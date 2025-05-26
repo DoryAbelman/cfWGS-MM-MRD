@@ -1,34 +1,74 @@
+# =============================================================================
+# Script: integrate_features.R
+#
+# Description:
+#   Integrates copy-number (CNA), translocation, tumor-fraction, and mutation
+#   features into a unified `All_feature_data` table for downstream analysis.
+#   Steps:
+#     1. Load and harmonize clinical metadata (sample IDs).
+#     2. Read pre-exported CNA and translocation tables.
+#     3. Read ichorCNA tumor-fraction data.
+#     4. Load mutation calls from combined MAFs (BM and blood) via `read.maf()`.
+#     5. Merge CNA + translocation with metadata and tumor fraction.
+#     6. Subset MAF objects to `myeloma_genes`, classify VAF and mutation types,
+#        and summarize per sample.
+#     7. Join mutation summary into the feature table, fill missing values.
+#     8. Define two levels of `Evidence_of_Disease` flags (high/low stringency).
+#     9. Save `mutation_export` and `All_feature_data` as RDS and TSV.
+#
+# Inputs:
+#   • combined_clinical_data_updated_Feb5_2025.csv
+#   • Jan2025_exported_data/cna_data.rds
+#   • Jan2025_exported_data/translocation_data.rds
+#   • Oct 2024 data/tumor_fraction_cfWGS.txt
+#   • combined_maf_temp_blood_Jan2025.maf
+#   • combined_maf_temp_bm_Jan2025.maf
+#
+# Outputs:
+#   • Jan2025_exported_data/mutation_export.rds/.txt
+#   • Jan2025_exported_data/All_feature_data_Feb2025.rds/.txt
+#
+# Dependencies:
+#   library(dplyr)
+#   library(tidyr)
+#   library(readr)
+#   library(stringr)
+#   library(maftools)
+#
+# Usage:
+#   source("integrate_features.R")
+#
+# Author: Dory Abelman
+# Date:   2025-05-26
+# =============================================================================
 
-### Integrate features 
+# Load libraries
+library(dplyr)
+library(tidyr)
+library(readr)
+library(stringr)
+library(maftools)
 
+# Define export directory
+export_dir <- "Jan2025_exported_data"
 
-## Load clinical info
-# Load in the patient info 
-metada_df_mutation_comparison <- read_csv("combined_clinical_data_updated_Feb5_2025.csv")
+# Load clinical metadata
+metada_df_mutation_comparison <- read_csv("combined_clinical_data_updated_Feb5_2025.csv") %>%
+  mutate(
+    Tumor_Sample_Barcode = Bam %>%
+      str_remove_all("_PG|_WG") %>%
+      str_replace_all("\\.filter.*|\\.ded.*|\\.recalibrate.*", ""),
+    Bam_clean_tmp = str_remove(Bam, "\\.bam$")
+  )
 
-# Add a Tumor_Sample_Barcode column to metada_df_mutation_comparison
-metada_df_mutation_comparison <- metada_df_mutation_comparison %>%
-  mutate(Tumor_Sample_Barcode = Bam %>%
-           # Remove _PG or _WG
-           str_remove_all("_PG|_WG") %>%
-           # Remove anything after ".filter", ".ded", or ".recalibrate"
-           str_replace_all("\\.filter.*|\\.ded.*|\\.recalibrate.*", ""))
+# Load CNA, translocation, and tumor fraction data
+cna_data           <- readRDS(file.path(export_dir, "cna_data.rds"))
+translocation_data <- readRDS(file.path(export_dir, "translocation_data.rds"))
+tumor_fraction     <- read_tsv("Oct 2024 data/tumor_fraction_cfWGS.txt")
 
-metada_df_mutation_comparison <- metada_df_mutation_comparison %>%
-  mutate(Bam_clean_tmp = gsub(".bam$", "", Bam))  # Remove the '.bam' suffix
-
-
-
-
-### Load data
-cna_data <- readRDS(file.path("Jan2025_exported_data", "cna_data.rds"))
-translocation_data <- readRDS(file.path("Jan2025_exported_data", "translocation_data.rds"))
-tumor_fraction <- read_tsv("Oct 2024 data/tumor_fraction_cfWGS.txt") ## From ichorCNA
-
-# Read the mutation MAF file using read.maf
-maf_object_blood <- read.maf(maf = "combined_maf_temp_blood_Jan2025.maf")
-maf_object_bm <- read.maf(maf = "combined_maf_temp_bm_Jan2025.maf")
-
+# Load mutation MAF objects
+maf_object_blood <- read.maf("combined_maf_temp_blood_Jan2025.maf")
+maf_object_bm    <- read.maf("combined_maf_temp_bm_Jan2025.maf")
 
 
 ### Process CNA and translocation data 
