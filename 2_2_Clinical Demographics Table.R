@@ -1,4 +1,43 @@
-
+# =============================================================================
+# Script: generate_baseline_characteristics_table.R
+#
+# Description:
+#   This script processes the final aggregated cfWGS feature table (with clinical
+#   and demographic annotations), selects each patient’s earliest Baseline/Diagnosis
+#   sample, defines clinical cohorts (Newly diagnosed vs Pre-treated), and builds
+#   a “Table 1” of baseline characteristics.  It also exports a cohort assignment
+#   file for downstream merging.
+#
+# Steps:
+#   1. Load the aggregated RDS of cfWGS features + clinical/demographics
+#   2. Identify patients with both BM and blood data
+#   3. Subset to Diagnosis/Baseline, resolve duplicates (CA-02, SPORE_0009, etc.)
+#   4. Define cohorts by patient ID patterns (Newly diagnosed vs Pre-treated)
+#   5. Clean and recode categorical and continuous variables
+#   6. Build categorical Table 1 with gtsummary + overall column
+#   7. (Optional) Build continuous Table 1
+#   8. Export tables to Word and save cohort assignment as TXT/RDS
+#
+# Inputs:
+#   • RDS: Final_aggregate_table_cfWGS_features_with_clinical_and_demographics_updated3.rds
+#
+# Outputs:
+#   • Word: table1_categorical_updated_final.docx
+#   • Word: baseline_characteristics_updated.docx
+#   • TXT/RDS: cohort_assignment_table.{txt,rds}
+#
+# Dependencies:
+#   library(tidyverse)
+#   library(gtsummary)
+#   library(officer)
+#   library(flextable)
+#
+# Usage:
+#   source("generate_baseline_characteristics_table.R")
+#
+# Author: Dory Abelman
+# Date:   2025-05-26
+# =============================================================================
 
 # -----------------------------------------------------------
 # 0.  PACKAGES  (install once, then keep only library() lines)
@@ -219,7 +258,30 @@ doc <- read_docx() %>%
   body_end_section_portrait()
 print(doc, target = "table1_categorical_updated_final.docx")
 
+# -----------------------------------------------------------
+# 6.  DONE!  -----------------------------------------------
+# -----------------------------------------------------------
+# The file 'baseline_characteristics.docx' is now in your working directory.
+# Open it in Word to fine‑tune column widths, font, or add footnotes.
 
+
+
+### Export important things 
+# Create a cohort assignment dataframe
+cohort_df <- data.frame(
+  Patient = c(new_dx_ids, pretreated_ids),
+  NewDx = c(rep(1, length(new_dx_ids)), rep(0, length(pretreated_ids)))
+)
+
+# Optional: sort for clarity
+cohort_df <- cohort_df[order(cohort_df$Patient), ]
+
+# Export to file (choose your desired path)
+write.table(cohort_df, file = "cohort_assignment_table.txt",
+            sep = "\t", row.names = FALSE, quote = FALSE)
+
+# Also optionally save as RDS
+saveRDS(cohort_df, file = "cohort_assignment_table.rds")
 
 
 
@@ -282,8 +344,4 @@ doc <- read_docx() %>%
   body_end_section_portrait()
 
 print(doc, target = "baseline_characteristics_updated.docx")
-# -----------------------------------------------------------
-# 6.  DONE!  -----------------------------------------------
-# -----------------------------------------------------------
-# The file 'baseline_characteristics.docx' is now in your working directory.
-# Open it in Word to fine‑tune column widths, font, or add footnotes.
+
