@@ -256,3 +256,12 @@ saveRDS(All_feature_data, file = file.path(export_dir, "All_feature_data_Feb2025
 
 # Save All_feature_data as a text file with tab-separated values
 write.table(All_feature_data, file = file.path(export_dir, "All_feature_data_Feb2025.txt"), sep = "\t", row.names = TRUE, quote = FALSE)
+
+
+### Save the CNA_Translocation file 
+# Save All_feature_data as an RDS file
+saveRDS(CNA_translocation, file = file.path(export_dir, "CNA_translocation_Feb2025.rds"))
+
+# Save All_feature_data as a text file with tab-separated values
+write.table(CNA_translocation, file = file.path(export_dir, "CNA_translocation_Feb2025.txt"), sep = "\t", row.names = TRUE, quote = FALSE)
+
