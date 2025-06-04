@@ -18,6 +18,7 @@ library(purrr)       # for pmap_dfr
 library(stringr)     # str_detect, str_to_lower, etc.
 library(writexl)     # write_xlsx()
 library(glue)        # for building sentence output
+library(scales)      # percent()
 
 
 dat <- readRDS("Final_aggregate_table_cfWGS_features_with_clinical_and_demographics_updated3.rds")
@@ -31,7 +32,9 @@ baseline  <- c("Diagnosis","Baseline")   # recognise baseline labels
 ## ------------------------------------------------------------------
 ## 2.  STARTING DATA  ------------------------------------------------
 ## ------------------------------------------------------------------
-dat <- joined_clean2   # <- your tibble
+## The feature table was saved as "joined_clean2" in the assembly script.
+## Here we load it directly from the RDS above.
+# dat <- joined_clean2   # <- your tibble
 
 ## ------------------------------------------------------------------
 ## 3.  KEEP BASELINE SAMPLES  ---------------------------------------
