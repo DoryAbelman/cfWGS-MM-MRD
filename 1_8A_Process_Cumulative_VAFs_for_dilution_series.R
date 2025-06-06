@@ -1,9 +1,5 @@
-source("setup_packages.R")
-source("config.R")
-source("helpers.R")
-
 # =============================================================================
-# MRDetect_processing.R
+# MRDetect_processing_for_dilution_series.R
 # Project:  cfWGS MRDetect (Winter 2025)
 # Author:   Dory Abelman
 # Date:     January 2025
@@ -39,6 +35,17 @@ source("helpers.R")
 # ──────────────────────────────────────────────────────────────────────────────
 # 1) Load libraries
 # ──────────────────────────────────────────────────────────────────────────────
+library(readr)
+library(data.table)
+library(dplyr)
+library(tidyr)
+library(stringr)
+library(openxlsx)
+library(ggplot2)
+library(ggbreak)
+library(patchwork)
+library(scales)
+library(conflicted)
 
 # resolve common conflicts
 conflicted::conflicts_prefer("dplyr::mutate")
@@ -50,7 +57,7 @@ conflicted::conflicts_prefer("dplyr::summarize")
 # ──────────────────────────────────────────────────────────────────────────────
 # 2) Set up paths and create output directory
 # ──────────────────────────────────────────────────────────────────────────────
-input_root <- "MRDetect_output_winter_2025/MRDetect_outputs/"
+input_root <- "MRDetect_output_winter_2025/MRDetect_outputs/Dilution_series/"
 outdir     <- "MRDetect_output_winter_2025/Processed_R_outputs/"
 project    <- "cfWGS_Winter2025"
 
@@ -111,7 +118,7 @@ all_files <- all_files %>%
 # ──────────────────────────────────────────────────────────────────────────────
 # 4) Load clinical metadata and unify ‘VCF_clean’ naming
 # ──────────────────────────────────────────────────────────────────────────────
-cfWGS_metadata <- read_csv("../combined_clinical_data_updated_April2025.csv") %>%
+cfWGS_metadata <- read_csv("combined_clinical_data_updated_April2025.csv") %>%
   mutate(
     VCF_clean_merge = str_remove(Bam, "\\.filter.*"),
     # correct internal PG→WG for those five patient‐specific IDs
@@ -127,6 +134,7 @@ cfWGS_metadata <- read_csv("../combined_clinical_data_updated_April2025.csv") %>
       VCF_clean_merge
     )
   )
+
 
 # ──────────────────────────────────────────────────────────────────────────────
 # 5) Standardize column names: replace spaces & dots with underscores
@@ -179,6 +187,24 @@ all_files <- all_files %>%
     )
   )
 
+## Add the values if missing from the fields 
+# If Mut_source is empty, assign based on VCF_clean patterns;
+# then set Filter_source to "STR_encode" for all rows
+
+all_files <- all_files %>%
+  mutate(
+    Mut_source = ifelse(
+      is.na(Mut_source) | Mut_source == "",
+      case_when(
+        grepl("-O-DNA", VCF_clean) ~ "BM_cells",
+        grepl("-P-DNA", VCF_clean) ~ "Blood",
+        TRUE                        ~ Mut_source
+      ),
+      Mut_source
+    ),
+    Filter_source = "STR_encode" # This is what was run prior to loading
+  )
+
 
 # ──────────────────────────────────────────────────────────────────────────────
 # 8) Merge MRDetect outputs with clinical metadata
@@ -187,26 +213,22 @@ tmp_meta <- cfWGS_metadata %>%
   select(-Bam) %>%
   rename(Study_VCF = Study)
 
-Merged_MRDetect <- all_files %>%
+Merged_MRDetect_dilution <- all_files %>%
   left_join(tmp_meta, by = c("VCF_clean" = "VCF_clean_merge"))
-
 
 # ──────────────────────────────────────────────────────────────────────────────
 # 9) Add BAM‐level sample info (Sample_ID, Patient, Sample_type, timepoint_info)
 # ──────────────────────────────────────────────────────────────────────────────
-bam_info <- cfWGS_metadata %>%
-  select(Bam, Sample_ID, Patient, Sample_type, timepoint_info) %>%
-  rename_with(~ paste0(.x, "_Bam"), .cols = -Bam)
+bam_info <- read.csv("Metadata_dilution_series.csv")
 
-Merged_MRDetect <- Merged_MRDetect %>%
-  left_join(bam_info, by = c("BAM" = "Bam"))
-
-
+# 3. Join back into the main Merged_MRDetect_dilution table
+Merged_MRDetect_dilution <- Merged_MRDetect_dilution %>%
+  left_join(bam_info, by = "BAM")
 
 # ──────────────────────────────────────────────────────────────────────────────
 # 10) Classify matched vs. unmatched plasma; force CHARM_healthy→cfDNA
 # ──────────────────────────────────────────────────────────────────────────────
-Merged_MRDetect <- Merged_MRDetect %>%
+Merged_MRDetect_dilution <- Merged_MRDetect_dilution %>%
   mutate(
     plotting_type       = if_else(Patient_Bam == Patient, "Matched_plasma", "Unmatched_plasma"),
     Sample_type_Bam     = if_else(Study == "CHARM_healthy", "Blood_plasma_cfDNA", Sample_type_Bam)
@@ -214,19 +236,25 @@ Merged_MRDetect <- Merged_MRDetect %>%
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# 11) Subset to cfDNA timepoints only (Baseline/Diagnosis/Progression)
+# 11) Laod in the matched healthy control data and join
 # ──────────────────────────────────────────────────────────────────────────────
-Merged_MRDetect_cfDNA <- Merged_MRDetect %>%
-  filter(Sample_type_Bam == "Blood_plasma_cfDNA",
-         timepoint_info_Bam %in% c("Baseline","Diagnosis","Progression"))
+Healthy_reference <- readRDS("MRDetect_output_winter_2025/Processed_R_outputs/cfWGS_Winter2025All_MRDetect_May2025.rds")
+Healthy_reference <- Healthy_reference %>% filter(Study == "CHARM_healthy") %>% filter(Patient == "VA-02")
 
+## Ensure matching column types
+Merged_MRDetect_dilution <- Merged_MRDetect_dilution %>%
+  mutate(Date_of_sample_collection = as.Date(Date_of_sample_collection))
 
+Healthy_reference <- Healthy_reference %>%
+  mutate(Date_of_sample_collection = as.Date(Date_of_sample_collection))
+
+Merged_MRDetect_dilution_joined <- bind_rows(Merged_MRDetect_dilution, Healthy_reference)
 # ──────────────────────────────────────────────────────────────────────────────
 # 12) Compute CHARM_healthy means & SDs → join back for z-scores
 # ──────────────────────────────────────────────────────────────────────────────
-Merged_MRDetect$VCF_factor <- factor(Merged_MRDetect$VCF, levels = unique(Merged_MRDetect$VCF))
+Merged_MRDetect_dilution$VCF_factor <- factor(Merged_MRDetect_dilution$VCF, levels = unique(Merged_MRDetect_dilution$VCF))
 
-zscore_lookup <- Merged_MRDetect %>%
+zscore_lookup <- Merged_MRDetect_dilution %>%
   filter(Study == "CHARM_healthy") %>%
   select(VCF_factor, Mut_source, Filter_source,
          detection_rate,
@@ -246,7 +274,7 @@ zscore_lookup <- Merged_MRDetect %>%
   ) %>%
   ungroup()
 
-Merged_MRDetect_zscore <- Merged_MRDetect %>%
+Merged_MRDetect_dilution_zscore <- Merged_MRDetect_dilution_joined %>%
   left_join(zscore_lookup, by = c("VCF_factor","Mut_source","Filter_source")) %>%
   mutate(
     detection_rate_zscore_charm                   = (detection_rate - mean_det_charm) / sd_det_charm,
@@ -261,7 +289,7 @@ Merged_MRDetect_zscore <- Merged_MRDetect %>%
 # ──────────────────────────────────────────────────────────────────────────────
 dup_keys <- c("BAM","Mut_source","Filter_source","VCF","VCF_clean","Study",
               "Sample_ID_Bam","Patient_Bam","VCF_factor")
-Merged_MRDetect_zscore <- Merged_MRDetect_zscore %>%
+Merged_MRDetect_dilution_zscore <- Merged_MRDetect_dilution_zscore %>%
   group_by(across(all_of(dup_keys))) %>%
   slice_max(order_by = total_reads, n = 1, with_ties = FALSE) %>%
   ungroup()
@@ -270,21 +298,21 @@ Merged_MRDetect_zscore <- Merged_MRDetect_zscore %>%
 # ──────────────────────────────────────────────────────────────────────────────
 # 14) Save both “raw” and “z-scored” MRDetect tables
 # ──────────────────────────────────────────────────────────────────────────────
-base_name_raw    <- paste0(project, "All_MRDetect_May2025")
-base_name_zscore <- paste0(project, "All_MRDetect_with_Zscore_May2025")
+base_name_raw    <- paste0(project, "Dilution_series_May2025")
+base_name_zscore <- paste0(project, "Dilution_series_May2025")
 
-write.table(Merged_MRDetect,
+write.table(Merged_MRDetect_dilution,
             file = file.path(outdir, paste0(base_name_raw, ".txt")),
             sep = "\t", row.names = FALSE)
 
-saveRDS(Merged_MRDetect,
+saveRDS(Merged_MRDetect_dilution,
         file = file.path(outdir, paste0(base_name_raw, ".rds")))
 
-write.table(Merged_MRDetect_zscore,
+write.table(Merged_MRDetect_dilution_zscore,
             file = file.path(outdir, paste0(base_name_zscore, ".txt")),
             sep = "\t", row.names = FALSE)
 
-saveRDS(Merged_MRDetect_zscore,
+saveRDS(Merged_MRDetect_dilution_zscore,
         file = file.path(outdir, paste0(base_name_zscore, ".rds")))
 
 message("→ MRDetect tables (raw & z-scored) written to: ", outdir)
