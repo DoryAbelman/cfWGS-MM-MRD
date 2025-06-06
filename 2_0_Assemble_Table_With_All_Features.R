@@ -954,34 +954,6 @@ cfWGS_Clinical_MRD_filled <- cfWGS_Clinical_MRD_filled %>%
   )
 
 
-### Can also add for MYC the mean coverage to the table 
-
-
-## Pull for Aimee 
-# 1) Filter for Rapid_Novor < 0.029 and select the desired columns
-low_rapid_novor <- cfWGS_Clinical_MRD_filled %>%
-  filter(Rapid_Novor > 0, Rapid_Novor < 0.029) %>%
-  select(
-    Patient,
-    Date,
-    timepoint_info,
-    Sample_Code,
-    Timepoint,
-    Rapid_Novor
-  )
-
-# 2) (Optional) View the resulting table
-print(low_rapid_novor)
-
-# 3) Save it to disk as a CSV
-write_csv(low_rapid_novDr, "low_rapid_novor_samples.csv")
-
-
-
-##### Next add other info like DNA yields and clinical data
-
-
-
 
 #### Clinical data 
 clinical_data_integrate <- read.csv("Clinical data/Master_clinical_data_table_all_projects_May2025_updated.csv")

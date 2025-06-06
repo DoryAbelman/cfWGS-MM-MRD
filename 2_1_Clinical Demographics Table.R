@@ -52,18 +52,16 @@ library(flextable)
 # -----------------------------------------------------------
 # 1.  DATA  
 # -----------------------------------------------------------
-# keep ONLY the earliest sample per patient
+# Load data 
 dat <- readRDS("Final_aggregate_table_cfWGS_features_with_clinical_and_demographics_updated3.rds")
 
 
 ### Get the list of qualifying samples 
-# Identify patients with ≥2 rows where either zscore_bm or zscore_blood is not NA
-patients_have_data_on <- dat %>%
-  filter(!is.na(zscore_BM) | !is.na(zscore_blood)) %>%  # keep rows with data in at least one of the two columns
-  group_by(Patient) %>%
-  filter(n() >= 2) %>%                                    # require at least 2 such rows per patient
-  distinct(Patient) %>%                                   # one entry per patient
-  pull(Patient)                                           # extract as a simple vector
+# Define export directory
+export_dir <- "Output_tables_2025"
+
+# Load from CSV (if you want to view/edit easily)
+patient_cohort_tbl_csv <- read.csv(file.path(export_dir, "patient_cohort_assignment.csv"))
 
 
 # 1. Subset to only Diagnosis or Baseline timepoints
@@ -120,7 +118,11 @@ dat_tb_final <- bind_rows(dat_tb4, resp_CA02) %>%
   arrange(Patient)
 
 dat_base <- dat_tb_final %>%
-  filter(Patient %in% patients_have_data_on)
+  filter(Patient %in% patient_cohort_tbl_csv$Patient)
+
+## Remove dup
+dat_base <- dat_base %>%
+  filter(!(Patient == "CA-03" & Timepoint == "02"))
 
 # 6) Quick duplicate check
 dups <- dat_base %>%
@@ -138,23 +140,16 @@ if (nrow(dups)) {
 # -----------------------------------------------------------
 # 2.  DEFINE COHORTS  ------------
 # -----------------------------------------------------------
-# Define the two groups
-new_dx_ids <- patients_have_data_on[
-  grepl("^[A-Z]{2}-\\d{2}$", patients_have_data_on) |
-    patients_have_data_on %in% c("IMG-060", "IMG-127", "IMG-181")
-]
+dat_base <- dat_base %>%
+  left_join(patient_cohort_tbl_csv, by = "Patient")
 
-pretreated_ids <- patients_have_data_on[
-  grepl("SPORE", patients_have_data_on) |
-    patients_have_data_on %in% c("IMG-098", "IMG-159")
-]
 
 dat_base <- dat_base %>%
   mutate(cohort = case_when(
-    Patient %in% new_dx_ids     ~ "Newly diagnosed",
-    Patient %in% pretreated_ids ~ "Pre‑treated",
-    TRUE                        ~ NA_character_
+    Cohort == "Frontline"     ~ "Frontline induction-transplant",
+    TRUE                      ~ Cohort
   ))
+
 
 # -----------------------------------------------------------
 # 3.  VARIABLES TO SHOW IN TABLE 1 --------------------------
@@ -256,34 +251,13 @@ tbl1_flex <- as_flex_table(tbl1_cat)
 doc <- read_docx() %>%
   body_add_flextable(tbl1_flex) %>%
   body_end_section_portrait()
-print(doc, target = "table1_categorical_updated_final.docx")
+print(doc, target = "table1_clinical_categorical_updated_final_3.docx")
 
 # -----------------------------------------------------------
 # 6.  DONE!  -----------------------------------------------
 # -----------------------------------------------------------
 # The file 'baseline_characteristics.docx' is now in your working directory.
 # Open it in Word to fine‑tune column widths, font, or add footnotes.
-
-
-
-### Export important things 
-# Create a cohort assignment dataframe
-cohort_df <- data.frame(
-  Patient = c(new_dx_ids, pretreated_ids),
-  NewDx = c(rep(1, length(new_dx_ids)), rep(0, length(pretreated_ids)))
-)
-
-# Optional: sort for clarity
-cohort_df <- cohort_df[order(cohort_df$Patient), ]
-
-# Export to file (choose your desired path)
-write.table(cohort_df, file = "cohort_assignment_table.txt",
-            sep = "\t", row.names = FALSE, quote = FALSE)
-
-# Also optionally save as RDS
-saveRDS(cohort_df, file = "cohort_assignment_table.rds")
-
-
 
 
 
@@ -345,3 +319,57 @@ doc <- read_docx() %>%
 
 print(doc, target = "baseline_characteristics_updated.docx")
 
+
+
+
+
+
+
+
+
+
+
+
+
+##### Below here is testing 
+#### Now see the total patients we have in general for fragmentomics part
+
+# Define which columns count as “clinical MRD”
+clinical_mrd_cols <- c(
+  "MRD_by_clinical_testing",
+  "MRD_by_clinical_testing_stringent",
+  "MRD_Clinical_Binary",
+  "MRD_Clinical_Stringent_Binary"
+)
+
+patients_with_FS_and_clinical_MRD <- dat %>%
+  # 1) require FS not missing
+  filter(!is.na(FS)) %>%
+  # 2) require at least one clinical‐MRD column not missing
+  filter(if_any(all_of(clinical_mrd_cols), ~ !is.na(.))) %>%
+  # 3) Check not at baseline 
+  filter(!timepoint_info %in% c("Diagnosis", "Baseline")) %>%
+  # 4) pull unique patient IDs
+  distinct(Patient) %>%
+  pull(Patient)
+
+# Print the result
+cat("Patients with FS and clinical MRD data:\n")
+print(patients_with_FS_and_clinical_MRD)
+cat("Total:", length(patients_with_FS_and_clinical_MRD), "patients\n")
+
+# Get patients that do not start with IMG or SPORE
+non_img_spore_patients <- patients_with_FS_and_clinical_MRD[
+  !grepl("^(IMG|SPORE)", patients_with_FS_and_clinical_MRD)
+]
+
+# Which of these are NOT in the cohort_df Patient list?
+new_possible_patients <- setdiff(non_img_spore_patients, cohort_df$Patient)
+
+# Show them
+cat("Patients with FS+clinical MRD, not in cohort_df, and not IMG/SPORE:\n")
+print(new_possible_patients)
+cat("Total:", length(new_possible_patients), "patients\n")
+
+
+### Don't use since not enough gains for added complexity
