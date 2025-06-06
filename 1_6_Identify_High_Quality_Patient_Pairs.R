@@ -1,3 +1,7 @@
+source("setup_packages.R")
+source("config.R")
+source("helpers.R")
+
 # =============================================================================
 # sample_availability_summary.R
 # Project:  cfWGS MRD Detection (M4 / IMMAGINE / SPORE)
@@ -47,11 +51,6 @@
 # Date:    January 2025 (last update May 2025)
 # =============================================================================
 
-library(readxl)
-library(dplyr)
-library(readr)
-library(stringr)
-library(glue)
 
 # ──────────────────────────────────────────────────────────────────────────────
 # 1. FILE PATHS & SETUP

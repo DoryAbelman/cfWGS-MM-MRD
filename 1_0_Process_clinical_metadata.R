@@ -49,10 +49,9 @@
 
 
 # ─── 1.  Load libraries ─────────────────────────────────────────────────────────
-library(readxl)       # reading Excel files
-library(data.table)   # fast fread/fwrite if needed
-library(tidyverse)    # dplyr, tidyr, ggplot2, etc.
-library(lubridate)    # date parsing
+source("setup_packages.R")   # loads required packages
+source("config.R")            # provides directory paths
+source("helpers.R")           # utility functions
 
 
 # ─── 2.  Configuration & helper functions (optional) ───────────────────────────
@@ -123,7 +122,7 @@ spore_data <- spore_data %>%
 spore_data <- spore_data %>%
   mutate(
     Study     = "SPORE",
-    Sample_ID = paste0(Patient, "_T", Timepoint, "_", Sample_type)
+    Sample_ID = clean_sample_id(paste0(Patient, "_T", Timepoint, "_", Sample_type))
   ) %>%
   rename(Bam = `Bams have`)
 

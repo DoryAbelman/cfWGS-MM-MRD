@@ -13,17 +13,22 @@
 #   tidyverse, purrr, stringr, writexl, glue
 # ==============================================================================
 
-library(tidyverse)   # dplyr, tidyr, readr, etc.
-library(purrr)       # for pmap_dfr
-library(stringr)     # str_detect, str_to_lower, etc.
-library(writexl)     # write_xlsx()
-library(glue)        # for building sentence output
-library(Hmisc)    # for rcorr()
-library(broom)    # for tidy()
-library(purrr)    # for map_df()
-library(tibble)   # for tibble()
+source("setup_packages.R")   # load libraries consistently
+source("config.R")            # directory paths
+source("helpers.R")           # utility functions
 
 file <- readRDS("Final_aggregate_table_cfWGS_features_with_clinical_and_demographics_updated3.rds")
+
+# The table should contain at least the columns used below. This check stops the
+# script early with a clear message if something went wrong during the
+# aggregation step.
+
+# basic sanity check for expected columns
+required_cols <- c("timepoint_info", "BM_Mutation_Count")
+missing_cols <- setdiff(required_cols, names(file))
+if (length(missing_cols) > 0) {
+  stop(paste("Input data is missing columns:", paste(missing_cols, collapse = ", ")))
+}
 
 
 ## 1.  PARAMETERS  ---------------------------------------------------
@@ -546,8 +551,7 @@ kruskal.test(BM_Mutation_Count ~ Subtype,
 
 #––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––  
 # 4) Spearman correlations for continuous predictors
-#––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––  
-library(Hmisc)
+#––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––
 cont_vars <- c("WGS_Tumor_Fraction_BM_cells",
                "WGS_Tumor_Fraction_Blood_plasma_cfDNA",
                "FS",

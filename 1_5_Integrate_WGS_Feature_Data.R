@@ -1,3 +1,7 @@
+source("setup_packages.R")
+source("config.R")
+source("helpers.R")
+
 # =============================================================================
 # Script: integrate_features.R
 #
@@ -43,11 +47,6 @@
 # =============================================================================
 
 # Load libraries
-library(dplyr)
-library(tidyr)
-library(readr)
-library(stringr)
-library(maftools)
 
 # Define export directory
 export_dir <- "Jan2025_exported_data"

@@ -1,3 +1,7 @@
+source("setup_packages.R")
+source("config.R")
+source("helpers.R")
+
 # ──────────────────────────────────────────────────────────────────────────────
 # process_fragmentomics_data_nucleosome_accessibility.R
 #
@@ -33,13 +37,6 @@
 
 
 ### PREPARE SESSION ################################################################################
-library(BoutrosLab.plotting.general)
-library(GeneCycle)
-library(pracma)
-library(dplyr)
-library(readr)
-library(stringr)
-library(data.table)
 
 source('session.functions.R')
 

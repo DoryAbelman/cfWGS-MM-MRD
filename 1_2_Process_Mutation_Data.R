@@ -55,17 +55,10 @@
 # =============================================================================
 
 # Load required libraries
-library(maftools)
-library(dplyr)
-library(tidyr)
-library(readr)
-library(ggplot2)
-library(ggridges)
-library(viridis)
-library(scales)
-library(stringr)
-library(purrr)
 
+source("setup_packages.R")
+source("config.R")
+source("helpers.R")
 
 ### Define the mutation gene list (used for both BM and blood)
 myeloma_genes <- c(

@@ -1,3 +1,7 @@
+source("setup_packages.R")
+source("config.R")
+source("helpers.R")
+
 # figure1_integrated_heatmaps.R
 # ------------------------------------------------------------
 # Generate Figure 1: Integrated alteration heatmaps
@@ -15,15 +19,6 @@
 
 
 # Load required libraries
-library(maftools)
-library(dplyr)
-library(tidyr)
-library(ComplexHeatmap)
-library(circlize)
-library(purrr)
-library(stringr)
-library(readr)
-library(grid)
 
 
 ### Load data 
@@ -698,7 +693,6 @@ bm_counts    <- dat_base$BM_Mutation_Count[    match(patient_ids, dat_base$Patie
 blood_counts <- dat_base$Blood_Mutation_Count[ match(patient_ids, dat_base$Patient) ]
 
 # 2) set up continuous palette for all muts (you can pick your own colours):
-library(circlize)
 all_counts <- c(bm_counts, blood_counts)
 qnts       <- quantile(all_counts, probs = c(0, 0.5, 1), na.rm = TRUE)
 

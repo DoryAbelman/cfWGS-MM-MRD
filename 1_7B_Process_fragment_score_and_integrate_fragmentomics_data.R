@@ -1,3 +1,7 @@
+source("setup_packages.R")
+source("config.R")
+source("helpers.R")
+
 # ──────────────────────────────────────────────────────────────────────────────
 # 01_process_fragmentomics_data.R
 #
@@ -25,16 +29,6 @@
 # ──────────────────────────────────────────────────────────────────────────────
 
 ### PREPARE SESSION ################################################################################
-library(BoutrosLab.plotting.general)
-library(ggplot2)        # used only for tibble/data‐frame handling (no plots)
-library(conflicted)
-library(survival)
-library(survminer)
-library(dplyr)
-library(readr)
-library(stringr)
-library(rstatix)        # for pairwise_wilcox_test, if needed
-library(tidyr)
 
 source('session.functions.R')
 

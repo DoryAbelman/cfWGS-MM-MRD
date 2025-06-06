@@ -54,16 +54,10 @@
 
 
 #### Load Libraries 
-library(ChromHeatMap)
 data("cytobands")
-library(tidyverse)
-library(stringr)
-library(reshape2)
-library(ComplexHeatmap)
-library(RColorBrewer)
-library(circlize)
-library(GenomicRanges)
-library(pbapply)
+source("setup_packages.R")
+source("config.R")
+source("helpers.R")
 
 
 source("GENIUSVariantAnalysis_Functions.R")
@@ -188,7 +182,6 @@ cfWGS_res_filtered <- cfWGS_res_filtered %>%
 cfWGS_res_filtered <- cfWGS_res_filtered %>%
   filter(!(IGCaller_Score <= 20 & Mappability_Issue != "none"))
 
-library(pbapply)  # For progress bar
 
 # Function to match cytobands for each breakpoint - much faster than original 
 match_cytoband_fast <- function(chromosome, position_start, cb_frame) {
