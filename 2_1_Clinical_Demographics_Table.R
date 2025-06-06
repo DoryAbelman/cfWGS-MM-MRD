@@ -1,3 +1,7 @@
+source("setup_packages.R")
+source("config.R")
+source("helpers.R")
+
 # =============================================================================
 # Script: generate_baseline_characteristics_table.R
 #
@@ -43,10 +47,6 @@
 # 0.  PACKAGES  (install once, then keep only library() lines)
 # -----------------------------------------------------------
 # install.packages(c("tidyverse", "gtsummary", "gt", "officer"))   # ← run once
-library(tidyverse)
-library(gtsummary)
-library(officer)
-library(flextable)
 
 
 # -----------------------------------------------------------

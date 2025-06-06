@@ -36,14 +36,9 @@
 
 
 # ─── 0.  Library loading & file checks ────────────────────────────────────────
-library(readxl)      # for reading Excel files
-library(dplyr)
-library(tidyr)
-library(lubridate)   # date parsing
-library(janitor)     # cleaning column names, removing empty rows/cols
-library(stringr)
-library(purrr)       # for functional programming (map, etc.)
-library(glue)        # for building file‐paths and messages
+source("setup_packages.R")
+source("config.R")
+source("helpers.R")
 
 # Helper to verify that required input files exist
 ensure_exists <- function(path) {

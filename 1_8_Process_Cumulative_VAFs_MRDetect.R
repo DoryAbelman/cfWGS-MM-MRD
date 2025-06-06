@@ -1,3 +1,7 @@
+source("setup_packages.R")
+source("config.R")
+source("helpers.R")
+
 # =============================================================================
 # MRDetect_processing.R
 # Project:  cfWGS MRDetect (Winter 2025)
@@ -35,17 +39,6 @@
 # ──────────────────────────────────────────────────────────────────────────────
 # 1) Load libraries
 # ──────────────────────────────────────────────────────────────────────────────
-library(readr)
-library(data.table)
-library(dplyr)
-library(tidyr)
-library(stringr)
-library(openxlsx)
-library(ggplot2)
-library(ggbreak)
-library(patchwork)
-library(scales)
-library(conflicted)
 
 # resolve common conflicts
 conflicted::conflicts_prefer("dplyr::mutate")

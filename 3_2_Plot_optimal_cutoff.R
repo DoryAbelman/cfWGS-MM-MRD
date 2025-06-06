@@ -1,3 +1,7 @@
+source("setup_packages.R")
+source("config.R")
+source("helpers.R")
+
 # =============================================================================
 # Script:   cfWGS_MRD_make_figures.R
 # Project:  cfWGS MRD detection (M4 / SPORE / IMMAGINE)
@@ -29,17 +33,6 @@
 # =============================================================================
 
 # -------- 0.  Load packages --------------------------------------------------
-library(dplyr)
-library(tidyr)
-library(ggplot2)
-library(pROC)        # ROC + AUC
-library(patchwork)   # multi‑panel figures
-library(janitor)     # tabyl + adorn_totals
-library(gt)          # pretty contingency tables
-library(glue)
-library(rmda)        # decision‑curve analysis
-library(lubridate)
-library(scales)   # for percent_format()
 
 
 # -------- 1.  Read processed data & thresholds ------------------------------
@@ -578,7 +571,6 @@ disc_cf_neg_flow %>%
 
 
 ### Run stats on discordant cases 
-library(exact2x2)      # for exact McNemar 
 # library(logistf)     # if you decide on Firth logistic
 
 ## 3.1  Build flags -----------------------------------------------------------
@@ -1271,8 +1263,6 @@ tbl_bl <- dat %>%
   adorn_totals(where="both")
 print(tbl_bl)
 
-library(janitor)
-library(gt)
 
 make_gt_cm <- function(tabyl_tbl, title_text){
   # drop the Totals row/col for clarity in the body

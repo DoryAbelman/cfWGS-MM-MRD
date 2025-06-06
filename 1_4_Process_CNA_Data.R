@@ -49,11 +49,11 @@
 
 
 # Load Libraries:
-library(tidyverse)       # dplyr, purrr, tidyr, readr, etc.
-library(purrr)           # for reduce()
-library(tidyr)           # for pivot_longer()
 
 
+source("setup_packages.R")
+source("config.R")
+source("helpers.R")
 ## Load clinical info
 # Load in the patient info 
 metada_df_mutation_comparison <- read_csv("combined_clinical_data_updated_Feb5_2025.csv")

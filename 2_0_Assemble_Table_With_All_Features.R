@@ -1,3 +1,7 @@
+source("setup_packages.R")
+source("config.R")
+source("helpers.R")
+
 # ==============================================================================
 # 2_Assemble_Table_With_All_Features
 #
@@ -19,9 +23,6 @@
 ### MRD comparison figures updated Winter 2025
 ### Author: Dory Abelman 
 
-library(tidyverse)
-library(readxl)
-library(gridExtra)
 
 
 ### Load in all data:

@@ -1,3 +1,7 @@
+source("setup_packages.R")
+source("config.R")
+source("helpers.R")
+
 # =============================================================================
 # Script:   optimize_cfWGS_thresholds.R
 # Project:  cfWGS MRD detection (M4 / SPORE / IMMAGINE)
@@ -22,15 +26,6 @@
 # =============================================================================
 
 # -------- 0.  Load packages --------------------------------------------------
-library(dplyr)
-library(tidyr)
-library(pROC)       # ROC curves, coords(), auc()
-library(yardstick)  # confusion-matrix metrics (if still used; otherwise drop)
-library(purrr)      # map_dfr()
-library(glmnet)     # ridge-penalized CV
-library(Matrix)     # sparse model matrices (dgCMatrix)
-library(janitor)    # tabyl() + adorn_totals()
-library(glue)       # string glue for messages
 
 
 
