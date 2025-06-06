@@ -16,8 +16,9 @@ The code is organised as a series of numbered R scripts that process raw clinica
 | 1.5 | `1_5_Integrate_WGS_Feature_Data.R` | Combine mutation, CNA, and translocation features. |
 | 1.6 | `1_6_Identify_High_Quality_Patient_Pairs.R` | Annotate samples that have matched bone‑marrow and cfDNA data. |
 | 1.7A | `1_7A_Process_fragmentomics_data_nucleosome_accessibility.R` | Derive nucleosome accessibility metrics from fragmentomics. |
-| 1.7B | `1_7B_Process_fragment_score_and_integrate_fragmentomics_data.R` | Compute fragmentation scores and integrate with the main table. |
-| 1.8 | `1_8_Process_Cumulative_VAFs_MRDetect.R` | Generate cumulative VAF plots using MRDetect results. |
+| 1.7B | `1_7B_Process_fragment_score_and_integrate_fragmentomics_data.R` | Compute fragmentation scores and export as table. |
+| 1.8 | `1_8_Process_Cumulative_VAFs_MRDetect.R` | Process MRDetect output and calculate zscores. |
+| 1.8A | `1_8A_Process_Cumulative_VAFs_MRDetect_for_dilution_seroes.R` | Process MRDetect output and calculate zscores for dilution series. |
 | 2.0 | `2_0_Assemble_Table_With_All_Features.R` | Merge all processed features into a single table for downstream analyses. |
 | 2.1 | `2_1_Clinical_Demographics_Table.R` | Produce patient demographic tables used in the manuscript. |
 | 2.2 | `2_2_Baseline_demographics_by_WGS_heatmap_updated.R` | Create integrated alteration heatmaps. |
