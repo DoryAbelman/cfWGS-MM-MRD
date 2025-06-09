@@ -252,11 +252,11 @@ Merged_MRDetect_dilution_joined <- bind_rows(Merged_MRDetect_dilution, Healthy_r
 # ──────────────────────────────────────────────────────────────────────────────
 # 12) Compute CHARM_healthy means & SDs → join back for z-scores
 # ──────────────────────────────────────────────────────────────────────────────
-Merged_MRDetect_dilution$VCF_factor <- factor(Merged_MRDetect_dilution$VCF, levels = unique(Merged_MRDetect_dilution$VCF))
+Merged_MRDetect_dilution_joined$VCF_factor <- factor(Merged_MRDetect_dilution_joined$VCF, levels = unique(Merged_MRDetect_dilution_joined$VCF))
 
-zscore_lookup <- Merged_MRDetect_dilution %>%
+zscore_lookup <- Merged_MRDetect_dilution_joined %>%
   filter(Study == "CHARM_healthy") %>%
-  select(VCF_factor, Mut_source, Filter_source,
+  dplyr::select(VCF_factor, Mut_source, Filter_source,
          detection_rate,
          detection_rate_as_reads_detected_over_reads_checked,
          detection_rate_as_reads_detected_over_total_reads,
@@ -299,7 +299,7 @@ Merged_MRDetect_dilution_zscore <- Merged_MRDetect_dilution_zscore %>%
 # 14) Save both “raw” and “z-scored” MRDetect tables
 # ──────────────────────────────────────────────────────────────────────────────
 base_name_raw    <- paste0(project, "Dilution_series_May2025")
-base_name_zscore <- paste0(project, "Dilution_series_May2025")
+base_name_zscore <- paste0(project, "Dilution_series_May2025_with_zscore")
 
 write.table(Merged_MRDetect_dilution,
             file = file.path(outdir, paste0(base_name_raw, ".txt")),

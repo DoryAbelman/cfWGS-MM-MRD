@@ -1,7 +1,3 @@
-source("setup_packages.R")
-source("config.R")
-source("helpers.R")
-
 # =============================================================================
 # Script:   optimize_cfWGS_thresholds.R
 # Project:  cfWGS MRD detection (M4 / SPORE / IMMAGINE)
@@ -26,6 +22,15 @@ source("helpers.R")
 # =============================================================================
 
 # -------- 0.  Load packages --------------------------------------------------
+library(dplyr)
+library(tidyr)
+library(pROC)       # ROC curves, coords(), auc()
+library(yardstick)  # confusion-matrix metrics (if still used; otherwise drop)
+library(purrr)      # map_dfr()
+library(glmnet)     # ridge-penalized CV
+library(Matrix)     # sparse model matrices (dgCMatrix)
+library(janitor)    # tabyl() + adorn_totals()
+library(glue)       # string glue for messages
 
 
 
@@ -333,8 +338,19 @@ write.csv(combo_results,
           row.names = FALSE)
 
 
+#  Save fitted combo models for later scoring ─────────────────────────
 
+# Collect the exact fits you just trained
+model_list <- list(
+  BM_zscore_only   = cv_bm,       # classic BM combo
+  BM_ext           = cv_bm_ext,   # extended BM combo
+  Blood_base       = cv_bl,       # classic blood combo
+  Blood_ext        = cv_bl_ext    # extended blood combo
+)
 
+# Write them to disk so your dilution-series script can just load & predict
+saveRDS(model_list,
+        file = file.path(outdir, "models_cfWGS_final.rds"))
 
 
 
@@ -353,6 +369,42 @@ blood_rows    <- pick_rows("Blood_all_extras", n = 2)
 blood_row_add <- pick_rows("Blood_base", n = 1)
 selected_rows <- bind_rows(bm_row, blood_rows, blood_row_add)   # 4 rows in total
 print(selected_rows)
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# 4b.  Fit & save only the selected combo models ----------------------------
+
+# Extract the combo names you picked
+selected_combos <- selected_rows$combo
+
+# Fit each model on the frontline training set exactly as you did before
+selected_models <- selected_combos %>%
+  set_names() %>%                  # name the list by combo
+  map(function(cmb) {
+    preds <- combos[[cmb]]
+    df_cc <- train_df %>% drop_na(MRD_truth, all_of(preds))
+    
+    if (length(preds) >= 2) {
+      # ridge‐penalized logistic
+      xy  <- make_sparse_xy(df_cc, preds)
+      cv.glmnet(xy$x, xy$y,
+                family  = "binomial",
+                alpha   = 0,
+                nfolds  = 5,
+                nlambda = 30)
+    } else {
+      # single‐feature logistic
+      form <- reformulate(preds, response = "MRD_truth")
+      glm(form, data = df_cc, family = binomial)
+    }
+  })
+
+# Save both the models and the thresholds
+saveRDS(selected_models,
+        file = file.path(outdir, "selected_combo_models.rds"))
+saveRDS(selected_rows,
+        file = file.path(outdir, "selected_combo_thresholds.rds"))
+
 
 # ────────────────────────────────────────────────────────────────────────────
 # 5.  Function to refit & apply a single rule --------------------------------
