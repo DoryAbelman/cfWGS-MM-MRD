@@ -49,9 +49,10 @@
 
 
 # ─── 1.  Load libraries ─────────────────────────────────────────────────────────
-source("setup_packages.R")   # loads required packages
-source("config.R")            # provides directory paths
-source("helpers.R")           # utility functions
+library(readxl)       # reading Excel files
+library(data.table)   # fast fread/fwrite if needed
+library(tidyverse)    # dplyr, tidyr, ggplot2, etc.
+library(lubridate)    # date parsing
 
 
 # ─── 2.  Configuration & helper functions (optional) ───────────────────────────
@@ -122,7 +123,7 @@ spore_data <- spore_data %>%
 spore_data <- spore_data %>%
   mutate(
     Study     = "SPORE",
-    Sample_ID = clean_sample_id(paste0(Patient, "_T", Timepoint, "_", Sample_type))
+    Sample_ID = paste0(Patient, "_T", Timepoint, "_", Sample_type)
   ) %>%
   rename(Bam = `Bams have`)
 
@@ -373,9 +374,9 @@ ggsave(file.path(output_dir, "patients_by_study.png"), width = 6, height = 4)
 ##  14.1  Read M4 lab workbook
 M4_Labs <- read_excel("M4_CMRG_Data/M4_COHORT_LABS.xlsx")
 
-##  14.2  Select up to column G, rename G → UNITS
+##  14.2  Select columns
 M4_Labs <- M4_Labs %>%
-  select(M4_id, study_patient_id, LAB_TYPE, LAB_DATE, PURPOSE, LAB_NAME, LAB_VALUE, UNITS = G)
+  select(M4_id, study_patient_id, LAB_TYPE, LAB_DATE, PURPOSE, LAB_NAME, LAB_VALUE)
 
 ##  14.3  Define extract_timepoint() (purpose → “01”, “03”, … “R”)
 # Define the function to extract the timepoint
@@ -430,6 +431,8 @@ M4_Labs <- M4_Labs %>%
     TIMEPOINT       = sapply(PURPOSE, extract_timepoint),
     TIMEPOINT_DESC  = description_mapping[TIMEPOINT]
   )
+
+write.csv(M4_labs_cleaned, file = "M4_labs_cleaned.csv")
 
 ##  14.5  Make M4_dates_cmrg with unique M4_id, LAB_DATE, TIMEPOINT, TIMEPOINT_DESC
 M4_dates_cmrg <- M4_Labs %>%

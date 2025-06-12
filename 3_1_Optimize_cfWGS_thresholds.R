@@ -589,6 +589,59 @@ dat %>%
   count(Cohort, name = "n_patients_with_blood_only")
 
 
+
+
+
+#### Get more info on total number of samples
+### Now check sample counts 
+
+# Define export directory
+export_dir <- "Output_tables_2025"
+
+# Load from CSV (if you want to view/edit easily)
+patient_cohort_tbl_csv <- read.csv(file.path(export_dir, "patient_cohort_assignment.csv"))
+
+## Edit to ones we have cfDNA analyzed on in primary cohorts
+dat_valid <- dat %>%
+  filter(Patient %in% patient_cohort_tbl_csv$Patient) %>% filter(!is.na(WGS_Tumor_Fraction_Blood_plasma_cfDNA))
+
+## 2. Per‑patient summaries
+patient_summ <- dat_valid %>%
+  group_by(Patient) %>%
+  summarise(
+    n_samples   = dplyr::n(),                                   # how many cfDNA samples
+    first_date  = min(Date, na.rm = TRUE),
+    last_date   = max(Date, na.rm = TRUE),
+    follow_days = as.numeric(difftime(last_date, first_date, units = "days")),
+    .groups = "drop"
+  )
+
+## 4. Study‑level numbers
+n_patients        <- n_distinct(dat_valid$Patient)        # should be 51 (check)
+total_samples     <- nrow(dat_valid)
+median_per_pt     <- median(patient_summ$n_samples)
+range_per_pt      <- range(patient_summ$n_samples)
+median_follow     <- median(patient_summ$follow_days)
+range_follow      <- range(patient_summ$follow_days)
+
+## 5. Auto‑generate the sentence
+glue(
+  "This study comprises cfWGS analysis of {total_samples} blood cfDNA samples ",
+  "from {n_patients} MM patients (median {median_per_pt} samples per patient, ",
+  "range {range_per_pt[1]}–{range_per_pt[2]}), collected over a median follow‑up ",
+  "of {median_follow} days (range {range_follow[1]}–{range_follow[2]})."
+)
+
+
+
+
+
+
+
+
+
+
+#### Below here is testing - not used in main analysis 
 # ────────────────────────────────────────────────────────────────────────────
 # A. 1) OVERALL performance by Cohort --------------------------------------
 # 1) Define your three “rules” (call columns)

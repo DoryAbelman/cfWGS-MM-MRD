@@ -1,7 +1,3 @@
-source("setup_packages.R")
-source("config.R")
-source("helpers.R")
-
 # =============================================================================
 # Script:   cfWGS_MRD_make_figures.R
 # Project:  cfWGS MRD detection (M4 / SPORE / IMMAGINE)
@@ -33,10 +29,22 @@ source("helpers.R")
 # =============================================================================
 
 # -------- 0.  Load packages --------------------------------------------------
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(pROC)        # ROC + AUC
+library(patchwork)   # multi‑panel figures
+library(janitor)     # tabyl + adorn_totals
+library(gt)          # pretty contingency tables
+library(glue)
+library(rmda)        # decision‑curve analysis
+library(lubridate)
+library(scales)   # for percent_format()
 
 
 # -------- 1.  Read processed data & thresholds ------------------------------
 outdir   <- "Output_tables_2025"
+OUTPUT_DIR_FIGURES    <- "Output_figures_2025"
 dat      <- readRDS(file.path(outdir, "all_patients_with_BM_and_blood_calls.rds"))
 selected <- read.csv(file.path(outdir, "STable_selected_thresholds.csv"))
 
@@ -53,7 +61,7 @@ summarise_pos <- function(df) {
 }
 
 # ---------------------------------------------------------------------------
-#  2.  Recoding of your landmark labels --------------------------------------
+#  2.  Recoding of landmark labels --------------------------------------
 # If your `timepoint_info` already uses exactly "Post‑ASCT" and "Maintenance‑1yr"
 # you can drop this mutate() block.
 dat <- dat %>%
@@ -67,10 +75,11 @@ dat <- dat %>%
 # ---------------------------------------------------------------------------
 #  3.  FRONTLINE cohort: positivity by landmark ------------------------------
 front_tbl <- dat %>%
-  filter(Cohort == "Frontline",
-         !is.na(landmark_tp),
-         !is.na(BM_zscore_only_call)) %>%
-  # pivot technologies into long form
+  filter(
+    Cohort == "Frontline",
+    !is.na(landmark_tp),
+    !is.na(BM_zscore_only_call)
+  ) %>%
   pivot_longer(
     cols      = c(Flow_Binary, Adaptive_Binary, BM_zscore_only_call),
     names_to  = "Technology",
@@ -78,26 +87,29 @@ front_tbl <- dat %>%
   ) %>%
   filter(!is.na(Result)) %>%
   group_by(landmark_tp, Technology) %>%
-  summarise(
-    n_total  = n(),
-    n_pos    = sum(Result == 1, na.rm = TRUE),
+  dplyr::summarise(
+    n_total  = dplyr::n(),
+    n_pos    = sum(Result == 1L, na.rm = TRUE),
     pos_rate = n_pos / n_total,
     .groups  = "drop"
   ) %>%
-  # rename for display
   mutate(
-    Technology = recode(Technology,
-                        "Flow_Binary"       = "MFC",
-                        "Adaptive_Binary"   = "clonoSEQ",
-                        "BM_zscore_only_call"   = "cfWGS_BM")
+    Technology = recode(
+      Technology,
+      Flow_Binary         = "MFC",
+      Adaptive_Binary     = "clonoSEQ",
+      BM_zscore_only_call = "cfWGS_BM"
+    )
   )
+
 # ---------------------------------------------------------------------------
 #  4.  NON‑FRONTLINE cohort: pooled positivity -------------------------------
 non_tbl <- dat %>%
-  mutate(landmark_tp = "All time‑points") %>%
-  filter(Cohort == "Non-frontline",
-         !is.na(BM_zscore_only_call)) %>%
-  # pivot technologies into long form
+  mutate(landmark_tp = "All timepoints") %>%
+  filter(
+    Cohort == "Non-frontline",
+    !is.na(BM_zscore_only_call)
+  ) %>%
   pivot_longer(
     cols      = c(Flow_Binary, Adaptive_Binary, BM_zscore_only_call),
     names_to  = "Technology",
@@ -105,36 +117,40 @@ non_tbl <- dat %>%
   ) %>%
   filter(!is.na(Result)) %>%
   group_by(landmark_tp, Technology) %>%
-  summarise(
-    n_total  = n(),
-    n_pos    = sum(Result == 1, na.rm = TRUE),
+  dplyr::summarise(
+    n_total  = dplyr::n(),
+    n_pos    = sum(Result == 1L, na.rm = TRUE),
     pos_rate = n_pos / n_total,
     .groups  = "drop"
   ) %>%
-  # rename for display
   mutate(
-    Technology = recode(Technology,
-                        "Flow_Binary"       = "MFC",
-                        "Adaptive_Binary"   = "clonoSEQ",
-                        "BM_zscore_only_call"   = "cfWGS_BM")) 
+    Technology = recode(
+      Technology,
+      Flow_Binary         = "MFC",
+      Adaptive_Binary     = "clonoSEQ",
+      BM_zscore_only_call = "cfWGS_BM"
+    )
+  )
 
-## Export 
+
+## Export
 readr::write_csv(
   front_tbl,
-  "Positivity_by_Landmark_TimePoint_BoneMarrow_Frontline.csv"
+  file.path(outdir, "Positivity_by_Landmark_TimePoint_BoneMarrow_Frontline.csv")
 )
+
 readr::write_csv(
   non_tbl,
-  "Positivity_All_TimePoints_BoneMarrow_NonFrontline.csv"
+  file.path(outdir, "Positivity_All_TimePoints_BoneMarrow_NonFrontline.csv")
 )
 
 
 # ---------------------------------------------------------------------------
 # ---------------------------------------------------------------------------
 #  0.  Aesthetics ------------------------------------------------------------
-custom_cols <- c("Post‑ASCT"       = "#E41A1C",   # red  (same as poster)
-                 "Maintenance‑1yr" = "#377EB8",   # blue (same as poster)
-                 "All time‑points" = "#999999")   # grey (non‑frontline single bar)
+custom_cols <- c("Post-ASCT"       = "#E41A1C",
+                 "Maintenance-1yr" = "#377EB8",   
+                 "All timepoints" = "#999999")   # grey (non‑frontline single bar)
 
 plot_theme <- theme_minimal(base_size = 11) +
   theme(
@@ -149,58 +165,113 @@ plot_theme <- theme_minimal(base_size = 11) +
     plot.margin      = margin(10, 10, 30, 10)      # t, r, b, l  (pt)
   )
 
-# helper for % above bar + n under bar --------------------------------------
-add_bar_labels <- function() {
-  list(
-    geom_text(                                 # % label above bar
-      aes(label = sprintf("%.0f%%", pos_rate*100)),
-      vjust = -0.45, size = 3.5
-    ),
-    geom_text(                                 # “n =” label under bar
-      aes(label = sprintf("n = %d", n_total), y = 0.01),
-      vjust = 1.8, size = 3.5
-    )
+# ---------------------------------------------------------------------------
+#  1.  Frontline plot  ------------------------------------------------------------
+
+# 1) Clean and re-factor your time-point column
+front_tbl <- front_tbl %>%
+  # 1) normalize that unicode hyphen to the ASCII hyphen-minus
+  mutate(
+    landmark_tp = str_replace_all(landmark_tp, "\u2011", "-")
+  ) %>%
+  # 2) now convert to a factor with Post-ASCT first
+  mutate(
+    landmark_tp = factor(landmark_tp,
+                         levels = c("Post-ASCT", "Maintenance-1yr"))
   )
-}
+
+# 2) Rebuild the grouped barplot for frontline
+p_front_grouped <- ggplot(front_tbl, 
+                          aes(x    = Technology,
+                              y    = pos_rate * 100,
+                              fill = landmark_tp)) +
+  geom_col(position = position_dodge(width = 0.8),
+           width    = 0.7,
+           colour   = "black") +
+  scale_fill_manual(
+    name   = "Timepoint",
+    values = custom_cols,
+    breaks = names(custom_cols)    # forces legend order
+  ) +
+  scale_y_continuous(
+    labels = scales::percent_format(scale = 1),
+    expand = expansion(mult = c(0, 0.05)),
+    limits = c(0, 100)
+  ) +
+  labs(
+    title = "cfWGS Positivity: Frontline cohort, BM-derived muts",
+    x     = NULL,
+    y     = "Positivity rate"
+  ) +
+  plot_theme +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1)
+  ) +
+  geom_text(aes(label = sprintf("%.0f%%", pos_rate * 100)),
+            position = position_dodge(width = 0.8),
+            vjust    = -0.3,
+            size     = 3.5)
+
+# 4) save
+ggsave(
+    filename = file.path(OUTPUT_DIR_FIGURES, "Fig_BM_positivity_by_tech.png"),
+  plot     = p_front_grouped,
+  width    = 6,
+  height   = 4,
+  dpi      = 500
+)
+
 
 # ---------------------------------------------------------------------------
-#  1.  FRONTLINE plot --------------------------------------------------------
-p_front <- ggplot(front_tbl,
-                  aes(x = landmark_tp,
-                      y = pos_rate,
-                      fill = landmark_tp)) +
-  geom_bar(stat = "identity", width = 0.7, colour = "black") +
-  scale_fill_manual(values = custom_cols, guide = "none") +
-  scale_y_continuous(labels = scales::percent_format(scale = 1),
-                     limits = c(0, 1.05)) +
-  labs(title = "cfWGS BM positivity: Frontline cohort",
-       x = NULL, y = "Positivity rate") +
+#  2. Now create NON‑FRONTLINE plot ----------------------------------------------------
+
+# 1) Clean and re-factor your time-point column
+non_tbl <- non_tbl %>%
+  # 1) normalize that unicode hyphen to the ASCII hyphen-minus
+  mutate(
+    landmark_tp = str_replace_all(landmark_tp, "\u2011", "-")
+  ) 
+
+# 2) Rebuild the grouped barplot for frontline
+p_non_grouped <- ggplot(non_tbl, 
+                          aes(x    = Technology,
+                              y    = pos_rate * 100,
+                              fill = landmark_tp)) +
+  geom_col(position = position_dodge(width = 0.8),
+           width    = 0.7,
+           colour   = "black") +
+  scale_fill_manual(
+    name   = "Timepoint",
+    values = custom_cols,
+    breaks = names(custom_cols)    # forces legend order
+  ) +
+  scale_y_continuous(
+    labels = scales::percent_format(scale = 1),
+    expand = expansion(mult = c(0, 0.05)),
+    limits = c(0, 100)
+  ) +
+  labs(
+    title = "cfWGS Positivity: Later-line cohort, BM-derived muts",
+    x     = NULL,
+    y     = "Positivity rate"
+  ) +
   plot_theme +
-  add_bar_labels()
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1)
+  ) +
+  geom_text(aes(label = sprintf("%.0f%%", pos_rate * 100)),
+            position = position_dodge(width = 0.8),
+            vjust    = -0.3,
+            size     = 3.5)
 
-ggsave("Figures_May2025/MRD comparisons/BM_pos_rate_Frontline.png",
-       p_front, width = 5, height = 4, dpi = 500)
-
-# ---------------------------------------------------------------------------
-#  2.  NON‑FRONTLINE plot ----------------------------------------------------
-p_non <- ggplot(non_tbl,
-                aes(x = landmark_tp,
-                    y = pos_rate,
-                    fill = landmark_tp)) +
-  geom_bar(stat = "identity", width = 0.6, colour = "black") +
-  scale_fill_manual(values = custom_cols, guide = "none") +
-  scale_y_continuous(labels = scales::percent_format(scale = 1),
-                     limits = c(0, 1.05)) +
-  labs(title = "cfWGS BM positivity — Non‑frontline cohort",
-       x = NULL, y = "Positivity rate") +
-  plot_theme +
-  theme(axis.text.x = element_blank(),
-        axis.ticks.x = element_blank()) +
-  add_bar_labels()
-
-ggsave("Figures_May2025/MRD comparisons/BM_pos_rate_NonFrontline.png",
-       p_non, width = 4, height = 4, dpi = 500)
-
+# 4) save
+ggsave(
+  filename = file.path(OUTPUT_DIR_FIGURES, "Fig_BM_positivity_by_tech_later_line.png"),
+  plot     = p_front_grouped,
+  width    = 6,
+  height   = 4,
+  dpi      = 500
+)
 
 
 
@@ -236,7 +307,7 @@ dat <- dat %>%
 
 # ---------------------------------------------------------------------------
 # 3.  FRONTLINE: concordance & positivity  -----------------------------------
-front <- dat %>% filter(Cohort == "Frontline", !is.na(landmark))
+front <- dat %>% filter(Cohort == "Frontline", !is.na(landmark)) %>% filter(!is.na(BM_zscore_only_call))
 
 # --- 3a. Pairwise concordance at Post‑ASCT ----------------------------------
 pa   <- front %>% filter(landmark == "Post_ASCT")
@@ -255,14 +326,17 @@ maint_conc <- bind_rows(
 
 # --- 3c. Positivity counts ---------------------------------------------------
 pos_tbl <- front %>%
-  filter(landmark %in% c("Post_ASCT","Maintenance")) %>%
-  pivot_longer(cols = c(BM_zscore_only_call, Adaptive_Binary, Flow_Binary),
-               names_to = "Test", values_to = "Result") %>%
+  filter(landmark %in% c("Post_ASCT", "Maintenance")) %>%
+  pivot_longer(
+    cols      = c(BM_zscore_only_call, Adaptive_Binary, Flow_Binary),
+    names_to  = "Test",
+    values_to = "Result"
+  ) %>%
   drop_na(Result) %>%
   group_by(landmark, Test) %>%
-  summarise(
-    pos = sum(Result == 1),
-    tot = n(),
+  dplyr::summarise(
+    pos = sum(Result == 1L, na.rm = TRUE),
+    tot = dplyr::n(),
     .groups = "drop"
   )
 
@@ -293,7 +367,8 @@ ppv_npv <- function(df, pred_col = "BM_zscore_only_call") {
   )
 }
 
-# Now you can run:
+## To get the PPV and NPV 
+# Now can run:
 ppv_post  <- ppv_npv(pa %>% filter(!is.na(MRD_truth)))
 ppv_maint <- ppv_npv(ma %>% filter(!is.na(MRD_truth)))
 
@@ -303,45 +378,47 @@ print(ppv_maint)
 
 # ---------------------------------------------------------------------------
 # 5.  NON-FRONTLINE cohort ----------------------------------------------------
-non <- dat %>% filter(Cohort != "Frontline")
+non <- dat %>% filter(Cohort != "Frontline") %>% filter(!is.na(BM_zscore_only_call))
 
-# Build the 2×2 confusion table
-non_cm <- non %>%
-  filter(!is.na(BM_zscore_only_call), !is.na(MRD_truth)) %>%
-  tabyl(BM_zscore_only_call, MRD_truth)
+non_cm <- dat %>%
+  filter(Cohort != "Frontline",
+         !is.na(BM_zscore_only_call),
+         !is.na(MRD_truth)) %>%
+  tabyl(BM_zscore_only_call, MRD_truth) %>%
+  # ensure integer rows 0 and 1 exist
+  complete(
+    BM_zscore_only_call = c(0L, 1L), 
+    fill = list(`0` = 0, `1` = 0)
+  ) %>%
+  column_to_rownames("BM_zscore_only_call")
 
-non_cm <- non_cm %>%
-  mutate(BM_zscore_only_call = as.character(BM_zscore_only_call))
 
-# Ensure both levels 0 and 1 appear as rows and columns:
-if (!all(c("0","1") %in% rownames(non_cm))) {
-  non_cm <- complete(non_cm, BM_zscore_only_call = c("0","1"), fill = list(`0`=0, `1`=0))
-}
-if (!all(c("0","1") %in% colnames(non_cm))) {
-  non_cm <- cbind(non_cm, `0` = 0, `1` = 0)[, c("0","1")]
-}
+# extract counts
+TPn <- non_cm["1", "1"]
+FPn <- non_cm["1", "0"]
+TNn <- non_cm["0", "0"]
+FNn <- non_cm["0", "1"]
 
-# Extract counts as scalars
-TPn <- non_cm["1", "1", drop = TRUE]
-FPn <- non_cm["1", "0", drop = TRUE]
-TNn <- non_cm["0", "0", drop = TRUE]
-FNn <- non_cm["0", "1", drop = TRUE]
-
-# Now compute sensitivity and specificity
 sens_non <- TPn / (TPn + FNn)
 spec_non <- TNn / (TNn + FPn)
 
 sens_non
 spec_non
 
-
 # Overall positivity non‑frontline
 non_pos <- non %>%
-  pivot_longer(cols = c(BM_zscore_only_call, Flow_Binary),
-               names_to = "Test", values_to = "Result") %>%
+  pivot_longer(
+    cols      = c(BM_zscore_only_call, Flow_Binary),
+    names_to  = "Test",
+    values_to = "Result"
+  ) %>%
   drop_na(Result) %>%
   group_by(Test) %>%
-  summarise(pos = sum(Result==1), tot=n(), .groups="drop")
+  dplyr::summarise(
+    pos = sum(Result == 1L, na.rm = TRUE),
+    tot = dplyr::n(),
+    .groups = "drop"
+  )
 
 # ---------------------------------------------------------------------------
 # 6.  Collect outputs --------------------------------------------------------
@@ -411,38 +488,42 @@ if (write_para) {
 }
 
 ## Export 
-# 1. Export post‐ASCT pairwise concordance for bone marrow (frontline cohort)
+# 1. Export post-ASCT pairwise concordance (frontline BM)
 readr::write_csv(
   post_conc,
-  "Frontline_BoneMarrow_PostASCT_Pairwise_Concordance.csv"
+  file.path(outdir, "Frontline_BoneMarrow_PostASCT_Pairwise_Concordance.csv")
 )
 
-# 2. Export maintenance‐timepoint pairwise concordance for bone marrow (frontline cohort)
+# 2. Export maintenance-timepoint pairwise concordance (frontline BM)
 readr::write_csv(
   maint_conc,
-  "Frontline_BoneMarrow_Maintenance_Pairwise_Concordance.csv"
+  file.path(outdir, "Frontline_BoneMarrow_Maintenance_Pairwise_Concordance.csv")
 )
 
-# 3. Export frontline positivity counts by test and landmark for bone marrow
-#    (this includes Post_ASCT and Maintenance combined in one table)
+# 3. Export frontline positivity counts by test & landmark (Post_ASCT + Maintenance)
 readr::write_csv(
   pos_tbl,
-  "Frontline_BoneMarrow_Positivity_PostASCT_and_Maintenance.csv"
+  file.path(outdir, "Frontline_BoneMarrow_Positivity_PostASCT_and_Maintenance.csv")
 )
 
-# 4. Export PPV/NPV at post‐ASCT for BM_zscore_only_call (frontline bone marrow)
+# 4. Export PPV/NPV at Post-ASCT for BM_zscore_only_call
 readr::write_csv(
   ppv_post,
-  "Frontline_BoneMarrow_PostASCT_PPV_NPV.csv"
+  file.path(outdir, "Frontline_BoneMarrow_PostASCT_PPV_NPV.csv")
 )
 
-# 5. Export PPV/NPV at maintenance for BM_zscore_only_call (frontline bone marrow)
+# 5. Export PPV/NPV at Maintenance for BM_zscore_only_call
 readr::write_csv(
   ppv_maint,
-  "Frontline_BoneMarrow_Maintenance_PPV_NPV.csv"
+  file.path(outdir, "Frontline_BoneMarrow_Maintenance_PPV_NPV.csv")
 )
 
 
+
+
+# ------------------------------------------------------------------------------
+# SECTION: CHARACTERISTICS OF MISCLASSIFIED SAMPLES
+# ------------------------------------------------------------------------------
 
 ### Look at characteristics of the samples that were misclassified
 
@@ -475,6 +556,75 @@ dat %>%
   head(10)
 
 
+
+
+
+
+### Add in the expected positions of fragmentomics data in healthy controls 
+# 1) Load the cut-offs tables
+fs_cutoffs_tbl <- read_csv(
+  file.path(outdir, "FS_cutoffs_table.csv"),
+  col_types = cols(
+    Method       = col_character(),
+    Lower_Cutoff = col_double(),
+    Upper_Cutoff = col_double()
+  )
+)
+
+mm_ranges <- read_csv(
+  file.path(outdir, "HC_Ranges_Selected_MM_DARs_Metrics.csv"),
+  col_types = cols(
+    metric           = col_character(),
+    mean_value       = col_double(),
+    sd_value         = col_double(),
+    lower_gaussian   = col_double(),
+    upper_gaussian   = col_double(),
+    lower_empirical  = col_double(),
+    upper_empirical  = col_double()
+  )
+)
+
+# 2) Turn those into named vectors for easy lookup
+lower_fs <- fs_cutoffs_tbl$Lower_Cutoff
+upper_fs <- fs_cutoffs_tbl$Upper_Cutoff
+
+# pick the guassian bounds from mm_ranges
+emp_ranges <- mm_ranges %>%
+  select(metric, lower = lower_gaussian, upper = upper_gaussian)
+
+lower_mm <- setNames(emp_ranges$lower, emp_ranges$metric)
+upper_mm <- setNames(emp_ranges$upper, emp_ranges$metric)
+
+# ────────────────────────────────────────────────────────────────────────────
+# 3) Flag outliers in dat
+# ────────────────────────────────────────────────────────────────────────────
+dat <- dat %>%
+  # 3a. FS outlier
+  mutate(
+    FS_outlier = case_when(
+      !is.na(FS) & (FS < lower_fs | FS > upper_fs) ~ 1L,
+      TRUE                                         ~ 0L
+    )
+  ) %>%
+  # 3b. MM-DARs outliers for each metric
+  mutate(
+    across(
+      .cols = c("Mean.Coverage", "Midpoint.Coverage",
+                "Midpoint.normalized", "Amplitude"),
+      .fns  = ~ as.integer(.x < lower_mm[cur_column()] |
+                             .x > upper_mm[cur_column()]),
+      .names = "{.col}_outlier"
+    )
+  )
+
+# 4) Save the augmented dat
+readr::write_csv(
+  dat,
+  file.path(outdir, "dat_with_fragment_and_DARs_outlier_flags.csv")
+)
+
+
+#### Now report on 
 # Columns you definitely need for inspection
 id_cols   <- c("Patient", "Sample_Code", "Timepoint", "timepoint_info")
 
@@ -484,7 +634,7 @@ aux_cols  <- c("Adaptive_Frequency",              # clonoSEQ cumulative VAF (ren
                "BM_zscore_only_prob",                # cfWGS probability (before threshold)
                "FS", "Mean.Coverage", "detect_rate_BM", "zscore_BM", 
                "WGS_Tumor_Fraction_Blood_plasma_cfDNA",
-               "BM_MutCount_Baseline", "Blood_MutCount_Baseline")
+               "BM_MutCount_Baseline", "Blood_MutCount_Baseline", "FS_outlier", "Mean.Coverage_outlier")
 
 # Make sure they exist
 missing <- setdiff(aux_cols, names(dat))
@@ -504,21 +654,21 @@ disc_cf_pos <- discord_tbl %>% filter(category == "cfWGS_pos / clonoSEQ_neg")
 disc_cf_neg <- discord_tbl %>% filter(category == "cfWGS_neg / clonoSEQ_pos")
 
 
-outdir <- "discordant_tables"
-dir.create(outdir, showWarnings = FALSE)
+outdir_discordances <- "Output_tables_2025/Discordant_tables"
+dir.create(outdir_discordances, showWarnings = FALSE)
 
 disc_cf_pos %>%
   select(all_of(id_cols), BM_zscore_only_call, Adaptive_Binary,
          # Flow_Binary if you want it too
          all_of(aux_cols)) %>%
   arrange(Adaptive_Frequency) %>%                        # lowest VAF at top
-  write.csv(file.path(outdir, "cfWGSpos_clSEQneg.csv"), row.names = FALSE)
+  write.csv(file.path(outdir_discordances, "cfWGSpos_clSEQneg.csv"), row.names = FALSE)
 
 disc_cf_neg %>%
   select(all_of(id_cols), BM_zscore_only_call, Adaptive_Binary,
          all_of(aux_cols)) %>%
   arrange(Adaptive_Frequency) %>%
-  write.csv(file.path(outdir, "cfWGSneg_clSEQpos.csv"), row.names = FALSE)
+  write.csv(file.path(outdir_discordances, "cfWGSneg_clSEQpos.csv"), row.names = FALSE)
 
 
 ## Now for MFC 
@@ -551,7 +701,7 @@ disc_cf_pos_flow %>%
   ) %>%
   arrange(Flow_pct_cells) %>%   # sort by MFC percentage (lowest first)
   write.csv(
-    file.path(outdir, "cfWGSpos_MFCneg.csv"),
+    file.path(outdir_discordances, "cfWGSpos_MFCneg.csv"),
     row.names = FALSE
   )
 
@@ -564,13 +714,16 @@ disc_cf_neg_flow %>%
   ) %>%
   arrange(Flow_pct_cells) %>%   # MFC percentage (lowest first)
   write.csv(
-    file.path(outdir, "cfWGSneg_MFCpos.csv"),
+    file.path(outdir_discordances, "cfWGSneg_MFCpos.csv"),
     row.names = FALSE
   )
 
 
 
+
+
 ### Run stats on discordant cases 
+library(exact2x2)      # for exact McNemar 
 # library(logistf)     # if you decide on Firth logistic
 
 ## 3.1  Build flags -----------------------------------------------------------
@@ -1263,6 +1416,8 @@ tbl_bl <- dat %>%
   adorn_totals(where="both")
 print(tbl_bl)
 
+library(janitor)
+library(gt)
 
 make_gt_cm <- function(tabyl_tbl, title_text){
   # drop the Totals row/col for clarity in the body

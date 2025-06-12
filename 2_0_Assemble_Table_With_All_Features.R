@@ -1,7 +1,3 @@
-source("setup_packages.R")
-source("config.R")
-source("helpers.R")
-
 # ==============================================================================
 # 2_Assemble_Table_With_All_Features
 #
@@ -23,6 +19,9 @@ source("helpers.R")
 ### MRD comparison figures updated Winter 2025
 ### Author: Dory Abelman 
 
+library(tidyverse)
+library(readxl)
+library(gridExtra)
 
 
 ### Load in all data:
@@ -36,7 +35,7 @@ MRD_cfWGS_blood <- read.csv(file.path("MRDetect_output_winter_2025/Processed_R_o
 
 
 Relapse_dates_M4_clean <- read_csv("Relapse_dates_M4_clean.csv") # Relapse dates
-combined_clinical_data_updated <- read_csv("combined_clinical_data_updated_Feb5_2025.csv") ## Aggregated clinical info
+combined_clinical_data_updated <- read_csv("combined_clinical_data_updated_April2025.csv") ## Aggregated clinical info
 SPORE_MRD <- read_excel("Clinical data/SPORE/SPORE_pct_flow_extracted.xlsx") %>% filter(!is.na(Patient))
 IMMAGINE_MRD <- read_excel("Clinical data/IMMAGINE/Extracted_clinical_MRD_data.xlsx", sheet = 3)
 
@@ -357,10 +356,10 @@ discrepancies <- Rapid_Novor_consolidated %>%
 tmp <- cfWGS_Clinical_MRD_filled %>%
   select(-Rapid_Novor)
 
-## Check for duplicates 
-dups_by_pt <- Rapid_Novor_consolidated %>%
+# Step 2: Check for duplicates in tmp
+dups_by_pt <- tmp %>%
   group_by(Patient, Timepoint) %>%
-  filter(n() > 1) %>%
+  filter(dplyr::n() > 1) %>%
   ungroup()
 
 
@@ -369,13 +368,15 @@ cfWGS_Clinical_MRD_filled <- tmp %>%
   full_join(
     Rapid_Novor_consolidated %>% 
       select(Patient, Timepoint, Rapid_Novor, Sample_Code, timepoint_info)
-  ) %>% unique()
+  ) %>% 
+  unique()
 
 # Identify duplicate rows based on Sample_Code
 duplicate_rows <- cfWGS_Clinical_MRD_filled %>%
   group_by(Sample_Code) %>%
-  filter(n() > 1) %>%
+  filter(dplyr::n() > 1) %>%
   ungroup()
+
 
 
 ### Add in the PET results
@@ -676,8 +677,8 @@ duplicate_dates <- M4_processing_log_dates %>%
 M4_processing_log_dates <- M4_processing_log_dates %>%
   mutate(Cleaned_Date = as.Date(Cleaned_Date))
 
-## From previous script5
-M4_Labs <- Labs_all_timepoints %>%
+## From previous script
+M4_Labs <- read.csv(file = "M4_labs_cleaned.csv") %>% # generated in script 1_0
   mutate(LAB_DATE = as.Date(LAB_DATE))
 
 # Merge the two datasets with a left join to retain all processing log dates
@@ -922,6 +923,7 @@ frag_small <- frag %>%
     Date        = Date_of_sample_collection
   )
 
+frag_small <- frag_small %>% filter(!is.na(Patient))
 # 2) If you only want one row per Patient/Date/Sample_Code—drop any duplicates
 # 2) Collapse duplicates by averaging all numeric columns
 frag_small_unique <- frag_small %>%
@@ -956,8 +958,11 @@ cfWGS_Clinical_MRD_filled <- cfWGS_Clinical_MRD_filled %>%
 
 
 
+
+
+##### Next add other info like clinical data
 #### Clinical data 
-clinical_data_integrate <- read.csv("Clinical data/Master_clinical_data_table_all_projects_May2025_updated.csv")
+clinical_data_integrate <- read.csv("Clinical data/Master_clinical_data_table_all_projects_May2025_updated2.csv") ### Generated in 1_1B
 
 # make sure both date columns are Date class
 clinical_data_integrate <- clinical_data_integrate %>%
@@ -1581,3 +1586,8 @@ write.csv(joined_clean2, file = "Final_aggregate_table_cfWGS_features_with_clini
 
 # Write to RDS (for loading back into R with full structure)
 saveRDS(joined_clean2, file = "Final_aggregate_table_cfWGS_features_with_clinical_and_demographics_updated3.rds")
+
+
+## Clean up info for VA-07 to correct previous typo when setting it as relapse 
+tmp <- readRDS("Final_aggregate_table_cfWGS_features_with_clinical_and_demographics_updated3.rds")
+

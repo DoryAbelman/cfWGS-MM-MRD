@@ -1,7 +1,3 @@
-source("setup_packages.R")
-source("config.R")
-source("helpers.R")
-
 # =============================================================================
 # MRDetect_processing.R
 # Project:  cfWGS MRDetect (Winter 2025)
@@ -31,6 +27,8 @@ source("helpers.R")
 #       - cfWGS_Winter2025All_MRDetect_May2025.rds
 #       - cfWGS_Winter2025All_MRDetect_with_Zscore_May2025.txt
 #       - cfWGS_Winter2025All_MRDetect_with_Zscore_May2025.rds
+#       - cfWGS MRDetect BM data updated May.csv
+#       - cfWGS MRDetect Blood data updated May.csv
 #
 # Usage:
 #   Rscript MRDetect_processing.R
@@ -39,12 +37,24 @@ source("helpers.R")
 # ──────────────────────────────────────────────────────────────────────────────
 # 1) Load libraries
 # ──────────────────────────────────────────────────────────────────────────────
+library(readr)
+library(data.table)
+library(dplyr)
+library(tidyr)
+library(stringr)
+library(openxlsx)
+library(ggplot2)
+library(ggbreak)
+library(patchwork)
+library(scales)
+#library(conflicted)
+library(lubridate)
 
 # resolve common conflicts
-conflicted::conflicts_prefer("dplyr::mutate")
-conflicted::conflicts_prefer("dplyr::filter")
-conflicted::conflicts_prefer("dplyr::select")
-conflicted::conflicts_prefer("dplyr::summarize")
+#conflicted::conflicts_prefer("dplyr::mutate")
+#conflicted::conflicts_prefer("dplyr::filter")
+#conflicted::conflicts_prefer("dplyr::select")
+#conflicted::conflicts_prefer("dplyr::summarize")
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -111,7 +121,7 @@ all_files <- all_files %>%
 # ──────────────────────────────────────────────────────────────────────────────
 # 4) Load clinical metadata and unify ‘VCF_clean’ naming
 # ──────────────────────────────────────────────────────────────────────────────
-cfWGS_metadata <- read_csv("../combined_clinical_data_updated_April2025.csv") %>%
+cfWGS_metadata <- read_csv("combined_clinical_data_updated_April2025.csv") %>%
   mutate(
     VCF_clean_merge = str_remove(Bam, "\\.filter.*"),
     # correct internal PG→WG for those five patient‐specific IDs
@@ -202,7 +212,6 @@ Merged_MRDetect <- Merged_MRDetect %>%
   left_join(bam_info, by = c("BAM" = "Bam"))
 
 
-
 # ──────────────────────────────────────────────────────────────────────────────
 # 10) Classify matched vs. unmatched plasma; force CHARM_healthy→cfDNA
 # ──────────────────────────────────────────────────────────────────────────────
@@ -288,3 +297,300 @@ saveRDS(Merged_MRDetect_zscore,
         file = file.path(outdir, paste0(base_name_zscore, ".rds")))
 
 message("→ MRDetect tables (raw & z-scored) written to: ", outdir)
+
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 15) Additional Processing - BM muts
+# ──────────────────────────────────────────────────────────────────────────────
+### Now Process Further
+### First BM Muts
+
+# 1) Start from your z-scored MRDetect table
+df <- Merged_MRDetect_zscore %>%
+  filter(plotting_type == "Matched_plasma",
+         Mut_source      == "BM_cells",
+         Filter_source   == "STR_encode")
+
+# 2) Collapse duplicate BAM runs by averaging all numeric QC/MRD metrics
+num_cols <- c(
+  "sites_checked", "reads_checked", "sites_detected", "reads_detected",
+  "total_reads", "detection_rate",
+  "detection_rate_as_reads_detected_over_reads_checked",
+  "detection_rate_as_reads_detected_over_total_reads",
+  "sites_detection_rate", "mean_detection_rate_charm", "sd_detection_rate_charm",
+  "mean_detection_rate_reads_checked_charm", "sd_detection_rate_reads_checked_charm",
+  "mean_detection_rate_total_reads_charm", "sd_detection_rate_total_reads_charm",
+  "mean_sites_rate_charm", "sd_sites_rate_charm",
+  "detection_rate_zscore_charm","sites_rate_zscore_charm",
+  "detection_rate_zscore_reads_checked_charm",
+  "detection_rate_zscore_total_reads_charm"
+)
+
+df <- df %>%
+  group_by(
+    Sample_ID, Sample_ID_Bam, VCF, VCF_clean, Study, Patient,
+    Date_of_sample_collection, Sample_type, Timepoint, Study_VCF,
+    timepoint_info, Sample_type_Bam, timepoint_info_Bam,
+    Mut_source, Filter_source, plotting_type, VCF_factor
+  ) %>%
+  summarise(across(all_of(num_cols), mean, na.rm = TRUE), .groups = "drop")
+
+# 3) Recompute MRD status & cumulative VAF
+df <- df %>%
+  mutate(
+    Mrd_by_WGS    = if_else(sites_rate_zscore_charm > 4.5, "Positive", "Negative"),
+    Cumulative_VAF = if_else(Mrd_by_WGS == "Positive",
+                             detection_rate_as_reads_detected_over_reads_checked,
+                             0)
+  )
+
+# 4) Pull in clinical dates & timepoints for both Sample_ID and Sample_ID_Bam
+cc <- cfWGS_metadata %>%
+  group_by(Sample_ID) %>%
+  slice_max(Date_of_sample_collection, n = 1) %>%
+  ungroup() %>%
+  select(Sample_ID, Date_of_sample_collection, Timepoint)
+
+# Build start_dates _including_ Patient
+start_dates <- df %>%
+  select(Sample_ID, Sample_ID_Bam, Patient) %>%          # ← grab Patient here
+  left_join(cc, by="Sample_ID") %>%                     
+  rename(Date0 = Date_of_sample_collection, TP0 = Timepoint) %>%
+  left_join(cc, by=c("Sample_ID_Bam"="Sample_ID")) %>%
+  rename(Date1 = Date_of_sample_collection, TP1 = Timepoint) %>%
+  transmute(
+    Sample_ID, Sample_ID_Bam, Patient,
+    num_days  = as.numeric(difftime(Date1, Date0, units="days")),
+    num_weeks = num_days/7
+  ) %>%
+  filter(!is.na(num_days))
+
+start_dates <- start_dates %>%
+  distinct()
+
+# 5) Attach start_dates back onto df
+combined_data_plot <- df %>%
+  left_join(start_dates, by = c("Sample_ID", "Sample_ID_Bam", "Patient"))
+
+# 6) Flag “Good_baseline_marrow” from your All_feature_data
+All_feature_data <- readRDS("Jan2025_exported_data/All_feature_data_Feb2025.rds")
+good_pts <- All_feature_data %>%
+  filter(Sample_type == "BM_cells",
+         Evidence_of_Disease == 1,
+         timepoint_info %in% c("Diagnosis","Baseline")) %>%
+  pull(Patient) %>% unique()
+
+combined_data_plot <- combined_data_plot %>%
+  mutate(
+    Good_baseline_marrow = if_else(Patient %in% good_pts, "Yes", "No")
+  )
+
+# 7) Calculate START_DATE and percent_change from baseline
+combined_data_plot <- combined_data_plot %>%
+  rename(START_DATE = num_days) %>%
+  filter(Good_baseline_marrow == "Yes",
+         Sample_type_Bam == "Blood_plasma_cfDNA") %>%
+  group_by(Patient) %>%
+  mutate(
+    baseline_date = min(START_DATE[timepoint_info %in% c("Baseline","Diagnosis")], na.rm = TRUE),
+    baseline_rate = detection_rate_as_reads_detected_over_reads_checked[START_DATE == baseline_date][1],
+    absolute_change = detection_rate_as_reads_detected_over_reads_checked - baseline_rate,
+    percent_change  = if_else(!is.na(baseline_rate),
+                              (absolute_change / baseline_rate) * 100,
+                              NA_real_),
+    Weeks_since_baseline = pmax(0, START_DATE) / 7
+  ) %>%
+  ungroup() 
+
+## Get the change since the first treatment timepoint 
+# Define the treatment sample categories
+treatment_samples <- c("Post_induction", "Post_transplant", "Maintenance", "1.5yr maintenance")
+
+combined_data_plot <- combined_data_plot %>%
+  dplyr::group_by(Patient) %>%
+  dplyr::arrange(START_DATE) %>%  # Ensure entries are sorted by days since baseline within each patient
+  dplyr::mutate(
+    # Find the first treatment sample date if available
+    first_treatment_date = ifelse(any(timepoint_info_Bam %in% treatment_samples),
+                                  START_DATE[timepoint_info_Bam %in% treatment_samples][1],
+                                  NA_real_),
+    # Calculate the detection rate for the first treatment timepoint
+    treatment_detection_rate = ifelse(!is.na(first_treatment_date),
+                                      detection_rate_as_reads_detected_over_reads_checked[START_DATE == first_treatment_date],
+                                      NA_real_)
+  ) %>%
+  ungroup() %>%
+  dplyr::mutate(
+    # Calculate the absolute and percent change in detection rate since the first treatment timepoint
+    absolute_change_detection_rate_treatment = detection_rate_as_reads_detected_over_reads_checked - treatment_detection_rate,
+    percent_change_detection_rate_treatment = (absolute_change_detection_rate_treatment / treatment_detection_rate) * 100,
+    # Calculate weeks since the first treatment date
+    Weeks_since_first_treatment = (START_DATE - first_treatment_date) / 7
+  )
+
+# For consistency 
+combined_data_plot$Weeks_since_second_start <- combined_data_plot$Weeks_since_first_treatment
+combined_data_plot$percent_change_detection_rate_second_timepoint <- combined_data_plot$percent_change_detection_rate_treatment
+
+
+# 8) Write out 
+export_dir <- "MRDetect_output_winter_2025/Processed_R_outputs/BM_muts_data"
+dir.create(export_dir, recursive = TRUE, showWarnings = FALSE)
+
+readr::write_csv(
+  combined_data_plot,
+  file = file.path(export_dir, "cfWGS_MRDetect_BM_data_updated_May.csv")
+)
+
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 15) Additional Processing - Blood muts
+# ──────────────────────────────────────────────────────────────────────────────
+### Next for blood-derived muts
+
+# 1) Start from your z-scored MRDetect table
+df <- Merged_MRDetect_zscore %>%
+  filter(plotting_type == "Matched_plasma",
+         Mut_source      == "Blood",
+         Filter_source   == "STR_encode")
+
+# 2) Collapse duplicate BAM runs by averaging all numeric QC/MRD metrics
+num_cols <- c(
+  "sites_checked", "reads_checked", "sites_detected", "reads_detected",
+  "total_reads", "detection_rate",
+  "detection_rate_as_reads_detected_over_reads_checked",
+  "detection_rate_as_reads_detected_over_total_reads",
+  "sites_detection_rate", "mean_detection_rate_charm", "sd_detection_rate_charm",
+  "mean_detection_rate_reads_checked_charm", "sd_detection_rate_reads_checked_charm",
+  "mean_detection_rate_total_reads_charm", "sd_detection_rate_total_reads_charm",
+  "mean_sites_rate_charm", "sd_sites_rate_charm",
+  "detection_rate_zscore_charm","sites_rate_zscore_charm",
+  "detection_rate_zscore_reads_checked_charm",
+  "detection_rate_zscore_total_reads_charm"
+)
+
+df <- df %>%
+  group_by(
+    Sample_ID, Sample_ID_Bam, VCF, VCF_clean, Study, Patient,
+    Date_of_sample_collection, Sample_type, Timepoint, Study_VCF,
+    timepoint_info, Sample_type_Bam, timepoint_info_Bam,
+    Mut_source, Filter_source, plotting_type, VCF_factor
+  ) %>%
+  summarise(across(all_of(num_cols), mean, na.rm = TRUE), .groups = "drop")
+
+# 3) Recompute MRD status & cumulative VAF
+df <- df %>%
+  mutate(
+    Mrd_by_WGS    = if_else(sites_rate_zscore_charm > 4.5, "Positive", "Negative"),
+    Cumulative_VAF = if_else(Mrd_by_WGS == "Positive",
+                             detection_rate_as_reads_detected_over_reads_checked,
+                             0)
+  )
+
+# 4) Pull in clinical dates & timepoints for both Sample_ID and Sample_ID_Bam
+cc <- cfWGS_metadata %>%
+  group_by(Sample_ID) %>%
+  slice_max(Date_of_sample_collection, n = 1) %>%
+  ungroup() %>%
+  select(Sample_ID, Date_of_sample_collection, Timepoint)
+
+# Build start_dates _including_ Patient
+start_dates <- df %>%
+  select(Sample_ID, Sample_ID_Bam, Patient) %>%          # ← grab Patient here
+  left_join(cc, by="Sample_ID") %>%                     
+  rename(Date0 = Date_of_sample_collection, TP0 = Timepoint) %>%
+  left_join(cc, by=c("Sample_ID_Bam"="Sample_ID")) %>%
+  rename(Date1 = Date_of_sample_collection, TP1 = Timepoint) %>%
+  transmute(
+    Sample_ID, Sample_ID_Bam, Patient,
+    num_days  = as.numeric(difftime(Date1, Date0, units="days")),
+    num_weeks = num_days/7
+  ) %>%
+  filter(!is.na(num_days))
+
+start_dates <- start_dates %>%
+  distinct()
+
+# 5) Attach start_dates back onto df
+combined_data_plot <- df %>%
+  left_join(start_dates, by = c("Sample_ID", "Sample_ID_Bam", "Patient"))
+
+# 6) Flag “Good_baseline_sapmle” from your All_feature_data
+good_pts <- All_feature_data %>%
+  filter(Sample_type == "Blood_plasma_cfDNA",
+         Evidence_of_Disease == 1,
+         timepoint_info %in% c("Diagnosis","Baseline")) %>%
+  pull(Patient) %>% unique()
+
+combined_data_plot <- combined_data_plot %>%
+  mutate(
+    Good_baseline_sample = if_else(Patient %in% good_pts, "Yes", "No")
+  )
+
+# 7) Calculate START_DATE and percent_change from baseline
+combined_data_plot <- combined_data_plot %>%
+  rename(START_DATE = num_days) %>%
+  filter(Good_baseline_sample == "Yes",
+         Sample_type_Bam == "Blood_plasma_cfDNA") %>%
+  group_by(Patient) %>%
+  mutate(
+    baseline_date = min(START_DATE[timepoint_info %in% c("Baseline","Diagnosis")], na.rm = TRUE),
+    baseline_rate = detection_rate_as_reads_detected_over_reads_checked[START_DATE == baseline_date][1],
+    absolute_change = detection_rate_as_reads_detected_over_reads_checked - baseline_rate,
+    percent_change  = if_else(!is.na(baseline_rate),
+                              (absolute_change / baseline_rate) * 100,
+                              NA_real_),
+    Weeks_since_baseline = pmax(0, START_DATE) / 7
+  ) %>%
+  ungroup() 
+
+
+## Now edit this to show the time difference since the second timepoint 
+## First calculate the percent change in detection rate and put dates
+
+## Get the change since the first treatment timepoint 
+# Define the treatment sample categories
+treatment_samples <- c("Post_induction", "Post_transplant", "Maintenance", "1.5yr maintenance")
+
+combined_data_plot <- combined_data_plot %>%
+  dplyr::group_by(Patient) %>%
+  dplyr::arrange(START_DATE) %>%  # Ensure entries are sorted by days since baseline within each patient
+  dplyr::mutate(
+    # Find the first treatment sample date if available
+    first_treatment_date = ifelse(any(timepoint_info_Bam %in% treatment_samples),
+                                  START_DATE[timepoint_info_Bam %in% treatment_samples][1],
+                                  NA_real_),
+    # Calculate the detection rate for the first treatment timepoint
+    treatment_detection_rate = ifelse(!is.na(first_treatment_date),
+                                      detection_rate_as_reads_detected_over_reads_checked[START_DATE == first_treatment_date],
+                                      NA_real_)
+  ) %>%
+  ungroup() %>%
+  dplyr::mutate(
+    # Calculate the absolute and percent change in detection rate since the first treatment timepoint
+    absolute_change_detection_rate_treatment = detection_rate_as_reads_detected_over_reads_checked - treatment_detection_rate,
+    percent_change_detection_rate_treatment = (absolute_change_detection_rate_treatment / treatment_detection_rate) * 100,
+    # Calculate weeks since the first treatment date
+    Weeks_since_first_treatment = (START_DATE - first_treatment_date) / 7
+  )
+
+# For consistency 
+combined_data_plot$Weeks_since_second_start <- combined_data_plot$Weeks_since_first_treatment
+combined_data_plot$percent_change_detection_rate_second_timepoint <- combined_data_plot$percent_change_detection_rate_treatment
+
+## Get rid of marrows that are not at baseline 
+combined_data_plot <- combined_data_plot %>%
+  filter(Timepoint %in% c("01", "T0", "1"))
+combined_data_plot <- combined_data_plot %>% 
+  filter(Sample_type == "Blood_plasma_cfDNA")
+
+# 8) Write out 
+readr::write_csv(
+  combined_data_plot,
+  file = file.path(export_dir, "cfWGS MRDetect Blood data updated May.csv")
+)
+
+
+## Script complete.
