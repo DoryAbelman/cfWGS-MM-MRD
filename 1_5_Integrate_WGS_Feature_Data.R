@@ -1,7 +1,3 @@
-source("setup_packages.R")
-source("config.R")
-source("helpers.R")
-
 # =============================================================================
 # Script: integrate_features.R
 #
@@ -47,6 +43,11 @@ source("helpers.R")
 # =============================================================================
 
 # Load libraries
+library(dplyr)
+library(tidyr)
+library(readr)
+library(stringr)
+library(maftools)
 
 # Define export directory
 export_dir <- "Jan2025_exported_data"
@@ -218,43 +219,97 @@ All_feature_data <- All_feature_data %>%
     )
   )
 
-## Version 2 - less stringency on the cfDNA cases 
+## Version 2 - less stringency on the cfDNA cases, used in final version
 # Add the Evidence_of_Disease column based on the specified conditions
 All_feature_data <- All_feature_data %>%
   mutate(
     Evidence_of_Disease = case_when(
-      # Condition 0: Any translocation or Mut_highest_VAF > 0.1 gives Evidence_of_Disease = 1 regardless of Tumor_Fraction
-      IGH_MAF == 1 | IGH_CCND1 == 1 | IGH_MYC == 1 | IGH_FGFR3 == 1 | Mut_highest_VAF > 0.1 ~ 1,
+      # Condition 0: any of the key translocations OR very high‐VAF (10%) OR cfDNA VAF > 5%
+      IGH_MAF == 1 |
+        IGH_CCND1 == 1 |
+        IGH_MYC == 1 |
+        IGH_FGFR3 == 1 |
+        Mut_highest_VAF > 0.10 |
+        (Sample_type != "BM_cells" & Mut_highest_VAF > 0.05)    ~ 1,
       
-      # Primary Condition 1: Tumor_Fraction > 10% and Sample_type is BM_cells
-      Tumor_Fraction > 0.10 & Sample_type == "BM_cells" ~ 1,
+      # Primary Condition 1: high Tumor_Fraction in bone‐marrow
+      Tumor_Fraction > 0.10 & Sample_type == "BM_cells"     ~ 1,
       
-      # Primary Condition 2: Tumor_Fraction > 5% and Sample_type is not BM_cells
-      Tumor_Fraction > 0.05 & Sample_type != "BM_cells" ~ 1,
+      # Primary Condition 2: tumor fraction > 5% in non‐BM samples
+      Tumor_Fraction > 0.05 & Sample_type != "BM_cells"     ~ 1,
       
-      # Additional Condition 3: Tumor_Fraction between 0.03 and 0.05 and Sample_type is not BM_cells,
-      # evaluate further conditions
-      Tumor_Fraction <= 0.05 & Tumor_Fraction > 0.03 & Sample_type != "BM_cells" & (
-        # Condition 3a: hyperdiploid is TRUE
+      # Additional Condition 3: moderate tumor fraction + supportive cytogenetics
+      Tumor_Fraction > 0.03 & Tumor_Fraction <= 0.05 & Sample_type != "BM_cells" & (
         hyperdiploid == "TRUE" |
-          
-          # Condition 3b: At least one of del1p, amp1q, or del17p is 1
-          (del1p == "1" | amp1q == "1" | del17p == "1")
-      ) ~ 1,
+          del1p     == "1" |
+          amp1q     == "1" |
+          del17p    == "1"
+      )                                                     ~ 1,
       
-      # If none of the above conditions are met, set to 0
-      TRUE ~ 0
+      # else
+      TRUE                                                  ~ 0
     )
   )
+
+
+### See difference to old version (Feb2025 version)
+# 1) Define a helper that computes the old Evidence_of_Disease
+compute_old_evidence <- function(df) {
+  df %>% mutate(
+    Evidence_old = case_when(
+      IGH_MAF    == 1 | IGH_CCND1 == 1 | IGH_MYC  == 1 | IGH_FGFR3 == 1 | Mut_highest_VAF > 0.10  ~ 1,
+      Tumor_Fraction > 0.10 & Sample_type == "BM_cells"                                ~ 1,
+      Tumor_Fraction > 0.05 & Sample_type != "BM_cells"                                ~ 1,
+      Tumor_Fraction > 0.03 & Tumor_Fraction <= 0.05 & Sample_type != "BM_cells" &
+        (hyperdiploid == "TRUE" |
+           del1p       == "1"    |
+           amp1q       == "1"    |
+           del17p      == "1")                                                 ~ 1,
+      TRUE                                                                            ~ 0
+    )
+  )
+}
+
+# 2) Define a helper that computes the new Evidence_of_Disease
+compute_new_evidence <- function(df) {
+  df %>% mutate(
+    Evidence_new = case_when(
+      IGH_MAF    == 1 | IGH_CCND1 == 1 | IGH_MYC  == 1 | IGH_FGFR3 == 1 |
+        Mut_highest_VAF > 0.10 |
+        (Sample_type != "BM_cells" & Mut_highest_VAF > 0.05)                         ~ 1,
+      Tumor_Fraction > 0.10 & Sample_type == "BM_cells"                            ~ 1,
+      Tumor_Fraction > 0.05 & Sample_type != "BM_cells"                            ~ 1,
+      Tumor_Fraction > 0.03 & Tumor_Fraction <= 0.05 & Sample_type != "BM_cells" &
+        (hyperdiploid == "TRUE" |
+           del1p       == "1"    |
+           amp1q       == "1"    |
+           del17p      == "1")                                                 ~ 1,
+      TRUE                                                                        ~ 0
+    )
+  )
+}
+
+# 3) Chain them together and filter for differences
+comparison <- All_feature_data %>%
+  compute_old_evidence() %>%
+  compute_new_evidence() %>%
+  filter(Evidence_old != Evidence_new) %>%
+  select(
+    Sample_ID, Sample_type, Tumor_Fraction, Mut_highest_VAF,
+    Evidence_old, Evidence_new
+  )
+
+# 4) View
+print(comparison)
 
 
 
 ## Export this 
 # Save All_feature_data as an RDS file
-saveRDS(All_feature_data, file = file.path(export_dir, "All_feature_data_Feb2025.rds"))
+saveRDS(All_feature_data, file = file.path(export_dir, "All_feature_data_May2025.rds"))
 
 # Save All_feature_data as a text file with tab-separated values
-write.table(All_feature_data, file = file.path(export_dir, "All_feature_data_Feb2025.txt"), sep = "\t", row.names = TRUE, quote = FALSE)
+write.table(All_feature_data, file = file.path(export_dir, "All_feature_data_May2025.txt"), sep = "\t", row.names = TRUE, quote = FALSE)
 
 
 ### Save the CNA_Translocation file 

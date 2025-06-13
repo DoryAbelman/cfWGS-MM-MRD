@@ -1,7 +1,3 @@
-source("setup_packages.R")
-source("config.R")
-source("helpers.R")
-
 # =============================================================================
 # sample_availability_summary.R
 # Project:  cfWGS MRD Detection (M4 / IMMAGINE / SPORE)
@@ -51,6 +47,11 @@ source("helpers.R")
 # Date:    January 2025 (last update May 2025)
 # =============================================================================
 
+library(readxl)
+library(dplyr)
+library(readr)
+library(stringr)
+library(glue)
 
 # ──────────────────────────────────────────────────────────────────────────────
 # 1. FILE PATHS & SETUP
@@ -58,7 +59,7 @@ source("helpers.R")
 bm_list_path        <- "Clinical data/M4/M4 V1 BM processed at baseline.xlsx"
 processing_log_path <- "TFRIM4_Processing Log_Nov2024.xlsx"
 clinical_csv_path   <- "combined_clinical_data_updated_April2025.csv"
-features_rds_path   <- "All_feature_data_Feb2025.rds"
+features_rds_path   <- "All_feature_data_May2025.rds"
 failed_info_path    <- "summary_table_of_samples_and_patient_availability_cfWGS - for making the flow chart of samples.xlsx"
 export_dir          <- "Output_tables_2025"
 
@@ -409,6 +410,55 @@ patient_cohort <- failed_info %>%
 write_csv(patient_cohort, file.path(export_dir, "patient_cohort_assignment.csv"))
 saveRDS(patient_cohort,   file.path(export_dir, "patient_cohort_assignment.rds"))
 message("Saved → patient_cohort_assignment.{csv,rds} in ", export_dir)
+
+
+
+### Check to see the proportion with evidence of disease 
+cohort_df <- readRDS("cohort_assignment_table_updated.rds") ## after manual confirmation 
+successfuly_sequenced <- read_excel()
+# 1) Identify the cohort patients
+cohort_patients <- cohort_df %>% distinct(Patient)
+
+# 2) Which cohort patients have a “good” baseline BM sample?
+bm_good_patients <- All_feature_data %>%
+  filter(
+    Sample_type == "BM_cells",
+    timepoint_info %in% c("Diagnosis","Baseline"),
+    Evidence_of_Disease == 1
+  ) %>%
+  distinct(Patient)
+
+# 3) Which cohort patients have a “good” baseline cfDNA sample?
+cfDNA_good_patients <- All_feature_data %>%
+  filter(
+    Sample_type != "BM_cells",
+    timepoint_info %in% c("Diagnosis","Baseline"),
+    Evidence_of_Disease == 1
+  ) %>%
+  distinct(Patient)
+
+# 4) Calculate proportions
+prop_bm <- cohort_patients %>%
+  mutate(has_good_BM = Patient %in% bm_good_patients$Patient) %>%
+  summarise(
+    n_total = dplyr::n(),
+    n_good  = sum(has_good_BM),
+    prop_good_BM = n_good / n_total
+  )
+
+prop_cfDNA <- cohort_patients %>%
+  mutate(has_good_cfDNA = Patient %in% cfDNA_good_patients$Patient) %>%
+  summarise(
+    n_total   = dplyr::n(),
+    n_good    = sum(has_good_cfDNA),
+    prop_good_cfDNA = n_good / n_total
+  )
+
+# 5) Print results
+prop_bm
+prop_cfDNA
+
+
 
 # ──────────────────────────────────────────────────────────────────────────────
 # End of file

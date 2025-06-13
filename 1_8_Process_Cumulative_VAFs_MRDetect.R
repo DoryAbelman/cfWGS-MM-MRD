@@ -374,7 +374,7 @@ combined_data_plot <- df %>%
   left_join(start_dates, by = c("Sample_ID", "Sample_ID_Bam", "Patient"))
 
 # 6) Flag “Good_baseline_marrow” from your All_feature_data
-All_feature_data <- readRDS("Jan2025_exported_data/All_feature_data_Feb2025.rds")
+All_feature_data <- readRDS("Jan2025_exported_data/All_feature_data_May2025.rds")
 good_pts <- All_feature_data %>%
   filter(Sample_type == "BM_cells",
          Evidence_of_Disease == 1,
@@ -435,7 +435,7 @@ combined_data_plot$percent_change_detection_rate_second_timepoint <- combined_da
 
 
 # 8) Write out 
-export_dir <- "MRDetect_output_winter_2025/Processed_R_outputs/BM_muts_data"
+export_dir <- "MRDetect_output_winter_2025/Processed_R_outputs/BM_muts_plots_baseline/"
 dir.create(export_dir, recursive = TRUE, showWarnings = FALSE)
 
 readr::write_csv(
@@ -449,7 +449,7 @@ readr::write_csv(
 # 15) Additional Processing - Blood muts
 # ──────────────────────────────────────────────────────────────────────────────
 ### Next for blood-derived muts
-
+#Merged_MRDetect_zscore <- readRDS(file = "MRDetect_output_winter_2025/Processed_R_outputs/cfWGS_Winter2025All_MRDetect_with_Zscore_May2025.rds")
 # 1) Start from your z-scored MRDetect table
 df <- Merged_MRDetect_zscore %>%
   filter(plotting_type == "Matched_plasma",
@@ -487,7 +487,7 @@ df <- df %>%
     Cumulative_VAF = if_else(Mrd_by_WGS == "Positive",
                              detection_rate_as_reads_detected_over_reads_checked,
                              0)
-  )
+  ) ## Old version
 
 # 4) Pull in clinical dates & timepoints for both Sample_ID and Sample_ID_Bam
 cc <- cfWGS_metadata %>%
@@ -517,7 +517,7 @@ start_dates <- start_dates %>%
 combined_data_plot <- df %>%
   left_join(start_dates, by = c("Sample_ID", "Sample_ID_Bam", "Patient"))
 
-# 6) Flag “Good_baseline_sapmle” from your All_feature_data
+# 6) Flag “Good_baseline_sample” from your All_feature_data
 good_pts <- All_feature_data %>%
   filter(Sample_type == "Blood_plasma_cfDNA",
          Evidence_of_Disease == 1,
@@ -586,10 +586,12 @@ combined_data_plot <- combined_data_plot %>%
 combined_data_plot <- combined_data_plot %>% 
   filter(Sample_type == "Blood_plasma_cfDNA")
 
+
 # 8) Write out 
+export_dir <- "MRDetect_output_winter_2025/Processed_R_outputs/Blood_muts_plots_baseline/"
 readr::write_csv(
   combined_data_plot,
-  file = file.path(export_dir, "cfWGS MRDetect Blood data updated May.csv")
+  file = file.path(export_dir, "cfWGS MRDetect Blood data updated June.csv")
 )
 
 

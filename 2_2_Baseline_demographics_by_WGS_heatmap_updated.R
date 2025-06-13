@@ -1,7 +1,3 @@
-source("setup_packages.R")
-source("config.R")
-source("helpers.R")
-
 # figure1_integrated_heatmaps.R
 # ------------------------------------------------------------
 # Generate Figure 1: Integrated alteration heatmaps
@@ -19,6 +15,15 @@ source("helpers.R")
 
 
 # Load required libraries
+library(maftools)
+library(dplyr)
+library(tidyr)
+library(ComplexHeatmap)
+library(circlize)
+library(purrr)
+library(stringr)
+library(readr)
+library(grid)
 
 
 ### Load data 
@@ -99,6 +104,209 @@ myeloma_genes <- c(
 
 ### This script first does seperate heatmaps organized in the same order and then a combined heatmap
 ## The combined heatmap has updated sample groupings and is the figure used in the manuscript
+
+
+#### Verify the mutations in IGV
+# ─────────────────────────────────────────────────────────────────────────────
+#  EXPORT ONLY HEATMAPED MUTATIONS FOR MANUAL IGV CHECK
+# ─────────────────────────────────────────────────────────────────────────────
+# 1. pull raw MAF tables
+
+### First verify the mutations in IGV 
+# Process mutation data for BM
+maf_subset <- subsetMaf(maf = maf_object_bm, genes = myeloma_genes, includeSyn = FALSE)
+
+# Process mutation data for blood
+maf_subset_blood <- subsetMaf(maf = maf_object_blood, genes = myeloma_genes, includeSyn = FALSE)
+
+# 1. rename Tumor_Sample_Barcode → Bam
+screenshotter_df <- maf_subset@data %>%
+  mutate(Mutation = paste(Reference_Allele, Tumor_Seq_Allele2, sep=">")) %>%
+  distinct(Bam, Chromosome, Start_Position, Mutation)
+
+# 2. check your BAM‐name set
+current_bams    <- read_csv("Cut bam names.csv")$Name %>% str_remove("\\.bam$") # some minor stylistic changes after archiving renaming (ie, - vs _)
+
+screenshot_bams <- screenshotter_df$Bam %>% str_remove("\\.bam$")
+missing_bams    <- setdiff(screenshot_bams, current_bams)
+
+library(stringdist)
+
+# For each missing BAM, find the closest match in current_bams based on Levenshtein distance
+closest_matches <- sapply(missing_bams, function(miss) {
+  distances <- stringdist(miss, current_bams, method = "lv")
+  current_bams[which.min(distances)]
+})
+
+# Combine results into a data frame and print
+result <- data.frame(
+  Missing_BAM = missing_bams,
+  Closest_Match = closest_matches,
+  stringsAsFactors = FALSE
+)
+print(result)
+
+# Manual check - all good except:
+bad <- c(
+  "TFRIM4_0062_Bm_P_WG_RE-01-01-O-DNA.filter.deduped.recalibrated",
+  "TFRIM4_0186_Bm_P_WG_VA-12-01-O-DNA.filter.deduped.recalibrated"
+)
+
+# remove the bad ones
+result <- result %>%
+  filter(!Missing_BAM %in% bad)
+
+# 3. apply any name fixes, then split out groups
+screenshotter_df <- screenshotter_df %>%
+  mutate(Bam = str_remove(Bam, "\\.bam$")) %>%
+  left_join(result, by = c("Bam" = "Missing_BAM")) %>%
+  mutate(Bam = coalesce(Closest_Match, Bam)) %>%
+  select(-Closest_Match)
+
+# 4. write BEDs
+outdir_bed <- "IGV_screenshotter/Bed_files_BM_updated"
+if (!dir.exists(outdir_bed)) dir.create(outdir_bed, recursive = TRUE)
+
+write_bed <- function(df, bam_name) {
+  bed <- df %>%
+    mutate(
+      Chromosome = if_else(str_starts(Chromosome,"chr"), Chromosome, paste0("chr",Chromosome)),
+      Start      = pmax(0, Start_Position - 1 - 20),
+      End        = Start_Position + 20
+    ) %>%
+    select(Chromosome, Start, End, Name = Mutation)
+  # write into the outdir:
+  write_tsv(bed,
+            file.path(outdir_bed, paste0(bam_name, ".bed")),
+            col_names = FALSE)
+}
+
+# then this will drop all your .bed files into bed_files/
+screenshotter_df %>% group_by(Bam) %>% group_walk(~ write_bed(.x, .y$Bam))
+
+
+
+#### Now do the same for blood muts
+# 1. rename Tumor_Sample_Barcode → Bam
+screenshotter_df <- maf_subset_blood@data %>%
+  mutate(Mutation = paste(Reference_Allele, Tumor_Seq_Allele2, sep=">")) %>%
+  distinct(Bam, Chromosome, Start_Position, Mutation)
+
+# 2. check your BAM‐name set
+current_bams    <- read_csv("Cut bam names.csv")$Name %>% str_remove("\\.bam$") # some minor stylistic changes after archiving renaming (ie, - vs _)
+
+screenshot_bams <- screenshotter_df$Bam %>% str_remove("\\.bam$")
+missing_bams    <- setdiff(screenshot_bams, current_bams)
+
+# For each missing BAM, find the closest match in current_bams based on Levenshtein distance
+closest_matches <- sapply(missing_bams, function(miss) {
+  distances <- stringdist(miss, current_bams, method = "lv")
+  current_bams[which.min(distances)]
+})
+
+# Combine results into a data frame and print
+result <- data.frame(
+  Missing_BAM = missing_bams,
+  Closest_Match = closest_matches,
+  stringsAsFactors = FALSE
+)
+print(result)
+
+# Manual check - all good except:
+bad <- c(
+  "SPORE_0006_Pl_T_PG_PL6-T2-P-DNA.filter.deduped.recalibrated") # remove since don't have
+
+# remove the bad ones
+result <- result %>%
+  filter(!Missing_BAM %in% bad)
+
+# 3. apply any name fixes, then split out groups
+screenshotter_df <- screenshotter_df %>%
+  mutate(Bam = str_remove(Bam, "\\.bam$")) %>%
+  left_join(result, by = c("Bam" = "Missing_BAM")) %>%
+  mutate(Bam = coalesce(Closest_Match, Bam)) %>%
+  select(-Closest_Match)
+
+# 4. write BEDs
+outdir_bed <- "IGV_screenshotter/Bed_files_Blood_updated"
+if (!dir.exists(outdir_bed)) dir.create(outdir_bed, recursive = TRUE)
+
+write_bed <- function(df, bam_name) {
+  bed <- df %>%
+    mutate(
+      Chromosome = if_else(str_starts(Chromosome,"chr"), Chromosome, paste0("chr",Chromosome)),
+      Start      = pmax(0, Start_Position - 1 - 20),
+      End        = Start_Position + 20
+    ) %>%
+    select(Chromosome, Start, End, Name = Mutation)
+  # write into the outdir:
+  write_tsv(bed,
+            file.path(outdir_bed, paste0(bam_name, ".bed")),
+            col_names = FALSE)
+}
+
+# then this will drop all your .bed files into bed_files/
+screenshotter_df %>% group_by(Bam) %>% group_walk(~ write_bed(.x, .y$Bam))
+
+
+
+# 2. figure out exactly which barcodes & genes are on your heatmap
+final_BM_barcodes    <- combined_data_heatmap_BM$Tumor_Sample_Barcode
+final_blood_barcodes <- combined_data_heatmap_blood$Tumor_Sample_Barcode
+final_genes          <- intersect(myeloma_genes, colnames(combined_data_heatmap_BM))
+
+# 3. filter to those samples + genes
+bm_filt    <- maf_subset@data %>%
+  filter(Tumor_Sample_Barcode %in% final_BM_barcodes,
+         Hugo_Symbol            %in% final_genes)
+
+blood_filt <- maf_subset_blood@data %>%
+  filter(Tumor_Sample_Barcode %in% final_blood_barcodes,
+         Hugo_Symbol            %in% final_genes)
+
+# 4. add back your original BAM name
+bm_filt    <- bm_filt %>%
+  left_join(metada_df_mutation_comparison %>% 
+              select(Bam_clean_tmp, Bam),
+            by = c("Tumor_Sample_Barcode" = "Bam_clean_tmp"))
+
+blood_filt <- blood_filt %>%
+  left_join(metada_df_mutation_comparison %>% 
+              select(Bam_clean_tmp, Bam),
+            by = c("Tumor_Sample_Barcode" = "Bam_clean_tmp"))
+
+# 5. select only the columns you need for IGV
+bm_for_igv <- bm_filt %>%
+  transmute(
+    Sample       = Bam,
+    Chromosome   = Chromosome,
+    Start        = Start_Position,
+    End          = ifelse(is.na(End_Position), Start_Position, End_Position),
+    Gene         = Hugo_Symbol,
+    VariantClass = Variant_Classification
+  )
+
+blood_for_igv <- blood_filt %>%
+  transmute(
+    Sample       = Bam,
+    Chromosome   = Chromosome,
+    Start        = Start_Position,
+    End          = ifelse(is.na(End_Position), Start_Position, End_Position),
+    Gene         = Hugo_Symbol,
+    VariantClass = Variant_Classification
+  )
+
+# 6. write them out
+out_dir <- "Jan2025_exported_data/for_IGV_filtered"
+dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
+
+readr::write_tsv(bm_for_igv,    file.path(out_dir, "BM_heatmap_mutations_for_IGV.tsv"))
+readr::write_tsv(blood_for_igv, file.path(out_dir, "Blood_heatmap_mutations_for_IGV.tsv"))
+
+message("Wrote filtered IGV tables to ", out_dir)
+# ─────────────────────────────────────────────────────────────────────────────
+
+
 
 ###########################################
 ### 1. Bone Marrow (BM) Heatmap Section ###
@@ -491,6 +699,7 @@ saveRDS(combined_data_heatmap_BM, file = "combined_data_heatmap_BM_March2025.rds
 saveRDS(combined_data_heatmap_blood, file = "combined_data_heatmap_blood_March2025.rds")
 
 
+
 ################################################################################
 ### 3.  OVERLAY HEATMAP (BM ⬆︎ / cfDNA ⬇︎)  ####################################
 ################################################################################
@@ -693,6 +902,7 @@ bm_counts    <- dat_base$BM_Mutation_Count[    match(patient_ids, dat_base$Patie
 blood_counts <- dat_base$Blood_Mutation_Count[ match(patient_ids, dat_base$Patient) ]
 
 # 2) set up continuous palette for all muts (you can pick your own colours):
+library(circlize)
 all_counts <- c(bm_counts, blood_counts)
 qnts       <- quantile(all_counts, probs = c(0, 0.5, 1), na.rm = TRUE)
 

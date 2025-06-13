@@ -25,13 +25,13 @@ library(gridExtra)
 
 
 ### Load in all data:
-All_feature_data <- readRDS("Jan2025_exported_data/All_feature_data_Feb2025.rds") # MRD sample purity
+All_feature_data <- readRDS("Jan2025_exported_data/All_feature_data_May2025.rds") # MRD sample purity
 M4_MRD_filtered <- read_tsv("M4_MRD_filtered.txt") # The MRD data from labs
 
 path <- file.path("MRDetect_output_winter_2025", "Processed_R_outputs", "BM_muts_data")
 #MRD_cfWGS_backup <- MRD_cfWGS
 MRD_cfWGS_BM <- read.csv(file.path("MRDetect_output_winter_2025/Processed_R_outputs/BM_muts_plots_baseline/cfWGS MRDetect BM data updated May.csv")) # MRD data from MRDetect
-MRD_cfWGS_blood <- read.csv(file.path("MRDetect_output_winter_2025/Processed_R_outputs/Blood_muts_plots_baseline/cfWGS MRDetect Blood data updated May.csv")) # MRD data from MRDetect
+MRD_cfWGS_blood <- read.csv(file.path("MRDetect_output_winter_2025/Processed_R_outputs/Blood_muts_plots_baseline/cfWGS MRDetect Blood data updated June.csv")) # MRD data from MRDetect
 
 
 Relapse_dates_M4_clean <- read_csv("Relapse_dates_M4_clean.csv") # Relapse dates
@@ -571,7 +571,7 @@ cfWGS_Clinical_MRD_filled <- cfWGS_Clinical_MRD_filled %>%
 # How many rows got both BM & blood info?
 cfWGS_Clinical_MRD_filled %>% 
   summarize(
-    total = n(),
+    total = dplyr::n(),
     with_BM    = sum(!is.na(Mrd_by_WGS_BM)),
     with_blood = sum(!is.na(Mrd_by_WGS_blood))
   )
@@ -637,7 +637,7 @@ cfWGS_Clinical_MRD_filled <- cfWGS_Clinical_MRD_filled %>% unique()
 # 1) Pull out all the rows where (Patient, Date) is duplicated
 dups <- cfWGS_Clinical_MRD_filled %>%
   group_by(Patient, Date, Sample_Code) %>%
-  filter(n() > 1) %>%
+  filter(dplyr::n() > 1) %>%
   ungroup()
 
 # Inspect
@@ -669,7 +669,7 @@ date_comparison <- cfWGS_Clinical_MRD_filled %>%
 # Find duplicate date entries
 duplicate_dates <- M4_processing_log_dates %>%
   group_by(Sample_Code) %>%  # Group by the sample code column
-  filter(n() > 1)  # Keep only rows where the Cleaned_Date appears more than once
+  filter(dplyr::n() > 1)  # Keep only rows where the Cleaned_Date appears more than once
 
 # Keep only those closest to lab 
 # Merge the two datasets to compare dates
@@ -708,7 +708,7 @@ final_processing_log <- closest_date_entries %>%
 # Find duplicate date entries
 duplicate_dates <- final_processing_log %>%
   group_by(Sample_Code) %>%  # Group by the sample code column
-  filter(n() > 1)  # Keep only rows where the Cleaned_Date appears more than once
+  filter(dplyr::n() > 1)  # Keep only rows where the Cleaned_Date appears more than once
 
 
 # Define the rows to exclude
@@ -810,7 +810,7 @@ cfWGS_Clinical_MRD_filled <- cfWGS_Clinical_MRD_filled %>%
 # Find duplicate date entries
 duplicate_dates <- cfWGS_Clinical_MRD_filled %>%
   group_by(Sample_Code) %>%  # Group by the sample code column
-  filter(n() > 1)  # Keep only rows where the Cleaned_Date appears more than once
+  filter(dplyr::n() > 1)  # Keep only rows where the Cleaned_Date appears more than once
 
 # Find sample codes with NA in the Date column
 missing_date_samples <- cfWGS_Clinical_MRD_filled %>%
@@ -974,7 +974,7 @@ cfWGS_Clinical_MRD_filled <- cfWGS_Clinical_MRD_filled %>%
 ## See duplicates 
 dups <- clinical_data_integrate %>%
   group_by(Patient, Timepoint) %>%
-  filter(n() > 1) %>%
+  filter(dplyr::n() > 1) %>%
   ungroup()
 
 ## Add the sample codes 
@@ -1038,7 +1038,7 @@ cfWGS_Clinical_MRD_filled_final <- joined %>%
 cfWGS_Clinical_MRD_filled_final <- cfWGS_Clinical_MRD_filled_final %>% unique() 
 dups <- cfWGS_Clinical_MRD_filled_final %>%
   group_by(Patient, Timepoint) %>%
-  filter(n() > 1) %>%
+  filter(dplyr::n() > 1) %>%
   ungroup()
 
 write.csv(dups, file = "duplicate_check.csv")
@@ -1080,7 +1080,7 @@ group_by(Patient, Timepoint) %>%
 
 dups <- cfWGS_dedup %>%
   group_by(Patient, Timepoint) %>%
-  filter(n() > 1) %>%
+  filter(dplyr::n() > 1) %>%
   ungroup()
 
 
@@ -1125,12 +1125,12 @@ wgs_prefixed <- wgs_prefixed %>%
 wgs_prefixed %>% 
   filter(Sample_type %in% c("BM_cells","Blood_plasma_cfDNA")) %>%
   group_by(Patient, Timepoint, Date_of_sample_collection, Sample_type) %>%
-  filter(n()>1) %>%
+  filter(dplyr::n()>1) %>%
   ungroup() -> dups
 
 # how many duplicate groups?
 dups %>% 
-  summarise(count = n(), .by = c(Patient, Timepoint, Date_of_sample_collection, Sample_type)) %>% 
+  summarise(count = dplyr::n(), .by = c(Patient, Timepoint, Date_of_sample_collection, Sample_type)) %>% 
   arrange(desc(count))
 
 ## Correct 
@@ -1281,7 +1281,7 @@ joined_clean <- joined_clean %>% select(-Date_of_sample_collection)
 ## get duplicates 
 dups <- joined_clean %>%
   group_by(Patient, Timepoint) %>%
-  filter(n() > 1) %>%
+  filter(dplyr::n() > 1) %>%
   ungroup()
 
 
@@ -1303,7 +1303,7 @@ joined_clean <- joined_clean %>%
 ## get duplicates 
 dups <- joined_clean %>%
   group_by(Patient, Timepoint) %>%
-  filter(n() > 1) %>%
+  filter(dplyr::n() > 1) %>%
   ungroup()
 
 

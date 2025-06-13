@@ -54,10 +54,16 @@
 
 
 #### Load Libraries 
+library(ChromHeatMap)
 data("cytobands")
-source("setup_packages.R")
-source("config.R")
-source("helpers.R")
+library(tidyverse)
+library(stringr)
+library(reshape2)
+library(ComplexHeatmap)
+library(RColorBrewer)
+library(circlize)
+library(GenomicRanges)
+library(pbapply)
 
 
 source("GENIUSVariantAnalysis_Functions.R")
@@ -182,6 +188,7 @@ cfWGS_res_filtered <- cfWGS_res_filtered %>%
 cfWGS_res_filtered <- cfWGS_res_filtered %>%
   filter(!(IGCaller_Score <= 20 & Mappability_Issue != "none"))
 
+library(pbapply)  # For progress bar
 
 # Function to match cytobands for each breakpoint - much faster than original 
 match_cytoband_fast <- function(chromosome, position_start, cb_frame) {
@@ -666,14 +673,173 @@ translocation_matrix_cytoband <- Ig_caller_df_cfWGS_filtered_aggressive2 %>%
   )
 
 
-## Keep gene one until can get proper screenshots 
-## Alternatively use cytoband since very few 
-## Just screenshotting would save a lot of time compared to all this manual filtering... 
+### Now export the screenshotter dataframes for these 
+# 1) pivot both breakpoints into one table
+screenshotter_df <- Ig_caller_df_cfWGS_filtered_aggressive2 %>%
+  filter(Common_MM_translocation == 1) %>% 
+  select(
+    Bam        = Bam_File,
+    Chromosome = break1_chromosome,
+    Start      = break1_position_start,
+    End        = break1_position_end,
+    Name       = Translocation
+  ) %>%
+  distinct() %>%
+  mutate(
+    # pull 50 bp upstream, but not below 1:
+    Start = pmax(1, Start - 50),
+    # push 50 bp downstream:
+    End   = End   + 50
+  )
+
+# 2) load your “canonical” list of BAMs (no .bam suffix)
+current_bams <- read_csv("IG_Mini_Bams.csv")$Name %>%
+  str_remove("\\.bam$")
+
+# detect any missing & auto‐map them
+screenshot_bams <- str_remove(screenshotter_df$Bam, "\\.bam$")
+missing_bams    <- setdiff(screenshot_bams, current_bams)
+
+library(stringdist)
+
+# For each missing BAM, find the closest match in current_bams based on Levenshtein distance
+closest_matches <- sapply(missing_bams, function(miss) {
+  distances <- stringdist(miss, current_bams, method = "lv")
+  current_bams[which.min(distances)]
+})
+
+# Combine results into a data frame and print
+result <- data.frame(
+  Missing_BAM = missing_bams,
+  Closest_Match = closest_matches,
+  stringsAsFactors = FALSE
+)
+print(result)
+
+keep <- c( # after manual check to ensure accurate 
+  "TFRIM4_0060_Bm_P_WG_FZ-09.filter.deduped.recalibrated",
+  "TFRIM4_0178_Bm_P_WG_FZ-07.filter.deduped.recalibrated",
+  "TFRIM4_0184_Bm_P_WG_VA-10-01-O-DNA.filter.deduped.recalibrated",
+  "TFRIM4_0187_Bm_P_WG_VA-13-01-O-DNA.filter.deduped.recalibrated"
+)
+
+# 3. apply any name fixes, then split out groups
+screenshotter_df <- screenshotter_df %>%
+  mutate(Bam = str_remove(Bam, "\\.bam$")) %>%
+  left_join(result, by = c("Bam" = "Missing_BAM")) %>%
+  mutate(Bam = coalesce(Closest_Match, Bam)) %>%
+  select(-Closest_Match)
+
+# 4. write BEDs
+outdir_bed <- "IGV_screenshotter/Bed_files_translocations_cytoband"
+if (!dir.exists(outdir_bed)) dir.create(outdir_bed, recursive = TRUE)
+
+write_bed <- function(df, bam_name) {
+  bed <- df %>%
+    mutate(
+      Chromosome = if_else(str_starts(Chromosome,"chr"), Chromosome, paste0("chr",Chromosome)),
+      Start      = Start,
+      End        = End
+    ) %>%
+    select(Chromosome, Start, End, Name)
+  # write into the outdir:
+  write_tsv(bed,
+            file.path(outdir_bed, paste0(bam_name, ".bed")),
+            col_names = FALSE)
+}
+  
+
+screenshotter_df %>%
+  group_by(Bam) %>%
+  group_walk(~ write_bed(.x, .y$Bam))
+
+
+### Now do for the breakpoint 2
+# 1) pivot both breakpoints into one table
+screenshotter_df <- Ig_caller_df_cfWGS_filtered_aggressive2 %>%
+  filter(Common_MM_translocation == 1) %>% 
+  select(
+    Bam        = Bam_File,
+    Chromosome = break2_chromosome,
+    Start      = break2_position_start,
+    End        = break2_position_end,
+    Name       = Translocation
+  ) %>%
+  distinct() %>%
+  mutate(
+    # pull 50 bp upstream, but not below 1:
+    Start = pmax(1, Start - 50),
+    # push 50 bp downstream:
+    End   = End   + 50
+  )
+
+# 2) load your “canonical” list of BAMs (no .bam suffix)
+current_bams <- read_csv("IG_Mini_Bams.csv")$Name %>%
+  str_remove("\\.bam$")
+
+# detect any missing & auto‐map them
+screenshot_bams <- str_remove(screenshotter_df$Bam, "\\.bam$")
+missing_bams    <- setdiff(screenshot_bams, current_bams)
+
+# For each missing BAM, find the closest match in current_bams based on Levenshtein distance
+closest_matches <- sapply(missing_bams, function(miss) {
+  distances <- stringdist(miss, current_bams, method = "lv")
+  current_bams[which.min(distances)]
+})
+
+# Combine results into a data frame and print
+result <- data.frame(
+  Missing_BAM = missing_bams,
+  Closest_Match = closest_matches,
+  stringsAsFactors = FALSE
+)
+print(result)
+
+keep <- c( # after manual check to ensure accurate 
+  "TFRIM4_0060_Bm_P_WG_FZ-09.filter.deduped.recalibrated",
+  "TFRIM4_0178_Bm_P_WG_FZ-07.filter.deduped.recalibrated",
+  "TFRIM4_0184_Bm_P_WG_VA-10-01-O-DNA.filter.deduped.recalibrated",
+  "TFRIM4_0187_Bm_P_WG_VA-13-01-O-DNA.filter.deduped.recalibrated"
+)
+
+# 3. apply any name fixes, then split out groups
+screenshotter_df <- screenshotter_df %>%
+  mutate(Bam = str_remove(Bam, "\\.bam$")) %>%
+  left_join(result, by = c("Bam" = "Missing_BAM")) %>%
+  mutate(Bam = coalesce(Closest_Match, Bam)) %>%
+  select(-Closest_Match)
+
+# 4. write BEDs
+outdir_bed <- "IGV_screenshotter/Bed_files_translocations_cytoband_breakpoint_2"
+if (!dir.exists(outdir_bed)) dir.create(outdir_bed, recursive = TRUE)
+
+write_bed <- function(df, bam_name) {
+  bed <- df %>%
+    mutate(
+      Chromosome = if_else(str_starts(Chromosome,"chr"), Chromosome, paste0("chr",Chromosome)),
+      Start      = Start,
+      End        = End
+    ) %>%
+    select(Chromosome, Start, End, Name)
+  # write into the outdir:
+  write_tsv(bed,
+            file.path(outdir_bed, paste0(bam_name, ".bed")),
+            col_names = FALSE)
+}
+
+
+screenshotter_df %>%
+  group_by(Bam) %>%
+  group_walk(~ write_bed(.x, .y$Bam))
+
+
+
+
+
+
 
 # Replace missing values (if any) with 0
 translocation_matrix[is.na(translocation_matrix)] <- 0
-
-
 
 #  Prepare translocation data
 translocation_data <- translocation_matrix %>%
