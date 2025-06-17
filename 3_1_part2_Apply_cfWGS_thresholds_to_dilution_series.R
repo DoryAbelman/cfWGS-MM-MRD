@@ -15,8 +15,8 @@ library(patchwork)   # optional – for combining plots, if needed
 
 
 # ── 1. FILE PATHS ───────────────────────────────────────────────────────────
-PATH_MODEL_LIST       <- "~/Documents/Thesis_work/R/M4/Projects/High_risk_MM_baselinbe_relapse_marrow/Output_tables_2025/selected_combo_models.rds"
-PATH_THRESHOLD_LIST   <- "~/Documents/Thesis_work/R/M4/Projects/High_risk_MM_baselinbe_relapse_marrow/Output_tables_2025/selected_combo_thresholds.rds"
+PATH_MODEL_LIST       <- "~/Documents/Thesis_work/R/M4/Projects/High_risk_MM_baselinbe_relapse_marrow/Output_tables_2025/selected_combo_models_2025-06-17.rds"
+PATH_THRESHOLD_LIST   <- "~/Documents/Thesis_work/R/M4/Projects/High_risk_MM_baselinbe_relapse_marrow/Output_tables_2025/selected_combo_thresholds_2025-06-17.rds"
 PATH_DILUTION_FRAGMENTOMICS         <- "~/Documents/Thesis_work/R/M4/Projects/High_risk_MM_baselinbe_relapse_marrow/Results_Fragmentomics/Dilution_series/key_fragmentomics_info_dilution_series.rds"
 PATH_DILUTION_PROCESSED_MRDetect    <- "~/Documents/Thesis_work/R/M4/Projects/High_risk_MM_baselinbe_relapse_marrow/MRDetect_output_winter_2025/Processed_R_outputs/cfWGS_Winter2025Dilution_series_May2025_with_zscore.rds"
 PATH_DILUTION_CLINICAL  <- "~/Documents/Thesis_work/R/M4/Projects/High_risk_MM_baselinbe_relapse_marrow/Fragmentomics_data/Dilution_series/Metadata_dilution_series.csv"
@@ -24,25 +24,17 @@ PATH_TUMOR_FRACTION <- "~/Documents/Thesis_work/R/M4/Projects/High_risk_MM_basel
 
 OUTPUT_DIR            <- "Dilution_Series_Scoring_2025"
 OUTPUT_DIR_TABLES     <- "Output_tables_2025"
-OUTPUT_DIR_FIGURES    <- "Output_figures_2025"
+OUTPUT_DIR_FIGURES    <- "Final Tables and Figures"
 
 if (!dir.exists(OUTPUT_DIR)) dir.create(OUTPUT_DIR, recursive = TRUE)
 if (!dir.exists(OUTPUT_DIR_FIGURES)) dir.create(OUTPUT_DIR_FIGURES, recursive = TRUE)
 
 
 # ── 2. LOAD SAVED MODELS & THRESHOLDS ───────────────────────────────────────
-model_list    <- readRDS(PATH_MODEL_LIST)
-selected_rows <- readRDS(PATH_THRESHOLD_LIST)
+selected_models <- readRDS(PATH_MODEL_LIST)
+selected_thr    <- readRDS(PATH_THRESHOLD_LIST)
 
-# ── 3. REDEFINE YOUR COMBOS ─────────────────────────────────────────────────
-combos <- list(
-  BM_zscore_only   = c("zscore_BM"),
-  Blood_all_extras = c("zscore_blood","detect_rate_blood","FS",
-                       "Mean.Coverage","WGS_Tumor_Fraction_Blood_plasma_cfDNA"),
-  Blood_base       = c("zscore_blood","detect_rate_blood")
-)
-
-# ── 4. LOAD AND ASSEMBLE DILUTION SERIES DATA ────────────────────────────────
+# ── 3. LOAD AND ASSEMBLE DILUTION SERIES DATA ────────────────────────────────
 frag_df     <- read_rds(PATH_DILUTION_FRAGMENTOMICS)
 mrdetect_df <- read_rds(PATH_DILUTION_PROCESSED_MRDetect)
 clinical_df <- read_csv(PATH_DILUTION_CLINICAL)
@@ -67,7 +59,8 @@ mrdetect_wide <- mrdetect_df %>%
     Mut_source,
     Merge,
     detection_rate,
-    sites_rate_zscore_charm
+    sites_rate_zscore_charm,
+    detection_rate_zscore_reads_checked_charm
   ) %>%
   mutate(
     arm = case_when(
@@ -79,14 +72,16 @@ mrdetect_wide <- mrdetect_df %>%
   dplyr::select(-Mut_source) %>%
   pivot_wider(
     names_from  = arm,
-    values_from = c(detection_rate, sites_rate_zscore_charm),
+    values_from = c(detection_rate, sites_rate_zscore_charm, detection_rate_zscore_reads_checked_charm),
     names_sep   = "_"
   ) %>%
   rename(
     detect_rate_BM            = detection_rate_BM,
     detect_rate_blood         = detection_rate_blood,
+    z_score_detection_rate_BM = detection_rate_zscore_reads_checked_charm_BM, 
     zscore_BM                 = sites_rate_zscore_charm_BM,
-    zscore_blood              = sites_rate_zscore_charm_blood
+    zscore_blood              = sites_rate_zscore_charm_blood,
+    z_score_detection_rate_blood = detection_rate_zscore_reads_checked_charm_blood
   )
 
 
@@ -114,42 +109,53 @@ dilution_df <- dilution_df %>%
   rename(WGS_Tumor_Fraction_Blood_plasma_cfDNA = Tumor_fraction) # for consistency
 
 # ── 5. PREDICTION FUNCTION based on pre-trained model ────────────────────
-predict_combo <- function(df, cmb, model) {
-  preds <- combos[[cmb]]
-  keep  <- complete.cases(df[, preds])
-  prob  <- rep(NA_real_, nrow(df))
+apply_selected <- function(dat, models, thresholds, positive_class = "pos") {
+  out <- dat            # start with your full data.frame
+  n   <- nrow(dat)
   
-  if (any(keep)) {
-    if (inherits(model, "cv.glmnet")) {
-      mm <- model.matrix(reformulate(preds), df[keep, ])
-      prob[keep] <- as.numeric(
-        predict(model,
-                newx = as(mm[, -1], "dgCMatrix"),
-                s    = "lambda.min",
-                type = "response")
-      )
-    } else {
-      prob[keep] <- predict(model, newdata = df[keep, ], type = "response")
-    }
+  # Check that models and thresholds align
+  if (!all(names(models) %in% names(thresholds))) {
+    stop("Model names and threshold names do not match!")
   }
-  prob
+  common <- intersect(names(models), names(thresholds))
+  
+  for (cmb in common) {
+    fit <- models[[cmb]]
+    thr <- thresholds[[cmb]]
+    
+    # which predictors the model actually needs
+    preds <- setdiff(names(fit$trainingData), ".outcome")
+    
+    # figure out which rows we can actually score
+    can_score <- complete.cases(dat[preds])
+    
+    # pre‐allocate
+    probs <- rep(NA_real_,    n)
+    calls <- rep(NA_integer_, n)
+    
+    # only predict where allowed
+    if (any(can_score)) {
+      probs[can_score] <- predict(fit,
+                                  newdata = dat[can_score, preds, drop = FALSE],
+                                  type    = "prob")[[positive_class]]
+      calls[can_score] <- as.integer(probs[can_score] >= thr)
+    }
+    
+    # stick them back on
+    out[[paste0(cmb, "_prob")]] <- probs
+    out[[paste0(cmb, "_call")]] <- calls
+  }
+  
+  out
 }
 
 # ── 6. APPLY EACH SELECTED RULE TO DILUTION DATA ────────────────────────────
-for (i in seq_len(nrow(selected_rows))) {
-  cmb      <- selected_rows$combo[i]
-  thr      <- selected_rows$threshold[i]
-  fit_obj  <- model_list[[cmb]]
-  suffix   <- if (cmb == "Blood_all_extras") paste0("_acc", i) else ""
-  
-  prob_col <- paste0(cmb, suffix, "_prob")
-  call_col <- paste0(cmb, suffix, "_call")
-  
-  dilution_df[[prob_col]] <- predict_combo(dilution_df, cmb, fit_obj)
-  dilution_df[[call_col]] <- if_else(
-    dilution_df[[prob_col]] >= thr, 1L, 0L, NA_integer_
-  )
-}
+dilution_df_scored <- apply_selected(
+  dat           = dilution_df,
+  models        = selected_models,
+  thresholds    = selected_thr,
+  positive_class= "pos"
+)
 
 ### Rename for clarity 
 dilution_df <- dilution_df %>%
@@ -178,7 +184,7 @@ select <- dplyr::select ## for conisistency
 
 feature_cols <- c(
   "detect_rate_blood", "detect_rate_BM",
-  "zscore_blood", "zscore_BM",
+  "zscore_blood", "zscore_BM", "detection_rate_zscore_reads_checked_charm_BM", "detection_rate_zscore_reads_checked_charm_blood",
   "Mean.Coverage", "Midpoint.Coverage", "Midpoint.normalized",
   "Amplitude", "Zscore.Coverage", "Zscore.Midpoint", "Zscore.Amplitude",
   "Proportion.Short", "FS",

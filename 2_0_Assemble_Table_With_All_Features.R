@@ -305,7 +305,7 @@ Rapid_Novor_consolidated <- Rapid_Novor_consolidated %>%
     Sample_Code = paste0(Patient, "-", Timepoint)  # Create Sample_Code as Patient-Timepoint
   )
 
-
+## Correct errors
 # Create the mapping of timepoints to descriptions
 description_mapping <- c(
   "01" = "Diagnosis",
@@ -513,6 +513,7 @@ tmp_bm <- MRD_cfWGS_BM %>%
     Cumulative_VAF_BM        = Cumulative_VAF,
     detect_rate_BM   = detection_rate_as_reads_detected_over_reads_checked,
     zscore_BM        = sites_rate_zscore_charm,
+    z_score_detection_rate_BM = detection_rate_zscore_reads_checked_charm, 
     PercentChangeFromBaseline_BM       = percent_change_detection_rate, #percent_change
     PercentChangeAtSecondTimepoint_BM       = percent_change_detection_rate_second_timepoint
   ) %>%
@@ -530,6 +531,7 @@ tmp_blood <- MRD_cfWGS_blood %>%
     Cumulative_VAF_blood     = Cumulative_VAF,
     detect_rate_blood= detection_rate_as_reads_detected_over_reads_checked,
     zscore_blood     = sites_rate_zscore_charm,
+    z_score_detection_rate_blood = detection_rate_zscore_reads_checked_charm, 
     PercentChangeFromBaseline_blood    = percent_change,
     PercentChangeAtSecondTimepoint_blood    = percent_change_detection_rate_second_timepoint
   ) %>%
@@ -635,6 +637,7 @@ cfWGS_Clinical_MRD_filled <- cfWGS_Clinical_MRD_filled %>%
     Cumulative_VAF_BM,
     detect_rate_BM,
     zscore_BM,
+    z_score_detection_rate_BM,
     PercentChangeFromBaseline_BM,
     PercentChangeAtSecondTimepoint_BM,
     
@@ -644,6 +647,7 @@ cfWGS_Clinical_MRD_filled <- cfWGS_Clinical_MRD_filled %>%
     Cumulative_VAF_blood,
     detect_rate_blood,
     zscore_blood,
+    z_score_detection_rate_blood,
     PercentChangeFromBaseline_blood,
     PercentChangeAtSecondTimepoint_blood,
     
@@ -1310,10 +1314,10 @@ clinical_mrd_cols <- c(
 
 wgs_mrd_cols <- c(
   "Mrd_by_WGS_BM","cfWGS_BM_Binary","Cumulative_VAF_BM",
-  "detect_rate_BM","zscore_BM",
+  "detect_rate_BM","zscore_BM", "z_score_detection_rate_BM",
   "PercentChangeFromBaseline_BM","PercentChangeAtSecondTimepoint_BM",
   "Mrd_by_WGS_blood","cfWGS_blood_Binary","Cumulative_VAF_blood",
-  "detect_rate_blood","zscore_blood",
+  "detect_rate_blood","zscore_blood", "z_score_detection_rate_blood",
   "PercentChangeFromBaseline_blood","PercentChangeAtSecondTimepoint_blood",
   "Mrd1E5","Mrd1E6"
 )
@@ -1758,7 +1762,15 @@ filled_df <- filled_df %>%
 ## Now have everything need to make plots
 
 # Write to CSV (for Excel/sharing)
-write.csv(filled_df, file = "Final_aggregate_table_cfWGS_features_with_clinical_and_demographics_updated4.csv", row.names = FALSE)
+write.csv(filled_df, file = "Final_aggregate_table_cfWGS_features_with_clinical_and_demographics_updated5.csv", row.names = FALSE)
 
 # Write to RDS (for loading back into R with full structure)
-saveRDS(filled_df, file = "Final_aggregate_table_cfWGS_features_with_clinical_and_demographics_updated4.rds")
+saveRDS(filled_df, file = "Final_aggregate_table_cfWGS_features_with_clinical_and_demographics_updated5.rds")
+
+
+## Quick check 
+filled_df %>%
+  filter(is.na(FS) & !is.na(WGS_Tumor_Fraction_Blood_plasma_cfDNA))
+
+filled_df %>%
+  filter(!is.na(FS) & is.na(WGS_Tumor_Fraction_Blood_plasma_cfDNA))
