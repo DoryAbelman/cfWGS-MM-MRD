@@ -31,7 +31,8 @@ library(glmnet)     # ridge-penalized CV
 library(Matrix)     # sparse model matrices (dgCMatrix)
 library(janitor)    # tabyl() + adorn_totals()
 library(glue)       # string glue for messages
-
+library(Matrix)
+library(caret)
 
 
 
@@ -40,7 +41,7 @@ outdir   <- "Output_tables_2025"
 if (!dir.exists(outdir)) dir.create(outdir, recursive = TRUE)
 
 ### Load data 
-file <- readRDS("Final_aggregate_table_cfWGS_features_with_clinical_and_demographics_updated3.rds")
+file <- readRDS("Final_aggregate_table_cfWGS_features_with_clinical_and_demographics_updated4.rds")
 cohort_df <- readRDS("cohort_assignment_table_updated.rds")
 
 dat <- file 
@@ -224,28 +225,28 @@ combos <- list(
   # — BM combos with zscore —
   BM_zscore_only         = c("zscore_BM"),
   BM_base             = c("zscore_BM",    "detect_rate_BM"),
-  BM_plus_FS          = c("zscore_BM",    "detect_rate_BM", "FS"),
+  BM_plus_FS          = c("zscore_BM",    "detect_rate_BM", "FS", "Proportion.Short"),
   BM_plus_MeanCov     = c("zscore_BM",    "detect_rate_BM", "Mean.Coverage"),
-  BM_plus_TF          = c("zscore_BM",    "detect_rate_BM", "WGS_Tumor_Fraction_BM_cells"),
+  BM_plus_TF          = c("zscore_BM",    "detect_rate_BM", "WGS_Tumor_Fraction_Blood_plasma_cfDNA"),
   BM_all_extras       = c("zscore_BM",    "detect_rate_BM", "FS",
-                          "Mean.Coverage","WGS_Tumor_Fraction_BM_cells"),
+                          "Mean.Coverage","WGS_Tumor_Fraction_Blood_plasma_cfDNA", "Proportion.Short"),
   # — BM combos without zscore —
   BM_rate_base        = c("detect_rate_BM"),
-  BM_rate_plus_FS     = c("detect_rate_BM", "FS"),
+  BM_rate_plus_FS     = c("detect_rate_BM", "FS", "Proportion.Short"),
   BM_rate_plus_MeanCov= c("detect_rate_BM", "Mean.Coverage"),
-  BM_rate_plus_TF     = c("detect_rate_BM", "WGS_Tumor_Fraction_BM_cells"),
+  BM_rate_plus_TF     = c("detect_rate_BM", "WGS_Tumor_Fraction_Blood_plasma_cfDNA"),
   BM_rate_all_extras  = c("detect_rate_BM", "FS",
-                          "Mean.Coverage","WGS_Tumor_Fraction_BM_cells"),
+                          "Mean.Coverage","WGS_Tumor_Fraction_Blood_plasma_cfDNA", "Proportion.Short"),
 
   # — Blood combos with zscore —
   Blood_zscore_only      = c("zscore_blood"),
   Blood_base          = c("zscore_blood", "detect_rate_blood"),
-  Blood_plus_FS       = c("zscore_blood", "detect_rate_blood", "FS"),
+  Blood_plus_FS       = c("zscore_blood", "detect_rate_blood", "FS", "Proportion.Short"),
   Blood_plus_MeanCov  = c("zscore_blood", "detect_rate_blood", "Mean.Coverage"),
   Blood_plus_TF       = c("zscore_blood", "detect_rate_blood",
                           "WGS_Tumor_Fraction_Blood_plasma_cfDNA"),
   Blood_all_extras    = c("zscore_blood", "detect_rate_blood", "FS",
-                          "Mean.Coverage","WGS_Tumor_Fraction_Blood_plasma_cfDNA"),
+                          "Mean.Coverage","WGS_Tumor_Fraction_Blood_plasma_cfDNA", "Proportion.Short"),
   # — Blood combos without zscore —
   Blood_rate_base     = c("detect_rate_blood"),
   Blood_rate_plus_FS  = c("detect_rate_blood", "FS"),
@@ -253,11 +254,16 @@ combos <- list(
   Blood_rate_plus_TF  = c("detect_rate_blood",
                           "WGS_Tumor_Fraction_Blood_plasma_cfDNA"),
   Blood_rate_all_extras   = c("detect_rate_blood", "FS",
-                              "Mean.Coverage","WGS_Tumor_Fraction_Blood_plasma_cfDNA"),
+                              "Mean.Coverage","WGS_Tumor_Fraction_Blood_plasma_cfDNA", "Proportion.Short"),
   
   ### BM and blood together 
   BM_blood_ultimate = c("zscore_BM", "zscore_blood", "detect_rate_blood", "FS",
-                        "Mean.Coverage","WGS_Tumor_Fraction_Blood_plasma_cfDNA")
+                        "Mean.Coverage","WGS_Tumor_Fraction_Blood_plasma_cfDNA"), 
+  
+  ### Just with fragmentomics 
+  Just_fragmentomics_full = c("FS", "Mean.Coverage","WGS_Tumor_Fraction_Blood_plasma_cfDNA", "Proportion.Short"),
+  Just_fragmentomics_small = c("FS", "Mean.Coverage","WGS_Tumor_Fraction_Blood_plasma_cfDNA"),
+  Just_fragmentomics_small2 = c("FS", "Mean.Coverage")
 )
 
 
@@ -324,18 +330,20 @@ eval_combo <- function(preds, label) {
 
 
 # 3.  Run across all combos --------------------------------------------------
+set.seed(2025)
 combo_results <- imap_dfr(combos, eval_combo)
 
 print(combo_results)
 
 # Save as an RDS:
 saveRDS(combo_results,
-        file = file.path(outdir, "combo_results.rds"))
+        file = file.path(outdir, "combo_results_updated.rds"))
 
 # Export as CSV (no row names):
 write.csv(combo_results,
-          file = file.path(outdir, "combo_results.csv"),
+          file = file.path(outdir, "combo_results_updated.csv"),
           row.names = FALSE)
+
 
 
 #  Save fitted combo models for later scoring ─────────────────────────
@@ -354,18 +362,425 @@ saveRDS(model_list,
 
 
 
+
+
+
+
+
+
+
+###### Now do a repeated 5x5 cross validation to improve generalizability 
+###### Final numbers reported in the manuscript
+
+# parallel backend (optional, speeds up train())
+library(doParallel)
+registerDoParallel()
+
+# your data splits
+train_df <- dat_mrd %>% filter(Cohort == "Frontline") 
+hold_df  <- dat_mrd %>% filter(Cohort == "Non-frontline")
+
+train_df <- train_df %>% filter(!is.na(MRD_truth))
+hold_df <- hold_df %>% filter(!is.na(MRD_truth))
+
+# convert binary to factor with levels "neg"/"pos"
+train_df <- train_df %>% mutate(MRD_truth = factor(MRD_truth, levels = c(0,1), labels=c("neg","pos")))
+hold_df  <- hold_df  %>% mutate(MRD_truth = factor(MRD_truth, levels = c(0,1), labels=c("neg","pos")))
+
+positive_class <- "pos"
+# ──────────────────────────────────────────────────────────────────────────────
+# 1.  caret::train control (5×5 repeated CV) ------------------------------------
+# ──────────────────────────────────────────────────────────────────────────────
+ctrl <- trainControl(
+  method            = "repeatedcv",
+  number            = 5,
+  repeats           = 5,
+  classProbs        = TRUE,
+  summaryFunction   = twoClassSummary,
+  savePredictions   = "final",   # store OOF preds
+  allowParallel     = TRUE
+)
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 2.  Fit each combo, get CV + hold‐out metrics -------------------------------
+# ──────────────────────────────────────────────────────────────────────────────
+## Helper function 
+youden_metrics <- function(response, prob, thr) {
+  roc_obj <- roc(response, prob, quiet = TRUE, levels = c("neg", "pos"))
+  tibble(
+    auc = as.numeric(auc(roc_obj)),
+    sens = coords(roc_obj, thr, ret = "sensitivity"),
+    spec = coords(roc_obj, thr, ret = "specificity"),
+    acc  = mean((prob >= thr) == (response == positive_class))
+  )
+}
+
+## Run on cohort 
+results <- imap(combos, function(preds, label) {
+  
+  # complete cases in train
+  df_cc <- train_df %>% drop_na(all_of(preds), MRD_truth)
+  if(nrow(df_cc) < 20 || n_distinct(df_cc$MRD_truth) < 2) {
+    message("Skipping ", label, " (n=", nrow(df_cc), ")")
+    return(NULL)
+  }
+  
+  # fit the model (glm or glmnet)
+  form <- reformulate(preds, "MRD_truth")
+  fit  <- suppressWarnings(
+    if (length(preds) == 1) {
+      train(form, df_cc, method="glm", family=binomial,
+            metric="ROC", trControl=ctrl, preProc=c("center","scale"))
+    } else {
+      train(form, df_cc, method="glmnet", metric="ROC",
+            tuneLength=10, trControl=ctrl, preProc=c("center","scale"))
+    }
+  )
+  
+  # pull out OOF preds
+  oof <- if (length(preds)==1) fit$pred else {
+    fit$pred %>%
+      filter(alpha==fit$bestTune$alpha,
+             lambda==fit$bestTune$lambda)
+  }
+  roc_oof <- roc(oof$obs, oof[[positive_class]], quiet=TRUE,
+                 levels=c("neg","pos"))
+  
+  # helper to pick threshold by criterion
+  pick_thr <- function(mode){
+    df <- coords(
+      roc_oof, "all",
+      ret = c("threshold","sensitivity","specificity","accuracy"),
+      transpose = FALSE
+    ) %>% as_tibble()
+    if(mode=="youden"){
+      coords(
+        roc_oof, "best", best.method="youden",
+        ret="threshold", transpose=FALSE
+      )[[1]]
+    } else if(mode=="sens90"){
+      df %>%
+        filter(sensitivity >= .9) %>%
+        slice_max(specificity, n = 1, with_ties = FALSE) %>%
+        pull(threshold)
+    } else {
+      df %>%
+        filter(specificity >= .9) %>%
+        slice_max(sensitivity, n = 1, with_ties = FALSE) %>%
+        pull(threshold)
+    }
+  }
+  
+  # now build a numeric vector of exactly three thresholds:
+  thr_list <- map_dbl(c("youden","sens90","spec90"), pick_thr)
+  
+  
+  # build a little function to compute metrics at a given thr
+  eval_at <- function(roc_obj, response, prob, thr){
+    coords(roc_obj, x=thr,
+           ret=c("sensitivity","specificity","accuracy"),
+           transpose=FALSE) %>%
+      as_tibble() %>%
+      mutate(
+        auc = as.numeric(auc(roc_obj)),
+        thr = thr
+      )
+  }
+  
+  # 1) CV metrics for each mode
+  cv_metrics <- map2_dfr(
+    thr_list,
+    c("youden","sens>=0.9","spec>=0.9"),
+    ~ eval_at(roc_oof, oof$obs, oof[[positive_class]], .x) %>%
+      mutate(
+        combo = label,    # <— the feature-combo name
+        mode  = .y,       # <— which thresholding mode
+        .before = 1
+      )
+  )
+  
+  # now do hold-out
+  hold_cc    <- hold_df %>% drop_na(all_of(preds), MRD_truth)
+  probs_hold <- predict(fit, newdata=hold_cc, type="prob")[[positive_class]]
+  roc_hold   <- roc(hold_cc$MRD_truth, probs_hold, quiet=TRUE,
+                    levels=c("neg","pos"))
+  
+  hold_metrics <- map2_dfr(
+    thr_list,
+    c("youden","sens>=0.9","spec>=0.9"),
+    ~ eval_at(roc_hold, hold_cc$MRD_truth, probs_hold, .x) %>%
+      mutate(
+        combo = label,    # <— again, the feature-combo name
+        mode  = .y,
+        .before = 1
+      )
+  )
+  
+  # return
+  list(cv   = cv_metrics,
+       hold = hold_metrics,
+       fit  = fit                   # <<< return the caret model object
+  )
+})
+
+
+# bind into tables
+nested_metrics <- map_dfr(results, "cv")
+hold_metrics   <- map_dfr(results, "hold")
+
+
+
+
+
+
+
+### Next do a full nested cross validation 5x5 with hyperparameter tuning 
+### Even more robust with less data leakage
+positive_class <- "pos"
+
+# 1) Identify which predictors belong to BM vs Blood combos
+# BM combos: anything starting “BM_” but drop “BM_blood_ultimate”
+bm_names <- names(combos)[
+  startsWith(names(combos), "BM_") &
+    names(combos) != "BM_blood_ultimate"
+]
+combos_bm    <- combos[bm_names]
+
+# Blood combos: anything starting “Blood_” OR containing “Just_fragmentomics”
+blood_names <- names(combos)[
+  startsWith(names(combos), "Blood_") |
+    grepl("Just_fragmentomics", names(combos))
+]
+combos_blood <- combos[blood_names]
+
+# 2) Build train_bm / train_blood by dropping any row missing *any* BM or Blood predictors
+bm_preds    <- unique(unlist(combos_bm))
+blood_preds <- unique(unlist(combos_blood))
+
+train_bm    <- train_df %>% drop_na(all_of(c("MRD_truth", bm_preds)))
+train_blood <- train_df %>% drop_na(all_of(c("MRD_truth", blood_preds)))
+
+
+train_bm    <- train_df %>% drop_na(all_of(c("MRD_truth", bm_preds)))
+train_blood <- train_df %>% drop_na(all_of(c("MRD_truth", blood_preds)))
+
+hold_bm    <- hold_df %>% drop_na(all_of(c("MRD_truth", bm_preds)))
+hold_blood <- hold_df %>% drop_na(all_of(c("MRD_truth", blood_preds)))
+
+# Outer 5-fold nested CV
+run_nested_with_validation <- function(train_data,
+                                       valid_data,           # ◀ NEW: pass your hold-out cohort here
+                                       combo_list,
+                                       positive_class = "pos") {
+  # 0) Make sure your `ctrl` (trainControl) is defined in the parent environment
+  #    exactly as before (5×5 repeated CV, classProbs=TRUE, summaryFunction=twoClassSummary, etc.)
+  
+  # 1) Outer 5‐fold indices (stratified on MRD_truth)
+  outer_folds <- createFolds(train_data$MRD_truth,
+                             k = 5,
+                             returnTrain = TRUE)
+  
+  # 2) Loop over each feature-combo
+  results <- purrr::imap(combo_list, function(preds, label) {
+    
+    # 2a) Collect per‐fold metrics
+    combo_metrics <- purrr::map_dfr(seq_along(outer_folds), function(i) {
+      # split out vs. in
+      train_out <- train_data[ outer_folds[[i]], ]
+      test_out  <- train_data[-outer_folds[[i]], ]
+      
+      # complete‐case
+      train_cc <- train_out %>% drop_na(MRD_truth, all_of(preds))
+      test_cc  <- test_out  %>% drop_na(MRD_truth, all_of(preds))
+      
+      # SKIP if either side is too small or single‐class
+      if (nrow(train_cc) < 20 ||
+          n_distinct(train_cc$MRD_truth) < 2 ||
+          n_distinct(test_cc$MRD_truth)  < 2) {
+        return(NULL)
+      }
+      
+      # build formula
+      f <- reformulate(preds, response = "MRD_truth")
+      
+      # 2b) inner CV via caret::train
+      fit <- if (length(preds) == 1) {
+        train(f, data    = train_cc,
+              method  = "glm",
+              family  = binomial,
+              metric  = "ROC",
+              trControl = ctrl,
+              preProc = c("center","scale"))
+      } else {
+        train(f, data    = train_cc,
+              method    = "glmnet",
+              metric    = "ROC",
+              # ◀ EXPANDED GRID over alpha ∈ {0,0.25,0.5,0.75,1} and 50 log‐lambda values
+              tuneGrid  = expand.grid(
+                alpha  = seq(0,1, by=0.25),
+                lambda = 10^seq(-3, 1, length.out = 50)
+              ),
+              trControl = ctrl,
+              preProc   = c("center","scale"))
+      }
+      
+      # 2c) predict on outer test
+      probs    <- predict(fit, newdata = test_cc, type = "prob")[[positive_class]]
+      roc_o    <- pROC::roc(test_cc$MRD_truth, probs,
+                            quiet  = TRUE,
+                            levels = c("neg","pos"))
+      youden_t <- pROC::coords(roc_o, "best",
+                               best.method = "youden",
+                               ret         = "threshold")[[1]]
+      
+      # pull out single‐value sens/spec
+      sens_o <- pROC::coords(roc_o, x = youden_t,
+                             ret       = "sensitivity",
+                             transpose = FALSE)[[1]]
+      spec_o <- pROC::coords(roc_o, x = youden_t,
+                             ret       = "specificity",
+                             transpose = FALSE)[[1]]
+      
+      tibble(
+        combo       = label,
+        auc         = as.numeric( pROC::auc(roc_o) ),
+        sensitivity = sens_o,
+        specificity = spec_o,
+        accuracy    = mean((probs >= youden_t) ==
+                             (test_cc$MRD_truth == positive_class))
+      )
+    })
+    
+    # 2d) summarize across *kept* folds
+    nested_summary <- combo_metrics %>%
+      summarise(
+        combo     = first(combo),
+        auc_mean  = mean(auc,           na.rm = TRUE),
+        sens_mean = mean(sensitivity,   na.rm = TRUE),
+        spec_mean = mean(specificity,   na.rm = TRUE),
+        acc_mean  = mean(accuracy,      na.rm = TRUE),
+        .groups   = "drop"
+      )
+    
+    # 3) Re‐fit on the *entire* train_data
+    full_cc   <- train_data %>% drop_na(MRD_truth, all_of(preds))
+    f_full    <- reformulate(preds, "MRD_truth")
+    final_fit <- if (length(preds) == 1) {
+      train(f_full, data    = full_cc,
+            method  = "glm", family = binomial,
+            metric  = "ROC", trControl = ctrl,
+            preProc = c("center","scale"))
+    } else {
+      train(f_full, data    = full_cc,
+            method    = "glmnet",
+            metric    = "ROC",
+            tuneGrid  = expand.grid(
+              alpha  = seq(0,1, by=0.25),
+              lambda = 10^seq(-3, 1, length.out = 10)
+            ),
+            trControl = ctrl,
+            preProc   = c("center","scale"))
+    }
+    
+    # 4) Compute Youden threshold on full‐train ROC
+    full_probs <- predict(final_fit, newdata = full_cc, type="prob")[[positive_class]]
+    roc_full   <- pROC::roc(full_cc$MRD_truth, full_probs,
+                            quiet  = TRUE,
+                            levels = c("neg","pos"))
+    youden_full <- pROC::coords(roc_full, "best",
+                                best.method = "youden",
+                                ret         = "threshold")[[1]]
+    
+    # 5) EVALUATE on the *external* validation set
+    valid_cc   <- valid_data %>% drop_na(MRD_truth, all_of(preds))
+    valid_probs<- predict(final_fit, newdata = valid_cc, type="prob")[[positive_class]]
+    roc_val    <- pROC::roc(valid_cc$MRD_truth, valid_probs,
+                            quiet  = TRUE,
+                            levels = c("neg","pos"))
+    sens_val   <- pROC::coords(roc_val, x = youden_full,
+                               ret = "sensitivity")[[1]]
+    spec_val   <- pROC::coords(roc_val, x = youden_full,
+                               ret = "specificity")[[1]]
+    acc_val    <- mean((valid_probs >= youden_full) ==
+                         (valid_cc$MRD_truth == positive_class))
+    
+    validation_summary <- tibble(
+      combo       = label,
+      auc_valid   = as.numeric( pROC::auc(roc_val) ),
+      sens_valid  = sens_val,
+      spec_valid  = spec_val,
+      acc_valid   = acc_val
+    )
+    
+    # return all pieces
+    list(
+      nested     = nested_summary,
+      final_fit  = final_fit,
+      bestTune   = final_fit$bestTune,
+      validation = validation_summary
+    )
+  })
+  
+  # pull them back out
+  nested_metrics     <- map_dfr(results, "nested")
+  models             <- map(results, "final_fit")
+  best_tunes         <- map(results, "bestTune")
+  validation_metrics <- map_dfr(results, "validation")
+  
+  list(
+    nested_metrics     = nested_metrics,
+    models             = models,
+    best_tunes         = best_tunes,
+    validation_metrics = validation_metrics
+  )
+}
+
+
+# 4) Run nested CV separately
+nested_bm_validation <- run_nested_with_validation(
+  train_data = train_bm,
+  valid_data = hold_bm,
+  combo_list = combos_bm,
+  positive_class = "pos"
+)
+
+nested_blood_validation <- run_nested_with_validation(
+  train_data = train_blood,
+  valid_data = hold_blood,
+  combo_list = combos_blood,
+  positive_class = "pos"
+)
+
+
+# 5) Export
+saveRDS(nested_bm_validation, file = "nested_bm_validation.rds")
+saveRDS(nested_blood_validation, file = "nested_blood_validation.rds")
+
+
+#### Other things to add: Bootstrapping for confidence intervals and permutation testing to show AUC drop  
+
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 4.  Save for manuscript ------------------------------------------------------
+# ──────────────────────────────────────────────────────────────────────────────
+write_csv(nested_metrics, "nested_metrics.csv")
+write_csv(hold_metrics,   "hold_metrics.csv")
+
+
+
 ### Now select best one and apply to everything 
 # ────────────────────────────────────────────────────────────────────────────
 # 4.  SELECT THE THREE RULES YOU WANT ----------------------------------------
 # helper to pull top‑n accuracy rows for a given combo
 pick_rows <- function(cmb, n = 1) {
-  combo_results %>%
+  nested_metrics %>%
     filter(combo == cmb) %>%
     slice_max(accuracy, n = n, with_ties = FALSE)
 }
 
 bm_row        <- pick_rows("BM_zscore_only", n = 1)
-blood_rows    <- pick_rows("Blood_all_extras", n = 2)
+blood_rows    <- pick_rows("Blood_rate_all_extras", n = 1)
 blood_row_add <- pick_rows("Blood_base", n = 1)
 selected_rows <- bind_rows(bm_row, blood_rows, blood_row_add)   # 4 rows in total
 print(selected_rows)
@@ -377,90 +792,78 @@ print(selected_rows)
 # Extract the combo names you picked
 selected_combos <- selected_rows$combo
 
-# Fit each model on the frontline training set exactly as you did before
-selected_models <- selected_combos %>%
-  set_names() %>%                  # name the list by combo
-  map(function(cmb) {
-    preds <- combos[[cmb]]
-    df_cc <- train_df %>% drop_na(MRD_truth, all_of(preds))
-    
-    if (length(preds) >= 2) {
-      # ridge‐penalized logistic
-      xy  <- make_sparse_xy(df_cc, preds)
-      cv.glmnet(xy$x, xy$y,
-                family  = "binomial",
-                alpha   = 0,
-                nfolds  = 5,
-                nlambda = 30)
-    } else {
-      # single‐feature logistic
-      form <- reformulate(preds, response = "MRD_truth")
-      glm(form, data = df_cc, family = binomial)
-    }
-  })
+# Get the models from before
+selected_models <- map(results[selected_combos], "fit")
 
 # Save both the models and the thresholds
 saveRDS(selected_models,
-        file = file.path(outdir, "selected_combo_models.rds"))
+        file = file.path(outdir, "selected_combo_models_updated.rds"))
 saveRDS(selected_rows,
-        file = file.path(outdir, "selected_combo_thresholds.rds"))
+        file = file.path(outdir, "selected_combo_thresholds_updated.rds"))
+
 
 
 # ────────────────────────────────────────────────────────────────────────────
-# 5.  Function to refit & apply a single rule --------------------------------
-# ────────────────────────────────────────────────────────────────────────────
-fit_and_apply <- function(row, ix, dat, train_df, combos) {
+# 5. NOW APPLY TO REST OF COHORT  --------------------------------------------
+
+# Define function 
+apply_selected <- function(row, idx, dat, combos, models, positive_class){
   cmb   <- row$combo
-  thr   <- row$threshold
+  thr   <- row$threshold      # make sure your selected_rows has exactly this column!
   preds <- combos[[cmb]]
+  fit   <- models[[cmb]]
   
-  # ---- (re)fit -------------------------------------------------------------
-  train_cc <- train_df %>% drop_na(MRD_truth, all_of(preds))
-  
-  if (length(preds) >= 2) {
-    mm <- model.matrix(reformulate(preds, response = "MRD_truth"), train_cc)
-    X  <- as(mm[, -1, drop = FALSE], "dgCMatrix")
-    y  <- train_cc$MRD_truth
-    
-    fit <- cv.glmnet(X, y, family = "binomial",
-                     alpha = 0, nfolds = 5, nlambda = 30)
-    
+  # build a prediction function
+  if (inherits(fit, "cv.glmnet")) {
     predict_fun <- function(df_sub) {
-      mm  <- model.matrix(reformulate(preds), data = df_sub)
-      newx <- as(mm[, -1, drop = FALSE], "dgCMatrix")
-      as.numeric(predict(fit, newx = newx, s = "lambda.min",
-                         type = "response"))
+      mm   <- model.matrix(reformulate(preds), data = df_sub)
+      Xnew <- as(mm[,-1, drop=FALSE], "dgCMatrix")
+      as.numeric(predict(fit, newx = Xnew, s="lambda.min", type="response"))
+    }
+  } else if (inherits(fit, "glm")) {
+    predict_fun <- function(df_sub) {
+      predict(fit, newdata = df_sub, type="response")
+    }
+  } else if (inherits(fit, "train")) {
+    predict_fun <- function(df_sub) {
+      prob_df <- predict(fit, newdata = df_sub, type="prob")
+      prob_df[[ positive_class ]]
     }
   } else {
-    fit <- glm(reformulate(preds, response = "MRD_truth"),
-               data = train_cc, family = binomial)
-    
-    predict_fun <- function(df_sub) {
-      predict(fit, newdata = df_sub, type = "response")
-    }
+    stop("Unknown model type for combo: ", cmb)
   }
   
-  # ---- apply to all rows ---------------------------------------------------
-  keep <- complete.cases(dat[, preds])
+  # apply to all rows with non-missing preds
+  keep <- complete.cases(dat[, preds, drop=FALSE])
   prob <- rep(NA_real_, nrow(dat))
-  if (any(keep)) prob[keep] <- predict_fun(dat[keep, ])
+  prob[keep] <- predict_fun(dat[keep, ])
   
-  # suffix: only for the two Blood_all_extras rows
-  suffix <- if (cmb == "Blood_all_extras") paste0("_acc", ix) else ""
+  # optional suffix if you have multiples of same combo
+  suffix <- if(cmb=="Blood_all_extras") paste0("_acc", idx) else ""
+  pcol   <- paste0(cmb, suffix, "_prob")
+  ccol   <- paste0(cmb, suffix, "_call")
   
-  prob_col  <- paste0(cmb, suffix, "_prob")
-  call_col  <- paste0(cmb, suffix, "_call")
+  dat[[pcol]] <- prob
+  dat[[ccol]] <- if_else(prob >= thr, 1L, 0L, NA_integer_)
   
-  dat[[prob_col]]  <- prob
-  dat[[call_col]]  <- if_else(prob >= thr, 1L, 0L, NA_integer_)
   dat
 }
 
-# ────────────────────────────────────────────────────────────────────────────
-# 6.  LOOP OVER THE 3 SELECTED ROWS -----------------------------------------
-for (i in seq_len(nrow(selected_rows))) {
-  dat <- fit_and_apply(selected_rows[i, ], i, dat, train_df, combos)
+selected_rows <- selected_rows %>%
+  mutate(threshold = thr)    # or rename(threshold = threshold_cv)
+
+# Loop through all selected rows
+for(i in seq_len(nrow(selected_rows))) {
+  dat <- apply_selected(
+    selected_rows[i, ], 
+    i, 
+    dat, 
+    combos, 
+    selected_models, 
+    positive_class
+  )
 }
+
 
 
 
@@ -468,10 +871,10 @@ for (i in seq_len(nrow(selected_rows))) {
 # 7.  Quick checks -----------------------------------------------------------
 message("BM_zscore_only positives: ",
         sum(dat$BM_zscore_only_call == 1, na.rm = TRUE))
-message("Blood_all_extras_acc2 positives: ",
-        sum(dat$Blood_all_extras_acc2_call == 1, na.rm = TRUE))
-message("Blood_all_extras_acc3 positives: ",
-        sum(dat$Blood_all_extras_acc3_call == 1, na.rm = TRUE))
+message("Blood_base_call positives: ",
+        sum(dat$Blood_base_call == 1, na.rm = TRUE))
+message("Blood_rate_all_extras_call positives: ",
+        sum(dat$Blood_rate_all_extras_call == 1, na.rm = TRUE))
 
 
 ### Rename for clarity 

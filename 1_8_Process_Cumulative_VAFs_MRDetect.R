@@ -354,20 +354,22 @@ cc <- cfWGS_metadata %>%
 
 # Build start_dates _including_ Patient
 start_dates <- df %>%
-  select(Sample_ID, Sample_ID_Bam, Patient) %>%          # ← grab Patient here
-  left_join(cc, by="Sample_ID") %>%                     
-  rename(Date0 = Date_of_sample_collection, TP0 = Timepoint) %>%
-  left_join(cc, by=c("Sample_ID_Bam"="Sample_ID")) %>%
-  rename(Date1 = Date_of_sample_collection, TP1 = Timepoint) %>%
-  transmute(
-    Sample_ID, Sample_ID_Bam, Patient,
-    num_days  = as.numeric(difftime(Date1, Date0, units="days")),
-    num_weeks = num_days/7
-  ) %>%
-  filter(!is.na(num_days))
-
-start_dates <- start_dates %>%
+  select(Sample_ID, Sample_ID_Bam, Patient) %>% 
+  left_join(cc,                    by = "Sample_ID")           %>% 
+  rename(Date_of_sample_collection_Sample_ID = Date_of_sample_collection,
+         Timepoint_Sample_ID            = Timepoint)           %>% 
+  left_join(cc, by = c("Sample_ID_Bam" = "Sample_ID"))         %>% 
+  rename(Date_of_sample_collection_Sample_ID_Bam = Date_of_sample_collection,
+         Timepoint_Sample_ID_Bam            = Timepoint)       %>% 
+  mutate(
+    num_days  = as.numeric(difftime(
+      Date_of_sample_collection_Sample_ID_Bam,
+      Date_of_sample_collection_Sample_ID,
+      units = "days")),
+    num_weeks = num_days / 7
+  ) %>% 
   distinct()
+
 
 # 5) Attach start_dates back onto df
 combined_data_plot <- df %>%
@@ -498,20 +500,22 @@ cc <- cfWGS_metadata %>%
 
 # Build start_dates _including_ Patient
 start_dates <- df %>%
-  select(Sample_ID, Sample_ID_Bam, Patient) %>%          # ← grab Patient here
-  left_join(cc, by="Sample_ID") %>%                     
-  rename(Date0 = Date_of_sample_collection, TP0 = Timepoint) %>%
-  left_join(cc, by=c("Sample_ID_Bam"="Sample_ID")) %>%
-  rename(Date1 = Date_of_sample_collection, TP1 = Timepoint) %>%
-  transmute(
-    Sample_ID, Sample_ID_Bam, Patient,
-    num_days  = as.numeric(difftime(Date1, Date0, units="days")),
-    num_weeks = num_days/7
-  ) %>%
-  filter(!is.na(num_days))
-
-start_dates <- start_dates %>%
+  select(Sample_ID, Sample_ID_Bam, Patient) %>% 
+  left_join(cc,                    by = "Sample_ID")           %>% 
+  rename(Date_of_sample_collection_Sample_ID = Date_of_sample_collection,
+         Timepoint_Sample_ID            = Timepoint)           %>% 
+  left_join(cc, by = c("Sample_ID_Bam" = "Sample_ID"))         %>% 
+  rename(Date_of_sample_collection_Sample_ID_Bam = Date_of_sample_collection,
+         Timepoint_Sample_ID_Bam            = Timepoint)       %>% 
+  mutate(
+    num_days  = as.numeric(difftime(
+      Date_of_sample_collection_Sample_ID_Bam,
+      Date_of_sample_collection_Sample_ID,
+      units = "days")),
+    num_weeks = num_days / 7
+  ) %>% 
   distinct()
+
 
 # 5) Attach start_dates back onto df
 combined_data_plot <- df %>%

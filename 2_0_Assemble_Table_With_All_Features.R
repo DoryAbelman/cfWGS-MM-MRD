@@ -185,6 +185,19 @@ cfWGS_Clinical_MRD_filled <- cfWGS_Clinical_MRD %>% filter(is.na(Timepoint)) %>%
   unique()
 
 ## Bind rows to the other 
+
+# Make sure both data frames have Sample_Code (and Timepoint) as character
+cfWGS_Clinical_MRD_filled <- cfWGS_Clinical_MRD_filled %>%
+  mutate(
+    Sample_Code = as.character(Sample_Code),
+    Timepoint   = as.character(Timepoint)
+  )
+
+cfWGS_Clinical_MRD <- cfWGS_Clinical_MRD %>%
+  mutate(
+    Sample_Code = as.character(Sample_Code),
+    Timepoint   = as.character(Timepoint)
+  )
 cfWGS_Clinical_MRD_filled <- bind_rows(cfWGS_Clinical_MRD_filled, cfWGS_Clinical_MRD %>% filter(!is.na(Timepoint)))
 
 ## Add timepoint info if NA
@@ -500,7 +513,7 @@ tmp_bm <- MRD_cfWGS_BM %>%
     Cumulative_VAF_BM        = Cumulative_VAF,
     detect_rate_BM   = detection_rate_as_reads_detected_over_reads_checked,
     zscore_BM        = sites_rate_zscore_charm,
-    PercentChangeFromBaseline_BM       = percent_change_detection_rate,
+    PercentChangeFromBaseline_BM       = percent_change_detection_rate, #percent_change
     PercentChangeAtSecondTimepoint_BM       = percent_change_detection_rate_second_timepoint
   ) %>%
   distinct()                # just in case you have duplicates
@@ -517,7 +530,7 @@ tmp_blood <- MRD_cfWGS_blood %>%
     Cumulative_VAF_blood     = Cumulative_VAF,
     detect_rate_blood= detection_rate_as_reads_detected_over_reads_checked,
     zscore_blood     = sites_rate_zscore_charm,
-    PercentChangeFromBaseline_blood    = percent_change_detection_rate,
+    PercentChangeFromBaseline_blood    = percent_change,
     PercentChangeAtSecondTimepoint_blood    = percent_change_detection_rate_second_timepoint
   ) %>%
   distinct()
@@ -544,6 +557,15 @@ blood_dups
 
 
 # --- 3. Join both into your clinical table ------------------
+# Ensure all Date columns are of type Date
+cfWGS_Clinical_MRD_filled <- cfWGS_Clinical_MRD_filled %>%
+  mutate(Date = as.Date(Date))
+
+tmp_bm <- tmp_bm %>%
+  mutate(Date = as.Date(Date))
+
+tmp_blood <- tmp_blood %>%
+  mutate(Date = as.Date(Date))
 cfWGS_Clinical_MRD_filled <- cfWGS_Clinical_MRD_filled %>%
   # first bring in the BM calls
   full_join(tmp_bm,    by = c("Patient","Date","Timepoint")) %>%
@@ -642,7 +664,7 @@ dups <- cfWGS_Clinical_MRD_filled %>%
 
 # Inspect
 dups %>% 
-  select(Patient, Date, Sample_Code, Sample_ID) %>%
+  select(Patient, Date, Sample_Code) %>%
   arrange(Patient, Date)
 
 ## Remove and consolidate 
@@ -659,12 +681,24 @@ M4_processing_log_dates <- M4_processing_log_dates %>%
 
 # Compare dates for matching Sample_Codes and calculate days difference
 date_comparison <- cfWGS_Clinical_MRD_filled %>%
+  # make sure Sample_Code is character, not logical
+  mutate(Sample_Code = as.character(Sample_Code)) %>%
   select(Sample_Code, Date) %>%
-  inner_join(M4_processing_log_dates %>% select(Sample_Code, Cleaned_Date), by = "Sample_Code") %>%
-  mutate(
-    Days_Difference = as.numeric(Date - as.Date(Cleaned_Date))  # Calculate number of days difference
+  inner_join(
+    M4_processing_log_dates %>%
+      # likewise ensure it’s character
+      mutate(Sample_Code = as.character(Sample_Code)) %>%
+      select(Sample_Code, Cleaned_Date),
+    by = "Sample_Code"
   ) %>%
-  filter(!is.na(Days_Difference) & Days_Difference != 0)  # Only keep rows with differences
+  mutate(
+    # coerce your cleaned date to Date
+    Cleaned_Date   = as.Date(Cleaned_Date),
+    # calculate days difference
+    Days_Difference = as.numeric(Date - Cleaned_Date)
+  ) %>%
+  # drop any zero or NA differences
+  filter(!is.na(Days_Difference) & Days_Difference != 0)
 
 # Find duplicate date entries
 duplicate_dates <- M4_processing_log_dates %>%
@@ -673,7 +707,6 @@ duplicate_dates <- M4_processing_log_dates %>%
 
 # Keep only those closest to lab 
 # Merge the two datasets to compare dates
-
 M4_processing_log_dates <- M4_processing_log_dates %>%
   mutate(Cleaned_Date = as.Date(Cleaned_Date))
 
@@ -685,8 +718,8 @@ M4_Labs <- read.csv(file = "M4_labs_cleaned.csv") %>% # generated in script 1_0
 merged_data <- M4_processing_log_dates %>%
   left_join(
     M4_Labs %>%
-      select(Patient, Timepoint, LAB_DATE), 
-    by = c("Patient" = "Patient", "Timepoint" = "Timepoint")
+      select(Patient, TIMEPOINT, LAB_DATE), 
+    by = c("Patient" = "Patient", "Timepoint" = "TIMEPOINT")
   )
 
 # Calculate the absolute difference in days (assign NA for rows without LAB_DATE)
@@ -721,21 +754,57 @@ duplicates_to_exclude <- data.frame(
 M4_processing_log_dates <- M4_processing_log_dates %>%
   anti_join(duplicates_to_exclude, by = c("Sample_Code", "Cleaned_Date"))
 
+## Recode VA-07 since 05 was actually relapse timepoint 
+M4_processing_log_dates <- M4_processing_log_dates %>%
+  mutate(
+    # define your condition once
+    is_va07_05 = Patient == "VA-07" & Timepoint == "05",
+    
+    # change Timepoint where needed
+    Timepoint  = if_else(is_va07_05, "R-", Timepoint),
+    
+    # change Sample_Code where needed
+    Sample_Code = if_else(is_va07_05, "VA-07-R", Sample_Code)
+  ) %>%
+  select(-is_va07_05)
+
 ## Take the Date value for labs since may have been typos in processing log 
 # Update NA dates or sample codes in cfWGS_Clinical_MRD_filled with values from M4_processing_log_dates
 cfWGS_Clinical_MRD_filled <- cfWGS_Clinical_MRD_filled %>%
+  # 1) fix types in your main table
+  mutate(
+    Patient     = as.character(Patient),
+    Timepoint   = as.character(Timepoint),
+    Sample_Code = as.character(Sample_Code)
+  ) %>%
   left_join(
-    M4_processing_log_dates %>% select(Patient, Timepoint, Cleaned_Date, Sample_Code),
-    by = c("Patient", "Timepoint")
+    M4_processing_log_dates %>%
+      # 2) also fix types in your lookup
+      mutate(
+        Patient     = as.character(Patient),
+        Timepoint   = as.character(Timepoint),
+        Sample_Code = as.character(Sample_Code)
+      ) %>%
+      # if there really are duplicate log rows, pick one
+      distinct(Patient, Timepoint, .keep_all = TRUE) %>%
+      select(Patient, Timepoint, Cleaned_Date, Sample_Code),
+    by     = c("Patient", "Timepoint"),
+    suffix = c("", ".log")   # keeps your original Sample_Code, brings in Sample_Code.log
   ) %>%
   mutate(
-    # Replace NA dates with Cleaned_Date
-    Date = if_else(is.na(Date), as.Date(Cleaned_Date), Date),
+    # 3a) fill in Date from Cleaned_Date only when Date is NA
+    Date = coalesce(Date, as.Date(Cleaned_Date)),
     
-    # Fill in Sample_Code if it's missing
-    Sample_Code = if_else(is.na(Sample_Code) | Sample_Code == "", Sample_Code.y, Sample_Code)
+    # 3b) fill in Sample_Code from the log when the original is missing/empty
+    Sample_Code = if_else(
+      is.na(Sample_Code) | Sample_Code == "",
+      Sample_Code.log,
+      Sample_Code
+    )
   ) %>%
-  select(-Cleaned_Date, -Sample_Code.y)  # Clean up temporary join columns
+  # 4) drop the helper columns
+  select(-Cleaned_Date, -Sample_Code.log)
+
 
 
 # Convert numeric dates back to proper Date format
@@ -896,8 +965,7 @@ write.csv(cfWGS_Clinical_MRD_filled, file = "cfWGS clinical MRD values with time
 
 # 1) Read in your fragmentomics + cfWGS data
 ##### Ensure is correct with everything
-frag <- read_csv("Results_Fragmentomics/Key_fragmentomics_data_updated.csv")
-
+frag <- read_csv("Results_Fragmentomics/Key_fragmentomics_data_updated2.csv")
 ## Filter the frag df 
 
 # 1) Load fragmentomics + cfWGS features, keeping only the new columns you need
@@ -907,6 +975,7 @@ frag_small <- frag %>%
     Patient,
     Date_of_sample_collection,
     FS,
+    Proportion.Short,
     Site,
     Mean.Coverage,
     Midpoint.Coverage,
@@ -932,6 +1001,7 @@ frag_small_unique <- frag_small %>%
     across(
       c(
         FS,
+        Proportion.Short,
         Mean.Coverage,
         Midpoint.Coverage,
         Midpoint.normalized,
@@ -1149,6 +1219,11 @@ wgs_prefixed <- wgs_prefixed %>%
     .groups = "drop"
   )
 
+# Normalize timepoints
+wgs_prefixed <- wgs_prefixed %>%
+  mutate(
+    Timepoint = str_replace(Timepoint, "^R-$", "R")
+  )
 
 wgs_wide <- wgs_prefixed %>%
   # 1. keep only BM_cells and Blood_plasma_cfDNA
@@ -1165,8 +1240,14 @@ wgs_wide <- wgs_prefixed %>%
 
 # 3. Join onto  clinical MRD table by matching modifiers 
 # make sure both date columns are Date objects
+# Normalize the timepoints 
 cfWGS_Clinical_MRD_filled_final <- cfWGS_dedup %>%
-  mutate(Date = as.Date(Date))
+  mutate(
+    Date      = as.Date(Date),
+    Timepoint = str_replace(Timepoint, "^R-$", "R"),
+    Sample_Code = str_replace(Sample_Code, "R-$", "R")
+  )
+
 
 wgs_wide <- wgs_wide %>%
   mutate(Date_of_sample_collection = as.Date(Date_of_sample_collection))
@@ -1238,7 +1319,7 @@ wgs_mrd_cols <- c(
 )
 
 coverage_cols <- c(
-  "FS",                     # you noted FS belongs here
+  "FS", "Proportion.Short",                    
   "Mean.Coverage","Midpoint.Coverage","Midpoint.normalized","Amplitude",
   "Zscore.Coverage","Zscore.Midpoint","Zscore.Amplitude",
   "Threshold.Coverage","Threshold.Midpoint","Threshold.Amplitude"
@@ -1419,19 +1500,23 @@ joined_with_counts <- joined_clean %>%
 
 
 ### Now correct the duplicate rows in joined with counts 
+first_non_na <- function(x) {
+  x[x %in% c("", "-")] <- NA      # treat blanks and dashes as missing
+  vec <- x[!is.na(x)]             # drop all NA
+  if (length(vec)) vec[[1]] else NA
+}
+
 joined_consolidated <- joined_with_counts %>%
-  # clean the “R-” cases
+  # normalize your “R-” codes up front
   mutate(
-    Timepoint   = if_else(Timepoint   == "R-", "R", Timepoint),
-    Sample_Code = sub("R-$",          "R", Sample_Code)
+    Timepoint   = str_replace(Timepoint,   "^R-$", "R"),
+    Sample_Code = str_replace(Sample_Code, "^R-$", "R")
   ) %>%
-  # group on Patient + Timepoint
-  group_by(Patient, Timepoint) %>%
-  # for every column, pick the first non-NA value
-  summarise(
-    across(everything(), ~ first(na.omit(.x))),
-    .groups = "drop"
+  group_by(Patient, Timepoint, Date) %>%   # or just (Patient, Timepoint)
+  reframe(
+    across(everything(), first_non_na)
   )
+
 
 ## Now have everything need to make plots
 # Write to CSV (for Excel/sharing)
@@ -1439,7 +1524,6 @@ write.csv(joined_consolidated, file = "Final_aggregate_table_cfWGS_features_with
 
 # Write to RDS (for loading back into R with full structure)
 saveRDS(joined_consolidated, file = "Final_aggregate_table_cfWGS_features_with_clinical_and_demographics_updated.rds")
-
 
 ### Do a bit more cleaning for duplicate or missing timepoints
 
@@ -1453,6 +1537,11 @@ cc_by_date <- combined_clinical_data_updated %>%
   select(Patient, Date_of_sample_collection, 
          TP_date = Timepoint, 
          Info_date = timepoint_info)
+
+cc_by_date <- cc_by_date %>%
+  mutate(
+    Date_of_sample_collection = as.Date(Date_of_sample_collection, origin = "1970-01-01")
+  )
 
 # 2) left-join both onto joined_consolidated
 joined_filled2 <- joined_consolidated %>% 
@@ -1493,10 +1582,11 @@ joined_filled2 <- joined_filled2 %>%
   filter(!is.na(Timepoint))
 
 # 4) finally de-duplicate exactly as before
-joined_clean2 <- joined_filled2 %>% 
-  group_by(Patient, Timepoint) %>% 
-  summarise(across(everything(), ~ first(na.omit(.x))),
-            .groups = "drop")
+joined_clean2 <- joined_filled2 %>%
+  group_by(Patient, Timepoint, Date) %>%
+  reframe(
+    across(everything(), first_non_na)
+  )
 
 
 ## Now have everything need to make plots
@@ -1579,15 +1669,96 @@ joined_clean2 <- joined_clean2_fixed %>%
   )
 
 
+## Another check
+# helper to treat "" or "-" as NA, then pick first non-NA
+first_non_na <- function(x) {
+  x[x %in% c("", "-")] <- NA
+  vals <- x[!is.na(x)]
+  if (length(vals)) vals[1] else NA
+}
+
+joined_clean3 <- joined_clean2 %>%
+  # 1) fix any Sample_Code ending in "R-"
+  mutate(
+    Sample_Code = str_replace(Sample_Code, "R-$", "R")
+  ) %>%
+  
+  # 2) group on Patient, Date, Timepoint and collapse
+  group_by(Patient, Date, Timepoint) %>%
+  reframe(
+    across(everything(), first_non_na)
+  )
+
+## Clean dates 
+df <- joined_clean3
+
+# 1) For each Patient/Timepoint/Sample_Code, compute exactly one fill_date:
+fill_dates <- df %>%
+  group_by(Patient, Timepoint, Sample_Code) %>%
+  summarise(
+    fill_date = {
+      ud <- unique(Date[!is.na(Date)])
+      if (length(ud) == 1) {
+        # exactly one date → keep it
+        ud
+      } else {
+        # zero dates or multiple conflicting → NA
+        as.Date(NA)
+      }
+    },
+    .groups = "drop"
+  )
+
+# 2) Join back and coalesce only the missing Dates
+filled_df <- df %>%
+  left_join(fill_dates, by = c("Patient","Timepoint","Sample_Code")) %>%
+  mutate(
+    Date = coalesce(Date, fill_date)
+  ) %>%
+  select(-fill_date)
+
+# 3) (Optional) sanity‐check that you didn’t miss any fillable gaps
+residual <- filled_df %>%
+  group_by(Patient, Timepoint, Sample_Code) %>%
+  filter(any(is.na(Date)) & any(!is.na(Date))) %>%
+  distinct(Patient, Timepoint, Sample_Code)
+
+if (nrow(residual)) {
+  warning("These groups still have mixed NA/non-NA dates:\n",
+          paste0(sprintf("%s / %s / %s", residual$Patient, residual$Timepoint, residual$Sample_Code),
+                 collapse = "\n"))
+} else {
+  message("All missing dates successfully filled where possible.")
+}
+
+filled_df <- filled_df %>% unique()
+
+filled_df %>%
+  # for safety, make sure Date is Date class
+  mutate(Date = as.Date(Date)) %>%
+  # group by Patient + Timepoint
+  group_by(Patient, Timepoint) %>%
+  # collect unique dates and count them
+  summarise(
+    n_dates = n_distinct(Date),
+    dates   = paste(sort(unique(as.character(Date))), collapse = ", "),
+    .groups = "drop"
+  ) %>%
+  # keep only those with more than one distinct date
+  filter(n_dates > 1)
+
+## One last pass to coalesce
+filled_df <- filled_df %>%
+  #group on Patient, Date and collapse
+  group_by(Patient, Date) %>%
+  reframe(
+    across(everything(), first_non_na)
+  )
 
 ## Now have everything need to make plots
+
 # Write to CSV (for Excel/sharing)
-write.csv(joined_clean2, file = "Final_aggregate_table_cfWGS_features_with_clinical_and_demographics_updated3.csv", row.names = FALSE)
+write.csv(filled_df, file = "Final_aggregate_table_cfWGS_features_with_clinical_and_demographics_updated4.csv", row.names = FALSE)
 
 # Write to RDS (for loading back into R with full structure)
-saveRDS(joined_clean2, file = "Final_aggregate_table_cfWGS_features_with_clinical_and_demographics_updated3.rds")
-
-
-## Clean up info for VA-07 to correct previous typo when setting it as relapse 
-tmp <- readRDS("Final_aggregate_table_cfWGS_features_with_clinical_and_demographics_updated3.rds")
-
+saveRDS(filled_df, file = "Final_aggregate_table_cfWGS_features_with_clinical_and_demographics_updated4.rds")

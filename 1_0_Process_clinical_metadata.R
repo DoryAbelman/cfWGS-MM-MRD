@@ -280,17 +280,17 @@ num_patients <- combined_clinical_data_updated %>%
 ##  12.2  Samples by Sample_type
 samples_by_type      <- combined_clinical_data_updated %>%
   group_by(Sample_type) %>%
-  summarise(num_samples = n())
+  summarise(num_samples = dplyr::n())
 
 ##  12.3  Samples by timepoint_info
 samples_by_timepoint <- combined_clinical_data_updated %>%
   group_by(timepoint_info) %>%
-  summarise(num_samples = n())
+  summarise(num_samples = dplyr::n())
 
 ##  12.4  Samples by Study
 samples_by_study     <- combined_clinical_data_updated %>%
   group_by(Study) %>%
-  summarise(num_samples = n())
+  summarise(num_samples = dplyr::n())
 
 ##  12.5  Print to screen & write CSVs
 print(num_patients)
@@ -344,7 +344,7 @@ ggsave(file.path(output_dir, "samples_by_timepoint.png"), width = 6, height = 4)
 ##  13.3  Stacked bar: Samples by Study & Sample_type
 samples_by_study_and_type <- combined_clinical_data %>%
   group_by(Study, Sample_type) %>%
-  summarise(num_samples = n(), .groups = "drop")
+  summarise(num_samples = dplyr::n(), .groups = "drop")
 
 plot_samples_by_study_and_type <- ggplot(samples_by_study_and_type,
                                          aes(x = Study, y = num_samples, fill = Sample_type)) +
@@ -428,11 +428,12 @@ description_mapping <- c(
 
 M4_Labs <- M4_Labs %>%
   mutate(
+    Patient         = M4_id,
     TIMEPOINT       = sapply(PURPOSE, extract_timepoint),
     TIMEPOINT_DESC  = description_mapping[TIMEPOINT]
   )
 
-write.csv(M4_labs_cleaned, file = "M4_labs_cleaned.csv")
+write.csv(M4_Labs, file = "M4_labs_cleaned.csv", row.names = FALSE)
 
 ##  14.5  Make M4_dates_cmrg with unique M4_id, LAB_DATE, TIMEPOINT, TIMEPOINT_DESC
 M4_dates_cmrg <- M4_Labs %>%
