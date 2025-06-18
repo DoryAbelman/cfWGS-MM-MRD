@@ -1774,3 +1774,64 @@ filled_df %>%
 
 filled_df %>%
   filter(!is.na(FS) & is.na(WGS_Tumor_Fraction_Blood_plasma_cfDNA))
+
+
+
+### Check labs are ok 
+
+# 1) Define your “lab” columns
+lab_vars <- c(
+  "Albumin", "B2_micro", "Calcium", "Creatinine", "Hemoglobin", "LDH",
+  "IgA", "IgG", "IgM", "Kappa", "Kappa_Lambda_Ratio", "Lambda", "M_Protein"
+)
+
+# Keep only those that actually exist
+lab_vars <- intersect(lab_vars, names(filled_df))
+
+# 2) Compute min / Q1 / median / mean / Q3 / max for each
+lab_summary <- filled_df %>%
+  summarise(across(
+    all_of(lab_vars),
+    list(
+      min    = ~ min(.x, na.rm=TRUE),
+      Q1     = ~ quantile(.x, 0.25, na.rm=TRUE),
+      median = ~ median(.x, na.rm=TRUE),
+      mean   = ~ mean(.x, na.rm=TRUE),
+      Q3     = ~ quantile(.x, 0.75, na.rm=TRUE),
+      max    = ~ max(.x, na.rm=TRUE)
+    ),
+    .names = "{col}_{fn}"
+  ))
+
+print(lab_summary, width = Inf)
+
+# 3) (Optional) reshape for easier inspection
+tmp <- lab_summary %>%
+  pivot_longer(everything(),
+               names_to = c("Lab", "Stat"),
+               names_sep = "_") %>%
+  pivot_wider(names_from = Stat, values_from = value) %>%
+  arrange(Lab) %>%
+  print(n = Inf)
+
+# 4) Quick pairwise scatter/diag plot to catch weird units
+#    This will be heavy if you have many samples—consider sampling 100 pts if slow.
+library(GGally)
+filled_df %>%
+  select(all_of(lab_vars)) %>%
+  # drop raws with any NAs across labs
+  drop_na() %>%
+  # pick a sample if too big
+  slice_sample(n = min(200, dplyr::n())) %>%
+  ggpairs(title = "Lab Variables Pairwise Check")
+
+
+filled_df %>% 
+  summarise(
+    Ca_min  = min(Calcium,    na.rm=TRUE),
+    Ca_max  = max(Calcium,    na.rm=TRUE),
+    B2_min  = min(B2_micro,   na.rm=TRUE),
+    B2_max  = max(B2_micro,   na.rm=TRUE),
+    LDH_min = min(LDH,        na.rm=TRUE),
+    LDH_max = max(LDH,        na.rm=TRUE)
+  )

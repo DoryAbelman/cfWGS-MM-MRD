@@ -150,26 +150,17 @@ apply_selected <- function(dat, models, thresholds, positive_class = "pos") {
 }
 
 # ── 6. APPLY EACH SELECTED RULE TO DILUTION DATA ────────────────────────────
-dilution_df_scored <- apply_selected(
+dilution_df <- apply_selected(
   dat           = dilution_df,
   models        = selected_models,
   thresholds    = selected_thr,
   positive_class= "pos"
 )
 
-### Rename for clarity 
-dilution_df <- dilution_df %>%
-  rename(
-    BloodSensPriority_prob = Blood_all_extras_acc2_prob,
-    BloodSensPriority_call = Blood_all_extras_acc2_call,
-    BloodAccPriority_prob   = Blood_all_extras_acc3_prob,
-    BloodAccPriority_call   = Blood_all_extras_acc3_call
-  )
-
 # ── 7. SAVE SCORED DILUTION SERIES ──────────────────────────────────────────
-write_rds(dilution_df, file.path(OUTPUT_DIR, "dilution_series_scored.rds"))
-write_csv(dilution_df, file.path(OUTPUT_DIR, "dilution_series_scored.csv"))
-write_csv(dilution_df, file.path(OUTPUT_DIR_TABLES, "dilution_series_scored.csv"))
+write_rds(dilution_df, file.path(OUTPUT_DIR, "dilution_series_scored_updated.rds"))
+write_csv(dilution_df, file.path(OUTPUT_DIR, "dilution_series_scored_updated.csv"))
+write_csv(dilution_df, file.path(OUTPUT_DIR_TABLES, "dilution_series_scored_updated.csv"))
 
 message("Finished: results written to ", OUTPUT_DIR)
 
@@ -184,13 +175,18 @@ select <- dplyr::select ## for conisistency
 
 feature_cols <- c(
   "detect_rate_blood", "detect_rate_BM",
-  "zscore_blood", "zscore_BM", "detection_rate_zscore_reads_checked_charm_BM", "detection_rate_zscore_reads_checked_charm_blood",
+  "zscore_blood", "zscore_BM", "z_score_detection_rate_BM", "z_score_detection_rate_blood",
   "Mean.Coverage", "Midpoint.Coverage", "Midpoint.normalized",
   "Amplitude", "Zscore.Coverage", "Zscore.Midpoint", "Zscore.Amplitude",
   "Proportion.Short", "FS",
   "WGS_Tumor_Fraction_Blood_plasma_cfDNA",
-  "BM_zscore_only_prob",
-  "BloodSensPriority_prob", "BloodAccPriority_prob", "Blood_base_prob"
+  "BM_zscore_only_sites_prob",
+  "BM_zscore_only_detection_rate_prob",
+  "Blood_zscore_only_detection_rate_prob",
+  "Blood_rate_only_prob",
+  "Blood_plus_fragment_min_prob",
+  "Fragmentomics_min_prob",
+  "Fragmentomics_mean_coverage_only_prob"
 )
 
 ## ----------------------------------------------------------------------
@@ -212,7 +208,7 @@ corr_tbl <- plot_df %>%
   arrange(desc(r2))
 
 ## save the full table for the supplement
-write_csv(corr_tbl, file.path(OUTPUT_DIR_TABLES, "Supp_Table_LOD_feature_correlations.csv"))
+write_csv(corr_tbl, file.path(OUTPUT_DIR_TABLES, "Supp_Table_LOD_feature_correlations_updated.csv"))
 
 ## ----------------------------------------------------------------------
 ## 3.  Pick “interesting” features  -------------------------------------
@@ -222,6 +218,8 @@ sig_features <- corr_tbl %>%
   filter(abs(r) > 0.80, p < 0.05) %>%
   pull(feature)
 
+sig_features_df <- corr_tbl %>%
+  filter(abs(r) > 0.80, p < 0.05) 
 ## ----------------------------------------------------------------------
 ## 4.  Build the figure  -------------------------------------------------
 ## ----------------------------------------------------------------------
@@ -247,15 +245,21 @@ p <- ggplot(sig_plot_df, aes(x = LOD, y = value)) +
   theme_bw(base_size = 14) +
   theme(strip.text = element_text(face = "bold"))
 
-ggsave("Fig_LOD_feature_correlations.svg", p,
+ggsave("Fig_LOD_feature_correlations_updated.svg", p,
        width = 8, height = 6, dpi = 500)
 
 ## Make nicer figure for publication
+
+# ───────────────────────────────────────────
+# 1. BM Features
+# ───────────────────────────────────────────
 # 1) define your BM features of interest
 bm_features <- c(
   "detect_rate_BM",           # BM mutation detection rate
   "zscore_BM",                # BM z-score
-  "BM_zscore_only_prob"       # BM MRD probability
+  "z_score_detection_rate_BM",           # BM mutation detection rate
+  "BM_zscore_only_detection_rate_prob",       # BM MRD probability
+  "BM_zscore_only_sites_prob"       # BM MRD probability
 )
 
 # 2) prepare long data
@@ -278,11 +282,12 @@ annot_df <- corr_bm %>%
 
 # 4) nicer facet labels
 facet_labels <- c(
-  detect_rate_BM         = "BM mutation\ndetection rate",
-  zscore_BM              = "BM sites z-score",
-  BM_zscore_only_prob    = "BM MRD probability"
+  BM_zscore_only_sites_prob                 = "BM sites Z-score\nmodel prob.",
+  BM_zscore_only_detection_rate_prob             = "BM cVAF Z-score\nmodel prob.",
+  detect_rate_BM                     = "BM cVAF",
+  z_score_detection_rate_BM    = "BM cVAF Z-score",
+  zscore_BM             = "BM sites Z-score"
 )
-
 # 5) clean ggplot - pearson 
 p_bm <- ggplot(plot_df_bm, aes(x = LOD, y = value)) +
   geom_point(size = 2, alpha = 0.8) +
@@ -347,10 +352,242 @@ p_bm_spearman_actual <- ggplot(plot_df_bm, aes(x = LOD, y = value)) +
 
 # 4) Save to output directory
 ggsave(
-  filename = file.path(OUTPUT_DIR_FIGURES, "Fig_LOD_BM_metrics_spearman_actual.png"),
+  filename = file.path(OUTPUT_DIR_FIGURES, "Fig_LOD_BM_metrics_spearman_actual_updated.png"),
   plot     = p_bm_spearman_actual,
   width    = 10,
   height   = 5,
   dpi      = 500
 )
 
+
+
+
+
+
+# ───────────────────────────────────────────
+# 2. Blood Features
+# ───────────────────────────────────────────
+blood_features <- c(
+  "detect_rate_blood",                          
+  "zscore_blood",                               
+  "z_score_detection_rate_blood",              
+  "Blood_zscore_only_detection_rate_prob",     
+  "Blood_rate_only_prob",                      
+  "Blood_plus_fragment_min_prob"
+)
+
+### consider adding the blood sites zscore probability 
+#### and fragmentomics features 
+
+# 2) prepare long data
+plot_df_blood <- dilution_df %>%
+  select(LOD, all_of(blood_features)) %>%
+  pivot_longer(-LOD, names_to = "feature", values_to = "value")
+
+# 3) get correlations & annotate
+corr_blood <- plot_df_blood %>%
+  group_by(feature) %>%
+  summarise(
+    r   = cor(value, LOD, method = "spearman"),
+    r2  = r^2,
+    p   = cor.test(value, LOD, method = "spearman")$p.value,
+    .groups = "drop"
+  )
+
+annot_df <- corr_blood %>%
+  mutate(label = sprintf("r² = %.2f", r2))
+
+# 4) nicer facet labels
+facet_labels_blood <- c(
+  detect_rate_blood                             = "Blood cVAF",
+  zscore_blood                                  = "Blood sites\nZ-score",
+  z_score_detection_rate_blood                  = "Blood cVAF\nZ-score",
+  Blood_rate_only_prob                           = "Blood cVAF\nProbability",
+  Blood_zscore_only_detection_rate_prob          = "Blood cVAF Z-score\nProbability",
+  Blood_plus_fragment_min_prob                   = "Blood + Fragments\nProbability"
+)
+
+# 5) clean ggplot - pearson 
+p_blood <- ggplot(plot_df_blood, aes(x = LOD, y = value)) +
+  geom_point(size = 2, alpha = 0.8) +
+  geom_smooth(method = "lm", se = FALSE, size = 0.7) +
+  facet_wrap(~ feature,
+             scales = "free_y",
+             labeller = as_labeller(facet_labels_blood)) +
+  geom_text(
+    data = annot_df,
+    aes(x = Inf, y = Inf, label = label),
+    hjust = 1.1, vjust = 1.2,
+    size = 3.5
+  ) +
+  labs(
+    x = "Dilution tumour fraction (%)",
+    y = "Values"
+  ) +
+  theme_classic(base_size = 14) +
+  theme(
+    strip.text        = element_text(face = "bold"),
+    panel.border      = element_rect(color = "black", fill = NA),
+    axis.title.x      = element_text(margin = margin(t = 8)),
+    axis.ticks        = element_line(color = "black")
+  )
+
+## For Spearman
+# 1) Compute Spearman correlation (on raw data, using ranks internally)
+corr_blood_spearman <- plot_df_blood %>%
+  group_by(feature) %>%
+  summarise(
+    rho = cor(value, LOD, method = "spearman"),
+    .groups = "drop"
+  )
+
+# 2) Prepare annotation
+annot_spear <- corr_blood_spearman %>%
+  mutate(label = sprintf("ρ = %.2f", rho))
+
+# 3) Create plot with actual values and Spearman rho
+p_blood_spearman_actual <- ggplot(plot_df_blood, aes(x = LOD, y = value)) +
+  geom_point(size = 2, alpha = 0.8) +
+  geom_smooth(method = "lm", se = FALSE, size = 0.7) +
+  facet_wrap(~ feature,
+             scales   = "free_y",
+             labeller = as_labeller(facet_labels_blood)) +
+  geom_text(
+    data    = annot_spear,
+    aes(x = Inf, y = Inf, label = label),
+    hjust   = 1.1, vjust = 1.2,
+    size    = 3.5
+  ) +
+  labs(
+    x = "Tumour fraction (%)",
+    y = "Feature value"
+  ) +
+  theme_classic(base_size = 14) +
+  theme(
+    strip.text   = element_text(face = "bold"),
+    panel.border = element_rect(color = "black", fill = NA),
+    axis.ticks   = element_line(color = "black")
+  )
+
+# 4) Save to output directory
+ggsave(
+  filename = file.path(OUTPUT_DIR_FIGURES, "Fig_LOD_blood_metrics_spearman_actual_updated.png"),
+  plot     = p_blood_spearman_actual,
+  width    = 10,
+  height   = 5,
+  dpi      = 500
+)
+
+
+# ───────────────────────────────────────────
+# 3. Fragmentomics Features
+# ───────────────────────────────────────────
+## Update this - just template 
+fragmentomics_features <- c(
+  "FS",                                        
+  "Proportion.Short",                          
+  "Mean.Coverage",                             
+  "WGS_Tumor_Fraction_Blood_plasma_cfDNA",     
+  "Fragmentomics_min_prob",                    
+  "Fragmentomics_mean_coverage_only_prob"
+)
+
+
+# 2) prepare long data
+plot_df_blood <- dilution_df %>%
+  select(LOD, all_of(blood_features)) %>%
+  pivot_longer(-LOD, names_to = "feature", values_to = "value")
+
+# 3) get correlations & annotate
+corr_blood <- plot_df_blood %>%
+  group_by(feature) %>%
+  summarise(
+    r   = cor(value, LOD, method = "spearman"),
+    r2  = r^2,
+    p   = cor.test(value, LOD, method = "spearman")$p.value,
+    .groups = "drop"
+  )
+
+annot_df <- corr_blood %>%
+  mutate(label = sprintf("r² = %.2f", r2))
+
+# 4) nicer facet labels
+facet_labels_fragmentomics <- c(
+  FS                                            = "Fragment size\nscore",
+  Proportion.Short                              = "Short fragment\nproportion",
+  Mean.Coverage                                 = "Mean coverage",
+  WGS_Tumor_Fraction_Blood_plasma_cfDNA         = "Tumor fraction",
+  Fragmentomics_min_prob                        = "Fragmentomics\nProbability (min)",
+  Fragmentomics_mean_coverage_only_prob         = "Fragmentomics\nProbability (mean coverage)"
+)
+
+# 5) clean ggplot - pearson 
+p_blood <- ggplot(plot_df_blood, aes(x = LOD, y = value)) +
+  geom_point(size = 2, alpha = 0.8) +
+  geom_smooth(method = "lm", se = FALSE, size = 0.7) +
+  facet_wrap(~ feature,
+             scales = "free_y",
+             labeller = as_labeller(facet_labels_blood)) +
+  geom_text(
+    data = annot_df,
+    aes(x = Inf, y = Inf, label = label),
+    hjust = 1.1, vjust = 1.2,
+    size = 3.5
+  ) +
+  labs(
+    x = "Dilution tumour fraction (%)",
+    y = "Values"
+  ) +
+  theme_classic(base_size = 14) +
+  theme(
+    strip.text        = element_text(face = "bold"),
+    panel.border      = element_rect(color = "black", fill = NA),
+    axis.title.x      = element_text(margin = margin(t = 8)),
+    axis.ticks        = element_line(color = "black")
+  )
+
+## For Spearman
+# 1) Compute Spearman correlation (on raw data, using ranks internally)
+corr_blood_spearman <- plot_df_blood %>%
+  group_by(feature) %>%
+  summarise(
+    rho = cor(value, LOD, method = "spearman"),
+    .groups = "drop"
+  )
+
+# 2) Prepare annotation
+annot_spear <- corr_blood_spearman %>%
+  mutate(label = sprintf("ρ = %.2f", rho))
+
+# 3) Create plot with actual values and Spearman rho
+p_blood_spearman_actual <- ggplot(plot_df_blood, aes(x = LOD, y = value)) +
+  geom_point(size = 2, alpha = 0.8) +
+  geom_smooth(method = "lm", se = FALSE, size = 0.7) +
+  facet_wrap(~ feature,
+             scales   = "free_y",
+             labeller = as_labeller(facet_labels_blood)) +
+  geom_text(
+    data    = annot_spear,
+    aes(x = Inf, y = Inf, label = label),
+    hjust   = 1.1, vjust = 1.2,
+    size    = 3.5
+  ) +
+  labs(
+    x = "Tumour fraction (%)",
+    y = "Feature value"
+  ) +
+  theme_classic(base_size = 14) +
+  theme(
+    strip.text   = element_text(face = "bold"),
+    panel.border = element_rect(color = "black", fill = NA),
+    axis.ticks   = element_line(color = "black")
+  )
+
+# 4) Save to output directory
+ggsave(
+  filename = file.path(OUTPUT_DIR_FIGURES, "Fig_LOD_blood_metrics_spearman_actual_updated.png"),
+  plot     = p_blood_spearman_actual,
+  width    = 10,
+  height   = 5,
+  dpi      = 500
+)

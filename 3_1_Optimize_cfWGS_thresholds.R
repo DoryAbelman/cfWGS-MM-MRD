@@ -1267,6 +1267,9 @@ data_scored <- apply_selected(
 )
 
 
+### Save this 
+saveRDS(data_scored, file = file.path(outdir, "all_patients_with_BM_and_blood_calls_updated.rds"))
+write_csv(data_scored, file = file.path(outdir, "all_patients_with_BM_and_blood_calls_updated.csv"))
 
 
 
