@@ -721,6 +721,31 @@ train_blood <- train_df %>% drop_na(all_of(c("MRD_truth", blood_preds)))
 hold_bm    <- hold_df %>% drop_na(all_of(c("MRD_truth", bm_preds)))
 hold_blood <- hold_df %>% drop_na(all_of(c("MRD_truth", blood_preds)))
 
+
+### see what has blood but not BM 
+# Restrict to frontline samples in each training set
+fb <- train_blood %>% filter(Cohort == "Frontline")
+fbm <- train_bm    %>% filter(Cohort == "Frontline")
+
+# 1) Identify blood samples with no BM call
+no_bm <- fb %>%
+  # drop any that have a matching (Patient, Timepoint) in the BM table
+  anti_join(fbm, by = c("Patient", "Timepoint")) %>%
+  # keep only non‐baseline/diagnosis timepoints
+  filter(! timepoint_info %in% c("Baseline", "Diagnosis")) 
+
+
+n_samples_no_bm  <- nrow(no_bm)
+n_patients_no_bm <- no_bm %>% distinct(Patient) %>% nrow()
+
+# Summarize
+tibble(
+  samples_without_bm   = n_samples_no_bm,
+  patients_without_bm  = n_patients_no_bm
+)
+
+
+
 # 3) Build train/hold sets for fragmentomics-only models
 frag_preds       <- unique(unlist(combos_fragmentomics))
 
@@ -1153,6 +1178,7 @@ wanted <- c(
   "Blood_rate_only",                   # best blood by AUC
   "Blood_plus_fragment_min",           # best blood by accuracy
   "Blood_zscore_only_detection_rate",  # best blood by sensitivity
+  "Blood_zscore_only_sites",  # best blood in validation cohort
   
   # Fragmentomics-only models
   "Fragmentomics_min",             # best fragmentomics in validation cohort and good sens
@@ -1169,9 +1195,10 @@ selected_models   <- all_models[selected_combos]
 selected_thr      <- all_thresholds[selected_combos]
 
 saveRDS(selected_models,
-        file = file.path(outdir, "selected_combo_models_2025-06-17.rds"))
+        file = file.path(outdir, "selected_combo_models_2025-06-19.rds"))
 saveRDS(selected_thr,
-        file = file.path(outdir, "selected_combo_thresholds_2025-06-17.rds"))
+        file = file.path(outdir, "selected_combo_thresholds_2025-06-19.rds"))
+
 
 # -----------------------------------------------------------------------------
 # 8b. Export Combined Metrics & Models
@@ -1211,9 +1238,88 @@ message("Exported validation metrics, nested‐CV metrics, models list, and thre
 
 
 
+##### Now see sensetivity at 95% specificity in the all models file 
+# all_models is your named list of caret::train objects
+sens_at_95spec <- map_dbl(all_models, function(model) {
+  # 1) Grab the best‐tuning parameters
+  best <- model$bestTune
+  
+  # 2) Subset the out‐of‐fold predictions to only those rows matching bestTune
+  preds_best <- inner_join(
+    model$pred,
+    best,
+    by = names(best)
+  )
+  
+  # 3) Build ROC on those held‐out probabilities
+  roc_obj <- roc(
+    response  = preds_best$obs,    # observed neg/pos
+    predictor = preds_best$pos,    # predicted probability of “pos”
+    levels    = c("neg", "pos"),
+    direction = "<"
+  )
+  
+  # 4) Extract the sensitivity at 95% specificity
+  sens <- coords(
+    roc_obj,
+    x         = 0.95,
+    input     = "specificity",
+    ret       = "sensitivity",
+    transpose = FALSE
+  )
+  
+  as.numeric(sens)
+})
+
+# Combine into a dataframe for reporting
+tibble(
+  model            = names(sens_at_95spec),
+  sens_at_95_spec  = sens_at_95spec
+)
+
+
+# Compute specificity at 95% sensitivity for each model
+spec_at_95sen <- map_dbl(all_models, function(model) {
+  # 1) Optimal tuning parameters
+  best <- model$bestTune
+  
+  # 2) Subset to out-of-fold predictions at bestTune
+  preds_best <- inner_join(
+    model$pred,
+    best,
+    by = names(best)
+  )
+  
+  # 3) Build ROC on those held-out predictions
+  roc_obj <- roc(
+    response  = preds_best$obs,   # true class: “neg”/“pos”
+    predictor = preds_best$pos,   # predicted probability for “pos”
+    levels    = c("neg","pos"),
+    direction = "<"
+  )
+  
+  # 4) Extract specificity when sensitivity = 0.95
+  spec <- coords(
+    roc_obj,
+    x         = 0.95,
+    input     = "sensitivity",
+    ret       = "specificity",
+    transpose = FALSE
+  )
+  
+  as.numeric(spec)
+})
+
+# Create a summary table
+table <- tibble(
+  model                  = names(spec_at_95sen),
+  spec_at_95_sensitivity = spec_at_95sen
+)
+
+
 
 # -----------------------------------------------------------------------------
-# 9. Full-Cohort & Dilution-Series Scoring
+# 9A. Full-Cohort & Prep for Dilution-Series Scoring
 # -----------------------------------------------------------------------------
 ### Apply on entire dataframe 
 ## Define function
@@ -1268,8 +1374,181 @@ data_scored <- apply_selected(
 
 
 ### Save this 
-saveRDS(data_scored, file = file.path(outdir, "all_patients_with_BM_and_blood_calls_updated.rds"))
-write_csv(data_scored, file = file.path(outdir, "all_patients_with_BM_and_blood_calls_updated.csv"))
+saveRDS(data_scored, file = file.path(outdir, "all_patients_with_BM_and_blood_calls_updated2.rds"))
+write_csv(data_scored, file = file.path(outdir, "all_patients_with_BM_and_blood_calls_updated2.csv"))
+
+
+
+
+
+
+
+# -----------------------------------------------------------------------------
+# 9B. Now re-get model metrics on the whole cohort 
+# -----------------------------------------------------------------------------
+
+## See what the metrics look like at 95% specificity 
+
+# 1) Filter to frontline cohort and compute prevalence
+frontline <- data_scored %>% 
+  filter(Cohort == "Frontline") 
+prev <- mean(frontline$MRD_truth == 1, na.rm = TRUE)
+
+# 2) Identify all “_prob” columns (i.e. your different models)
+prob_cols <- grep("_prob$", colnames(data_scored), value = TRUE)
+
+### 3A) First get metrics for entire cohort 
+# 3) Loop over models, build ROC & compute metrics at every threshold
+all_metrics_rescored_primary <- map_dfr(prob_cols, function(prob_col) {
+  # build ROC object
+  roc_obj <- roc(
+    response  = frontline$MRD_truth,
+    predictor = frontline[[prob_col]],
+    levels    = c(0, 1),
+    direction = "<"
+  )
+  
+  # extract thresholds with sens, spec, ppv, npv
+  roc_df <- coords(
+    roc_obj,
+    x         = "all",
+    ret       = c("threshold", "sensitivity", "specificity", "ppv", "npv"),
+    transpose = FALSE
+  ) %>% 
+    as_tibble()
+  
+  # compute additional metrics
+  roc_df %>% 
+    mutate(
+      model        = prob_col,
+      accuracy     = sensitivity * prev + specificity * (1 - prev),
+      bal_accuracy = (sensitivity + specificity) / 2,
+      f1           = 2 * sensitivity * ppv / (sensitivity + ppv)
+    ) %>%
+    select(model, threshold, sensitivity, specificity, ppv, npv, accuracy, bal_accuracy, f1)
+})
+
+# Get Youden cutoff
+threshold_df <- tibble(
+  model = paste0(names(all_thresholds), "_prob"),
+  youden = unname(all_thresholds)
+)
+
+# Filter your all_metrics_rescored_primary to only the Youden‐index row for each model
+metrics_youden <- all_metrics_rescored_primary %>%
+  inner_join(threshold_df, by = "model") %>%
+  group_by(model) %>%
+  # pick the row whose threshold minimizes |threshold - youden|
+  slice_min(order_by = abs(threshold - youden), n = 1) %>%
+  ungroup() %>%
+  select(-youden)
+
+print(metrics_youden)
+
+### 3B) Now for each model, find the threshold with ≥95% specificity that maximizes sensitivity,
+#    then compute sensitivity, specificity and accuracy at that threshold
+metrics_at_95spec <- map_dfr(prob_cols, function(prob_col) {
+  # build ROC
+  roc_obj <- roc(
+    response  = frontline$MRD_truth,
+    predictor = frontline[[prob_col]],
+    levels    = c(0,1),
+    direction = "<"
+  )
+  
+  # get all sens/spec pairs
+  roc_df <- coords(
+    roc_obj,
+    x        = "all",
+    ret      = c("threshold","sensitivity","specificity"),
+    transpose= FALSE
+  ) %>% as_tibble()
+  
+  # filter to spec ≥ 0.95
+  cand <- roc_df %>%
+    filter(specificity >= 0.95)
+  
+  # if no threshold meets the bar, return NA
+  if (nrow(cand) == 0) {
+    return(tibble(
+      model        = prob_col,
+      threshold    = NA_real_,
+      sensitivity  = NA_real_,
+      specificity  = NA_real_,
+      accuracy     = NA_real_
+    ))
+  }
+  
+  # pick the one with highest sensitivity
+  best <- cand %>%
+    arrange(desc(sensitivity)) %>%
+    slice(1)
+  
+  # compute accuracy = sens*prev + spec*(1-prev)
+  best <- best %>%
+    mutate(
+      accuracy = sensitivity * prev + specificity * (1 - prev),
+      model    = prob_col
+    ) %>%
+    select(model, threshold, sensitivity, specificity, accuracy)
+  
+  return(best)
+})
+
+print(metrics_at_95spec)
+
+## Now for sens
+metrics_at_95sens <- map_dfr(prob_cols, function(prob_col) {
+  # 1) Build ROC
+  roc_obj <- roc(
+    response  = frontline$MRD_truth,
+    predictor = frontline[[prob_col]],
+    levels    = c(0,1),
+    direction = "<"
+  )
+  
+  # 2) Extract all sens/spec pairs
+  roc_df <- coords(
+    roc_obj,
+    x         = "all",
+    ret       = c("threshold","sensitivity","specificity"),
+    transpose = FALSE
+  ) %>% as_tibble()
+  
+  # 3) Filter to sens ≥ 0.95
+  cand <- roc_df %>%
+    filter(sensitivity >= 0.94)
+  
+  # 4) If none meet the bar, fall back to highest observed sens
+  if (nrow(cand) == 0) {
+    best <- roc_df %>% slice_max(sensitivity, n = 1)
+  } else {
+    # 5) Otherwise pick the one with highest specificity
+    best <- cand %>% arrange(desc(specificity)) %>% slice(1)
+  }
+  
+  # 6) Compute accuracy at that threshold
+  best %>%
+    mutate(
+      model     = prob_col,
+      accuracy  = sensitivity * prev + specificity * (1 - prev)
+    ) %>%
+    select(model, threshold, sensitivity, specificity, accuracy)
+})
+
+print(metrics_at_95sens)
+
+### Save this 
+# Save metrics evaluated at Youden threshold
+write_rds(metrics_youden, file = file.path(outdir, "cfWGS_model_metrics_youden_threshold.rds"))
+write_csv(metrics_youden, file = file.path(outdir, "cfWGS_model_metrics_youden_threshold.csv"))
+
+# Save metrics evaluated at fixed 95% specificity (if applicable)
+write_rds(metrics_at_95spec, file = file.path(outdir, "cfWGS_model_metrics_fixed_95spec.rds"))
+write_csv(metrics_at_95spec, file = file.path(outdir, "cfWGS_model_metrics_fixed_95spec.csv"))
+
+write_rds(metrics_at_95sens, file = file.path(outdir, "cfWGS_model_metrics_fixed_95sens.rds"))
+write_csv(metrics_at_95sens, file = file.path(outdir, "cfWGS_model_metrics_fixed_95sens.csv"))
 
 
 

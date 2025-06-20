@@ -15,8 +15,8 @@ library(patchwork)   # optional – for combining plots, if needed
 
 
 # ── 1. FILE PATHS ───────────────────────────────────────────────────────────
-PATH_MODEL_LIST       <- "~/Documents/Thesis_work/R/M4/Projects/High_risk_MM_baselinbe_relapse_marrow/Output_tables_2025/selected_combo_models_2025-06-17.rds"
-PATH_THRESHOLD_LIST   <- "~/Documents/Thesis_work/R/M4/Projects/High_risk_MM_baselinbe_relapse_marrow/Output_tables_2025/selected_combo_thresholds_2025-06-17.rds"
+PATH_MODEL_LIST       <- "~/Documents/Thesis_work/R/M4/Projects/High_risk_MM_baselinbe_relapse_marrow/Output_tables_2025/selected_combo_models_2025-06-19.rds"
+PATH_THRESHOLD_LIST   <- "~/Documents/Thesis_work/R/M4/Projects/High_risk_MM_baselinbe_relapse_marrow/Output_tables_2025/selected_combo_thresholds_2025-06-19.rds"
 PATH_DILUTION_FRAGMENTOMICS         <- "~/Documents/Thesis_work/R/M4/Projects/High_risk_MM_baselinbe_relapse_marrow/Results_Fragmentomics/Dilution_series/key_fragmentomics_info_dilution_series.rds"
 PATH_DILUTION_PROCESSED_MRDetect    <- "~/Documents/Thesis_work/R/M4/Projects/High_risk_MM_baselinbe_relapse_marrow/MRDetect_output_winter_2025/Processed_R_outputs/cfWGS_Winter2025Dilution_series_May2025_with_zscore.rds"
 PATH_DILUTION_CLINICAL  <- "~/Documents/Thesis_work/R/M4/Projects/High_risk_MM_baselinbe_relapse_marrow/Fragmentomics_data/Dilution_series/Metadata_dilution_series.csv"
@@ -158,9 +158,9 @@ dilution_df <- apply_selected(
 )
 
 # ── 7. SAVE SCORED DILUTION SERIES ──────────────────────────────────────────
-write_rds(dilution_df, file.path(OUTPUT_DIR, "dilution_series_scored_updated.rds"))
-write_csv(dilution_df, file.path(OUTPUT_DIR, "dilution_series_scored_updated.csv"))
-write_csv(dilution_df, file.path(OUTPUT_DIR_TABLES, "dilution_series_scored_updated.csv"))
+write_rds(dilution_df, file.path(OUTPUT_DIR, "dilution_series_scored_updated2.rds"))
+write_csv(dilution_df, file.path(OUTPUT_DIR, "dilution_series_scored_updated2.csv"))
+write_csv(dilution_df, file.path(OUTPUT_DIR_TABLES, "dilution_series_scored_updated2.csv"))
 
 message("Finished: results written to ", OUTPUT_DIR)
 
@@ -184,6 +184,7 @@ feature_cols <- c(
   "BM_zscore_only_detection_rate_prob",
   "Blood_zscore_only_detection_rate_prob",
   "Blood_rate_only_prob",
+  "Blood_zscore_only_sites_prob",
   "Blood_plus_fragment_min_prob",
   "Fragmentomics_min_prob",
   "Fragmentomics_mean_coverage_only_prob"
@@ -208,7 +209,7 @@ corr_tbl <- plot_df %>%
   arrange(desc(r2))
 
 ## save the full table for the supplement
-write_csv(corr_tbl, file.path(OUTPUT_DIR_TABLES, "Supp_Table_LOD_feature_correlations_updated.csv"))
+write_csv(corr_tbl, file.path(OUTPUT_DIR_TABLES, "Supp_Table_LOD_feature_correlations_updated2.csv"))
 
 ## ----------------------------------------------------------------------
 ## 3.  Pick “interesting” features  -------------------------------------
@@ -371,7 +372,8 @@ blood_features <- c(
   "detect_rate_blood",                          
   "zscore_blood",                               
   "z_score_detection_rate_blood",              
-  "Blood_zscore_only_detection_rate_prob",     
+  "Blood_zscore_only_detection_rate_prob",   
+  "Blood_zscore_only_sites_prob",
   "Blood_rate_only_prob",                      
   "Blood_plus_fragment_min_prob"
 )
@@ -404,6 +406,7 @@ facet_labels_blood <- c(
   z_score_detection_rate_blood                  = "Blood cVAF\nZ-score",
   Blood_rate_only_prob                           = "Blood cVAF\nProbability",
   Blood_zscore_only_detection_rate_prob          = "Blood cVAF Z-score\nProbability",
+  Blood_zscore_only_sites_prob  = "Blood sites Z-score\nProbability",
   Blood_plus_fragment_min_prob                   = "Blood + Fragments\nProbability"
 )
 
@@ -478,6 +481,68 @@ ggsave(
   dpi      = 500
 )
 
+### Can do full features for supplement - subset now 
+# 1) Define the four blood features you want
+selected_blood_feats <- c(
+  "zscore_blood",                   # blood sites Z‐score
+  "Blood_zscore_only_sites_prob",   # blood sites Z‐score probability
+  "detect_rate_blood",              # blood cVAF
+  "Blood_rate_only_prob"            # blood cVAF probability
+)
+
+# 2) Subset your long data and re‐compute annotations
+plot_df_sel <- plot_df_blood %>%
+  filter(feature %in% selected_blood_feats)
+
+annot_spear_sel <- annot_spear %>%
+  filter(feature %in% selected_blood_feats)
+
+# 3) Keep only the labels you need
+facet_labels_sel <- facet_labels_blood[selected_blood_feats]
+
+# 4) Make the plot
+p_blood_sel <- ggplot(plot_df_sel, aes(x = LOD, y = value)) +
+  geom_point(size = 2, alpha = 0.8) +
+  geom_smooth(method = "lm", se = FALSE, size = 0.7) +
+  facet_wrap(~ feature,
+             scales   = "free_y",
+             labeller = as_labeller(facet_labels_sel)) +
+  geom_text(
+    data    = annot_spear_sel,
+    aes(x = Inf, y = Inf, label = label),
+    hjust   = 1.1, vjust = 1.2,
+    size    = 3.5
+  ) +
+  labs(
+    x = "Tumour fraction (%)",
+    y = "Feature value"
+  ) +
+  theme_classic(base_size = 14) +
+  theme(
+    strip.text   = element_text(face = "bold"),
+    panel.border = element_rect(color = "black", fill = NA),
+    axis.ticks   = element_line(color = "black")
+  )
+
+# 5) Save it
+ggsave(
+  filename = file.path(OUTPUT_DIR_FIGURES, "Fig_LOD_blood_selected_spearman.png"),
+  plot     = p_blood_sel,
+  width    = 8,   # adjust to taste
+  height   = 4,
+  dpi      = 500
+)
+
+
+## Rescore based on new LOD 
+dilution_df <- dilution_df %>%
+  mutate(
+    Blood_zscore_only_sites_call_rescored = if_else(
+      Blood_zscore_only_sites_prob >= 0.457,
+      1L,    # “positive” call
+      0L     # “negative” call
+    )
+  )
 
 # ───────────────────────────────────────────
 # 3. Fragmentomics Features

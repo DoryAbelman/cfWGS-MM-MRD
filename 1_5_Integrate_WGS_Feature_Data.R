@@ -53,7 +53,7 @@ library(maftools)
 export_dir <- "Jan2025_exported_data"
 
 # Load clinical metadata
-metada_df_mutation_comparison <- read_csv("combined_clinical_data_updated_Feb5_2025.csv") %>%
+metada_df_mutation_comparison <- read_csv("combined_clinical_data_updated_April2025.csv") %>%
   mutate(
     Tumor_Sample_Barcode = Bam %>%
       str_remove_all("_PG|_WG") %>%

@@ -110,9 +110,11 @@ front_tbl <- dat %>%
 #  4.  NON‑FRONTLINE cohort: pooled positivity -------------------------------
 non_tbl <- dat %>%
   mutate(landmark_tp = "All timepoints") %>%
+  filter(!timepoint_info %in% c("Baseline", "Diagnosis")) %>% 
   filter(
     Cohort == "Non-frontline",
-    !is.na(BM_zscore_only_detection_rate_call)
+    !is.na(BM_zscore_only_detection_rate_call),
+    !is.na(MRD_truth) # restrict to only ones with MRD for fair comparison
   ) %>%
   pivot_longer(
     cols      = c(Flow_Binary, Adaptive_Binary, BM_zscore_only_detection_rate_call),

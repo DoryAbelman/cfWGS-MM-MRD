@@ -778,6 +778,36 @@ new_dates <- data.frame(
 # Add the new dates to the existing data frame
 Relapse_dates_full <- bind_rows(Relapse_dates_full, new_dates) %>% unique()
 
+## Add other dates in 
+# load the additional dates from Esther
+new_dates_esther <- read_excel(
+  "Clinical data/IMMAGINE/Additional_relapse_dates_IMG_from_Esther.xlsx",
+  sheet = 1,
+  col_types = c("text", "text")
+) %>%
+  transmute(
+    Patient          = `IMMAGINE ID`,
+    Progression_date = PROGRESSION)
+
+new_dates_esther <- new_dates_esther %>%
+  mutate(
+    Progression_date = as.Date(
+      as.numeric(Progression_date),
+      origin = "1899-12-30"
+    )
+  )
+
+# 3) drop any existing entries for these patients
+updated_relapse <- Relapse_dates_full %>%
+  filter(!Patient %in% new_dates_esther$Patient)
+
+# 4) append the new dates
+updated_relapse <- bind_rows(updated_relapse, new_dates_esther) %>%
+  arrange(Patient)
+
+## Fix back to original name for consistency 
+Relapse_dates_full <- updated_relapse
+
 ## Export relapse dates 
 write.csv(Relapse_dates_full, file = "Relapse dates cfWGS updated.csv", row.names = F)
 write.csv(Relapse_dates_M4_clean, "Relapse_dates_M4_clean.csv", row.names = FALSE)
@@ -1140,11 +1170,79 @@ latest_dates <- df_combined %>%
 tmp <- spore_OS_info %>%
   select(Patient, latest_date = `Status last follow up`)
 
+## Add additional IMG info have 
+tmp_IMG <- read_excel(
+  "Clinical data/IMMAGINE/Additional_relapse_dates_IMG_from_Esther.xlsx",
+  sheet = 2,
+  col_types = c("text","text")
+) %>%
+  transmute(
+    Patient     = `IMMAGINE ID`,
+    latest_date = `Date of last Follow-up`
+  )
+
+tmp_IMG <- tmp_IMG %>%
+  mutate(
+    latest_date = as.Date(
+      as.numeric(latest_date),
+      origin = "1899-12-30"
+    )
+  )
+
+
 # Combine the two tables
-latest_dates <- bind_rows(latest_dates, tmp)
+latest_dates <- bind_rows(latest_dates, tmp_IMG)
+
+latest_dates <- latest_dates %>%
+  group_by(Patient) %>%
+  summarise(
+    latest_date = max(latest_date, na.rm = TRUE),
+    .groups = "drop"
+  )
 
 ## Export this 
 write.csv(latest_dates, file = "Exported_data_tables_clinical/latest_dates_per_patient.csv", row.names = FALSE)
+
+
+
+
+#### Re-do with IMG and update method
+# Helper to extract one source
+extract_latest <- function(df, pt_col, tp_col, date_col){
+  df %>% 
+    transmute(Patient = .data[[pt_col]],
+              Timepoint = as.character(.data[[tp_col]]),
+              Date = as.Date(.data[[date_col]])) %>% 
+    filter(!is.na(Timepoint)) %>% 
+    group_by(Patient, Timepoint) %>% 
+    summarise(Date = max(Date, na.rm=TRUE), .groups="drop")
+}
+
+# 1) pull from each source
+d1 <- extract_latest(M4_dates,       "Patient",       "Timepoint_Code", "Date")
+d2 <- extract_latest(M4_dates_cmrg,  "M4_id",         "TIMEPOINT",      "LAB_DATE")
+d3 <- extract_latest(processing_log_cleaned, "Patient","Timepoint",      "Cleaned_Date")
+d4 <- extract_latest(combined_clinical_data_updated, "Patient","Timepoint",      "Date_of_sample_collection")
+
+# 2) combine and get per-patient max
+latest_dates <- bind_rows(d1, d2, d3, d4) %>% 
+  group_by(Patient) %>% 
+  summarise(latest_date = max(Date, na.rm=TRUE), .groups="drop")
+
+# 3) incorporate SPORE follow-up
+spore_dates <- spore_OS_info %>% 
+  transmute(Patient, status_date = as.Date(`Status last follow up`))
+
+latest_dates <- latest_dates %>% 
+  left_join(spore_dates, by="Patient") %>% 
+  left_join(tmp_IMG, by="Patient") %>% 
+  mutate(latest_date = pmax(latest_date, status_date, na.rm=TRUE)) %>% 
+  select(Patient, latest_date)
+
+# 4) write out
+write.csv(latest_dates,
+          "Exported_data_tables_clinical/latest_dates_per_patient_updated.csv",
+          row.names = FALSE)
 
 
 # ─── 19.  Filter/compare patient sets for cfDNA vs. BM longitudinal → export counts ─
@@ -1289,6 +1387,117 @@ dir.create("exported_clinical_data_April2025", showWarnings = FALSE)
 write.csv(baseline_dates_all,
           file.path("exported_clinical_data_April2025", "all_baseline_dates.csv"),
           row.names = FALSE)
+
+
+### Now re-do the PFS table 
+# 1) Relapsed patients
+prog_info <- Relapse_dates_full %>%
+  # ensure Date class
+  mutate(Progression_date = as.Date(Progression_date)) %>%
+  
+  # group all progression events per patient
+  group_by(Patient) %>%
+  summarise(
+    all_prog     = list(sort(Progression_date)),  # list of all prog dates
+    .groups = "drop"
+  ) %>%
+  
+  # bring in baseline so we can drop any very-early events if needed
+  left_join(baseline_dates_all, by = "Patient") %>%
+  mutate(
+    # keep only those after baseline (if baseline exists)
+    prog_after_baseline = map2(
+      all_prog, Baseline_Date,
+      ~ if (!is.na(.y)) .x[.x > .y] else .x
+    ),
+    # pick the first event as the censor date
+    Censor_date             = map_dbl(prog_after_baseline, ~ .x[1]),
+    # collect any remaining prog-dates into a list-column
+    Other_Progression_Dates = map(prog_after_baseline, ~ if (length(.x)>1) .x[-1] else as.Date(NA))
+  ) %>%
+  mutate(
+    Relapsed      = 1,
+    High_Priority = as.integer(Patient %in% cohort_df$Patient)
+  ) %>%
+  select(Patient, Censor_date, Other_Progression_Dates, Relapsed, High_Priority)
+
+
+# 2) Non-relapsed patients
+nonprog_info <- latest_dates %>%
+  # drop anyone who has at least one progression event
+  filter(! Patient %in% prog_info$Patient) %>%
+  rename(Censor_date = latest_date) %>%
+  mutate(
+    Other_Progression_Dates = as.Date(NA),    # no “other” dates
+    Relapsed                = 0,
+    High_Priority           = as.integer(Patient %in% cohort_df$Patient)
+  ) %>%
+  select(Patient, Censor_date, Other_Progression_Dates, Relapsed, High_Priority)
+
+
+# 3) Combine
+# If prog_info$Censor_date came out numeric, convert it back:
+prog_info <- prog_info %>%
+  mutate(
+    Censor_date = as.Date(Censor_date, origin = "1970-01-01")
+  )
+
+# Ensure nonprog_info$Censor_date is Date as well
+nonprog_info <- nonprog_info %>%
+  mutate(
+    Censor_date = as.Date(Censor_date)
+  )
+
+# Convert nonprog_info's single Date into a list-column of length-1 Date vectors:
+nonprog_info <- nonprog_info %>%
+  mutate(
+    # wrap each scalar Censor_date in its own list (of length 1)
+    Other_Progression_Dates = map(Censor_date, ~ as.Date(NA))
+  )
+
+# Now bind:
+final_tbl <- bind_rows(prog_info, nonprog_info)
+
+## Add baseline
+final_tbl <-final_tbl %>%
+  # 1) join baseline
+  left_join(baseline_dates_all, by = "Patient") 
+
+# Reorder
+final_tbl <- final_tbl %>%
+  select(Patient, Baseline_Date, Censor_date, Relapsed, Other_Progression_Dates, High_Priority)
+
+# Collapse
+tmp <- final_tbl %>%
+  mutate(
+    Other_Progression_Dates = map_chr(Other_Progression_Dates, function(dts) {
+      # if it’s all NA or empty, leave blank
+      if (all(is.na(dts)) || length(dts)==0) {
+        ""
+      } else {
+        # convert Dates to "YYYY-MM-DD" and join with semicolons
+        paste(as.character(dts), collapse = ";")
+      }
+    })
+  )
+
+write.csv(
+  tmp,
+  "Exported_data_tables_clinical/Censore_dates_per_patient_for_PFS.csv",
+  row.names = FALSE
+)
+
+tmp <- tmp %>% filter(!grepl("^(SPORE|IMG)", Patient))
+tmp <- tmp %>% filter(!is.na(Baseline_Date))
+write.csv(
+  tmp,
+  "Exported_data_tables_clinical/Censore_dates_per_patient_for_PFS_just_M4.csv",
+  row.names = FALSE
+)
+
+saveRDS(final_tbl, "Exported_data_tables_clinical/Censor_dates_per_patient_for_PFS.rds")
+
+
 
 
 
