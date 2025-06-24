@@ -1224,8 +1224,34 @@ d2 <- extract_latest(M4_dates_cmrg,  "M4_id",         "TIMEPOINT",      "LAB_DAT
 d3 <- extract_latest(processing_log_cleaned, "Patient","Timepoint",      "Cleaned_Date")
 d4 <- extract_latest(combined_clinical_data_updated, "Patient","Timepoint",      "Date_of_sample_collection")
 
+### Add the other CMRG table to try get latest date - issue is not fully updated
+M4_DEMO <- read_excel("M4_CMRG_Data/M4_COHORT_DEMO.xlsx")
+
+M4_DEMO <- M4_DEMO %>%
+  mutate(Date = as.Date(DATE_OF_LAST_FOLLOWUP),
+         Patient = M4_id) %>%
+  select(Patient, Date) %>%
+  group_by(Patient) %>%
+  filter(Date == max(Date, na.rm = TRUE)) %>%
+  ungroup() %>%
+  distinct()
+
+## Check if later in DEMO file
+other_dates <- bind_rows(d1, d2, d3, d4) %>%
+  group_by(Patient) %>%
+  summarise(latest_other_date = max(Date, na.rm = TRUE), .groups = "drop")
+
+# 2. Compare with M4_DEMO
+more_recent_in_demo <- M4_DEMO %>%
+  left_join(other_dates, by = "Patient") %>%
+  filter(!is.na(latest_other_date), Date > latest_other_date)
+
+# View result
+more_recent_in_demo
+
+
 # 2) combine and get per-patient max
-latest_dates <- bind_rows(d1, d2, d3, d4) %>% 
+latest_dates <- bind_rows(d1, d2, d3, d4, M4_DEMO) %>% 
   group_by(Patient) %>% 
   summarise(latest_date = max(Date, na.rm=TRUE), .groups="drop")
 
@@ -1235,9 +1261,14 @@ spore_dates <- spore_OS_info %>%
 
 latest_dates <- latest_dates %>% 
   left_join(spore_dates, by="Patient") %>% 
-  left_join(tmp_IMG, by="Patient") %>% 
+  bind_rows(tmp_IMG) %>% 
   mutate(latest_date = pmax(latest_date, status_date, na.rm=TRUE)) %>% 
-  select(Patient, latest_date)
+  select(Patient, latest_date) %>%
+  group_by(Patient) %>%
+  filter(latest_date == max(latest_date, na.rm = TRUE)) %>%
+  ungroup() %>%
+  distinct()
+
 
 # 4) write out
 write.csv(latest_dates,
@@ -1383,6 +1414,8 @@ baseline_dates_all <- bind_rows(
 
 n_distinct(baseline_dates_all$Patient)
 
+baseline_dates_all$Baseline_Date <- baseline_dates_all$Diagnosis_date
+
 dir.create("exported_clinical_data_April2025", showWarnings = FALSE)
 write.csv(baseline_dates_all,
           file.path("exported_clinical_data_April2025", "all_baseline_dates.csv"),
@@ -1392,35 +1425,30 @@ write.csv(baseline_dates_all,
 ### Now re-do the PFS table 
 # 1) Relapsed patients
 prog_info <- Relapse_dates_full %>%
-  # ensure Date class
+  # 1) coerce to Date
   mutate(Progression_date = as.Date(Progression_date)) %>%
-  
-  # group all progression events per patient
+  # 2) bring in each patient’s baseline
+  left_join(baseline_dates_all %>% select(Patient, Baseline_Date),
+            by = "Patient") %>%
+  # 3) drop any prog that happened before that patient’s baseline
+  filter(is.na(Baseline_Date) | Progression_date >= Baseline_Date) %>%
+  # 4) now group & collect
   group_by(Patient) %>%
   summarise(
-    all_prog     = list(sort(Progression_date)),  # list of all prog dates
+    all_prog     = list(sort(Progression_date)),
     .groups = "drop"
   ) %>%
-  
-  # bring in baseline so we can drop any very-early events if needed
+  # 5) re-join baseline so you can pick first post-baseline event
   left_join(baseline_dates_all, by = "Patient") %>%
   mutate(
-    # keep only those after baseline (if baseline exists)
-    prog_after_baseline = map2(
-      all_prog, Baseline_Date,
-      ~ if (!is.na(.y)) .x[.x > .y] else .x
-    ),
-    # pick the first event as the censor date
+    prog_after_baseline = all_prog,          # already filtered above
     Censor_date             = map_dbl(prog_after_baseline, ~ .x[1]),
-    # collect any remaining prog-dates into a list-column
-    Other_Progression_Dates = map(prog_after_baseline, ~ if (length(.x)>1) .x[-1] else as.Date(NA))
-  ) %>%
-  mutate(
+    Other_Progression_Dates = map(prog_after_baseline, 
+                                  ~ if(length(.x)>1) .x[-1] else as.Date(NA)),
     Relapsed      = 1,
     High_Priority = as.integer(Patient %in% cohort_df$Patient)
   ) %>%
   select(Patient, Censor_date, Other_Progression_Dates, Relapsed, High_Priority)
-
 
 # 2) Non-relapsed patients
 nonprog_info <- latest_dates %>%
@@ -1613,3 +1641,92 @@ num_sites <- length(filtered_sites)
 cat("Number of unique sites (excluding IMG):", num_sites, "\n")
 
 write.csv(patients_with_either, file = "patients_with_either_cfDNA_at_baseline_and_monitoring.csv", row.names = FALSE)
+
+
+
+#### Check against CMRG baseline dates
+
+Baseline_dates_CMRG <- read_excel("M4_CMRG_Data/M4_COHORT_DIAGNOSTIC_BIOPSY.xlsx") %>%
+  mutate(
+    # if your BIopsy date column is numeric serials:
+    Baseline_Date = as.Date(as.numeric(BIOPSY_DATE), origin = "1899-12-30"), 
+    Patient = M4_id
+  )
+
+## Get diagnosis only 
+# Keep only rows where PURPOSE indicates a diagnostic baseline
+diagnostic_baselines <- Baseline_dates_CMRG %>%
+  filter(
+    str_detect(PURPOSE, regex("^At diagnosis",      ignore_case = TRUE)) |
+      str_detect(PURPOSE, regex("^Diagnosis",         ignore_case = TRUE)) |
+      str_detect(PURPOSE, regex("^Diagnostic\\b",     ignore_case = TRUE))
+  )
+
+# Inspect
+table(diagnostic_baselines$PURPOSE)
+# 2) Get the official baseline_date from your PFS table
+baseline_official <- final_tbl %>%
+  select(Patient, baseline_date)
+
+# 3) Compute the difference
+baseline_comparison <- baseline_official %>%
+  left_join(diagnostic_baselines %>% select(Patient, Baseline_Date, PURPOSE), by = "Patient") %>%
+  mutate(
+    diff_days   = as.numeric(baseline_date - Baseline_Date),
+    diff_months = diff_days / 30.44
+  )
+
+baseline_comparison <- baseline_comparison %>%
+  left_join(cohort_df, by = "Patient")
+
+baseline_comparison <- baseline_comparison %>%
+  rename(
+    Baseline_Date_CMRG_BM_Biopsy     = Baseline_Date,
+    Baseline_Date_current_info       = baseline_date
+  )
+
+### Now see which blood are not at baseline? 
+# 1) Filter to timepoint “01” (baseline draws)  
+processing_baseline <- processing_log_cleaned %>%
+  filter(Timepoint == "01") %>%
+  rename(sample_date = Cleaned_Date) %>%
+  select(Patient, sample_date)
+
+## See mismatch
+baseline_mismatch <- processing_baseline %>%
+  left_join(
+    baseline_comparison %>%
+      select(Patient,
+             Baseline_Date_CMRG_BM_Biopsy,
+             Baseline_Date_current_info,
+             Cohort),
+    by = "Patient"
+  ) %>%
+  mutate(
+    diff_vs_CMRG     = as.numeric(sample_date - Baseline_Date_CMRG_BM_Biopsy),
+    diff_vs_current  = as.numeric(sample_date - Baseline_Date_current_info),
+    mismatch_CMRG    = diff_vs_CMRG    != 0,
+    mismatch_current = diff_vs_current != 0
+  ) %>%
+  filter(mismatch_CMRG | mismatch_current) %>% 
+  distinct()
+
+# Inspect
+print(baseline_mismatch)
+
+# Export if desired
+write_csv(
+  baseline_mismatch,
+  file.path(outdir, "baseline_date_mismatches_both.csv")
+)
+# 4) Write out to CSV for reporting  
+outdir <- "Output_tables_2025/detection_progression"
+dir.create(outdir, recursive = TRUE, showWarnings = FALSE)
+
+write_csv(
+  baseline_mismatch,
+  file.path(outdir, "baseline_date_mismatches.csv")
+)
+
+
+### Now edit the baseline dates to second draw to account for this in BM and re-check against processing log

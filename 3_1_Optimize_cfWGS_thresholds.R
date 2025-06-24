@@ -1552,6 +1552,39 @@ write_csv(metrics_at_95sens, file = file.path(outdir, "cfWGS_model_metrics_fixed
 
 
 
+### Now get whole cohort performance on rescored dataframe
+# Define the specific model and a second fixed threshold
+model_name <- "BM_zscore_only_sites_prob"
+fixed_thr  <- 0.2211
+
+# Pull out the Youden threshold for this model
+youden_thr <- threshold_df %>%
+  filter(model == model_name) %>%
+  pull(youden)
+
+# Subset your full metrics table to just this model
+metrics_model <- all_metrics_rescored_primary %>%
+  filter(model == model_name)
+
+# Find the row nearest the Youden cutoff
+metrics_youden <- metrics_model %>%
+  slice_min(order_by = abs(threshold - youden_thr), n = 1) %>%
+  mutate(type = "youden")
+
+# Find the row nearest your fixed cutoff
+metrics_fixed <- metrics_model %>%
+  slice_min(order_by = abs(threshold - fixed_thr), n = 1) %>%
+  mutate(type = "fixed")
+
+# Combine and print
+metrics_two <- bind_rows(metrics_youden, metrics_fixed) %>%
+  select(model, type, threshold, sensitivity, specificity, ppv, npv, accuracy, bal_accuracy, f1)
+
+print(metrics_two)
+
+write_rds(metrics_two, file = file.path(outdir, "cfWGS_model_metrics_fixed_z_score_model_deeper_LOD.rds"))
+write_csv(metrics_two, file = file.path(outdir, "cfWGS_model_metrics_fixed_z_score_model_deeper_LOD.csv"))
+
 
 # -----------------------------------------------------------------------------
 # 10A. Performance Summaries & Exports - BM 
