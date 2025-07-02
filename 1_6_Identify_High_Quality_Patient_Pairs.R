@@ -415,6 +415,11 @@ message("Saved → patient_cohort_assignment.{csv,rds} in ", export_dir)
 
 ### Check to see the proportion with evidence of disease 
 cohort_df <- readRDS("cohort_assignment_table_updated.rds") ## after manual confirmation 
+
+## Add 
+failed_info <- failed_info %>% 
+  left_join(cohort_df)
+
 successfuly_sequenced <- read_excel()
 # 1) Identify the cohort patients
 cohort_patients <- cohort_df %>% distinct(Patient)
@@ -431,11 +436,28 @@ bm_good_patients <- All_feature_data %>%
 # 3) Which cohort patients have a “good” baseline cfDNA sample?
 cfDNA_good_patients <- All_feature_data %>%
   filter(
-    Sample_type != "BM_cells",
+    Sample_type == "Blood_plasma_cfDNA",
     timepoint_info %in% c("Diagnosis","Baseline"),
     Evidence_of_Disease == 1
   ) %>%
   distinct(Patient)
+
+## Add 
+failed_info <- failed_info %>%
+  mutate(
+    high_quality_BM    = as.integer(Patient %in% bm_good_patients$Patient),
+    high_quality_cfDNA = as.integer(Patient %in% cfDNA_good_patients$Patient)
+  )
+
+failed_info <- failed_info %>%
+  mutate(
+    Cohort = case_when(
+      Study == "M4" & is.na(Cohort)        ~ "Frontline_omitted",
+      TRUE                                  ~ Cohort
+    )
+  )
+
+write.csv(failed_info, file = "Table for creating sample flowchart updated.csv")
 
 # 4) Calculate proportions
 prop_bm <- cohort_patients %>%

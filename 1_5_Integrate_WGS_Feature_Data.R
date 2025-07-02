@@ -63,12 +63,12 @@ metada_df_mutation_comparison <- read_csv("combined_clinical_data_updated_April2
 
 # Load CNA, translocation, and tumor fraction data
 cna_data           <- readRDS(file.path(export_dir, "cna_data.rds"))
-translocation_data <- readRDS(file.path(export_dir, "translocation_data.rds"))
+translocation_data <- readRDS(file.path(export_dir, "translocation_data_cytoband.rds"))
 tumor_fraction     <- read_tsv("Oct 2024 data/tumor_fraction_cfWGS.txt")
 
 # Load mutation MAF objects
 maf_object_blood <- read.maf("combined_maf_temp_blood_Jan2025.maf")
-maf_object_bm    <- read.maf("combined_maf_temp_bm_Jan2025.maf")
+maf_object_bm    <- read.maf("combined_maf_temp_bm_May2025.maf")
 
 
 ### Process CNA and translocation data 
@@ -143,43 +143,80 @@ myeloma_genes <- c(
 maf_subset <- subsetMaf(maf = maf_object_bm, genes = myeloma_genes, includeSyn = FALSE)
 maf_subset_blood <- subsetMaf(maf = maf_object_blood, genes = myeloma_genes, includeSyn = FALSE)
 
+
+# Bone‐marrow
 temp_bm <- maf_subset@data %>%
-  dplyr::select(Tumor_Sample_Barcode, Hugo_Symbol, Variant_Classification, t_depth, VAF, Bam) %>%
-  mutate(Mutation_Type = case_when(
-    Variant_Classification %in% c("Nonsense_Mutation", "Frame_Shift_Del", "Frame_Shift_Ins") ~ "Truncating",
-    Variant_Classification %in% c("Missense_Mutation", "In_Frame_Del", "In_Frame_Ins") ~ "Missense",
-    Variant_Classification == "Splice_Site" ~ "Splice_Site",
-    TRUE ~ "Other"
-  )) %>%
-  select(-Variant_Classification) %>%
+  filter(t_depth > 10) %>%                           # only well‐supported calls
+  mutate(
+    Sample          = sub("\\.bam$", "", Bam),       # drop .bam
+    Mutation_cDNA   = paste0(Hugo_Symbol, ":", HGVSc),
+    Mutation_Genomic= paste(Chromosome,
+                            Start_Position,
+                            Reference_Allele,
+                            Tumor_Seq_Allele2,
+                            sep = "_"),
+    Mutation_Type   = case_when(
+      Variant_Classification %in% c("Nonsense_Mutation",
+                                    "Frame_Shift_Del",
+                                    "Frame_Shift_Ins")       ~ "Truncating",
+      Variant_Classification %in% c("Missense_Mutation",
+                                    "In_Frame_Del",
+                                    "In_Frame_Ins")           ~ "Missense",
+      Variant_Classification == "Splice_Site"                          ~ "Splice_Site",
+      TRUE                                                             ~ "Other"
+    )
+  ) %>%
+  select(
+    Tumor_Sample_Barcode, Sample, Hugo_Symbol,
+    Mutation_cDNA, Mutation_Genomic,
+    Mutation_Type, t_depth, VAF
+  ) %>%
   distinct()
 
+# Blood
 temp_blood <- maf_subset_blood@data %>%
-  dplyr::select(Tumor_Sample_Barcode, Hugo_Symbol, Variant_Classification, t_depth, VAF, Bam) %>%
-  mutate(Mutation_Type = case_when(
-    Variant_Classification %in% c("Nonsense_Mutation", "Frame_Shift_Del", "Frame_Shift_Ins") ~ "Truncating",
-    Variant_Classification %in% c("Missense_Mutation", "In_Frame_Del", "In_Frame_Ins") ~ "Missense",
-    Variant_Classification == "Splice_Site" ~ "Splice_Site",
-    TRUE ~ "Other"
-  )) %>%
-  select(-Variant_Classification) %>%
+  filter(t_depth > 10) %>%
+  mutate(
+    Sample          = sub("\\.bam$", "", Bam),
+    Mutation_cDNA   = paste0(Hugo_Symbol, ":", HGVSc),
+    Mutation_Genomic= paste(Chromosome,
+                            Start_Position,
+                            Reference_Allele,
+                            Tumor_Seq_Allele2,
+                            sep = "_"),
+    Mutation_Type   = case_when(
+      Variant_Classification %in% c("Nonsense_Mutation",
+                                    "Frame_Shift_Del",
+                                    "Frame_Shift_Ins")       ~ "Truncating",
+      Variant_Classification %in% c("Missense_Mutation",
+                                    "In_Frame_Del",
+                                    "In_Frame_Ins")           ~ "Missense",
+      Variant_Classification == "Splice_Site"                          ~ "Splice_Site",
+      TRUE                                                             ~ "Other"
+    )
+  ) %>%
+  select(
+    Tumor_Sample_Barcode, Sample, Hugo_Symbol,
+    Mutation_cDNA, Mutation_Genomic,
+    Mutation_Type, t_depth, VAF
+  ) %>%
   distinct()
 
 mutation_export <- bind_rows(temp_bm, temp_blood)
 
-saveRDS(mutation_export, file = file.path(export_dir, "mutation_export.rds"))
-write.table(mutation_export, file = file.path(export_dir, "mutation_export.txt"), sep = "\t", row.names = FALSE, quote = FALSE)
+saveRDS(mutation_export, file = file.path(export_dir, "mutation_export_updated.rds"))
+write.table(mutation_export, file = file.path(export_dir, "mutation_export_updated.txt"), sep = "\t", row.names = FALSE, quote = FALSE)
 
 # Step 1: Create a helper table with required mutation information
-# Filter mutations with t_depth > 10
-filtered_mutations <- mutation_export # %>%
-#  filter(t_depth > 10)
+# Filter mutations with t_depth > 10 (all meet this criteria anyway)
+filtered_mutations <- mutation_export  %>%
+  filter(t_depth > 10)
 
 # Group by Tumor_Sample_Barcode to summarize mutations for each sample
 mutation_summary <- filtered_mutations %>%
   group_by(Tumor_Sample_Barcode) %>%
   summarise(
-    Mut_identified = ifelse(n() > 0, "Y", "N"),
+    Mut_identified = ifelse(dplyr::n() > 0, "Y", "N"),
     Mut_genes = paste(unique(Hugo_Symbol), collapse = ", "),  # List of mutated genes
     Mut_highest_VAF = max(VAF, na.rm = TRUE),                # Highest VAF among mutations
     Mut_type = paste(unique(Mutation_Type), collapse = ", ")  # List of mutation types
@@ -306,15 +343,18 @@ print(comparison)
 
 ## Export this 
 # Save All_feature_data as an RDS file
-saveRDS(All_feature_data, file = file.path(export_dir, "All_feature_data_May2025.rds"))
+saveRDS(All_feature_data, file = file.path(export_dir, "All_feature_data_June2025.rds"))
 
 # Save All_feature_data as a text file with tab-separated values
-write.table(All_feature_data, file = file.path(export_dir, "All_feature_data_May2025.txt"), sep = "\t", row.names = TRUE, quote = FALSE)
+write.table(All_feature_data, file = file.path(export_dir, "All_feature_data_June2025.txt"), sep = "\t", row.names = TRUE, quote = FALSE)
 
 
 ### Save the CNA_Translocation file 
 # Save All_feature_data as an RDS file
 saveRDS(CNA_translocation, file = file.path(export_dir, "CNA_translocation_Feb2025.rds"))
+#saveRDS(CNA_translocation, file = file.path(export_dir, "CNA_translocation_June2025.rds"))
+
 
 # Save All_feature_data as a text file with tab-separated values
 write.table(CNA_translocation, file = file.path(export_dir, "CNA_translocation_Feb2025.txt"), sep = "\t", row.names = TRUE, quote = FALSE)
+#write.table(CNA_translocation, file = file.path(export_dir, "CNA_translocation_June2025.txt"), sep = "\t", row.names = TRUE, quote = FALSE)

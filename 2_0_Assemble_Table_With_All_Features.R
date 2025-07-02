@@ -25,7 +25,7 @@ library(gridExtra)
 
 
 ### Load in all data:
-All_feature_data <- readRDS("Jan2025_exported_data/All_feature_data_May2025.rds") # MRD sample purity
+All_feature_data <- readRDS("Jan2025_exported_data/All_feature_data_June2025.rds") # MRD sample purity
 M4_MRD_filtered <- read_tsv("M4_MRD_filtered.txt") # The MRD data from labs
 
 path <- file.path("MRDetect_output_winter_2025", "Processed_R_outputs", "BM_muts_data")
@@ -1759,6 +1759,55 @@ filled_df <- filled_df %>%
     across(everything(), first_non_na)
   )
 
+
+### One final pass 
+## Add missing timepoint_info 
+filled_df <- filled_df %>%
+  # 1) compute the “new” labels based purely on Timepoint (and that special CA-08 tweak)
+  mutate(
+    new_timepoint_info = case_when(
+      Timepoint == "01"                       ~ "Diagnosis",
+      Timepoint == "03"                       ~ "Post_induction",
+      Timepoint == "05"                       ~ "Post_transplant",
+      Timepoint == "07"                       ~ "Maintenance",
+      Timepoint == "08"                       ~ "1.5yr maintenance",
+      Timepoint == "09" & Patient == "CA-08"  ~ "1.5yr maintenance",  # CA-08 special
+      Timepoint == "09"                       ~ "2yr maintenance",
+      Timepoint == "10"                       ~ "2.5yr maintenance",
+      Timepoint == "11"                       ~ "3yr maintenance",
+      Timepoint == "12"                       ~ "3.5yr maintenance",
+      Timepoint == "13"                       ~ "4yr maintenance",
+      Timepoint == "14"                       ~ "4.5yr maintenance",
+      Timepoint == "15"                       ~ "5yr maintenance",
+      Timepoint == "R"                        ~ "Relapse",
+      TRUE                                    ~ NA_character_
+    )
+  ) %>%
+  # 2) only overwrite the old timepoint_info when it was NA
+  mutate(
+    timepoint_info = coalesce(timepoint_info, new_timepoint_info)
+  ) %>%
+  # 3) drop the helper column
+  select(-new_timepoint_info)
+
+## Coalesce IMMAGINE-098 
+# 1) Extract and coalesce the two IMG-098 rows
+img98_coalesced <- filled_df %>%
+  filter(Patient == "IMG-098", Timepoint %in% c("T0", "T1")) %>%
+  summarise(across(
+    everything(),
+    ~ first(na.omit(.x)),
+    .names = "{.col}"
+  ))
+
+# 2) Drop the old IMG-098 T0/T1 rows and bind back the coalesced one
+filled_df <- filled_df %>%
+  filter(!(Patient == "IMG-098" & Timepoint %in% c("T0", "T1"))) %>%
+  bind_rows(img98_coalesced) %>%
+  # optional: re‐sort so IMG-098 sits in its original place
+  arrange(Patient, Timepoint)
+
+
 ## Now have everything need to make plots
 
 # Write to CSV (for Excel/sharing)
@@ -1770,7 +1819,7 @@ saveRDS(filled_df, file = "Final_aggregate_table_cfWGS_features_with_clinical_an
 
 ## Quick check 
 filled_df %>%
-  filter(is.na(FS) & !is.na(WGS_Tumor_Fraction_Blood_plasma_cfDNA))
+  filter(is.na(FS) & !is.na(WGS_Tumor_Fraction_Blood_plasma_cfDNA)) ## Not patients using 
 
 filled_df %>%
   filter(!is.na(FS) & is.na(WGS_Tumor_Fraction_Blood_plasma_cfDNA))

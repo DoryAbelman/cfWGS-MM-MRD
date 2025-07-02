@@ -13,24 +13,21 @@
 #   tidyverse, purrr, stringr, writexl, glue
 # ==============================================================================
 
-source("setup_packages.R")   # load libraries consistently
-source("config.R")            # directory paths
-source("helpers.R")           # utility functions
+library(tidyverse)   # dplyr, tidyr, readr, etc.
+library(purrr)       # for pmap_dfr
+library(stringr)     # str_detect, str_to_lower, etc.
+library(writexl)     # write_xlsx()
+library(glue)        # for building sentence output
+library(Hmisc)    # for rcorr()
+library(broom)    # for tidy()
+library(purrr)    # for map_df()
+library(tibble)   # for tibble()
 
-file <- readRDS("Final_aggregate_table_cfWGS_features_with_clinical_and_demographics_updated3.rds")
-
-# The table should contain at least the columns used below. This check stops the
-# script early with a clear message if something went wrong during the
-# aggregation step.
-
-# basic sanity check for expected columns
-required_cols <- c("timepoint_info", "BM_Mutation_Count")
-missing_cols <- setdiff(required_cols, names(file))
-if (length(missing_cols) > 0) {
-  stop(paste("Input data is missing columns:", paste(missing_cols, collapse = ", ")))
-}
+file <- readRDS("Final_aggregate_table_cfWGS_features_with_clinical_and_demographics_updated5.rds")
 
 
+
+##### PART 1: See concordance to FISH 
 ## 1.  PARAMETERS  ---------------------------------------------------
 ## ------------------------------------------------------------------
 tf_cut    <- 0.05            # ≥ 0.05 → “high TF”; change if needed
@@ -141,6 +138,8 @@ dat_base <- dat_base %>%
     TRUE                      ~ Cohort
   ))
 
+dat_base$cohort <- dat_base$Cohort ## for consistency 
+
 ## ------------------------------------------------------------------
 ## 4.  MAPPINGS  -----------------------------------------------------
 ## ------------------------------------------------------------------
@@ -226,7 +225,7 @@ summarise_concord <- function(df){
   df %>% 
     filter(!is.na(fish_call) & !is.na(wgs_call)) %>%       # both performed
     summarise(
-      n          = n(),
+      n          = dplyr::n(),
       tp         = sum(fish_call == 1 & wgs_call == 1),
       tn         = sum(fish_call == 0 & wgs_call == 0),
       fp         = sum(fish_call == 0 & wgs_call == 1),
@@ -273,11 +272,33 @@ concordance_tbl <- bind_rows(
 # have a quick look
 print(concordance_tbl, n = 20)
 
+### Get overall concordance for translocations and CNAs 
+# Translocation concordance on bone‐marrow WGS vs FISH - used in manuscript
+transloc_BM <- long %>% 
+  filter(type == "Translocation", wgs_source == "BM_cells") %>% 
+  summarise_concord()
+
+# Translocation concordance on cfDNA WGS vs FISH
+transloc_cf <- long %>% 
+  filter(type == "Translocation", wgs_source == "cfDNA") %>% 
+  summarise_concord()
+
+# CNA concordance on bone‐marrow WGS vs FISH
+cna_BM <- long %>% 
+  filter(type == "CNA", wgs_source == "BM_cells") %>% 
+  summarise_concord()
+
+# CNA concordance on cfDNA WGS vs FISH
+cna_cf <- long %>% 
+  filter(type == "CNA", wgs_source == "cfDNA") %>% 
+  summarise_concord()
+
+
 
 ## ------------------------------------------------------------------
 ## 8. SAVE RESULTS  -----------------------------------------
 ## ------------------------------------------------------------------
-writexl::write_xlsx(concordance_tbl, "Output_tables_2025/FISH_WGS_concordance_with_cohort_updated2.xlsx")
+writexl::write_xlsx(concordance_tbl, "Output_tables_2025/FISH_WGS_concordance_with_cohort_updated3.xlsx")
 
 
 
@@ -344,7 +365,7 @@ if(!dir.exists("Output_tables_2025")) {
 
 write.csv(
   results2,
-  "Output_tables_2025/concordance_by_cohort_and_source_and_tf_to_FISH_updated2.csv",
+  "Output_tables_2025/concordance_by_cohort_and_source_and_tf_to_FISH_updated3.csv",
   row.names = FALSE
 )
 
@@ -371,6 +392,144 @@ evidence_summary <- dat_base %>%
 
 
 
+
+###### PART 2: See mutation overlap based on breakpoint 
+mutation_data_total <- readRDS("Jan2025_exported_data/mutation_export_updated.rds")
+All_feature_data <- readRDS("Jan2025_exported_data/All_feature_data_June2025.rds")
+combined_clinical_data_updated <- read.csv("combined_clinical_data_updated_April2025.csv")
+
+
+# 1) Annotate your mutation table with clinical metadata
+mut_feat <- mutation_data_total %>%
+  left_join(
+    All_feature_data %>%
+      select(Sample, Patient, Sample_type, Tumor_Fraction, Timepoint),
+    by = "Sample"
+  ) %>%
+  # restrict to only the two sample types of interest
+  filter(Sample_type %in% c("BM_cells","Blood_plasma_cfDNA")) 
+
+# 2) Identify only patient×timepoints that have both BM & cfDNA  
+matched_pts <- combined_clinical_data_updated %>%
+  filter(Sample_type %in% c("BM_cells", "Blood_plasma_cfDNA")) %>%
+  distinct(Patient, Timepoint, Sample_type) %>%
+  group_by(Patient, Timepoint) %>%
+  filter(n_distinct(Sample_type) == 2) %>%
+  ungroup() %>%
+  select(Patient, Timepoint) %>% 
+  unique()
+
+# 3) Keep only those matched cases
+mut_matched <- mut_feat %>%
+  semi_join(matched_pts, by = c("Patient","Timepoint"))
+
+# filter to frontline
+mut_matched <- mut_matched %>% left_join(cohort_df)
+mut_matched <- mut_matched %>% filter(Cohort == "Frontline") %>% filter(Timepoint %in% c("01", "T0")) # get baseline
+
+# 4) Build per‐patient×timepoint sets of genes
+mut_sets <- mut_matched %>%
+  group_by(Patient, Timepoint, Sample_type) %>%
+  summarise(
+    muts = list(unique(Mutation_cDNA)),
+    .groups = "drop"
+  ) %>%
+  pivot_wider(
+    names_from  = Sample_type,
+    values_from = muts,
+    values_fill = list(muts = list(character(0)))  # in case one arm has zero
+  )
+
+tf_cut <- 0.05   # 5 %
+
+# 1) grab only the cfDNA rows
+cfDNA_tf_all <- All_feature_data %>%
+  filter(Sample_type == "Blood_plasma_cfDNA") %>%
+  select(Patient, Timepoint, Tumor_Fraction) %>%
+  distinct()   # in case you have duplicate
+
+# grab cfDNA TF for every matched Pt×TP
+cfDNA_tf_all <- cfDNA_tf_all %>%
+  mutate(
+    tf_group = case_when(
+      is.na(Tumor_Fraction)          ~ "tf_unknown",
+      Tumor_Fraction >  tf_cut       ~ "high_tf",
+      TRUE                     ~ "low_tf"
+    )
+  )
+
+# add to your mutation sets
+mut_sets <- mut_sets %>%
+  left_join(tf_df, by = c("Patient","Timepoint"))
+
+
+## 5)  per-row concordance 
+concordance_row <- mut_sets %>%
+  rowwise() %>%
+  mutate(
+    tp  = length(intersect(BM_cells, Blood_plasma_cfDNA)),
+    fn  = length(setdiff(BM_cells, Blood_plasma_cfDNA)),
+    fp  = length(setdiff(Blood_plasma_cfDNA, BM_cells)),
+    tn  = N_muts - length(union(BM_cells, Blood_plasma_cfDNA)),
+    sensitivity = tp / (tp + fn),
+    specificity = tn / (tn + fp),
+    jaccard     = tp / length(union(BM_cells, Blood_plasma_cfDNA))
+  ) %>%
+  ungroup()
+
+## 6)  global concordance **within each TF bucket** and **overall**
+concordance_tf <- concordance_row %>%
+  mutate(tf_group = replace_na(tf_group, "tf_unknown")) %>%
+  group_by(tf_group) %>%
+  summarise(
+    tp  = sum(tp),
+    fn  = sum(fn),
+    fp  = sum(fp),
+    tn  = sum(tn),
+    sensitivity = tp / (tp + fn),
+    specificity = tn / (tn + fp),
+    jaccard     = tp / (tp + fn + fp),   # global Jaccard
+    .groups = "drop"
+  )
+
+# add an “overall” row
+concordance_overall <- concordance_row %>%
+  summarise(
+    tp = sum(tp),
+    fn = sum(fn),
+    fp = sum(fp),
+    tn = sum(tn),
+    sensitivity = tp / (tp + fn),
+    specificity = tn / (tn + fp),
+    jaccard     = tp / (tp + fn + fp)
+  ) %>%
+  mutate(tf_group = "all")
+
+concordance_global <- bind_rows(concordance_tf, concordance_overall) %>%
+  mutate(
+    concordance = (tp + tn) / (tp + tn + fp + fn)
+  ) %>%
+  select(tf_group, tp, fn, fp, tn,
+         sensitivity, specificity,
+         jaccard, concordance)
+
+cat("\nGlobal concordance by tumour-fraction bucket:\n")
+print(concordance_global)
+
+
+## Export
+# 1) CSV
+write.csv(
+  concordance_global,
+  file = file.path(outdir, "concordance_global.csv"),
+  row.names = FALSE
+)
+
+
+
+
+
+#### PART 3: Mutation counts and other info 
 
 ##### Now get the mutation counts 
 # 1) Summary of mutations detected at baseline
@@ -551,7 +710,8 @@ kruskal.test(BM_Mutation_Count ~ Subtype,
 
 #––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––  
 # 4) Spearman correlations for continuous predictors
-#––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––
+#––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––  
+library(Hmisc)
 cont_vars <- c("WGS_Tumor_Fraction_BM_cells",
                "WGS_Tumor_Fraction_Blood_plasma_cfDNA",
                "FS",

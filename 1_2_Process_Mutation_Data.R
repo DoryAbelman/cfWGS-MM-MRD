@@ -55,10 +55,17 @@
 # =============================================================================
 
 # Load required libraries
+library(maftools)
+library(dplyr)
+library(tidyr)
+library(readr)
+library(ggplot2)
+library(ggridges)
+library(viridis)
+library(scales)
+library(stringr)
+library(purrr)
 
-source("setup_packages.R")
-source("config.R")
-source("helpers.R")
 
 ### Define the mutation gene list (used for both BM and blood)
 myeloma_genes <- c(
@@ -245,10 +252,10 @@ dfs <- lapply(maf_files, function(file) {
 
 # Combine all dataframes into one
 combined_maf <- bind_rows(dfs)
-
+rm(dfs)
 
 # Load in the patient info 
-metada_df_mutation_comparison <- read_csv("combined_clinical_data_updated_Feb5_2025.csv")
+metada_df_mutation_comparison <- read_csv("combined_clinical_data_updated_April2025.csv")
 
 # Add a Tumor_Sample_Barcode column to metada_df_mutation_comparison
 metada_df_mutation_comparison <- metada_df_mutation_comparison %>%
@@ -278,7 +285,7 @@ combined_maf <- left_join(combined_maf %>% select(-Bam), metada_df_mutation_comp
 
 ## First filter to just diagnosis 
 combined_maf_bm_dx <- combined_maf %>% filter(timepoint_info %in% c("Diagnosis", "Baseline", "Relapse", "Progression"))
-
+rm(combined_maf)
 
 
 
@@ -606,7 +613,7 @@ rm(vaf_plot)
 # Write combined_maf to a temporary MAF file 
 write.table(as.data.frame(combined_maf_blood), "combined_maf_temp_blood_Jan2025.maf", sep = "\t", quote = FALSE, row.names = FALSE)
 write.table(as.data.frame(combined_maf_bm_dx), "combined_maf_temp_bm_Jan2025.maf", sep = "\t", quote = FALSE, row.names = FALSE)
-
+#write.table(as.data.frame(combined_maf_bm_dx), "combined_maf_temp_bm_May2025.maf", sep = "\t", quote = FALSE, row.names = FALSE)
 
 
 #### Below here is optional

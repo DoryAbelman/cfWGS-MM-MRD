@@ -162,14 +162,6 @@ for(tp in tps) {
 }
 
 
-### To do 
-### Check that days since sample ok 
-## See why goes up to 1 at start 
-## Add other analyses
-
-
-
-
 
 
 
@@ -425,7 +417,19 @@ med_neg_cf <- med_cf[1] / 30.44
 med_pos_cf <- med_cf[2] / 30.44
 
 ## 2b) 24-month RFS by flow cytometry ----
-# we already have `fit_fl` from before
+# fit the Kaplan–Meier curve
+df_km_fl <- survival_df %>%
+  filter(
+    timepoint_info == "1yr maintenance",
+    !is.na(Flow_Binary)
+  )
+
+# fit the Kaplan–Meier curve
+fit_fl <- survfit(
+  Surv(Time_to_event, Relapsed_Binary) ~ Flow_Binary,
+  data = df_km_fl
+)
+
 sum_fl24   <- summary(fit_fl, times = t24)
 rfs_neg_fl <- sum_fl24$surv[1] * 100
 rfs_pos_fl <- sum_fl24$surv[2] * 100
@@ -995,13 +999,21 @@ assays <- c(
   cfWGS_Blood  = "Blood_zscore_only_sites_call"
 )
 
+## Get additional dates
+Relapse_dates_full <- read_csv(
+  "Relapse dates cfWGS updated.csv",
+  col_types = cols(
+    Patient          = col_character(),
+    Progression_date = col_date(format = "%Y-%m-%d")
+  )
+)
+
 # 2) Build df_sf: non-frontline samples + assays + relapse info
 df_sf <- dat %>%
   filter(tolower(Cohort) == "non-frontline") %>%
   transmute(
     Patient,
     sample_date = as.Date(Date),
-    Adaptive_Binary,
     Flow_Binary,
     BM_zscore_only_detection_rate_call,
     Blood_zscore_only_sites_call
@@ -1019,29 +1031,20 @@ df_sf <- dat %>%
     by = "Patient"
   )
 
-# 2) Build the sample‐level df for non‐frontline -----------------------------
-df_sf <- dat %>%
-  filter(tolower(Cohort) == "non-frontline") %>%
-  transmute(
-    Patient,
-    sample_date = as.Date(Date),
-    Adaptive_Binary,
-    Flow_Binary,
-    BM_zscore_only_detection_rate_call,
-    Blood_zscore_only_sites_call
-  ) %>%
-  # keep rows with at least one assay result
-  filter(if_any(all_of(assays), ~ !is.na(.x))) %>%
-  # join in per‐patient relapse_date + relapsed flag
-  left_join(
-    final_tbl %>% 
-      transmute(
-        Patient,
-        relapse_date = as.Date(censor_date),
-        relapsed     = as.integer(relapsed)
-      ),
-    by = "Patient"
-  )
+## Edit if progression date earlier than sample collected, since some patients had multiple
+df_sf2 <- df_sf %>%
+  select(-relapse_date, -relapsed) %>%           # ① drop the old pair
+  left_join(Relapse_dates_full, by = "Patient") %>%
+  filter(Progression_date >= sample_date) %>%
+  group_by(Patient, sample_date,
+           Flow_Binary,
+           BM_zscore_only_detection_rate_call,
+           Blood_zscore_only_sites_call) %>%
+  slice_min(Progression_date, with_ties = FALSE) %>%
+  ungroup() %>%
+  rename(relapse_date = Progression_date) %>%    # ② now safe to rename
+  mutate(relapsed = as.integer(!is.na(relapse_date)))
+
 
 # 3) Define windows (days) to evaluate
 windows <- c(90, 180, 365, 730)
@@ -1083,11 +1086,18 @@ calc_metrics <- function(df, assay_label, col_name, win_d) {
 
 
 # 6) Inspect results
+results <- imap_dfr(assays, 
+                    # .x = column name, .y = assay label
+                    .f = function(col_name, assay_label) {
+                      map_dfr(windows, function(win_d) {
+                        calc_metrics(df_sf2, assay_label, col_name, win_d)
+                      })
+                    }
+)
+
 results %>%
   arrange(Window_days, desc(Sensitivity), desc(Specificity)) %>%
   print(n = Inf)
-
-
 
 #### Now do only for those who got the cfWGS test done 
 
@@ -1120,6 +1130,43 @@ print(results_BM)
 message("=== Blood-cfWGS subset ===")
 print(results_blood)
 
+
+## Get info
+library(scales)   # for percent()
+
+results_BM %>%
+  # pick the assays & windows you want to narrate
+  filter(Assay %in% c("cfWGS_BM", "Flow"), Window_days %in% c(180, 365)) %>%
+  # build a sentence for each row
+  rowwise() %>%
+  mutate(
+    sentence = glue(
+      "{Assay} at {Window_days}-day window detected {TP}/{TP + FN} progressors ",
+      "(sensitivity {percent(Sensitivity)}, specificity {percent(Specificity)})."
+    )
+  ) %>%
+  ungroup() %>%
+  # print them to the console
+  pull(sentence) %>%
+  cat(sep = "\n")
+
+## For blood
+results_blood %>%
+  # pick the assays & windows you want to narrate
+  filter(Assay %in% c("cfWGS_Blood", "Flow"), Window_days %in% c(180, 365)) %>%
+  # build a sentence for each row
+  rowwise() %>%
+  mutate(
+    sentence = glue(
+      "{Assay} at {Window_days}-day window detected {TP}/{TP + FN} progressors ",
+      "(sensitivity {percent(Sensitivity)}, specificity {percent(Specificity)})."
+    )
+  ) %>%
+  ungroup() %>%
+  # print them to the console
+  pull(sentence) %>%
+  cat(sep = "\n")
+
 ## Get event counts 
 # define your windows of interest
 windows <- c(90, 180, 365, 730)
@@ -1145,7 +1192,7 @@ event_counts_BM <- map_dfr(windows, function(w) {
 })
 
 # view the result
-print(event_counts)
+print(event_counts_BM)
 
 
 ### Export this
@@ -1195,6 +1242,361 @@ write_csv(
 
 
 
+
+### See at what pont an increase occured 
+# 1) choose the probability column you want to analyze:
+assay_prob <- "BM_zscore_only_detection_rate_prob"  # or "BM_zscore_only_detection_rate_prob"
+
+## Reload dat 
+dat <- readRDS(dat_rds) %>%
+  mutate(
+    Patient        = as.character(Patient),
+    sample_date    = as.Date(Date),
+    timepoint_info = tolower(timepoint_info)
+  )
+
+
+### Now see how early it was to progression
+survival_df <- dat %>%
+  filter(Cohort == "Frontline") %>%
+  mutate(
+    Patient     = as.character(Patient),
+    sample_date = as.Date(Date)                     # the draw date for each row
+  ) %>%
+  # bring in censor_date + relapsed from final_tbl
+  left_join(
+    final_tbl %>% 
+      select(Patient, censor_date, relapsed),
+    by = "Patient"
+  ) %>%
+  # compute days from the sample to the event/censor
+  mutate(
+    Time_to_event   = as.numeric(censor_date - sample_date),
+    Relapsed_Binary = as.integer(relapsed)
+  ) %>%
+  # keep only the columns your KM‐loop needs
+  select(
+    Patient, Timepoint, sample_date, censor_date, timepoint_info,
+    Time_to_event, Relapsed_Binary,
+    Flow_Binary, Adaptive_Binary, Rapid_Novor_Binary,
+    Flow_pct_cells, Adaptive_Frequency,
+    PET_Binary,
+    BM_zscore_only_detection_rate_call, BM_zscore_only_detection_rate_prob,
+    Blood_zscore_only_sites_call, Blood_zscore_only_sites_prob, Cumulative_VAF_BM, Cumulative_VAF_blood
+  )
+
+
+# 1) build advance_df: per‐patient nadir & first increase before progression
+advance_df <- survival_df %>%
+  filter(
+    Relapsed_Binary == 1,
+    !is.na(.data[[assay_prob]]),
+    # include samples up to and including the progression date
+    sample_date <= censor_date
+  ) %>%
+  group_by(Patient) %>%
+  arrange(sample_date) %>%
+  group_modify(~ {
+    df <- .
+    # find the nadir (min prob)
+    nadir_idx   <- which.min(df[[assay_prob]])
+    nadir_date  <- df$sample_date[nadir_idx]
+    nadir_prob  <- df[[assay_prob]][nadir_idx]
+    # progression date
+    prog_date   <- df$censor_date[1]
+    # find first sample after nadir with prob > nadir
+    inc_idx     <- which(df$sample_date > nadir_date &
+                           df[[assay_prob]] > nadir_prob)
+    if (length(inc_idx)) {
+      first_inc_date <- df$sample_date[inc_idx[1]]
+      first_inc_prob <- df[[assay_prob]][inc_idx[1]]
+    } else {
+      first_inc_date <- as.Date(NA)
+      first_inc_prob <- NA_real_
+    }
+    tibble(
+      nadir_date             = nadir_date,
+      nadir_prob             = nadir_prob,
+      first_inc_date         = first_inc_date,
+      first_inc_prob         = first_inc_prob,
+      days_to_first_increase = as.numeric(first_inc_date - nadir_date),
+      days_before_progression= as.numeric(prog_date - first_inc_date),
+      prog_date              = prog_date
+    )
+  }) %>%
+  ungroup()
+
+# A) progressing‐patient dataset with non‐missing assay values
+df_prog <- survival_df %>%
+  filter(
+    Relapsed_Binary == 1,
+    !is.na(.data[[assay_prob]]),
+    sample_date <= censor_date    # ← restrict to pre-progression here
+  ) %>%
+  arrange(Patient, sample_date) %>%
+  # compute days before progression for each sample
+  mutate(days_before_prog = as.numeric(censor_date - sample_date))
+
+# B) total samples & timing relative to progression
+n_patients <- df_prog %>% pull(Patient) %>% unique() %>% length()
+n_samples  <- nrow(df_prog)
+sample_timing_stats <- df_prog %>%
+  summarise(
+    median_days_before = median(days_before_prog),
+    iqr_days_before    = IQR(days_before_prog),
+    min_days_before    = min(days_before_prog),
+    max_days_before    = max(days_before_prog),
+    .groups = "drop"
+  )
+
+# C) nadir timing stats (days before progression)
+nadir_timing_stats <- advance_df %>%
+  mutate(
+    days_nadir_before = as.numeric(prog_date - nadir_date)
+  ) %>%
+  summarise(
+    median_nadir_days = median(days_nadir_before, na.rm = TRUE),
+    iqr_nadir_days    = IQR(days_nadir_before, na.rm = TRUE),
+    min_nadir_days    = min(days_nadir_before, na.rm = TRUE),
+    max_nadir_days    = max(days_nadir_before, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+# D) first‐increase timing stats (already in advance_df)
+increase_stats <- advance_df %>%
+  summarise(
+    median_to_increase = median(days_to_first_increase, na.rm = TRUE),
+    iqr_to_increase    = IQR(days_to_first_increase, na.rm = TRUE),
+    min_inc_days       = min(days_to_first_increase, na.rm = TRUE),
+    max_inc_days       = max(days_to_first_increase, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+# E) print results‐section sentences
+cat(glue(
+  "We analyzed {n_patients} patients (total {n_samples} samples) collected a median ",
+  "{sample_timing_stats$median_days_before} days before progression (IQR ",
+  "{sample_timing_stats$iqr_days_before} days; range ",
+  "{sample_timing_stats$min_days_before}–{sample_timing_stats$max_days_before} days). ",
+  "The nadir detection probability occurred a median ",
+  "{nadir_timing_stats$median_nadir_days} days before progression ",
+  "(IQR {nadir_timing_stats$iqr_nadir_days} days; range ",
+  "{nadir_timing_stats$min_nadir_days}–{nadir_timing_stats$max_nadir_days} days). ",
+  "From that nadir, the first increase occurred a median ",
+  "{increase_stats$median_to_increase} days later ",
+  "(IQR {increase_stats$iqr_to_increase} days; range ",
+  "{increase_stats$min_inc_days}–{increase_stats$max_inc_days} days) before progression.\n"
+))
+
+# summarise both “after nadir” and “before progression”
+increase_stats2 <- advance_df %>%
+  summarise(
+    # after nadir → first increase
+    median_after_nadir = median(days_to_first_increase, na.rm = TRUE),
+    iqr_after_nadir    = IQR(days_to_first_increase,   na.rm = TRUE),
+    min_after_nadir    = min(days_to_first_increase,   na.rm = TRUE),
+    max_after_nadir    = max(days_to_first_increase,   na.rm = TRUE),
+    # first increase → progression
+    median_before_prog = median(days_before_progression, na.rm = TRUE),
+    iqr_before_prog    = IQR(days_before_progression,   na.rm = TRUE),
+    min_before_prog    = min(days_before_progression,   na.rm = TRUE),
+    max_before_prog    = max(days_before_progression,   na.rm = TRUE),
+    .groups            = "drop"
+  )
+
+# then one sentence with both
+cat(glue(
+  "From the nadir, the first increase occurred a median ",
+  "{increase_stats2$median_after_nadir} days later ",
+  "(IQR {increase_stats2$iqr_after_nadir} days; range ",
+  "{increase_stats2$min_after_nadir}–{increase_stats2$max_after_nadir} days), ",
+  "which was a median {increase_stats2$median_before_prog} days before progression ",
+  "(IQR {increase_stats2$iqr_before_prog} days; range ",
+  "{increase_stats2$min_before_prog}–{increase_stats2$max_before_prog} days).\n"
+))
+
+
+
+
+
+### Now for blood muts
+# 1) choose the probability column you want to analyze:
+assay_prob <- "Blood_zscore_only_sites_prob"  
+
+## Reload dat 
+dat <- readRDS(dat_rds) %>%
+  mutate(
+    Patient        = as.character(Patient),
+    sample_date    = as.Date(Date),
+    timepoint_info = tolower(timepoint_info)
+  )
+
+
+### Now see how early it was to progression
+survival_df <- dat %>%
+  filter(Cohort == "Frontline") %>%
+  mutate(
+    Patient     = as.character(Patient),
+    sample_date = as.Date(Date)                     # the draw date for each row
+  ) %>%
+  # bring in censor_date + relapsed from final_tbl
+  left_join(
+    final_tbl %>% 
+      select(Patient, censor_date, relapsed),
+    by = "Patient"
+  ) %>%
+  # compute days from the sample to the event/censor
+  mutate(
+    Time_to_event   = as.numeric(censor_date - sample_date),
+    Relapsed_Binary = as.integer(relapsed)
+  ) %>%
+  # keep only the columns your KM‐loop needs
+  select(
+    Patient, Timepoint, sample_date, censor_date, timepoint_info,
+    Time_to_event, Relapsed_Binary,
+    Flow_Binary, Adaptive_Binary, Rapid_Novor_Binary,
+    Flow_pct_cells, Adaptive_Frequency,
+    PET_Binary,
+    BM_zscore_only_detection_rate_call, BM_zscore_only_detection_rate_prob,
+    Blood_zscore_only_sites_call, Blood_zscore_only_sites_prob, Cumulative_VAF_BM, Cumulative_VAF_blood
+  )
+
+
+# 1) build advance_df: per‐patient nadir & first increase before progression
+advance_df <- survival_df %>%
+  filter(
+    Relapsed_Binary == 1,
+    !is.na(.data[[assay_prob]]),
+    # include samples up to and including the progression date
+    sample_date <= censor_date
+  ) %>%
+  group_by(Patient) %>%
+  arrange(sample_date) %>%
+  group_modify(~ {
+    df <- .
+    # find the nadir (min prob)
+    nadir_idx   <- which.min(df[[assay_prob]])
+    nadir_date  <- df$sample_date[nadir_idx]
+    nadir_prob  <- df[[assay_prob]][nadir_idx]
+    # progression date
+    prog_date   <- df$censor_date[1]
+    # find first sample after nadir with prob > nadir
+    inc_idx     <- which(df$sample_date > nadir_date &
+                           df[[assay_prob]] > nadir_prob)
+    if (length(inc_idx)) {
+      first_inc_date <- df$sample_date[inc_idx[1]]
+      first_inc_prob <- df[[assay_prob]][inc_idx[1]]
+    } else {
+      first_inc_date <- as.Date(NA)
+      first_inc_prob <- NA_real_
+    }
+    tibble(
+      nadir_date             = nadir_date,
+      nadir_prob             = nadir_prob,
+      first_inc_date         = first_inc_date,
+      first_inc_prob         = first_inc_prob,
+      days_to_first_increase = as.numeric(first_inc_date - nadir_date),
+      days_before_progression= as.numeric(prog_date - first_inc_date),
+      prog_date              = prog_date
+    )
+  }) %>%
+  ungroup()
+
+# A) progressing‐patient dataset with non‐missing assay values
+df_prog <- survival_df %>%
+  filter(
+    Relapsed_Binary == 1,
+    !is.na(.data[[assay_prob]]),
+    sample_date <= censor_date    # ← restrict to pre-progression here
+  ) %>%
+  arrange(Patient, sample_date) %>%
+  # compute days before progression for each sample
+  mutate(days_before_prog = as.numeric(censor_date - sample_date))
+
+# B) total samples & timing relative to progression
+n_patients <- df_prog %>% pull(Patient) %>% unique() %>% length()
+n_samples  <- nrow(df_prog)
+sample_timing_stats <- df_prog %>%
+  summarise(
+    median_days_before = median(days_before_prog),
+    iqr_days_before    = IQR(days_before_prog),
+    min_days_before    = min(days_before_prog),
+    max_days_before    = max(days_before_prog),
+    .groups = "drop"
+  )
+
+# C) nadir timing stats (days before progression)
+nadir_timing_stats <- advance_df %>%
+  mutate(
+    days_nadir_before = as.numeric(prog_date - nadir_date)
+  ) %>%
+  summarise(
+    median_nadir_days = median(days_nadir_before, na.rm = TRUE),
+    iqr_nadir_days    = IQR(days_nadir_before, na.rm = TRUE),
+    min_nadir_days    = min(days_nadir_before, na.rm = TRUE),
+    max_nadir_days    = max(days_nadir_before, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+# D) first‐increase timing stats (already in advance_df)
+increase_stats <- advance_df %>%
+  summarise(
+    median_to_increase = median(days_to_first_increase, na.rm = TRUE),
+    iqr_to_increase    = IQR(days_to_first_increase, na.rm = TRUE),
+    min_inc_days       = min(days_to_first_increase, na.rm = TRUE),
+    max_inc_days       = max(days_to_first_increase, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+# E) print results‐section sentences
+cat(glue(
+  "We analyzed {n_patients} patients (total {n_samples} samples) collected a median ",
+  "{sample_timing_stats$median_days_before} days before progression (IQR ",
+  "{sample_timing_stats$iqr_days_before} days; range ",
+  "{sample_timing_stats$min_days_before}–{sample_timing_stats$max_days_before} days). ",
+  "The nadir detection probability occurred a median ",
+  "{nadir_timing_stats$median_nadir_days} days before progression ",
+  "(IQR {nadir_timing_stats$iqr_nadir_days} days; range ",
+  "{nadir_timing_stats$min_nadir_days}–{nadir_timing_stats$max_nadir_days} days). ",
+  "From that nadir, the first increase occurred a median ",
+  "{increase_stats$median_to_increase} days later ",
+  "(IQR {increase_stats$iqr_to_increase} days; range ",
+  "{increase_stats$min_inc_days}–{increase_stats$max_inc_days} days) before progression.\n"
+))
+
+
+# summarise both “after nadir” and “before progression”
+increase_stats2 <- advance_df %>%
+  summarise(
+    # after nadir → first increase
+    median_after_nadir = median(days_to_first_increase, na.rm = TRUE),
+    iqr_after_nadir    = IQR(days_to_first_increase,   na.rm = TRUE),
+    min_after_nadir    = min(days_to_first_increase,   na.rm = TRUE),
+    max_after_nadir    = max(days_to_first_increase,   na.rm = TRUE),
+    # first increase → progression
+    median_before_prog = median(days_before_progression, na.rm = TRUE),
+    iqr_before_prog    = IQR(days_before_progression,   na.rm = TRUE),
+    min_before_prog    = min(days_before_progression,   na.rm = TRUE),
+    max_before_prog    = max(days_before_progression,   na.rm = TRUE),
+    .groups            = "drop"
+  )
+
+# then one sentence with both
+cat(glue(
+  "From the nadir, the first increase occurred a median ",
+  "{increase_stats2$median_after_nadir} days later ",
+  "(IQR {increase_stats2$iqr_after_nadir} days; range ",
+  "{increase_stats2$min_after_nadir}–{increase_stats2$max_after_nadir} days), ",
+  "which was a median {increase_stats2$median_before_prog} days before progression ",
+  "(IQR {increase_stats2$iqr_before_prog} days; range ",
+  "{increase_stats2$min_before_prog}–{increase_stats2$max_before_prog} days).\n"
+))
+
+
+
+
+
+
 ### Maybe follow up with Esteban to see if clinical or biochemical progression since don't know for non-frontline
 ### Leave as blank for now
 # Filter out patients whose ID starts with "IMG-" or "SPORE-"
@@ -1207,190 +1609,3 @@ saveRDS(relapse_filtered, file = "Relapse_dates_full_filtered.rds")
 # Export to CSV (optional)
 write.csv(relapse_filtered, file = "Relapse_dates_full_filtered.csv", row.names = FALSE)
 
-
-
-
-
-
-
-
-### Below here is testing 
-
-## ── 5.  FUNCTIONS TO ANALYSE & PLOT ONE ASSAY ───────────────────────────────
-plot_km <- function(df, assay_col,
-                    palette = c("#1b9e77", "#d95f02")) {
-  # 1) filter & create a simple marker factor --------------------------------
-  df2 <- df %>%
-    filter(!is.na(.data[[assay_col]])) %>%
-    mutate(marker = case_when(
-      .data[[assay_col]] %in% c("pos","positive",1,"1",TRUE)  ~ "MRD-positive",
-      .data[[assay_col]] %in% c("neg","negative",0,"0",FALSE) ~ "MRD-negative",
-      TRUE                                                      ~ NA_character_
-    )) %>%
-    filter(!is.na(marker)) %>%
-    mutate(marker = factor(marker, levels = c("MRD-negative","MRD-positive")))
-  
-  if (nrow(df2) == 0) {
-    stop("No data for assay: ", assay_col)
-  }
-  
-  # 2) fit Kaplan–Meier ------------------------------------------------------
-  fit <- survfit(Surv(time_mo, event) ~ marker, data = df2)
-  
-  # 3) extract log-rank p-value yourself ------------------------------------
-  pval <- surv_pvalue(fit, data = df2)$pval
-  
-  # 4) plot (pval passed as label string) -----------------------------------
-  ggs <- ggsurvplot(
-    fit, data       = df2,
-    risk.table      = TRUE,
-    pval            = paste0("p=", signif(pval, 2)),
-    conf.int        = FALSE,
-    palette         = palette,
-    xlab            = "Months from transplant",
-    ylab            = "Relapse-free survival",
-    legend.title    = NULL,
-    legend.labs     = levels(df2$marker),
-    title           = paste(assay_col, "(post-ASCT)")
-  )
-  
-  # 5) univariable Cox (HR + 95% CI) -----------------------------------------
-  cox_mod <- coxph(Surv(time_mo, event) ~ marker, data = df2)
-  cox_tab <- broom::tidy(
-    cox_mod,
-    exponentiate = TRUE,
-    conf.int     = TRUE
-  ) %>%
-    select(HR = estimate, CI_low = conf.low, CI_high = conf.high, p.value)
-  
-  list(plot = ggs, cox = cox_tab)
-}
-
-
-
-## list of assays to iterate over
-assays <- c("BM_zscore_only_detection_rate_call",
-            "Blood_zscore_only_sites_call",
-            "Flow_Binary",
-            "Adaptive_Binary")
-
-# 1. Are the columns really in surv_df?
-names(surv_df)
-# 2. How many non-NA values per assay?
-sapply(surv_df[assays], function(x) sum(!is.na(x)))
-
-
-# pick only assays with data
-non_na <- sapply(assays, function(a) sum(!is.na(surv_df[[a]])))
-valid <- assays[non_na > 0]
-if (length(valid) < length(assays)) {
-  message("Dropping assays with no data: ", paste(setdiff(assays, valid), collapse = ", "))
-}
-
-# run
-km_res <- map(valid, ~plot_km(surv_df, .x))
-
-## export individual PDFs
-walk2(km_res, valid, ~ggsave(
-  file.path(outdir, paste0(.y, "_KM.pdf")),
-  plot = .x$plot$plot, width = 5, height = 4
-))
-
-
-## combined figure (2×2 grid)
-combined <- wrap_plots(map(km_res, "plot"), ncol = 2)
-ggsave(file.path(outdir, "Figure_KM_4panel.pdf"),
-       combined, width = 8, height = 6)
-
-## HR table
-hr_tbl <- map2_dfr(km_res, assays,
-                   \(x, nm) mutate(x$cox, Assay = nm)) %>%
-  select(Assay, HR, CI_low, CI_high, p.value)
-
-write_csv(hr_tbl, file.path(outdir, "Cox_HR_table.csv"))
-
-## ── 6.  DETECTION-RATE & LEAD-TIME STATISTICS ──────────────────────────────
-## helper to compute sensitivity etc. at landmark
-detection_metrics <- function(df, assay_col) {
-  df %>%
-    filter(!is.na(.data[[assay_col]])) %>%
-    summarise(
-      Assay                = assay_col,
-      N_tested             = n(),
-      N_positive           = sum(.data[[assay_col]] == "pos"),
-      Prevalence_pos       = N_positive / N_tested,
-      Events_tested        = sum(event),
-      Sensitivity          = sum(event & (.data[[assay_col]] == "pos")) / Events_tested,
-      Specificity          = sum(!event & (.data[[assay_col]] == "neg")) /
-        sum(!event),
-      Relapse_rate_neg     = sum(event & (.data[[assay_col]] == "neg")) /
-        sum(.data[[assay_col]] == "neg"),
-      Relapse_rate_pos     = sum(event & (.data[[assay_col]] == "pos")) /
-        N_positive
-    )
-}
-
-det_tbl <- map_dfr(assays, ~detection_metrics(surv_df, .x))
-write_csv(det_tbl, file.path(outdir, "Detection_rate_summary.csv"))
-
-## ── 7.  LEAD TIME TO RELAPSE (earliest positive sample vs relapse) ─────────
-## For each assay, find earliest positive date AFTER transplant,
-## then compute (relapse_date − first_pos_date)
-lead_tbl <- map_dfr(assays, function(a) {
-  
-  ## pull all positive samples for that assay
-  pos_tbl <- dat %>%
-    filter(.data[[a]] %in% c("pos", "positive", 1, "1", TRUE)) %>%
-    select(Patient, first_pos_date = sample_date) %>%
-    group_by(Patient) %>%
-    summarise(first_pos_date = min(first_pos_date), .groups = "drop")
-  
-  ## join relapse date
-  df <- final_tbl %>%
-    select(Patient, relapse_date = censor_date, relapsed) %>%  # censor_date = relapse if relapsed==1
-    filter(relapsed == 1) %>%                                  # only real relapses
-    left_join(pos_tbl, by = "Patient") %>%
-    mutate(
-      lead_days = as.numeric(relapse_date - first_pos_date)
-    )
-  
-  summarise(df,
-            Assay         = a,
-            N_relp_w_pos  = sum(!is.na(lead_days)),
-            Median_lead_d = median(lead_days, na.rm = TRUE),
-            IQR_lead_d    = IQR(lead_days,  na.rm = TRUE))
-})
-
-write_csv(lead_tbl, file.path(outdir, "Lead_time_summary.csv"))
-
-## ── 8.  (OPTIONAL) TIME-DEPENDENT AUC AT 24 & 36 MONTHS ────────────────────
-auc_tbl <- map_dfr(assays, function(a) {
-  marker <- as.numeric(surv_df[[a]] == "pos")
-  roc24  <- timeROC(T = surv_df$time_mo,
-                    delta = surv_df$event,
-                    marker = marker,
-                    cause = 1,
-                    times = c(24, 36),
-                    iid = TRUE)
-  tibble(
-    Assay = a,
-    AUC24 = roc24$AUC[1],
-    AUC36 = roc24$AUC[2]
-  )
-})
-
-write_csv(auc_tbl, file.path(outdir, "AUC_timeROC_summary.csv"))
-
-## ── 9.  BASELINE CHARACTERISTICS TABLE (optional) ──────────────────────────
-vars <- c("AGE", "Gender", "ISS_STAGE", "Cytogenetic_Risk")
-baseline_tbl <- dat %>%
-  filter(timepoint_info == "diagnosis") %>%              # baseline sample
-  select(Patient, all_of(vars)) %>%
-  unique()
-
-CreateTableOne(vars = vars, data = baseline_tbl) %>%
-  print(varLabels = TRUE, showAllLevels = TRUE)
-
-################################################################################
-##  END
-################################################################################

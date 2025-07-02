@@ -53,8 +53,9 @@ tumor_fraction <- read_tsv("Oct 2024 data/tumor_fraction_cfWGS.txt")
 # 2. arm‐level CNA matrix (was saved as cna_data.rds in your export_dir)
 export_dir <- "Jan2025_exported_data"  
 cna_data <- readRDS(file.path(export_dir, "cna_data.rds"))
-# your code expects myeloma_CNA_matrix_with_HRD
-myeloma_CNA_matrix_with_HRD <- cna_data  
+
+CNA_translocation <- readRDS("Jan2025_exported_data/CNA_translocation_June2025.rds") ## From 1_5 script
+mutation_data_total <- readRDS("Jan2025_exported_data/mutation_export_updated.rds")
 
 # 3. cfDNA translocation tab (the 4‐call binary table you exported)
 translocation_data <- readRDS(
@@ -63,7 +64,7 @@ translocation_data <- readRDS(
 
 # 4. MAF objects for BM and blood
 #    these point at the .maf you dumped out in your mutation script
-maf_object_bm    <- read.maf(maf = "combined_maf_temp_bm_Jan2025.maf")
+maf_object_bm    <- read.maf(maf = "combined_maf_temp_bm_May2025.maf")
 maf_object_blood <- read.maf(maf = "combined_maf_temp_blood_Jan2025.maf")
 
 
@@ -251,7 +252,7 @@ screenshotter_df %>% group_by(Bam) %>% group_walk(~ write_bed(.x, .y$Bam))
 
 
 # 2. figure out exactly which barcodes & genes are on your heatmap
-final_BM_barcodes    <- combined_data_heatmap_BM$Tumor_Sample_Barcode
+final_BM_barcodes    <- combined_data_heatmap_BM$Tumor_Sample_Barcode ## defined later
 final_blood_barcodes <- combined_data_heatmap_blood$Tumor_Sample_Barcode
 final_genes          <- intersect(myeloma_genes, colnames(combined_data_heatmap_BM))
 
@@ -341,32 +342,7 @@ mutation_matrix <- mutation_data %>%
     })
   )
 
-# 1b. Prepare CNA and translocation data for BM
-cna_data <- myeloma_CNA_matrix_with_HRD %>%
-  select(Sample, del1p, amp1q, del13q, del17p, hyperdiploid) %>%
-  mutate_at(vars(-Sample), as.character)
 
-translocation_data <- translocation_matrix %>%
-  select(Bam_File, IGH_MAF = `IGH-MAF`, IGH_CCND1 = `IGH-CCND1`, IGH_MYC = `IGH-MYC`, IGH_FGFR3 = `IGH-FGFR3`) %>%
-  mutate(Sample = gsub(".bam$", "", Bam_File))
-
-CNA_translocation <- full_join(cna_data, translocation_data)
-
-# 1c. Merge with metadata and tumor fraction info (metadata must contain a "Patient" column)
-metada_df_mutation_comparison <- metada_df_mutation_comparison %>%
-  mutate(Bam_clean_tmp = gsub(".bam$", "", Bam))
-
-CNA_translocation <- left_join(CNA_translocation, 
-                               metada_df_mutation_comparison, 
-                               by = c("Sample" = "Bam_clean_tmp"))
-
-tumor_fraction_max <- tumor_fraction %>%
-  group_by(Bam) %>%
-  summarise(Tumor_Fraction = max(Tumor_fraction, na.rm = TRUE))
-
-CNA_translocation <- left_join(CNA_translocation, 
-                               tumor_fraction_max, 
-                               by = c("Sample" = "Bam"))
 
 # 1d. Merge mutation with CNA/translocation data for BM
 combined_data_heatmap_BM <- mutation_matrix %>%
@@ -442,7 +418,7 @@ temp2 <- combined_data_heatmap_BM %>%
   select(-c(Bam, Date_of_sample_collection, Sample_type, Timepoint, Study, 
             Sample_ID, Tumor_Sample_Barcode, Sample, timepoint_info, Tumor_Fraction, Patient, Patient_Timepoint))
 temp2 <- temp2 %>%
-  select(-c(Num_days_to_closest_relapse_absolute, Num_days_to_closest_relapse_non_absolute, Num_days_to_closest_relapse, Relapsed, `...27`, Bam_File))
+  select(-c(Num_days_to_closest_relapse_absolute, Num_days_to_closest_relapse_non_absolute, Num_days_to_closest_relapse, Relapsed, Bam_File))
 
 rownames(temp2) <- temp1
 
@@ -690,13 +666,13 @@ setdiff(rownames(heatmap_matrix_BM), rownames(heatmap_matrix_blood))
 
 ## Export 
 # save the filtered matrices for use elsewhere
-saveRDS(heatmap_matrix_BM,    file = "heatmap_matrix_BM_March2025.rds")
-saveRDS(heatmap_matrix_blood, file = "heatmap_matrix_blood_March2025.rds")
+saveRDS(heatmap_matrix_BM,    file = "heatmap_matrix_BM_June2025.rds")
+saveRDS(heatmap_matrix_blood, file = "heatmap_matrix_blood_June2025.rds")
 
 # Save bone marrow combined data
-saveRDS(combined_data_heatmap_BM, file = "combined_data_heatmap_BM_March2025.rds")
+saveRDS(combined_data_heatmap_BM, file = "combined_data_heatmap_BM_June2025.rds")
 # Save cfDNA (blood) combined data
-saveRDS(combined_data_heatmap_blood, file = "combined_data_heatmap_blood_March2025.rds")
+saveRDS(combined_data_heatmap_blood, file = "combined_data_heatmap_blood_June2025.rds")
 
 
 
@@ -714,7 +690,6 @@ keep_patients <- cohort_df$Patient
 # cols = Patient_Timepoint
 all_cols <- base::union(colnames(heatmap_matrix_BM), colnames(heatmap_matrix_blood))
 all_rows <- base::union(rownames(heatmap_matrix_BM), rownames(heatmap_matrix_blood))
-
 
 # helper to pull the patient ID off a column like "SPORE_0009_Baseline"
 extract_pid <- function(cols) {
@@ -803,12 +778,12 @@ cohort_label <- cohort_df$Cohort[match(patients, cohort_df$Patient)]
 # 2. Map to desired labels
 col_cohort <- case_when(
   cohort_label == "Frontline"      ~ "Frontline",
-  cohort_label == "Non-frontline" ~ "Non-frontline",
+  cohort_label == "Non-frontline" ~ "Later-line",
   TRUE                             ~ NA_character_
 )
 
 # 3. Convert to factor with defined levels
-col_cohort <- factor(col_cohort, levels = c("Frontline", "Non-frontline"))
+col_cohort <- factor(col_cohort, levels = c("Frontline", "Later-line"))
 
 # 4. Check distribution
 table(col_cohort, useNA = "ifany")
@@ -839,8 +814,8 @@ col_tf_ord     <- ord_df$TumourFraction
 # rename  cohort factor levels
 col_cohort_ord <- factor(
   col_cohort_ord,
-  levels = c("Frontline", "Non-frontline"),
-  labels = c("Frontline induction-transplant", "Non-frontline")
+  levels = c("Frontline", "Later-line"),
+  labels = c("Frontline", "Later-line")
 )
 
 # 3) re‐order your matrices
@@ -880,13 +855,21 @@ row_group <- factor(
   levels = c("Mutations","CNAs","Translocations")
 )
 
+# 1. Find which row is bad
+bad_ix <- which(is.na(row_group))
+
+# 2. Drop it from everything
+all_rows <- all_rows[-bad_ix]
+row_group <- row_group[-bad_ix]
+bm_mat    <- bm_mat[-bad_ix, , drop = FALSE]
+cfDNA_mat <- cfDNA_mat[-bad_ix, , drop = FALSE]
 
 # 7) build the top‐row annotation
 # 7a) Bring in mutation count dataframe
 #   (assumes you have a data.frame `mut_counts_df` with columns Patient, MutCount)
 # (a) Load your baseline clinical table (if not already loaded)
 #     and keep only one Diagnosis/Baseline row per patient.
-dat_base <- readRDS("Final_aggregate_table_cfWGS_features_with_clinical_and_demographics_updated3.rds") %>%
+dat_base <- readRDS("Final_aggregate_table_cfWGS_features_with_clinical_and_demographics_updated5.rds") %>%
   filter(timepoint_info %in% c("Diagnosis","Baseline")) %>%
   arrange(Patient, timepoint_info) %>%
   group_by(Patient) %>%
@@ -934,7 +917,7 @@ top_ha <- HeatmapAnnotation(
     na_col = "grey90"
   ),
   col = list(
-    Cohort = c(`Frontline induction-transplant` = "#3182bd", `Non-frontline` = "#e6550d")
+    Cohort = c(`Frontline` = "#3182bd", `Later-line` = "#e6550d")
   ),
   annotation_name_side = "left",
   annotation_name_rot  = 0,
@@ -971,6 +954,7 @@ lgd_count <- Legend(
   direction = "vertical"
 )
 
+n_slices <- length(unique(row_group))
 
 overlay_ht <- Heatmap(
   matrix("", nrow=length(all_rows), ncol=length(all_cols),
@@ -986,8 +970,7 @@ overlay_ht <- Heatmap(
   ## split rows 
   row_split        = row_group,
   row_title        = c("Mutations","CNAs","Translocations"),  # optional titles
-  row_gap          = unit(c(2, 2), "mm"),                    # space between the splits
-  
+  row_gap   = unit(rep(2, n_slices), "mm"),
   row_names_gp     = gpar(fontsize=8),
   column_names_gp  = gpar(fontsize=8, fontface="bold"),
   top_annotation   = top_ha,
@@ -1019,7 +1002,7 @@ draw(
 )
 
 # save
-png("overlay_heatmap_BM_vs_cfDNA_updated5.png", width = 14, height = 8, units = "in", res = 450)
+png("overlay_heatmap_BM_vs_cfDNA_updated6.png", width = 14, height = 8, units = "in", res = 450)
 draw(
   overlay_ht,
   annotation_legend_side = "right",  # where cohort legend goes
@@ -1152,34 +1135,6 @@ lgd_fish <- Legend(
   direction = "vertical"
 )
 
-
-### Tried lots of ways to get the triangle legend to work as in the plot but doesn't work
-lgd_sampletype <- ComplexHeatmap::Legend(
-  title       = "Sample type",
-  labels      = c("Bone marrow", "cfDNA"),
-  type        = "grid",
-  ncol        = 1,
-  grid_width  = unit(6, "mm"),
-  grid_height = unit(6, "mm"),
-  legend_gp   = gpar(fill = NA),
-  grid_fun    = function(index, x, y, w, h){
-    if(index == 1){       # ▲ BM (upper‑left)
-      grid.polygon(
-        x = unit.c(x, x + w, x),
-        y = unit.c(y + h, y + h, y),
-        gp = gpar(fill = "black", col = NA)
-      )
-    }else{                # ▼ cfDNA (lower‑right)
-      grid.polygon(
-        x = unit.c(x + w, x + w, x),
-        y = unit.c(y,     y + h, y),
-        gp = gpar(fill = "black", col = NA)
-      )
-    }
-  }
-)
-## above doesn't work, use below:
-
 #  Build a "sample type" legend showing the triangle orientations
 # Not exact but works
 lgd_sampletype <- Legend(
@@ -1192,7 +1147,7 @@ lgd_sampletype <- Legend(
 )
 
 # save
-png("overlay_heatmap_BM_vs_cfDNA_updated_with_FISH_4.png", width = 14, height = 8, units = "in", res = 450)
+png("overlay_heatmap_BM_vs_cfDNA_updated_with_FISH_5.png", width = 14, height = 8, units = "in", res = 450)
 draw(
   overlay_ht_2,
   annotation_legend_side = "right",  # where cohort legend goes
@@ -1369,7 +1324,7 @@ merged_mut <- merged_mut %>%
 mutation_summary <- merged_mut %>%
   group_by(timepoint, TF_category, cohort) %>%
   summarize(
-    n_samples = n(),
+    n_samples = dplyr::n(),
     total_BM_mut = sum(n_BM, na.rm = TRUE),
     total_blood_mut = sum(n_blood, na.rm = TRUE),
     total_intersect = sum(n_intersect, na.rm = TRUE),
@@ -1438,7 +1393,7 @@ merged_trans <- merged_trans %>%
 trans_summary <- merged_trans %>%
   group_by(timepoint, TF_category, cohort) %>%
   summarize(
-    n_samples = n(),
+    n_samples = dplyr::n(),
     total_trans_BM = sum(n_trans_BM, na.rm = TRUE),
     total_trans_blood = sum(n_trans_blood, na.rm = TRUE),
     total_trans_intersect = sum(n_trans_intersect, na.rm = TRUE),
@@ -1512,7 +1467,7 @@ merged_CNA <- merged_CNA %>%
 CNA_summary <- merged_CNA %>%
   group_by(timepoint, TF_category, cohort) %>%
   summarize(
-    n_samples = n(),
+    n_samples = dplyr::n(),
     total_CNA_BM = sum(n_CNA_BM, na.rm = TRUE),
     total_CNA_blood = sum(n_CNA_blood, na.rm = TRUE),
     total_CNA_intersect = sum(n_CNA_intersect, na.rm = TRUE),
@@ -1542,7 +1497,7 @@ mut_conc_cohort <- merged_mut %>%
          cf_high   = Tumor_Fraction_blood > 0.05) %>%
   group_by(cohort) %>%
   summarize(
-    n_pairs        = n(),
+    n_pairs        = dplyr::n(),
     n_conc         = sum(concordant, na.rm=TRUE),
     pct_conc       = round(100 * n_conc / n_pairs,1)
   )
@@ -1552,7 +1507,7 @@ mut_conc_tf <- merged_mut %>%
          cf_high   = Tumor_Fraction_blood > 0.05) %>%
   group_by(cohort, cf_high) %>%
   summarize(
-    n_pairs  = n(),
+    n_pairs  = dplyr::n(),
     n_conc   = sum(concordant, na.rm=TRUE),
     pct_conc = round(100 * n_conc / n_pairs,1)
   )
@@ -1579,7 +1534,7 @@ trans_conc_cohort <- merged_trans %>%
          cf_high   = Tumor_Fraction_blood > 0.05) %>%
   group_by(cohort) %>%
   summarize(
-    n_pairs  = n(),
+    n_pairs  = dplyr::n(),
     n_conc   = sum(concordant, na.rm=TRUE),
     pct_conc = round(100 * n_conc / n_pairs,1)
   )
@@ -1589,7 +1544,7 @@ trans_conc_tf <- merged_trans %>%
          cf_high   = Tumor_Fraction_blood > 0.05) %>%
   group_by(cohort, cf_high) %>%
   summarize(
-    n_pairs  = n(),
+    n_pairs  = dplyr::n(),
     n_conc   = sum(concordant, na.rm=TRUE),
     pct_conc = round(100 * n_conc / n_pairs,1)
   )
@@ -1606,7 +1561,7 @@ cna_conc_cohort <- merged_CNA %>%
          cf_high   = Tumor_Fraction_blood > 0.05) %>%
   group_by(cohort) %>%
   summarize(
-    n_pairs  = n(),
+    n_pairs  = dplyr::n(),
     n_conc   = sum(concordant, na.rm=TRUE),
     pct_conc = round(100 * n_conc / n_pairs,1)
   )
@@ -1616,7 +1571,7 @@ cna_conc_tf <- merged_CNA %>%
          cf_high   = Tumor_Fraction_blood > 0.05) %>%
   group_by(cohort, cf_high) %>%
   summarize(
-    n_pairs  = n(),
+    n_pairs  = dplyr::n(),
     n_conc   = sum(concordant, na.rm=TRUE),
     pct_conc = round(100 * n_conc / n_pairs,1)
   )
@@ -1695,7 +1650,7 @@ print(cna_fisher$estimate)
 combined_data_heatmap_blood_subset %>%
   group_by(cohort) %>%
   summarize(
-    n_samples   = n(),
+    n_samples   = dplyr::n(),
     median_TF   = median(Tumor_Fraction, na.rm = TRUE),
     mean_TF     = mean(Tumor_Fraction,   na.rm = TRUE),
     min_TF      = min(Tumor_Fraction,    na.rm = TRUE),
@@ -1706,7 +1661,7 @@ combined_data_heatmap_blood_subset %>%
 combined_data_heatmap_blood_subset %>%
   group_by(cohort) %>%
   summarize(
-    n_samples      = n(),
+    n_samples      = dplyr::n(),
     n_highTF       = sum(Tumor_Fraction > 0.05, na.rm = TRUE),
     pct_highTF     = round(100 * n_highTF / n_samples, 1)
   )
@@ -1992,7 +1947,7 @@ merged_mut <- full_join(BM_long, blood_long, by = c("Patient_Timepoint",
 mutation_summary <- merged_mut %>%
   group_by(cohort, TP, TF_band) %>%                         # << added cohort
   summarise(
-    n_samples        = n(),
+    n_samples        = dplyr::n(),
     total_mut_BM     = sum(n_BM,     na.rm=TRUE),
     total_mut_CF     = sum(n_CF,     na.rm=TRUE),
     total_intersect  = sum(n_int,    na.rm=TRUE),
@@ -2054,7 +2009,7 @@ merged_trans <- merged_trans %>%
 trans_summary <- merged_trans %>%
   group_by(cohort, TP, TF_band) %>%      # << stratified
   summarise(
-    n_samples       = n(),
+    n_samples       = dplyr::n(),
     total_BM        = sum(n_tr_BM),
     total_CF        = sum(n_tr_CF),
     total_intersect = sum(n_tr_int),
@@ -2110,7 +2065,7 @@ trans_full_long <- bm_trans_long %>%
 trans_fish_summary <- trans_full_long %>%
   group_by(cohort, Feature) %>%
   summarise(
-    n_samples           = n(),
+    n_samples           = dplyr::n(),
     fish_pos            = sum(Fish_Pos,    na.rm=TRUE),
     bm_pos              = sum(WGS_BM,     na.rm=TRUE),
     cf_pos              = sum(WGS_CF,     na.rm=TRUE),
@@ -2176,7 +2131,7 @@ merged_CNA <- merged_CNA %>%
 CNA_summary <- merged_CNA %>%
   group_by(cohort, TP, TF_band) %>%     # << stratified
   summarise(
-    n_samples       = n(),
+    n_samples       = dplyr::n(),
     total_BM        = sum(n_cna_BM),
     total_CF        = sum(n_cna_CF),
     total_intersect = sum(n_cna_int),
@@ -2219,7 +2174,7 @@ cna_full_long <- bm_cna_long %>%
 cna_fish_summary <- cna_full_long %>%
   group_by(cohort, Feature) %>%
   summarise(
-    n_samples        = n(),
+    n_samples        = dplyr::n(),
     fish_pos         = sum(Fish_Pos,    na.rm=TRUE),
     bm_pos           = sum(WGS_BM,     na.rm=TRUE),
     cf_pos           = sum(WGS_CF,     na.rm=TRUE),
@@ -2402,7 +2357,7 @@ saveRDS(fish_vs_wgs,         "output_tables/fish_vs_WGS_summary.rds")
 mutation_global_conc <- merged_mut %>%
   filter(!is.na(n_BM) & !is.na(n_CF)) %>%
   summarise(
-    n_pairs = n(),
+    n_pairs = dplyr::n(),
     n_concordant = sum(overlap == 1),
     percent_concordant = 100 * n_concordant / n_pairs
   ) %>%
@@ -2412,7 +2367,7 @@ mutation_global_conc <- merged_mut %>%
 trans_global_conc <- merged_trans %>%
   filter(!is.na(n_tr_BM) & !is.na(n_tr_CF)) %>%
   summarise(
-    n_pairs = n(),
+    n_pairs = dplyr::n(),
     n_concordant = sum(overlap == 1),
     percent_concordant = 100 * n_concordant / n_pairs
   ) %>%
@@ -2422,7 +2377,7 @@ trans_global_conc <- merged_trans %>%
 cna_global_conc <- merged_CNA %>%
   filter(!is.na(n_cna_BM) & !is.na(n_cna_CF)) %>%
   summarise(
-    n_pairs = n(),
+    n_pairs = dplyr::n(),
     n_concordant = sum(overlap == 1),
     percent_concordant = 100 * n_concordant / n_pairs
   ) %>%

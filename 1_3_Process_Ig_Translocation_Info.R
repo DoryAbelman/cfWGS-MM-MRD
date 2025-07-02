@@ -847,6 +847,23 @@ translocation_data <- translocation_matrix %>%
   mutate(Sample = gsub(".bam$", "", Bam_File))  # Remove '.bam' extension if present
 
 
+translocation_data_cytoband <- translocation_matrix_cytoband %>%
+  # first, create IGH_CCND1 by coalescing the two possible 11q13 bands
+  mutate(
+    IGH_CCND1 = coalesce(
+      .data[["chr11q13.2_chr14q32.33"]],
+      .data[["chr11q13.3_chr14q32.33"]]
+    )
+  ) %>%
+  # now pick off and rename all four
+  transmute(
+    Bam_File = Bam_File,
+    Sample      = gsub(".bam$", "", Bam_File),        # drop “.bam”
+    IGH_CCND1,                                     
+    IGH_FGFR3 = `chr14q32.33_chr4p16.3`,
+    IGH_MAF   = `chr14q32.33_chr16q23.2`,
+    IGH_MYC   = `chr14q32.33_chr8q24.21`
+  )
 
 ## Export the important tables 
 # Define the directory for export
@@ -859,6 +876,8 @@ if (!dir.exists(export_dir)) {
 
 # Exporting dataframes as RDS files
 saveRDS(translocation_data, file = file.path(export_dir, "translocation_data.rds"))
+saveRDS(translocation_data_cytoband, file = file.path(export_dir, "translocation_data_cytoband.rds"))
 
 # Exporting dataframes as text files
 write.table(translocation_data, file = file.path(export_dir, "translocation_data.txt"), sep = "\t", row.names = FALSE, quote = FALSE)
+write.table(translocation_data_cytoband, file = file.path(export_dir, "translocation_data_cytoband.txt"), sep = "\t", row.names = FALSE, quote = FALSE)

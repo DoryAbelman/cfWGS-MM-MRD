@@ -93,6 +93,8 @@ spore_timepoint_info   <- read_excel("Clinical data/SPORE/Spore_timepoint_info_u
 ##  3.6  SPORE overall survival info (for later OS annotations)
 spore_OS_info          <- read_excel("Clinical data/SPORE/SPORE_OS_info.xlsx")
 
+cohort_df <- readRDS("cohort_assignment_table_updated.rds")
+
 
 # ─── 4.  Tidy SPORE “bams” table ────────────────────────────────────────────────
 ##  4.1  Create Sample_type from “Bams have” patterns
@@ -1424,6 +1426,10 @@ write.csv(baseline_dates_all,
 
 ### Now re-do the PFS table 
 # 1) Relapsed patients
+
+## Remove EK-09 since progression was from smouldering MM
+Relapse_dates_full <- Relapse_dates_full %>% filter(Patient != "EK-09")
+
 prog_info <- Relapse_dates_full %>%
   # 1) coerce to Date
   mutate(Progression_date = as.Date(Progression_date)) %>%
@@ -1487,6 +1493,21 @@ nonprog_info <- nonprog_info %>%
 final_tbl <- bind_rows(prog_info, nonprog_info)
 
 ## Add baseline
+## Edit to be correct for EK-09 and EK-06 since current dates are for smouldering 
+baseline_dates_all <- baseline_dates_all %>%
+  mutate(
+    Diagnosis_date = case_when(
+      Patient == "EK-09" ~ as.Date("2020-08-12"),
+      Patient == "EK-06" ~ as.Date("2019-09-23"),
+      TRUE               ~ Diagnosis_date
+    ),
+    Baseline_Date   = case_when(
+      Patient == "EK-09" ~ as.Date("2020-08-12"),
+      Patient == "EK-06" ~ as.Date("2019-09-23"),
+      TRUE               ~ Baseline_Date
+    )
+  )
+
 final_tbl <-final_tbl %>%
   # 1) join baseline
   left_join(baseline_dates_all, by = "Patient") 
@@ -1511,7 +1532,7 @@ tmp <- final_tbl %>%
 
 write.csv(
   tmp,
-  "Exported_data_tables_clinical/Censore_dates_per_patient_for_PFS.csv",
+  "Exported_data_tables_clinical/Censore_dates_per_patient_for_PFS_updated.csv",
   row.names = FALSE
 )
 
