@@ -15,7 +15,7 @@ library(timeROC)       # optional – AUC vs time
 
 ## INPUT (already saved from your pipeline) ------------------------------
 final_tbl_rds <- "Exported_data_tables_clinical/Censor_dates_per_patient_for_PFS.rds"
-dat_rds       <- "output_tables_2025/all_patients_with_BM_and_blood_calls_updated2.rds"
+dat_rds       <- "output_tables_2025/all_patients_with_BM_and_blood_calls_updated5.rds"
 
 ## OUTPUT ----------------------------------------------------------------------
 outdir <- "Output_tables_2025/detection_progression"
