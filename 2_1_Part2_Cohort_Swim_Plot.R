@@ -63,7 +63,7 @@ m4_chemo <- m4_raw %>%
   )
 
 m4_chemo <- m4_chemo %>% filter(!is.na(start))
-
+write.csv(m4_chemo %>% filter(patient %in% cohort_df$Patient) %>% filter(is.na(end)), "m4_chemo.csv")
 
 ### Add transplant info for M4 
 # Read the raw sheet
@@ -415,11 +415,18 @@ write_csv(all_events, "Final Tables and Figures/all_events_for_swim_plot_combine
 saveRDS(all_events, "Final Tables and Figures/all_events_for_swim_plot_combined.rds")
 
 
+## Export for Esteban to get more info 
+spore_chemo_events <- all_events %>%
+  filter(event == "Chemotherapy", grepl("^SPORE", patient)) %>% 
+  mutate(end = NA) %>% 
+  filter(details != "ASCT")
+
+# Export to CSV
+write_csv(spore_chemo_events, "spore_chemo_events.csv")
 
 
 
-
-#### Now assemble plot 
+ #### Now assemble plot 
 # ──────────────────────────────────────────────────────────────────────
 # 1. LOAD DATA
 # ──────────────────────────────────────────────────────────────────────
@@ -492,6 +499,17 @@ events <- events %>%
     is_interval = start_day != end_day
   )
 
+## edit typo
+events <- events %>%
+  # if the details column is exactly "ASCT" (or contains ASCT), recode event
+  mutate(
+    event = if_else(
+      str_detect(details, regex("^ASCT$", ignore_case = TRUE)),
+      "Transplant",
+      event
+    )
+  )
+
 # ─────────────────────────────────────────────────────────────────────────────
 # 4. EXTEND ONE-DAY CHEMO BARS → 30 d BEFORE NEXT CHEMO START
 # ─────────────────────────────────────────────────────────────────────────────
@@ -519,11 +537,19 @@ events <- events %>%
 # ─────────────────────────────────────────────────────────────────────────────
 # 5. REGIMEN → COLOUR GROUP
 # ─────────────────────────────────────────────────────────────────────────────
+
+## See events
+all_chemo <- events %>%
+  filter(event == "Chemotherapy") %>%
+  distinct(details) %>%
+  arrange(details)
+
 events <- events %>%
   mutate(
     chemo_group = case_when(
       event != "Chemotherapy"                                 ~ NA_character_,
-      str_detect(details, regex("CY[Bb]OR.?D", TRUE))         ~ "CyBorD",
+      str_detect(details, regex("CY[Bb]OR.?[DP]", ignore_case = TRUE))  
+      ~ "CyBorD", 
       str_detect(details, regex("\\bV?RD\\b|Lenalidomide|Rev", TRUE))
       ~ "R/VRD ± Len",
       str_detect(details, regex("Dara", TRUE))                ~ "Dara-based",
@@ -536,6 +562,38 @@ events <- events %>%
     )
   )
 
+## Updated 
+events <- events %>%
+  mutate(
+    chemo_group = case_when(
+      event != "Chemotherapy"                                            ~ NA_character_,
+      # CyBorD (any D or P variant)
+      str_detect(details, regex("CY[Bb]OR.?[DP]", ignore_case=TRUE))    ~ "CyBorD",
+      # VRD / RVD / Lenalidomide / Revlimid variants
+      str_detect(details, regex("\\bV?RD\\b|Lenalidomide|Rev", TRUE))   ~ "Lenalidomide-based",
+      # Daratumumab‐based combos (even DaraPom, DaraRVD, etc.)
+      str_detect(details, regex("Dara|Daratumumab", TRUE))              ~ "Dara-based",
+      # Pomalidomide‐based (PomDex, KPomD, CAR POM, ELO POM, DAR POM, PomDex)
+      str_detect(details, regex("Pom(Dex|D)|POM|KPomD|CAR POM|ELO POM|DAR POM|PomDex", TRUE))
+      ~ "Pomalidomide-based",
+      # Carfilzomib combinations (Carfil-, KD-, but avoid “DAR CAR” which is caught above)
+      str_detect(details, regex("Carfilozomib|\\bKD\\b|CAR(?! *REV)", TRUE))
+      ~ "Carfilzomib-based",
+      # Ixazomib combos
+      str_detect(details, regex("Ixa|Ixazomib", TRUE))                  ~ "Ixazomib-based",
+      # Elranatamab (including the /daratumumab trial)
+      str_detect(details, regex("Elranatamab", TRUE))                   ~ "Elranatamab",
+      # Iberdomide combos
+      str_detect(details, regex("Iberdomide", TRUE))                    ~ "Iberdomide",
+      # Cyclophosphamide + dexamethasone (“CYCLO DEX” or “CYCLONE”)
+      str_detect(details, regex("CYCLO DEX|CYCLONE", TRUE))             ~ "Cyclophosphamide-based",
+      # Early-phase/trial drugs
+ #     str_detect(details, regex("MEDI|TAK-|VSV", TRUE))                 ~ "Clinical trial",
+      # Catch-all for everything else
+      TRUE                                                              ~ "Other"
+    )
+  )
+
 chemo_cols <- c(
   "CyBorD"              = "#4477AA",
   "R/VRD ± Len"         = "#CC6677",
@@ -545,6 +603,22 @@ chemo_cols <- c(
   "Elranatamab"         = "#EE7733",
   "Iberdomide"          = "#994F00",
   "Other"               = "#999999"
+)
+
+
+### Updated
+chemo_cols <- c(
+  "CyBorD"                    = "#0072B2",  # blue
+  "Lenalidomide-based"        = "#CC6677",  # pink 
+  "Dara-based"                = "#009E73",  # green
+  "Pomalidomide-based"        = "#D55E00",  # vermillon
+  "Carfilzomib-based"         = "#E69F00",  # orange
+  "Ixazomib-based"            = "#56B4E9",  # sky blue
+  "Elranatamab"               = "#F0E442",  # yellow
+  "Iberdomide"                = "#800080",  # purple
+  "Cyclophosphamide-based"    = "#994F00",  # brown-orange
+#  "Clinical trial"            = "#F7C6C7",  # light pink
+  "Other"                     = "#999999"   # grey
 )
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -693,10 +767,10 @@ combined_plot <- p_front / p_non +
     )
   )
 
-ggsave("swimplot_by_cohort_v2.pdf", combined_plot,
+ggsave("swimplot_by_cohort_v3.pdf", combined_plot,
        width = 12, height = 10, device = cairo_pdf)
 
-ggsave("swimplot_by_cohort_v2.png", combined_plot,
+ggsave("swimplot_by_cohort_v3.png", combined_plot,
        width = 12, height = 10, dpi = 300)
 
 
@@ -796,19 +870,21 @@ p_combined <- ggplot() +
 
 p_combined <- p_combined +
   labs(
-    title = "Swim Plot of Treatment Timelines by Cohort") +
+    title = "Swim Plot of Treatment Timelines") +
   theme(
     plot.title    = element_text(size = 16, face = "bold", hjust = 0.5)
   )
 
 # D) Display / Save
 print(p_combined)
-ggsave("swimplot_combined_cohorts.png", p_combined,
+ggsave("swimplot_combined_cohorts_v2.png", p_combined,
        width = 10, height = 12, dpi = 500)
+ggsave("swimplot_combined_cohorts_wide_v2.png", p_combined,
+       width = 16, height = 12, dpi = 500)
 
 
 
-
+## Above is figure 1B
 
 
 

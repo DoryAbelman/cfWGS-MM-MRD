@@ -1319,6 +1319,14 @@ merged_mut <- merged_mut %>%
     )
   )
 
+## Add average Jaccard
+avg_jaccard_mut <- merged_mut %>%
+  group_by(cohort) %>%
+  summarize(
+    mean_jaccard = mean(overlap_ratio, na.rm = TRUE),
+    sd_jaccard   = sd(overlap_ratio, na.rm = TRUE)
+  )
+print(avg_jaccard_mut)
 
 # --- Step 5. Summarize Mutation Concordance by Timepoint and TF Category --------
 mutation_summary <- merged_mut %>%
@@ -1336,6 +1344,32 @@ mutation_summary <- merged_mut %>%
     avg_TF_blood = mean(Tumor_Fraction_blood, na.rm = TRUE)
   ) %>% 
   ungroup()
+
+
+mut_conc_cohort <- merged_mut %>%
+  mutate(
+    concordant = (overlap_ratio == 1),
+    cf_high    = Tumor_Fraction_blood > 0.05
+  ) %>%
+  group_by(cohort) %>%
+  summarize(
+    n_pairs  = dplyr::n(),
+    n_conc   = sum(concordant, na.rm = TRUE),
+    pct_conc = round(100 * n_conc / n_pairs, 1)
+  )
+
+mut_conc_tf <- merged_mut %>%
+  mutate(
+    concordant = (overlap_ratio == 1),
+    cf_high    = Tumor_Fraction_blood > 0.05
+  ) %>%
+  group_by(cohort, cf_high) %>%
+  summarize(
+    n_pairs  = dplyr::n(),
+    n_conc   = sum(concordant, na.rm = TRUE),
+    pct_conc = round(100 * n_conc / n_pairs, 1)
+  )
+
 
 # Print mutation summary table
 cat("### Mutation Summary by Timepoint and Tumor Fraction Category ###\n")
@@ -1408,6 +1442,15 @@ trans_summary <- merged_trans %>%
 
 cat("\n### Translocation Summary by Timepoint and Tumor Fraction Category ###\n")
 print(trans_summary)
+
+## Get average jaccard 
+avg_jaccard_trans <- merged_trans %>%
+  group_by(cohort) %>%
+  summarize(
+    mean_jaccard = mean(trans_overlap, na.rm = TRUE),
+    sd_jaccard   = sd(trans_overlap, na.rm = TRUE)
+  )
+print(avg_jaccard_trans)
 
 # --- Step 7. CNA Concordance --------------------------------------------------
 BM_CNA <- combined_data_heatmap_BM_subset %>%
@@ -1483,6 +1526,14 @@ cat("\n### CNA Summary by Timepoint and Tumor Fraction Category ###\n")
 print(CNA_summary)
 
 
+## Get average
+avg_jaccard_cna <- merged_CNA %>%
+  group_by(cohort) %>%
+  summarize(
+    mean_jaccard = mean(CNA_overlap, na.rm = TRUE),
+    sd_jaccard   = sd(CNA_overlap, na.rm = TRUE)
+  )
+print(avg_jaccard_cna)
 
 
 
@@ -1602,7 +1653,60 @@ cat("-- CNAs --\n"); print(cna_conc_tf)
 
 
 
-### Fisher's test on the features for TF 
+#### Update based on new method to see not just for all calls from patient together
+cna_conc_cohort <- merged_CNA %>%
+  mutate(
+    concordant = (CNA_overlap == 1),
+    cf_high    = Tumor_Fraction_blood > 0.05
+  ) %>%
+  group_by(cohort) %>%
+  summarize(
+    n_pairs  = dplyr::n(),
+    n_conc   = sum(concordant, na.rm = TRUE),
+    pct_conc = round(100 * n_conc / n_pairs, 1)
+  )
+
+cna_conc_tf <- merged_CNA %>%
+  mutate(
+    concordant = (CNA_overlap == 1),
+    cf_high    = Tumor_Fraction_blood > 0.05
+  ) %>%
+  group_by(cohort, cf_high) %>%
+  summarize(
+    n_pairs  = dplyr::n(),
+    n_conc   = sum(concordant, na.rm = TRUE),
+    pct_conc = round(100 * n_conc / n_pairs, 1)
+  )
+
+## Translocations 
+trans_conc_cohort <- merged_trans %>%
+  mutate(
+    concordant = (trans_overlap == 1),
+    cf_high    = Tumor_Fraction_blood > 0.05
+  ) %>%
+  group_by(cohort) %>%
+  summarize(
+    n_pairs  = dplyr::n(),
+    n_conc   = sum(concordant, na.rm = TRUE),
+    pct_conc = round(100 * n_conc / n_pairs, 1)
+  )
+
+trans_conc_tf <- merged_trans %>%
+  mutate(
+    concordant = (trans_overlap == 1),
+    cf_high    = Tumor_Fraction_blood > 0.05
+  ) %>%
+  group_by(cohort, cf_high) %>%
+  summarize(
+    n_pairs  = dplyr::n(),
+    n_conc   = sum(concordant, na.rm = TRUE),
+    pct_conc = round(100 * n_conc / n_pairs, 1)
+  )
+
+
+### Mutations done with new method in 2_3
+
+### Fisher's test on the features for TF - based on old method
 # helper to run Fisher by cf_high / concordance
 
 run_fisher_by_tf <- function(df){

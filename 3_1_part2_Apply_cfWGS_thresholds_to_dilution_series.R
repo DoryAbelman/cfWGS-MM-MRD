@@ -12,7 +12,7 @@ library(pROC)
 library(stringr)
 library(broom)       # tidying model outputs
 library(patchwork)   # optional – for combining plots, if needed
-
+library(virdis)
 
 # ── 1. FILE PATHS ───────────────────────────────────────────────────────────
 PATH_MODEL_LIST       <- "~/Documents/Thesis_work/R/M4/Projects/High_risk_MM_baselinbe_relapse_marrow/Output_tables_2025/selected_combo_models_2025-06-19.rds"
@@ -157,6 +157,22 @@ dilution_df <- apply_selected(
   positive_class= "pos"
 )
 
+### Now edit the dilution LOD to the correct one 
+# these are your true measured VAFs (%)
+baseline_vaf <- 0.688    # baseline‐only library
+neg_vaf      <- 0.0087   # MRD‐negative library
+orig_full    <- 1.300    # the original “100%” point
+
+dilution_df <- dilution_df %>%
+  mutate(
+    LOD_updated = (LOD / orig_full) * baseline_vaf +
+      (1 - LOD / orig_full) * neg_vaf
+  )
+
+## For consistency
+dilution_df$LOD_original <- dilution_df$LOD
+dilution_df$LOD <- dilution_df$LOD_updated
+
 # ── 7. SAVE SCORED DILUTION SERIES ──────────────────────────────────────────
 write_rds(dilution_df, file.path(OUTPUT_DIR, "dilution_series_scored_updated2.rds"))
 write_csv(dilution_df, file.path(OUTPUT_DIR, "dilution_series_scored_updated2.csv"))
@@ -246,7 +262,7 @@ p <- ggplot(sig_plot_df, aes(x = LOD, y = value)) +
   theme_bw(base_size = 14) +
   theme(strip.text = element_text(face = "bold"))
 
-ggsave("Fig_LOD_feature_correlations_updated.svg", p,
+ggsave("Final Tables and Figures/Fig_LOD_feature_correlations_updated.svg", p,
        width = 8, height = 6, dpi = 500)
 
 ## Make nicer figure for publication
@@ -258,9 +274,9 @@ ggsave("Fig_LOD_feature_correlations_updated.svg", p,
 bm_features <- c(
   "detect_rate_BM",           # BM mutation detection rate
   "zscore_BM",                # BM z-score
-  "z_score_detection_rate_BM",           # BM mutation detection rate
-  "BM_zscore_only_detection_rate_prob",       # BM MRD probability
-  "BM_zscore_only_sites_prob"       # BM MRD probability
+  "z_score_detection_rate_BM"           # BM mutation detection rate
+#  "BM_zscore_only_detection_rate_prob",       # BM MRD probability
+#  "BM_zscore_only_sites_prob"       # BM MRD probability
 )
 
 # 2) prepare long data
@@ -283,8 +299,8 @@ annot_df <- corr_bm %>%
 
 # 4) nicer facet labels
 facet_labels <- c(
-  BM_zscore_only_sites_prob                 = "BM sites Z-score\nmodel prob.",
-  BM_zscore_only_detection_rate_prob             = "BM cVAF Z-score\nmodel prob.",
+  BM_zscore_only_sites_prob                 = "BM sites model prob.",
+  BM_zscore_only_detection_rate_prob             = "BM cVAF model prob.",
   detect_rate_BM                     = "BM cVAF",
   z_score_detection_rate_BM    = "BM cVAF Z-score",
   zscore_BM             = "BM sites Z-score"
@@ -320,12 +336,16 @@ corr_bm_spearman <- plot_df_bm %>%
   group_by(feature) %>%
   summarise(
     rho = cor(value, LOD, method = "spearman"),
+    p   = cor.test(value, LOD, method = "spearman")$p.value,
     .groups = "drop"
   )
 
 # 2) Prepare annotation
 annot_spear <- corr_bm_spearman %>%
-  mutate(label = sprintf("ρ = %.2f", rho))
+  mutate(
+    p_text = if_else(p < 0.01, "p < 0.01", paste0("p = ", signif(p, 2))),
+    label  = paste0("ρ = ", round(rho, 2), "\n", p_text)
+  )
 
 # 3) Create plot with actual values and Spearman rho
 p_bm_spearman_actual <- ggplot(plot_df_bm, aes(x = LOD, y = value)) +
@@ -337,14 +357,14 @@ p_bm_spearman_actual <- ggplot(plot_df_bm, aes(x = LOD, y = value)) +
   geom_text(
     data    = annot_spear,
     aes(x = Inf, y = Inf, label = label),
-    hjust   = 1.1, vjust = 1.2,
+    hjust   = 0.1, vjust = 1.2,
     size    = 3.5
   ) +
   labs(
     x = "Tumour fraction (%)",
     y = "Feature value"
   ) +
-  theme_classic(base_size = 14) +
+  theme_classic(base_size = 12) +
   theme(
     strip.text   = element_text(face = "bold"),
     panel.border = element_rect(color = "black", fill = NA),
@@ -353,12 +373,222 @@ p_bm_spearman_actual <- ggplot(plot_df_bm, aes(x = LOD, y = value)) +
 
 # 4) Save to output directory
 ggsave(
-  filename = file.path(OUTPUT_DIR_FIGURES, "Fig_LOD_BM_metrics_spearman_actual_updated.png"),
+  filename = file.path(OUTPUT_DIR_FIGURES, "Fig_LOD_BM_metrics_spearman_actual_updated2.png"),
   plot     = p_bm_spearman_actual,
-  width    = 10,
-  height   = 5,
+  width    = 8,
+  height   = 4,
   dpi      = 500
 )
+
+
+# 3) Create plot with actual values and Spearman rho (log–log axes)
+p_bm_spearman_actual <- ggplot(plot_df_bm, aes(x = LOD, y = value)) +
+  geom_point(size = 2, alpha = 0.8) +
+  #geom_smooth(method = "lm", se = FALSE, size = 0.7) +
+  facet_wrap(~ feature,
+             scales   = "free_y",
+             labeller = as_labeller(facet_labels)) +
+  geom_text(
+    data    = annot_spear,
+    aes(x = 0.007, y = Inf, label = label),
+    hjust   = 0, vjust = 1.2,
+    size    = 3
+  ) +
+  scale_x_log10() +
+  scale_y_continuous() +
+  labs(
+    x = "Log tumour fraction (%)",
+    y = "Feature value"
+  ) +
+  theme_classic(base_size = 10) +
+  theme(
+    strip.text   = element_text(face = "bold"),
+    panel.border = element_rect(color = "black", fill = NA),
+    axis.ticks   = element_line(color = "black")
+  )
+
+# 4) Save to output directory
+ggsave(
+  filename = file.path(OUTPUT_DIR_FIGURES, "Fig_LOD_BM_metrics_spearman_actual_updated2_loglog.png"),
+  plot     = p_bm_spearman_actual,
+  width    = 8,
+  height   = 4, 
+  dpi      = 500
+)
+
+
+ ## Add call features 
+# 1) specify which of your features are the model‐probabilities
+prob_features <- c(
+  "BM_zscore_only_detection_rate_prob",  # BM cVAF Z-score model prob.
+  "BM_zscore_only_sites_prob"            # BM sites Z-score model prob.
+)
+
+# 2) define your thresholds (one per feature)
+thresholds <- tibble(
+  feature = c("BM_zscore_only_sites_prob",
+              "BM_zscore_only_detection_rate_prob"),
+  thr     = c(
+    bm_obj$thresholds["BM_zscore_only_sites"],
+    bm_obj$thresholds["BM_zscore_only_detection_rate"]
+  )
+)
+
+# 3) pull out only the prob data, join thresholds, and add a call flag
+plot_df_prob <- plot_df %>%
+  filter(feature %in% prob_features) %>%
+  left_join(thresholds, by = "feature") %>%
+  mutate(call = if_else(value > thr, "Positive", "Negative"))
+
+# 4) make the ggplot
+p_bm_prob <- ggplot(plot_df_prob, aes(x = LOD, y = value, color = call)) +
+  # horizontal line at the threshold, drawn in the right facet
+  geom_hline(
+    data = thresholds,
+    aes(yintercept = thr),
+    linetype = "dashed",
+    color    = "gray40"
+  ) +
+  geom_point(size = 2, alpha = 0.8) +
+  facet_wrap(~ feature,
+             scales   = "free_y",
+             labeller = as_labeller(facet_labels)) +
+  scale_x_log10() +          # still log the x-axis if you like
+  scale_color_manual(
+    values = c(Positive = "forestgreen", Negative = "gray60"),
+    na.value = "black"
+  ) +
+  labs(
+    x     = "Log tumour fraction (%)",
+    y     = "Model probability",
+    color = "Call"
+  ) +
+  theme_classic(base_size = 10) +
+  theme(
+    strip.text   = element_text(face = "bold"),
+    panel.border = element_rect(color = "black", fill = NA),
+    axis.ticks   = element_line(color = "black")
+  )
+
+# 5) preview or save
+p_bm_prob
+
+ggsave(
+  filename = file.path(OUTPUT_DIR_FIGURES, "Fig_LOD_BM_metrics_prob_calls.png"),
+  plot     = p_bm_prob,
+  width    = 8,
+  height   = 4,
+  dpi      = 500
+)
+
+
+combined_plot <- p_bm_spearman_actual + p_bm_prob +
+  plot_layout(nrow = 1, widths = c(3, 2)) +
+  plot_annotation(
+    title = "Feature Concordance with Dilution Series",
+    theme = theme(
+      plot.title   = element_text(hjust = 0.5, face = "bold", size = 14),
+      plot.margin  = margin(5, 5, 5, 5),
+      plot.background = element_rect(fill = "white", colour = NA)
+    )
+  ) &
+  theme(
+    # this & theme() still applies to the individual panels
+    panel.border   = element_rect(colour = "black", fill = NA),
+    strip.text     = element_text(face = "bold")
+  )
+
+# draw it
+print(combined_plot)
+
+### Figure 4G
+# and save
+ggsave(
+  filename = file.path(OUTPUT_DIR_FIGURES, "Fig4G_LOD_combined.png"),
+  plot     = combined_plot,
+  width    = 12,        # adjust as needed
+  height   = 4,         # one‐line panel
+  dpi      = 600
+)
+
+
+#### Now do the overlap across all the features for 4H
+# 1) Select just the features you care about, in the order you want them
+selected_feats <- c(
+  "detect_rate_BM",                       # BM mutation detection rate
+  "zscore_BM",                            # BM sites z-score
+  "z_score_detection_rate_BM",            # BM cVAF Z-score
+  "Mean.Coverage",                        # enhancer coverage
+  "Proportion.Short",                     # short-fragment proportion
+  "FS",                                   # fragment‐size score
+  "WGS_Tumor_Fraction_Blood_plasma_cfDNA" # ichorCNA tumour fraction
+)
+
+# your custom labels
+custom_labels <- c(
+  detect_rate_BM                              = "BM cVAF",
+  z_score_detection_rate_BM                   = "BM cVAF Z-score",
+  zscore_BM                                   = "BM sites Z-score",
+  FS                                          = "Fragment-size score",
+  Mean.Coverage                               = "cfDNA coverage at MM active regulatory sites",
+  Proportion.Short                            = "Short-fragment proportion",
+  WGS_Tumor_Fraction_Blood_plasma_cfDNA       = "cfDNA tumour fraction (ichorCNA)"
+)
+
+# pick & sort
+plot_df2 <- corr_tbl %>%
+  filter(feature %in% names(custom_labels)) %>%
+  arrange(desc(r)) %>%
+  mutate(feature = factor(feature, levels = feature)) 
+
+ggplot(plot_df2, aes(x = r, y = feature)) +
+  # grey baseline at zero
+  geom_vline(xintercept = 0, colour = "grey80", linetype = "dashed") +
+  # segment from zero to rho
+  geom_segment(aes(x = 0, xend = r, y = feature, yend = feature),
+               colour = "grey70", size = 0.4) +
+  # coloured dot
+  geom_point(aes(colour = r), size = 3) +
+  scale_colour_viridis_c(
+    option = "D", end = 0.9,
+    name = expression(rho~"(Spearman)"),
+    limits = c(-1,1)
+  ) +
+  scale_x_continuous(
+    limits = c(-1, 1),
+    breaks = seq(-1, 1, by = 0.5)
+  ) +
+  scale_y_discrete(
+    labels = custom_labels
+  ) +
+  labs(
+    title = "Spearman correlation of cfDNA features vs tumour fraction",
+    x     = expression(rho~"(Spearman)"),
+    y     = NULL
+  ) +
+  theme_minimal(base_size = 10) +
+  theme(
+    plot.title        = element_text(face = "bold", size = 11, hjust = 0.5),
+    axis.text.y       = element_text(size = 9),
+    axis.text.x       = element_text(size = 8),
+    axis.title.x      = element_text(size = 9, margin = margin(t = 4)),
+    panel.grid.major.y = element_blank(),
+    panel.grid.minor   = element_blank(),
+    legend.position    = "right",
+    legend.key.height  = unit(1, "cm"),
+    legend.key.width   = unit(0.3, "cm"),
+    legend.title       = element_text(size = 9),
+    legend.text        = element_text(size = 8)
+  ) -> p_corr_nice
+
+# print or save
+print(p_corr_nice)
+ggsave(filename = file.path(OUTPUT_DIR_FIGURES, "Fig4H_feature_corr_lollipop_nice.png"), 
+       p_corr_nice, 
+       width = 4, height = 5, dpi = 600)
+
+
+
 
 
 

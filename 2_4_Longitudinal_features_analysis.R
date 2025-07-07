@@ -1,7 +1,22 @@
-################################################################################
-## longitudinal_MRD_features_v2.R
-##  – NA-robust, column-robust, start-date aware                        (2025-06)
-################################################################################
+# ===============================================================================
+# Script: longitudinal_MRD_feature_amalusis.R
+# Author: Dory Abelman
+# Date: 2025-06
+# Purpose:
+#   - Compute longitudinal MRD feature statistics and visualizations
+#   - Handles NA values and dynamic column presence
+#   - Identifies baseline and first follow-up samples using date logic
+#   - Summarizes cohort-level counts and paired feature changes
+#   - Generates publication-quality plots (violin/box, spaghetti, correlation)
+# Dependencies:
+#   tidyverse, lubridate, rstatix, patchwork, ggpubr, glue
+# Inputs:
+#   - Final_aggregate_table_cfWGS_features_with_clinical_and_demographics_updated5.rds
+#   - cohort_assignment_table_updated.rds
+# Outputs:
+#   - CSV tables in 'Output_tables_2025'
+#   - PDF figures: longitudinal pairs, spaghetti, correlation plots
+# ===============================================================================
 
 suppressPackageStartupMessages({
   library(tidyverse)
@@ -10,6 +25,8 @@ suppressPackageStartupMessages({
   library(patchwork)
   library(ggpubr)
   library(glue)
+  library(GGally)
+  library(viridis)
 })
 
 ## ───── 1. Load data ──────────────────────────────────────────────────────────
@@ -159,7 +176,7 @@ pairwise_stats <- map_dfr(features, function(f) {
   mutate(q_BH = p.adjust(p_Wilcoxon, method = "BH"))
 
 ## Write updated stats to outdir
-write_csv(pairwise_stats, file.path(outdir, "placeholder_stats_v2.csv"))
+write_csv(pairwise_stats, file.path(outdir, "placeholder_stats_v3.csv"))
 
 
 ## Check labs 
@@ -353,92 +370,469 @@ write_csv(sig_corrs, file.path(outdir, "mrd_metric_lab_sig_correlations.csv"))
 
 ## ───── 7. Figures – all filtered on !is.na for the plotted feature ──────────
 ## Helper for paired violin/box with spaghetti
-paired_plot <- function(var, ylab) {
-  
-  bl <- paste0(var, "_baseline")
-  f1 <- paste0(var, "_follow1")
-  if (!all(c(bl,f1) %in% names(paired_master))) return(NULL)
-  
-  paired_master %>%
-    select(Patient, all_of(c(bl,f1))) %>%
-    pivot_longer(-Patient, names_to="Time", values_to="value") %>%
-    drop_na() %>%
-    mutate(Time = factor(Time,
-                         levels=c(bl,f1),
-                         labels=c("Baseline","Post-Tx#1"))) %>%
-    ggplot(aes(Time, value, group=Patient))+
-    geom_line(alpha=.4)+
-    geom_violin(aes(fill=Time), width=.9, alpha=.4, colour=NA)+
-    geom_boxplot(width=.25, outlier.shape=NA)+
-    labs(y=ylab, x=NULL)+
-    theme_bw(base_size=11)+
-    theme(legend.position="none")
+## 9.1  Utilities ------------------------------------------------------------
+baseline_dates <- readRDS("Exported_data_tables_clinical/Censor_dates_per_patient_for_PFS.rds")
+
+dat <- dat_clean %>%
+  left_join(baseline_dates, by = "Patient") %>%
+  mutate(
+    Weeks_Since_Baseline = as.numeric(difftime(Date, Baseline_Date, units = "weeks")),
+    Weeks_Since_Baseline = case_when(
+      Weeks_Since_Baseline >= -2 & Weeks_Since_Baseline < 0 ~ 0, # minor fluctuations
+      TRUE                                                ~ Weeks_Since_Baseline
+    )
+  )
+
+# 1. Pivot to long form
+plot_df <- dat %>%
+  select(
+    Patient,
+    Weeks_Since_Baseline,
+    Num_days_to_closest_relapse,
+    cVAF       = Cumulative_VAF_BM,
+    cVAF_z     = z_score_detection_rate_BM,
+    sites      = detect_rate_BM,
+    sites_z    = zscore_BM
+  ) %>%
+  mutate(
+    relapse_within_180 = if_else(
+      Num_days_to_closest_relapse <= 180,
+      TRUE,
+      FALSE,
+      missing = FALSE    # recode any NA here to FALSE since didn't relapse
+    )) %>%
+  pivot_longer(
+    cols = c(cVAF, cVAF_z, sites, sites_z),
+    names_to  = "Metric",
+    values_to = "Value"
+  ) %>%
+  drop_na(Value)
+
+# 2. Plot
+# 1. Build the plot and save to a variable
+custom_labels <- c(
+  cVAF    = "Cumulative VAF",
+  cVAF_z  = "Cumulative VAF Z-score",
+  sites   = "Proportion of Sites Detected",
+  sites_z = "Proportion of Sites Detected Z-score"
+)
+
+p_traj <- ggplot(plot_df, aes(x = Weeks_Since_Baseline, y = Value, group = Patient)) +
+  geom_line(colour = "grey70", alpha = 0.4) +
+  geom_point(aes(color = relapse_within_180), size = 1.5, alpha = 0.8) +
+  facet_wrap(
+    ~ Metric,
+    scales = "free_y",
+    ncol  = 4,
+    labeller = labeller(Metric = custom_labels)
+  ) +
+  scale_color_manual(
+    values = c(`FALSE` = "black", `TRUE` = "red"),
+    labels = c(`FALSE` = "No relapse ≤180d", `TRUE` = "Relapse ≤180 d"),
+    name   = "Relapse status",
+    na.value = "black",         # <- this makes NA points black
+    na.translate = FALSE      # ← drop NA from the legend since these patients didn't progress
+    
+  ) +
+  labs(
+    x     = "Weeks Since Baseline",
+    y     = "Value",
+    title = "Longitudinal trajectories of MRD metrics from baseline BM mutation profiles"
+  ) +
+  theme_classic(base_size = 11) +
+  theme(
+    legend.position = "bottom",
+    strip.background = element_rect(fill = "grey95", colour = NA)
+  )
+
+# 2. Save as PNG in outdir
+ggsave(
+  filename = file.path(outdir, "Fig3A_metrics_trajectories_BM.png"),
+  plot     = p_traj,
+  device   = "png",
+  width    = 12,    # inches
+  height   = 4,     # inches
+  dpi      = 600
+)
+
+
+## Now for blood 
+# 1. Pivot to long form
+plot_df_blood <- dat %>%
+  select(
+    Patient,
+    Weeks_Since_Baseline,
+    Num_days_to_closest_relapse,
+    cVAF       = Cumulative_VAF_blood,
+    cVAF_z     = z_score_detection_rate_blood,
+    sites      = detect_rate_blood,
+    sites_z    = zscore_blood
+  ) %>%
+  mutate(
+    relapse_within_180 = if_else(
+      Num_days_to_closest_relapse <= 180,
+      TRUE,
+      FALSE,
+      missing = FALSE    # recode any NA here to FALSE since didn't relapse
+    )) %>%
+  pivot_longer(
+    cols = c(cVAF, cVAF_z, sites, sites_z),
+    names_to  = "Metric",
+    values_to = "Value"
+  ) %>%
+  drop_na(Value)
+
+# 2. Plot
+# 1. Build the plot and save to a variable
+custom_labels <- c(
+  cVAF    = "Cumulative VAF",
+  cVAF_z  = "Cumulative VAF Z-score",
+  sites   = "Proportion of Sites Detected",
+  sites_z = "Proportion of Sites Detected Z-score"
+)
+
+p_traj <- ggplot(plot_df_blood, aes(x = Weeks_Since_Baseline, y = Value, group = Patient)) +
+  geom_line(colour = "grey70", alpha = 0.4) +
+  geom_point(aes(color = relapse_within_180), size = 1.5, alpha = 0.8) +
+  facet_wrap(
+    ~ Metric,
+    scales = "free_y",
+    ncol  = 4,
+    labeller = labeller(Metric = custom_labels)
+  ) +
+  scale_color_manual(
+    values = c(`FALSE` = "black", `TRUE` = "red"),
+    labels = c(`FALSE` = "No relapse ≤180d", `TRUE` = "Relapse ≤180 d"),
+    name   = "Relapse status",
+    na.value = "black",         # <- this makes NA points black
+    na.translate = FALSE      # ← drop NA from the legend since these patients didn't progress
+    
+  ) +
+  labs(
+    x     = "Weeks Since Baseline",
+    y     = "Value",
+    title = "Longitudinal trajectories of MRD metrics from baseline PB cfDNA mutation profiles"
+  ) +
+  theme_classic(base_size = 11) +
+  theme(
+    legend.position = "bottom",
+    strip.background = element_rect(fill = "grey95", colour = NA)
+  )
+
+# 2. Save as PNG in outdir
+ggsave(
+  filename = file.path(outdir, "Fig3A_metrics_trajectories_Blood.png"),
+  plot     = p_traj,
+  device   = "png",
+  width    = 12,    # inches
+  height   = 4,     # inches
+  dpi      = 600
+)
+
+## Now for fragmentomics 
+# 1. Pivot to long form
+plot_df_fragmentomics <- dat %>%
+  select(
+    Patient,
+    Weeks_Since_Baseline,
+    Num_days_to_closest_relapse,
+    FS,
+    Mean.Coverage,
+    Proportion.Short,
+    WGS_Tumor_Fraction_Blood_plasma_cfDNA
+  ) %>%
+  mutate(
+    relapse_within_180 = if_else(
+      Num_days_to_closest_relapse <= 180,
+      TRUE,
+      FALSE,
+      missing = FALSE    # recode any NA here to FALSE since didn't relapse
+    )) %>%
+  pivot_longer(
+    cols = c(FS, Mean.Coverage, Proportion.Short, WGS_Tumor_Fraction_Blood_plasma_cfDNA),
+    names_to  = "Metric",
+    values_to = "Value"
+  ) %>%
+  drop_na(Value)
+
+# 2. Plot
+# 1. Build the plot and save to a variable
+custom_labels <- c(
+  FS                             = "Fragment-size score",
+  Mean.Coverage                  = "cfDNA coverage at MM active regulatory sites",
+  Proportion.Short               = "Short-fragment proportion",
+  WGS_Tumor_Fraction_Blood_plasma_cfDNA = "cfDNA tumor fraction (ichorCNA)"
+)
+
+p_traj <- ggplot(plot_df_fragmentomics, aes(x = Weeks_Since_Baseline, y = Value, group = Patient)) +
+  geom_line(colour = "grey70", alpha = 0.4) +
+  geom_point(aes(color = relapse_within_180), size = 1.5, alpha = 0.8) +
+  facet_wrap(
+    ~ Metric,
+    scales = "free_y",
+    ncol  = 4,
+    labeller = labeller(Metric = custom_labels)
+  ) +
+  scale_color_manual(
+    values = c(`FALSE` = "black", `TRUE` = "red"),
+    labels = c(`FALSE` = "No relapse ≤180d", `TRUE` = "Relapse ≤180 d"),
+    name   = "Relapse status",
+    na.value = "black",         # <- this makes NA points black
+    na.translate = FALSE      # ← drop NA from the legend since these patients didn't progress
+    
+  ) +
+  labs(
+    x     = "Weeks Since Baseline",
+    y     = "Value",
+    title = "Longitudinal trajectories of fragmentomic features"
+  ) +
+  theme_classic(base_size = 11) +
+  theme(
+    legend.position = "bottom",
+    strip.background = element_rect(fill = "grey95", colour = NA)
+  )
+
+# 2. Save as PNG in outdir
+ggsave(
+  filename = file.path(outdir, "Fig3A_metrics_trajectories_fragmentomics.png"),
+  plot     = p_traj,
+  device   = "png",
+  width    = 12,    # inches
+  height   = 4,     # inches
+  dpi      = 600
+)
+
+
+
+### Now correlation with lab values 
+# 1. Build a data frame of all relevant columns
+# Make slightly smaller to avoid being overcrowded
+pair_df <- dat_clean %>%
+  select(
+    Patient,
+    zscore_blood,                   # sites z-score (blood)
+    z_score_detection_rate_blood,   # cVAF z-score (blood)
+    detect_rate_blood,              # raw cVAF (%) (blood)
+    zscore_BM,                      # sites z-score (BM)
+    z_score_detection_rate_BM,      # cVAF z-score (BM)
+    detect_rate_BM,                 # raw cVAF (%) (BM)
+    FS,                             # fragment-size score
+    Mean.Coverage,                  # mean regulatory coverage (×)
+    Proportion.Short,               # short-fragment proportion (%)
+    WGS_Tumor_Fraction_Blood_plasma_cfDNA,  # ichorCNA tumor fraction (%)
+    M_Protein,                      # M-protein level
+    Calcium,                        # serum calcium
+    B2_micro,                       # β2-microglobulin
+    Kappa_Lambda_Ratio, 
+    Flow_pct_cells,                 # % aberrant plasma cells by MFC
+    Adaptive_Frequency              # clonoSEQ dominant rearrangement frequency
+  ) 
+
+# 2. Rename for Plot-Friendly Labels
+pair_df <- pair_df %>%
+  rename(
+    `Blood cVAF z-score`          = z_score_detection_rate_blood,
+    `Blood sites z-score`            = zscore_blood,
+    `Blood cVAF (%)`              = detect_rate_blood,
+    `BM sites z-score`            = zscore_BM,
+    `BM cVAF z-score`             = z_score_detection_rate_BM,
+    `BM cVAF (%)`                 = detect_rate_BM,
+    `Fragment-size score`         = FS,
+    `Regulatory coverage (×)`     = Mean.Coverage,
+    `Short-fragment proportion` = Proportion.Short,
+    `Tumor fraction (%)`          = WGS_Tumor_Fraction_Blood_plasma_cfDNA,
+    `M-protein (g/L)`             = M_Protein,
+    `Calcium (mmol/L)`            = Calcium,
+    `β2-microglobulin (mg/L)`     = B2_micro,
+    `Kappa:Lambda ratio`          = Kappa_Lambda_Ratio,
+    `% aberrant plasma cells (MFC)`     = Flow_pct_cells,
+    `clonoSEQ frequency`          = Adaptive_Frequency
+  )
+
+# 3. Generate the GGally pairs plot
+
+wrap_labels <- function(labels, width = 20) {
+  sapply(labels, function(x) paste(strwrap(x, width = width), collapse = "\n"))
 }
 
-p1 <- paired_plot("zscore_blood", "Blood mutation z-score")
-p2 <- paired_plot("detect_rate_blood", "Blood detection rate")
-p3 <- paired_plot("FS", "Fragment-size score")
+wrapped_labels <- wrap_labels(names(pair_df), width = 15)
 
-plot_combined <- (p1 | p2 | p3) + plot_annotation(tag_levels = "A")
 
-ggsave(file.path(outdir, "Fig_longitudinal_pairs_v2.pdf"),
-       plot = plot_combined,
-       width = 10, height = 4, dpi = 600, useDingbats = FALSE)
+pair_df <- pair_df %>% select(-Patient)
+p_pairs <- ggpairs(
+  pair_df,
+  columns    = 1:ncol(pair_df),
+  upper      = list(continuous = wrap("cor", size = 2.5, method = "spearman", use = "pairwise.complete.obs")),
+  lower      = list(continuous = wrap("points", alpha = 0.4, size = 0.8)),
+  diag       = list(continuous = wrap("densityDiag")),
+  columnLabels = wrapped_labels
+) +
+  theme_classic(base_size = 9) +
+  theme(
+    strip.text = element_text(face = "bold", size = 9),
+    axis.text  = element_text(size = 9)
+  )
 
-## Longitudinal spaghetti – keep rows with at least one var not-NA
-traj_vars <- intersect(c("zscore_blood","z_score_detection_rate_blood",
-                         "detect_rate_blood","FS",
-                         "Mean.Coverage","Proportion.Short",
-                         "WGS_Tumor_Fraction_Blood_plasma_cfDNA"),
-                       names(dat))
+# 4. Save as high-res PNG
+ggsave(
+  filename = file.path(outdir, "Supplementary_Figure_pairs_metrics_clinical_3B.png"),
+  plot     = p_pairs,
+  width    = 18,    # inches
+  height   = 18,    # inches
+  dpi      = 600
+)
 
-traj_long <- dat %>%
-  select(Patient, Date, all_of(traj_vars)) %>%
-  pivot_longer(-c(Patient,Date), names_to="Feature", values_to="value") %>%
-  drop_na()
 
-ggplot(traj_long, aes(Date,value,group=Patient,colour=Patient))+
-  geom_line(alpha=.6)+
-  facet_wrap(~Feature, scales="free_y", ncol=3)+
-  theme_bw(base_size=10)+
-  theme(legend.position="none")+
-  labs(x=NULL,y=NULL) %>%
-  ggsave("Fig_longitudinal_spaghetti_v2.pdf",
-         width=8, height=10, dpi=600, useDingbats=FALSE)
 
-## Correlation figure (only when both columns exist)
-corr_plot <- function(xvar,yvar,xlab,ylab){
-  if(!(xvar %in% names(dat) && yvar %in% names(dat))) return(NULL)
-  dat %>% select(all_of(c(xvar,yvar))) %>% drop_na() %>%
-    ggplot(aes(.data[[xvar]], .data[[yvar]]))+
-    geom_point(alpha=.7, size=1.5)+
-    geom_smooth(method="lm",se=FALSE, linetype="dashed")+
-    stat_cor(method="spearman", label.x.npc="left", label.y.npc=.9, size=3)+
-    theme_bw(base_size=11)+
-    labs(x=xlab,y=ylab)
-}
 
-c1 <- corr_plot("zscore_blood","z_score_detection_rate_blood",
-                "Blood mutation z-score","Blood detection-rate z-score")
-c2 <- corr_plot("WGS_Tumor_Fraction_Blood_plasma_cfDNA","Blood_Mutation_Count",
-                "Tumour fraction","Blood mutation count")
-c3 <- corr_plot("WGS_Tumor_Fraction_Blood_plasma_cfDNA","FS",
-                "Tumour fraction","Fragment-size score")
 
-((c1|c2|c3)+plot_annotation(tag_levels="A")) %>%
-  ggsave("Fig_correlations_v2.pdf",
-         width=10, height=3.5, dpi=600, useDingbats=FALSE)
+#### Now make heatmap 
+# 1. Compute Spearman correlation matrix
+corr_mat <- cor(pair_df, method = "spearman", use = "pairwise.complete.obs")
 
-## ───── 8. Console read-out for quick copy-paste ─────────────────────────────
-cat("\n──── Study-level counts ────\n")
-cat(glue::glue("cfDNA draws = {n_cfDNA_draws}\n",
-               "BM aspirates = {n_BM_aspirates}\n",
-               "Patients = {n_patients}\n",
-               "Median follow-up = {median_follow$med} months ",
-               "(range {median_follow$lo}–{median_follow$hi})\n\n"))
+# 2. Turn into long format for ggplot
+corr_df_updated <- as.data.frame(as.table(corr_mat)) %>%
+  set_names(c("Metric1", "Metric2", "rho")) %>%
+  # ensure the ordering matches the matrix
+  mutate(
+    Metric1 = factor(Metric1, levels = colnames(corr_mat)),
+    Metric2 = factor(Metric2, levels = colnames(corr_mat))
+  )
 
-print(pairwise_stats, width=Inf)
-print(corr_pairs, width=Inf)
+# 3. (Optional) order by hierarchical clustering for prettier blocks
+ord <- hclust(dist(corr_mat))$order
+levs <- colnames(corr_mat)[ord]
+corr_df_updated <- corr_df_updated %>%
+  mutate(
+    Metric1 = factor(Metric1, levels = levs),
+    Metric2 = factor(Metric2, levels = levs)
+  )
 
-sessionInfo()
+# 4. Plot heatmap
+p_heatmap <- ggplot(corr_df_updated, aes(x = Metric1, y = Metric2, fill = rho)) +
+  geom_tile(color = "white") +
+  geom_text(aes(label = sprintf("%.2f", rho)), size = 2.5) +
+  scale_fill_viridis_c(option = "D", name = expression(rho~"(Spearman)")) +
+  coord_equal() +
+  theme_minimal(base_size = 9) +
+  theme(
+    axis.text.x     = element_text(angle = 45, hjust = 1, size = 7),
+    axis.text.y     = element_text(size = 7),
+    panel.grid      = element_blank(),
+    legend.position = "bottom"
+  ) +
+  labs(
+    x = NULL, y = NULL,
+    title = "Spearman correlation heatmap of cfDNA features and biomarkers"
+  )
+
+# 5. Save it
+ggsave(
+  file.path(outdir, "Fig_heatmap_spearman.png"),
+  plot   = p_heatmap,
+  width  = 6,
+  height = 5,
+  dpi    = 600
+)
+
+# 6. Keep only the upper‐triangle (including diagonal)
+corr_df_tri <- corr_df_updated %>%
+  mutate(
+    r = as.integer(Metric1),
+    c = as.integer(Metric2)
+  ) %>%
+  filter(r < c) %>%     # strictly upper, drops diagonal
+  select(-r, -c)
+
+# 7. Plot only the upper triangle
+p_heatmap_tri <- ggplot(corr_df_tri, aes(x = Metric1, y = Metric2, fill = rho)) +
+  geom_tile(color = "white") +
+  geom_text(aes(label = sprintf("%.2f", rho)), size = 2) +
+  scale_fill_viridis_c(option = "D", name = expression(rho~"(Spearman)")) +
+  coord_equal() +
+  theme_minimal(base_size = 8) +
+  theme(
+    axis.text.x     = element_text(angle = 45, hjust = 1, size = 7),
+    axis.text.y     = element_text(size = 7),
+    panel.grid      = element_blank(),
+    legend.position = "bottom"
+  ) +
+  labs(
+    x     = NULL,
+    y     = NULL,
+    title = "Spearman correlation heatmap"
+  )
+
+p_heatmap_tri <- p_heatmap_tri +
+  theme(
+    # place legend at x=0.85 (85% from left), y=0.15 (15% from bottom)
+    legend.position     = c(0.85, 0.15),
+    # anchor the legend box’s top-right corner at that point
+    legend.justification = c(1, 0),
+    # give it a semi-opaque background so tiles underneath don’t show through
+    legend.background   = element_rect(fill = alpha("white", 0.7), colour = NA),
+    legend.key.size     = unit(0.8, "lines"),
+    legend.text         = element_text(size = 6),
+    legend.title        = element_text(size = 7)
+  )
+
+p_heatmap_tri <- ggplot(corr_df_tri, aes(x = Metric1, y = Metric2, fill = rho)) +
+  geom_tile(color = "white") +
+  
+  # draw text in white when rho < -0.3, else black
+  geom_text(aes(label = sprintf("%.2f", rho), color = rho < -0.3),
+            size = 2) +
+  scale_color_manual(
+    values = c(`TRUE` = "white", `FALSE` = "black"),
+    guide  = FALSE
+  ) +
+  
+  # force legend from -1 to +1, with breaks including 1
+  scale_fill_viridis_c(
+    option = "D",
+    name   = expression(rho~"(Spearman)"),
+    limits = c(-0.6, 1),
+    breaks = c(-0.5, 0, 0.5, 1),
+    labels = c("-0.5", "0.0", "0.5", "1.0")
+  ) +
+  
+  coord_equal() +
+  theme_minimal(base_size = 7) +
+  theme(
+    axis.text.x     = element_text(angle = 45, hjust = 1, size = 6),
+    axis.text.y     = element_text(size = 6),
+    panel.grid      = element_blank(),
+    plot.title      = element_text(size = 8, face = "bold"),
+    legend.position = c(0.9, 0.2),
+    legend.justification = c(1, 0),
+    legend.background   = element_rect(fill = alpha("white", 0.7), colour = NA),
+    legend.key.size     = unit(0.6, "lines"),
+    legend.text         = element_text(size = 6),
+    legend.title        = element_text(size = 7)
+  ) +
+  labs(
+    x     = NULL,
+    y     = NULL,
+    title = "Spearman correlation heatmap"
+  )
+
+
+
+# 8. Save the triangular heatmap
+### Figure 3B
+ggsave(
+  filename = file.path(outdir, "Fig_heatmap_spearman_upper_triangle.png"),
+  plot     = p_heatmap_tri,
+  width    = 6,
+  height   = 5,
+  dpi      = 600
+)
+
+
+
+
+
+
+
+
 ################################################################################

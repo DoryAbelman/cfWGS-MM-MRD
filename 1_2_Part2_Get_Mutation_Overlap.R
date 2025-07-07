@@ -48,6 +48,7 @@ library(ggplot2)
 library(scales)
 library(grid)
 library(VennDiagram)
+library(viridis)
 
 
 
@@ -310,6 +311,72 @@ cohort_sentences <- stats_by_cohort %>%
 
 # Print them
 cat(cohort_sentences, sep = "\n")
+
+
+### Now make figure 3C 
+# 1. Sort overlap_data and add position for plotting
+plot_df <- overlap_with_cohort %>%
+  filter(Cohort == "Frontline") %>%
+  arrange(Percent_Overlap) %>%
+  mutate(
+    Patient = factor(Patient, levels = Patient),      # keep order
+    pos     = row_number()                            # y-position
+  )
+
+# 2. Calculate overall statistics
+med  <- median(plot_df$Percent_Overlap, na.rm = TRUE)
+iqrL <- quantile(plot_df$Percent_Overlap, 0.25, na.rm = TRUE)
+iqrU <- quantile(plot_df$Percent_Overlap, 0.75, na.rm = TRUE)
+
+# 3. Build lollipop plot
+p_overlap <- ggplot(plot_df, aes(x = Percent_Overlap, y = Patient)) +
+ # annotate(                         # IQR ribbon
+ #   "rect", xmin = iqrL, xmax = iqrU,
+ #   ymin = 0.5, ymax = nrow(plot_df) + 0.5,
+ #   fill = "grey90"
+ # ) +
+  geom_vline(xintercept = med, linetype = "dashed", colour = "grey40") +
+  geom_segment(aes(x = 0, xend = Percent_Overlap, yend = Patient),
+               colour = "grey65", size = 0.35) +
+  geom_point(aes(colour = Percent_Overlap), size = 2) +
+  scale_colour_viridis_c(
+    option = "D", end = 0.9, name = "% overlap",
+    guide  = guide_colourbar(barwidth = 0.4, barheight = 3)
+  ) +
+  scale_x_continuous(expand = expansion(mult = c(0, 0.02))) +
+  labs(
+    x = "Mutation overlap: BM ∩ cfDNA (%)",
+    y = NULL,
+    title    = "Patient-level overlap of baseline mutations (BM vs. cfDNA)",
+    subtitle = glue::glue(
+      "Median = {round(med,1)}%   |   IQR = {round(iqrL,1)}–{round(iqrU,1)}%"
+    )
+  ) +
+  theme_minimal(base_size = 8) +
+  theme(
+    plot.title      = element_text(face = "bold", size = 9),
+    plot.subtitle   = element_text(size = 7, margin = margin(b = 6)),
+    axis.text.y     = element_text(size = 6),
+    panel.grid.major.y = element_blank(),
+    legend.position     = c(0.97, 0.05),     # inside bottom-right
+    legend.justification = c(1, 0),
+    legend.background    = element_rect(
+      fill = scales::alpha("white", 0.7), colour = NA
+    ),
+    legend.key.width  = unit(0.3, "cm"),
+    legend.key.height = unit(1.1, "cm"),
+    legend.title      = element_text(size = 6),
+    legend.text       = element_text(size = 6)
+  )
+
+# 4. Save for Figure 3C
+ggsave(
+  filename = file.path(outdir, "Fig3C_mutation_overlap_lollipop.png"),
+  plot     = p_overlap,
+  width    = 4,   # a bit narrower
+  height   = 5,
+  dpi      = 600
+)
 
 
 # Export overlap_with_cohort table

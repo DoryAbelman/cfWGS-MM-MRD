@@ -393,7 +393,7 @@ evidence_summary <- dat_base %>%
 
 
 
-###### PART 2: See mutation overlap based on breakpoint 
+###### PART 2: See mutation overlap based on the specific base change 
 mutation_data_total <- readRDS("Jan2025_exported_data/mutation_export_updated.rds")
 All_feature_data <- readRDS("Jan2025_exported_data/All_feature_data_June2025.rds")
 combined_clinical_data_updated <- read.csv("combined_clinical_data_updated_April2025.csv")
@@ -419,17 +419,21 @@ matched_pts <- combined_clinical_data_updated %>%
   select(Patient, Timepoint) %>% 
   unique()
 
-# 3) Keep only those matched cases
+# 3) Keep only those matched cases but add doulbe negatives
 mut_matched <- mut_feat %>%
-  semi_join(matched_pts, by = c("Patient","Timepoint"))
+  semi_join(matched_pts, by = c("Patient","Timepoint")) %>%
+  inner_join(matched_pts,  by = c("Patient","Timepoint"))
 
-# filter to frontline
+
+# filter to in cohort 
 mut_matched <- mut_matched %>% left_join(cohort_df)
-mut_matched <- mut_matched %>% filter(Cohort == "Frontline") %>% filter(Timepoint %in% c("01", "T0")) # get baseline
+mut_matched <- mut_matched %>% left_join(combined_clinical_data_updated)
+mut_matched <- mut_matched %>% filter(timepoint_info %in% c("Baseline", "Diagnosis")) # get baseline
+mut_matched <- mut_matched %>% filter(!is.na(Cohort))
 
 # 4) Build per‐patient×timepoint sets of genes
 mut_sets <- mut_matched %>%
-  group_by(Patient, Timepoint, Sample_type) %>%
+  group_by(Patient, Timepoint, Cohort, Sample_type) %>%
   summarise(
     muts = list(unique(Mutation_cDNA)),
     .groups = "drop"
@@ -479,8 +483,9 @@ concordance_row <- mut_sets %>%
 
 ## 6)  global concordance **within each TF bucket** and **overall**
 concordance_tf <- concordance_row %>%
+  group_by(Cohort) %>%
   mutate(tf_group = replace_na(tf_group, "tf_unknown")) %>%
-  group_by(tf_group) %>%
+  group_by(tf_group, Cohort) %>%
   summarise(
     tp  = sum(tp),
     fn  = sum(fn),
@@ -494,6 +499,7 @@ concordance_tf <- concordance_row %>%
 
 # add an “overall” row
 concordance_overall <- concordance_row %>%
+  group_by(Cohort) %>%
   summarise(
     tp = sum(tp),
     fn = sum(fn),
@@ -504,6 +510,14 @@ concordance_overall <- concordance_row %>%
     jaccard     = tp / (tp + fn + fp)
   ) %>%
   mutate(tf_group = "all")
+
+mean_jaccard <- concordance_row %>%
+  group_by(Cohort) %>%
+  summarise(
+    avg_jaccard = mean(jaccard, na.rm = TRUE),
+    sd_jaccard  = sd(jaccard, na.rm = TRUE),
+    n_samples   = dplyr::n()
+  )
 
 concordance_global <- bind_rows(concordance_tf, concordance_overall) %>%
   mutate(
@@ -526,6 +540,11 @@ write.csv(
 )
 
 
+### This above does not include double negatives 
+
+
+
+
 
 
 
@@ -536,7 +555,7 @@ write.csv(
 baseline_summary <- dat_base %>%
   group_by(cohort) %>%
   summarise(
-    n               = n(),
+    n               = dplyr::n(),
     mean_BM         = mean(BM_Mutation_Count,   na.rm = TRUE),
     median_BM       = median(BM_Mutation_Count, na.rm = TRUE),
     sd_BM           = sd(BM_Mutation_Count,     na.rm = TRUE),
@@ -555,7 +574,7 @@ print(baseline_summary)
 
 ### Add sentences and stats 
 # 2) Descriptive sentences––––––––––––––––––––––––––––––––––––––––
-sentences <- summary_by_tp %>%
+sentences <- baseline_summary %>%
   transmute(
     sentence = glue(
       "In the {cohort} cohort (n = {n}), the mean bone marrow mutation count was ",
@@ -741,3 +760,194 @@ mod <- lm(log1p(BM_Mutation_Count) ~
 summary(mod)
 
 ### Not significant
+
+
+
+### Add some plots
+
+# Create a directory for figures
+if (!dir.exists("Final Tables and Figures/Baseline_concordance")) dir.create("Final Tables and Figures/Baseline_concordance")
+
+# 1. Figure 2A — Boxplots of baseline BM vs cfDNA mutation counts by cohort
+plot_df <- dat_base %>%
+  select(cohort, BM_Mutation_Count, Blood_Mutation_Count) %>%
+  pivot_longer(
+    cols = c(BM_Mutation_Count, Blood_Mutation_Count),
+    names_to  = "Assay",
+    values_to = "MutCount"
+  ) %>%
+  mutate(
+    Assay = recode(Assay,
+                   "BM_Mutation_Count"    = "Bone marrow",
+                   "Blood_Mutation_Count" = "cfDNA")
+  ) %>%
+  mutate(cohort = recode(cohort,
+                         "Frontline induction-transplant"      = "Frontline",
+                         "Non-frontline" = "Later-line"))
+
+
+p1 <- ggplot(plot_df, aes(x = cohort, y = MutCount, fill = cohort)) +
+  geom_boxplot(outlier.shape = NA) +
+  geom_jitter(width = 0.2, size = 1, alpha = 0.6) +
+  facet_wrap(~Assay) +                          # fixed scales by default
+  stat_compare_means(
+    method        = "wilcox.test",
+    label         = "p.format",
+    label.y      = max(plot_df$MutCount) * 1.05  # position just above max
+  ) +
+  scale_x_discrete(labels = c("Frontline", "Later-line")) +
+  labs(
+    x        = NULL,
+    y        = "Number of mutations",
+    title    = "Baseline mutation counts by cohort",
+    subtitle = "Frontline vs Later-line, in BM and cfDNA"
+  ) +
+  theme_classic() +
+  theme(
+    legend.position = "none",
+    strip.text      = element_text(face = "bold")
+  )
+
+ggsave("Final Tables and Figures/Baseline_concordance/Figure2B_boxplot.png", p1,
+       width = 6, height = 4, dpi = 500)
+
+
+# 2. Scatterplot of BM vs cfDNA mutation counts
+rho_test <- cor.test(
+  dat_base$BM_Mutation_Count,
+  dat_base$Blood_Mutation_Count,
+  method = "spearman"
+)
+rho <- round(rho_test$estimate, 2)
+pval <- signif(rho_test$p.value, 2)
+
+rho_test <- cor.test(
+  dat_base$BM_Mutation_Count,
+  dat_base$Blood_Mutation_Count,
+  method = "spearman"
+)
+rho  <- round(rho_test$estimate, 2)
+pval <- signif(rho_test$p.value, 2)
+
+p2 <- ggplot(dat_base, aes(x = BM_Mutation_Count,
+                           y = Blood_Mutation_Count,
+                           color = cohort)) +
+  geom_point(size = 2, alpha = 0.7) +
+  geom_smooth(method = "lm", se = FALSE) +
+  annotate("text",
+           x = Inf, y = Inf,
+           label = paste0("ρ = ", rho, "\n", "p = ", pval),
+           hjust = 1.1, vjust = 1.1,
+           size = 3) +
+  labs(
+    x = "BM mutation count",
+    y = "cfDNA mutation count",
+    color = "Cohort",
+    title = "Correlation of mutation burden between BM and cfDNA"
+  ) +
+  theme_classic() +
+  theme(legend.position = "none")
+
+ggsave("Final Tables and Figures/Baseline_concordance/Figure2C_BM_vs_cfDNA_scatter.png", p2,
+       width = 4, height = 4, dpi = 500)
+
+
+# 3. cfDNA mutation count vs ichorCNA tumour fraction
+tf_test <- cor.test(
+  dat_base$Blood_Mutation_Count,
+  dat_base$WGS_Tumor_Fraction_Blood_plasma_cfDNA,
+  method = "spearman"
+)
+rho_tf <- round(tf_test$estimate, 2)
+p_tf   <- signif(tf_test$p.value, 2)
+
+p3 <- ggplot(dat_base,
+             aes(x = WGS_Tumor_Fraction_Blood_plasma_cfDNA,
+                 y = Blood_Mutation_Count,
+                 color = cohort)) +
+  geom_point(size = 2, alpha = 0.7) +
+  geom_smooth(method = "lm", se = FALSE) +
+  annotate("text",
+           x = Inf, y = Inf,
+           label = paste0("ρ = ", rho_tf, "\n", "p = ", p_tf),
+           hjust = 1.1, vjust = 1.1,
+           size = 3) +
+  labs(
+    x = "cfDNA tumour fraction (ichorCNA)",
+    y = "cfDNA mutation count",
+    color = "Cohort",
+    title = "Mutation burden vs tumour fraction in cfDNA"
+  ) +
+  theme_classic() +
+  theme(legend.position = "none")
+
+ggsave("Final Tables and Figures/Baseline_concordance/Figure2D_cfDNA_TF_scatter.png", p3,
+       width = 4, height = 4, dpi = 500)
+
+
+# 4. cfDNA mutation count vs fragmentomic score (FS)
+fs_test <- cor.test(
+  dat_base$Blood_Mutation_Count,
+  dat_base$FS,
+  method = "spearman"
+)
+rho_fs <- round(fs_test$estimate, 2)
+p_fs   <- signif(fs_test$p.value, 2)
+
+p4 <- ggplot(dat_base,
+             aes(x = FS,
+                 y = Blood_Mutation_Count,
+                 color = cohort)) +
+  geom_point(size = 2, alpha = 0.7) +
+  geom_smooth(method = "lm", se = FALSE) +
+  annotate("text",
+           x = Inf, y = Inf,
+           label = paste0("ρ = ", rho_fs, "\n", "p = ", p_fs),
+           hjust = 1.1, vjust = 1.1,
+           size = 3) +
+  labs(
+    x = "Short-fragment score (FS)",
+    y = "cfDNA mutation count",
+    color = "Cohort",
+    title = "Mutation burden vs fragmentomic score"
+  ) +
+  theme_classic() +
+  theme(legend.position = "none")
+
+
+ggsave("Final Tables and Figures/Baseline_concordance/Figure2E_FS_scatter.png", p4,
+       width = 4, height = 4, dpi = 500)
+
+
+# 5. cfDNA mutation count vs serum albumin
+alb_test <- cor.test(
+  dat_base$Blood_Mutation_Count,
+  dat_base$Albumin,
+  method = "spearman"
+)
+rho_alb <- round(alb_test$estimate, 2)
+p_alb   <- signif(alb_test$p.value, 2)
+
+p5 <- ggplot(dat_base,
+             aes(x = Albumin,
+                 y = Blood_Mutation_Count,
+                 color = cohort)) +
+  geom_point(size = 2, alpha = 0.7) +
+  geom_smooth(method = "lm", se = FALSE) +
+  annotate("text",
+           x = Inf, y = Inf,
+           label = paste0("ρ = ", rho_alb, "\n", "p = ", p_alb),
+           hjust = 1.1, vjust = 1.1,
+           size = 3) +
+  labs(
+    x = "Serum albumin (g/L)",
+    y = "cfDNA mutation count",
+    color = "Cohort",
+    title = "Mutation burden vs serum albumin"
+  ) +
+  theme_classic() +
+  theme(legend.position = "none")
+
+
+ggsave("Final Tables and Figures/Baseline_concordance/Figure2F_Albumin_scatter.png", p5,
+       width = 4, height = 4, dpi = 500)
