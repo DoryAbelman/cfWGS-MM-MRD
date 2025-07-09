@@ -777,13 +777,13 @@ cohort_label <- cohort_df$Cohort[match(patients, cohort_df$Patient)]
 
 # 2. Map to desired labels
 col_cohort <- case_when(
-  cohort_label == "Frontline"      ~ "Frontline",
-  cohort_label == "Non-frontline" ~ "Later-line",
+  cohort_label == "Frontline"      ~ "Primary",
+  cohort_label == "Non-frontline" ~ "Test",
   TRUE                             ~ NA_character_
 )
 
 # 3. Convert to factor with defined levels
-col_cohort <- factor(col_cohort, levels = c("Frontline", "Later-line"))
+col_cohort <- factor(col_cohort, levels = c("Primary", "Test"))
 
 # 4. Check distribution
 table(col_cohort, useNA = "ifany")
@@ -814,8 +814,8 @@ col_tf_ord     <- ord_df$TumourFraction
 # rename  cohort factor levels
 col_cohort_ord <- factor(
   col_cohort_ord,
-  levels = c("Frontline", "Later-line"),
-  labels = c("Frontline", "Later-line")
+  levels = c("Primary", "Test"),
+  labels = c("Primary", "Test")
 )
 
 # 3) re‐order your matrices
@@ -917,7 +917,7 @@ top_ha <- HeatmapAnnotation(
     na_col = "grey90"
   ),
   col = list(
-    Cohort = c(`Frontline` = "#3182bd", `Later-line` = "#e6550d")
+    Cohort = c(`Primary` = "#3182bd", `Test` = "#e6550d")
   ),
   annotation_name_side = "left",
   annotation_name_rot  = 0,
@@ -1002,7 +1002,7 @@ draw(
 )
 
 # save
-png("overlay_heatmap_BM_vs_cfDNA_updated6.png", width = 14, height = 8, units = "in", res = 450)
+png("overlay_heatmap_BM_vs_cfDNA_updated7.png", width = 14, height = 8, units = "in", res = 450)
 draw(
   overlay_ht,
   annotation_legend_side = "right",  # where cohort legend goes
@@ -1147,7 +1147,7 @@ lgd_sampletype <- Legend(
 )
 
 # save
-png("overlay_heatmap_BM_vs_cfDNA_updated_with_FISH_5.png", width = 14, height = 8, units = "in", res = 450)
+png("overlay_heatmap_BM_vs_cfDNA_updated_with_FISH_6.png", width = 14, height = 8, units = "in", res = 450)
 draw(
   overlay_ht_2,
   annotation_legend_side = "right",  # where cohort legend goes
@@ -1818,7 +1818,7 @@ write_csv(fisher_results,  file.path(outdir, "fisher_by_feature.csv"))
 tf_stats <- combined_data_heatmap_blood_subset %>%
   group_by(cohort) %>%
   summarize(
-    n_samples   = n(),
+    n_samples   = dplyr::n(),
     median_TF   = median(Tumor_Fraction, na.rm=TRUE),
     mean_TF     = mean(Tumor_Fraction,   na.rm=TRUE),
     min_TF      = min(Tumor_Fraction,    na.rm=TRUE),
@@ -1974,7 +1974,7 @@ cat("In patients with tumor fractions of >5%,",
 
 
 
-##### Below here is testing - parts to get PPV used in main script
+##### Below here is testing
 BM_long <- combined_data_heatmap_BM_subset  %>% 
   select(
     Patient_Timepoint, Patient, cohort,

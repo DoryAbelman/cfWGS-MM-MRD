@@ -530,18 +530,18 @@ custom_labels <- c(
   z_score_detection_rate_BM                   = "BM cVAF Z-score",
   zscore_BM                                   = "BM sites Z-score",
   FS                                          = "Fragment-size score",
-  Mean.Coverage                               = "cfDNA coverage at MM active regulatory sites",
-  Proportion.Short                            = "Short-fragment proportion",
-  WGS_Tumor_Fraction_Blood_plasma_cfDNA       = "cfDNA tumour fraction (ichorCNA)"
+  Mean.Coverage                               = "MM regulatory\ncoverage",
+  Proportion.Short                            = "Short-fragment\nproportion",
+  WGS_Tumor_Fraction_Blood_plasma_cfDNA       = "CNA tumour fraction\n(ichorCNA)"
 )
 
 # pick & sort
 plot_df2 <- corr_tbl %>%
   filter(feature %in% names(custom_labels)) %>%
   arrange(desc(r)) %>%
-  mutate(feature = factor(feature, levels = feature)) 
+  mutate(feature = factor(feature, levels = rev(feature))) 
 
-ggplot(plot_df2, aes(x = r, y = feature)) +
+p_corr_nice <- ggplot(plot_df2, aes(x = r, y = feature)) +
   # grey baseline at zero
   geom_vline(xintercept = 0, colour = "grey80", linetype = "dashed") +
   # segment from zero to rho
@@ -562,30 +562,31 @@ ggplot(plot_df2, aes(x = r, y = feature)) +
     labels = custom_labels
   ) +
   labs(
-    title = "Spearman correlation of cfDNA features vs tumour fraction",
+    title = "Feature Correlation with Dilution Series",
     x     = expression(rho~"(Spearman)"),
     y     = NULL
   ) +
-  theme_minimal(base_size = 10) +
+  theme_minimal(base_size = 8) +
   theme(
-    plot.title        = element_text(face = "bold", size = 11, hjust = 0.5),
-    axis.text.y       = element_text(size = 9),
+    plot.title.position = "plot",
+    plot.title        = element_text(face = "bold", size = 12, hjust = 0),
+    axis.text.y       = element_text(size = 8),
     axis.text.x       = element_text(size = 8),
-    axis.title.x      = element_text(size = 9, margin = margin(t = 4)),
+    axis.title.x      = element_text(size = 8, margin = margin(t = 4)),
     panel.grid.major.y = element_blank(),
     panel.grid.minor   = element_blank(),
-    legend.position    = "right",
+    legend.position    = "none",
     legend.key.height  = unit(1, "cm"),
     legend.key.width   = unit(0.3, "cm"),
-    legend.title       = element_text(size = 9),
+    legend.title       = element_text(size = 8),
     legend.text        = element_text(size = 8)
-  ) -> p_corr_nice
+  ) 
 
 # print or save
 print(p_corr_nice)
 ggsave(filename = file.path(OUTPUT_DIR_FIGURES, "Fig4H_feature_corr_lollipop_nice.png"), 
        p_corr_nice, 
-       width = 4, height = 5, dpi = 600)
+       width = 3.55, height = 4, dpi = 600)
 
 
 

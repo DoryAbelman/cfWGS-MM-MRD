@@ -1,16 +1,32 @@
 # ==============================================================================
-# 2_A_Feature_Concordance_And_Mutation_Counts
+# 2_3_Feature_And_Concordance_Analysis.R
 #
 # Purpose:
-#   Load the full, assembled feature table and run:
-#     • FISH vs WGS concordance analyses
-#     • Mutation count summaries by timepoint
+#   1. Load baseline WGS + clinical/feature table.
+#   2. Compute FISH ↔ WGS concordance (overall & by ctDNA fraction) for CNAs & SVs.
+#   3. Summarise baseline mutation counts in BM and cfDNA by cohort (means, ranges, tests).
+#   4. Calculate Spearman correlations between mutation burden and clinical/fragmentomic features.
+#   5. Fit a simple multivariable linear model on BM mutation counts.
+#   6. Generate publication-ready figures:
+#        • Boxplots of mutation counts and cfDNA tumor fraction by cohort
+#        • Scatterplots of mutation burden vs. tumor fraction, fragment-size score, albumin
+#        • Dumbbell plots of event-level concordance, sensitivity & specificity by ctDNA fraction
 #
 # Inputs:
-#   - Final_aggregate_table_cfWGS_features_with_clinical_and_demographics_updated3.rds
+#   - Final_aggregate_table_cfWGS_features_with_clinical_and_demographics_updated5.rds
+#   - cohort_assignment_table_updated.rds
+#   - Jan2025_exported_data/mutation_export_updated.rds
+#   - Jan2025_exported_data/All_feature_data_June2025.rds
+#   - combined_clinical_data_updated_April2025.csv
+#
+# Outputs:
+#   - Tables (CSV/XLSX) in Output_tables_2025/
+#   - Figures in Final Tables and Figures/Baseline_concordance/
+#   - R objects (RDS) for downstream use
 #
 # Required packages:
-#   tidyverse, purrr, stringr, writexl, glue
+#   tidyverse, purrr, stringr, writexl, glue, Hmisc, broom,
+#   ggpubr, patchwork, viridis, scales
 # ==============================================================================
 
 library(tidyverse)   # dplyr, tidyr, readr, etc.
@@ -525,7 +541,7 @@ concordance_global <- bind_rows(concordance_tf, concordance_overall) %>%
   ) %>%
   select(tf_group, tp, fn, fp, tn,
          sensitivity, specificity,
-         jaccard, concordance)
+         jaccard, concordance, Cohort)
 
 cat("\nGlobal concordance by tumour-fraction bucket:\n")
 print(concordance_global)
@@ -535,7 +551,7 @@ print(concordance_global)
 # 1) CSV
 write.csv(
   concordance_global,
-  file = file.path(outdir, "concordance_global.csv"),
+  file = file.path(outdir, "mutation_concordance_global.csv"),
   row.names = FALSE
 )
 
@@ -768,186 +784,999 @@ summary(mod)
 # Create a directory for figures
 if (!dir.exists("Final Tables and Figures/Baseline_concordance")) dir.create("Final Tables and Figures/Baseline_concordance")
 
-# 1. Figure 2A — Boxplots of baseline BM vs cfDNA mutation counts by cohort
+### Updated style 
+# palette
+cohort_cols <- c(
+  `Frontline induction-transplant` = "#3182bd",
+  `Non-frontline`    = "#e6550d"
+)
+
+format_p <- function(p) {
+  if (p < 0.01) {
+    "<0.01"
+  } else {
+    sprintf("%.2f", p)
+  }
+}
+
+# 1. Figure 2D — Boxplots of baseline BM vs cfDNA mutation counts
 plot_df <- dat_base %>%
   select(cohort, BM_Mutation_Count, Blood_Mutation_Count) %>%
   pivot_longer(
-    cols = c(BM_Mutation_Count, Blood_Mutation_Count),
+    cols      = c(BM_Mutation_Count, Blood_Mutation_Count),
     names_to  = "Assay",
     values_to = "MutCount"
   ) %>%
-  mutate(
-    Assay = recode(Assay,
-                   "BM_Mutation_Count"    = "Bone marrow",
-                   "Blood_Mutation_Count" = "cfDNA")
-  ) %>%
-  mutate(cohort = recode(cohort,
-                         "Frontline induction-transplant"      = "Frontline",
-                         "Non-frontline" = "Later-line"))
+  mutate(Assay = recode(Assay,
+                        BM_Mutation_Count    = "Bone marrow",
+                        Blood_Mutation_Count = "cfDNA"))
 
-
-p1 <- ggplot(plot_df, aes(x = cohort, y = MutCount, fill = cohort)) +
-  geom_boxplot(outlier.shape = NA) +
-  geom_jitter(width = 0.2, size = 1, alpha = 0.6) +
-  facet_wrap(~Assay) +                          # fixed scales by default
-  stat_compare_means(
-    method        = "wilcox.test",
-    label         = "p.format",
-    label.y      = max(plot_df$MutCount) * 1.05  # position just above max
-  ) +
-  scale_x_discrete(labels = c("Frontline", "Later-line")) +
+p1 <- ggplot(plot_df, aes(cohort, MutCount, fill = cohort)) +
+  geom_boxplot(outlier.shape = NA, colour = "black", size = 0.6) +
+  geom_jitter(width = 0.2, size = 1.5, alpha = 0.7, colour = "black") +
+  facet_wrap(~Assay) +
+  stat_compare_means(method = "wilcox.test",
+                     label    = "p.format",
+                     label.y  = max(plot_df$MutCount) * 1.05) +
+  scale_fill_manual(values = cohort_cols) +
   labs(
-    x        = NULL,
-    y        = "Number of mutations",
     title    = "Baseline mutation counts by cohort",
-    subtitle = "Frontline vs Later-line, in BM and cfDNA"
+   # subtitle = "Primary vs Test, in BM and cfDNA",
+    x        = "Cohort",
+    y        = "Number of mutations"
   ) +
-  theme_classic() +
+  scale_x_discrete(
+    labels = c(
+      "Frontline induction-transplant" = "Primary",
+      "Non-frontline"                  = "Test"
+    )
+  ) +
+  theme_classic(base_size = 11) +
   theme(
-    legend.position = "none",
-    strip.text      = element_text(face = "bold")
+    plot.title    = element_text(face = "bold", size = 12),
+    plot.subtitle = element_text(size = 12),
+    strip.text    = element_text(face = "bold"),
+    legend.position = "none"
   )
 
-ggsave("Final Tables and Figures/Baseline_concordance/Figure2B_boxplot.png", p1,
-       width = 6, height = 4, dpi = 500)
+ggsave("Final Tables and Figures/Baseline_concordance/Figure2F_boxplot.png", p1, width = 5, height = 4, dpi = 500)
+
+library(ggpubr)  # for stat_compare_means
+
+p1 <- ggplot(plot_df, aes(cohort, MutCount, fill = cohort)) +
+  geom_boxplot(outlier.shape = NA, colour = "black", size = 0.6) +
+  geom_jitter(width = 0.2, size = 1.5, alpha = 0.7, colour = "black") +
+  facet_wrap(~Assay) +
+  # add the Wilcoxon bracket + star
+  stat_compare_means(
+    comparisons = list(c("Frontline induction-transplant", "Non-frontline")),
+    method      = "wilcox.test",
+    label       = "p.signif",     # will show * / ** / ***  
+    tip.length  = 0.02,           # how far past the box ends the little ticks go
+    bracket.size = 0.4            # thickness of the bracket line
+  ) +
+  
+  scale_fill_manual(values = cohort_cols) +
+  scale_x_discrete(
+    labels = c(
+      "Frontline induction-transplant" = "Primary",
+      "Non-frontline"                  = "Test"
+    )
+  ) +
+  labs(
+    title = "Baseline mutation counts by cohort",
+    x     = "Cohort",
+    y     = "Number of mutations"
+  ) +
+  theme_classic(base_size = 11) +
+  theme(
+    plot.title     = element_text(face = "bold", size = 12),
+    strip.text     = element_text(face = "bold"),
+    legend.position = "none"
+  )
+
+ggsave("Final Tables and Figures/Baseline_concordance/Figure2F_boxplot_with_bracket.png", p1, width = 5, height = 4, dpi = 600)
 
 
-# 2. Scatterplot of BM vs cfDNA mutation counts
-rho_test <- cor.test(
-  dat_base$BM_Mutation_Count,
-  dat_base$Blood_Mutation_Count,
-  method = "spearman"
-)
-rho <- round(rho_test$estimate, 2)
-pval <- signif(rho_test$p.value, 2)
 
-rho_test <- cor.test(
-  dat_base$BM_Mutation_Count,
-  dat_base$Blood_Mutation_Count,
-  method = "spearman"
-)
+#### Now redo but percent high tumor fraction instead 
+### This is 2B
+plot_df <- dat_base %>%
+  select(cohort, WGS_Tumor_Fraction_Blood_plasma_cfDNA) 
+
+p2 <- ggplot(plot_df, aes(cohort, WGS_Tumor_Fraction_Blood_plasma_cfDNA, fill = cohort)) +
+  geom_boxplot(outlier.shape = NA, colour = "black", size = 0.6) +
+  geom_jitter(width = 0.2, size = 1.5, alpha = 0.7, colour = "black") +
+  # add the Wilcoxon bracket + star
+  stat_compare_means(
+    comparisons = list(c("Frontline induction-transplant", "Non-frontline")),
+    method      = "wilcox.test",
+    label       = "p.signif",     # will show * / ** / ***  
+    tip.length  = 0.02,           # how far past the box ends the little ticks go
+    bracket.size = 0.4            # thickness of the bracket line
+  ) +
+   scale_y_continuous(
+    labels = percent_format(accuracy = 1) #,
+  #  limits = c(0, 1)       # if you want the axis to go from 0% to 100%
+  ) +
+  scale_fill_manual(values = cohort_cols) +
+  scale_x_discrete(
+    labels = c(
+      "Frontline induction-transplant" = "Primary",
+      "Non-frontline"                  = "Test"
+    )
+  ) +
+  labs(
+    title = "cfDNA tumor fraction by cohort",
+    x     = "Cohort",
+    y     = "cfDNA tumor fraction (ichorCNA)"
+  ) +
+  geom_hline(yintercept = 0.05, linetype = "dashed", color = "black")+
+  theme_classic(base_size = 11) +
+  theme(
+    plot.title     = element_text(face = "bold", size = 12),
+    strip.text     = element_text(face = "bold"),
+    legend.position = "none"
+  )
+
+ggsave("Final Tables and Figures/Baseline_concordance/Figure2B_boxplot_with_bracket_tumor_fraction.png", p2, width = 4, height = 4, dpi = 600)
+
+
+# 2. Figure 2E — BM vs cfDNA mutation counts scatter
+rho_test <- cor.test(dat_base$BM_Mutation_Count,
+                     dat_base$Blood_Mutation_Count,
+                     method = "spearman")
 rho  <- round(rho_test$estimate, 2)
-pval <- signif(rho_test$p.value, 2)
+pval_raw <- tf_test$p.value
+pval     <- format_p(pval_raw)
 
-p2 <- ggplot(dat_base, aes(x = BM_Mutation_Count,
-                           y = Blood_Mutation_Count,
-                           color = cohort)) +
-  geom_point(size = 2, alpha = 0.7) +
-  geom_smooth(method = "lm", se = FALSE) +
+p2 <- ggplot(dat_base, aes(BM_Mutation_Count, Blood_Mutation_Count, color = cohort)) +
+  geom_point(size = 2, alpha = 0.8) +
+  geom_smooth(method = "lm", se = FALSE, colour = "black", linetype = "dashed") +
   annotate("text",
            x = Inf, y = Inf,
-           label = paste0("ρ = ", rho, "\n", "p = ", pval),
-           hjust = 1.1, vjust = 1.1,
-           size = 3) +
+           label = paste0("ρ = ", rho, "\np = ", pval),
+           hjust = 1.1, vjust = 1.1, size = 4) +
+  scale_color_manual(values = cohort_cols, name = "Cohort") +
   labs(
-    x = "BM mutation count",
-    y = "cfDNA mutation count",
-    color = "Cohort",
-    title = "Correlation of mutation burden between BM and cfDNA"
+    title = "Mutation burden: BM vs cfDNA",
+    x     = "BM mutation count",
+    y     = "cfDNA mutation count"
   ) +
-  theme_classic() +
-  theme(legend.position = "none")
+  theme_classic(base_size = 10) +
+  theme(
+    plot.title      = element_text(face = "bold", size = 12),
+    legend.position = "none"
+  )
 
-ggsave("Final Tables and Figures/Baseline_concordance/Figure2C_BM_vs_cfDNA_scatter.png", p2,
-       width = 4, height = 4, dpi = 500)
+ggsave("Figure2B_scatter_BM_vs_cfDNA.png", p2, width = 4, height = 4, dpi = 500)
 
 
-# 3. cfDNA mutation count vs ichorCNA tumour fraction
-tf_test <- cor.test(
-  dat_base$Blood_Mutation_Count,
-  dat_base$WGS_Tumor_Fraction_Blood_plasma_cfDNA,
-  method = "spearman"
-)
+# 3. Figure 2F — cfDNA mutation count vs ichorCNA tumour fraction
+tf_test <- cor.test(dat_base$Blood_Mutation_Count,
+                    dat_base$WGS_Tumor_Fraction_Blood_plasma_cfDNA,
+                    method = "spearman")
 rho_tf <- round(tf_test$estimate, 2)
 p_tf   <- signif(tf_test$p.value, 2)
+p_tf     <- format_p(p_tf)
 
 p3 <- ggplot(dat_base,
-             aes(x = WGS_Tumor_Fraction_Blood_plasma_cfDNA,
-                 y = Blood_Mutation_Count,
-                 color = cohort)) +
-  geom_point(size = 2, alpha = 0.7) +
-  geom_smooth(method = "lm", se = FALSE) +
+             aes(WGS_Tumor_Fraction_Blood_plasma_cfDNA, Blood_Mutation_Count, color = cohort)) +
+  geom_point(size = 2, alpha = 0.8) +
+  geom_smooth(method = "lm", se = FALSE, colour = "black", linetype = "dashed") +
   annotate("text",
            x = Inf, y = Inf,
-           label = paste0("ρ = ", rho_tf, "\n", "p = ", p_tf),
-           hjust = 1.1, vjust = 1.1,
-           size = 3) +
+           label = paste0("ρ = ", rho_tf, "\np = ", p_tf),
+           hjust = 1.1, vjust = 1.1, size = 4) +
+  scale_color_manual(values = cohort_cols, name = "Cohort") +
   labs(
-    x = "cfDNA tumour fraction (ichorCNA)",
-    y = "cfDNA mutation count",
-    color = "Cohort",
-    title = "Mutation burden vs tumour fraction in cfDNA"
+    title = "Mutation count vs tumour fraction",
+    x     = "cfDNA tumour fraction (ichorCNA)",
+    y     = "cfDNA mutation count"
   ) +
-  theme_classic() +
-  theme(legend.position = "none")
+  theme_classic(base_size = 10) +
+  theme(
+    plot.title      = element_text(face = "bold", size = 12),
+    legend.position = "none"
+  )
 
-ggsave("Final Tables and Figures/Baseline_concordance/Figure2D_cfDNA_TF_scatter.png", p3,
-       width = 4, height = 4, dpi = 500)
+ggsave("Figure2C_scatter_tf.png", p3, width = 4, height = 4, dpi = 500)
 
 
-# 4. cfDNA mutation count vs fragmentomic score (FS)
-fs_test <- cor.test(
-  dat_base$Blood_Mutation_Count,
-  dat_base$FS,
-  method = "spearman"
-)
+# 4. Figure 2G — cfDNA mutation count vs fragment-size score (FS)
+fs_test <- cor.test(dat_base$Blood_Mutation_Count,
+                    dat_base$FS, method = "spearman")
 rho_fs <- round(fs_test$estimate, 2)
 p_fs   <- signif(fs_test$p.value, 2)
+p_fs   <- format_p(p_fs)
 
 p4 <- ggplot(dat_base,
-             aes(x = FS,
-                 y = Blood_Mutation_Count,
-                 color = cohort)) +
-  geom_point(size = 2, alpha = 0.7) +
-  geom_smooth(method = "lm", se = FALSE) +
+             aes(FS, Blood_Mutation_Count, color = cohort)) +
+  geom_point(size = 2, alpha = 0.8) +
+  geom_smooth(method = "lm", se = FALSE, colour = "black", linetype = "dashed") +
   annotate("text",
            x = Inf, y = Inf,
-           label = paste0("ρ = ", rho_fs, "\n", "p = ", p_fs),
-           hjust = 1.1, vjust = 1.1,
-           size = 3) +
+           label = paste0("ρ = ", rho_fs, "\np = ", p_fs),
+           hjust = 1.1, vjust = 1.1, size = 4) +
+  scale_color_manual(values = cohort_cols, name = "Cohort") +
   labs(
-    x = "Short-fragment score (FS)",
-    y = "cfDNA mutation count",
-    color = "Cohort",
-    title = "Mutation burden vs fragmentomic score"
+    title = "Mutation count vs fragment-size score",
+    x     = "Fragment-size score (FS)",
+    y     = "cfDNA mutation count"
   ) +
-  theme_classic() +
-  theme(legend.position = "none")
+  theme_classic(base_size = 10) +
+  theme(
+    plot.title      = element_text(face = "bold", size = 12),
+    legend.position = "none"
+  )
+
+ggsave("Figure2D_scatter_FS.png", p4, width = 4, height = 4, dpi = 500)
 
 
-ggsave("Final Tables and Figures/Baseline_concordance/Figure2E_FS_scatter.png", p4,
-       width = 4, height = 4, dpi = 500)
-
-
-# 5. cfDNA mutation count vs serum albumin
-alb_test <- cor.test(
-  dat_base$Blood_Mutation_Count,
-  dat_base$Albumin,
-  method = "spearman"
-)
+# 5. Figure 2H — cfDNA mutation count vs serum albumin
+alb_test <- cor.test(dat_base$Blood_Mutation_Count,
+                     dat_base$Albumin, method = "spearman")
 rho_alb <- round(alb_test$estimate, 2)
 p_alb   <- signif(alb_test$p.value, 2)
+p_alb     <- format_p(p_alb)
 
 p5 <- ggplot(dat_base,
-             aes(x = Albumin,
-                 y = Blood_Mutation_Count,
-                 color = cohort)) +
-  geom_point(size = 2, alpha = 0.7) +
-  geom_smooth(method = "lm", se = FALSE) +
+             aes(Albumin, Blood_Mutation_Count, color = cohort)) +
+  geom_point(size = 2, alpha = 0.8) +
+  geom_smooth(method = "lm", se = FALSE, colour = "black", linetype = "dashed") +
   annotate("text",
            x = Inf, y = Inf,
-           label = paste0("ρ = ", rho_alb, "\n", "p = ", p_alb),
-           hjust = 1.1, vjust = 1.1,
-           size = 3) +
+           label = paste0("ρ = ", rho_alb, "\np = ", p_alb),
+           hjust = 1.1, vjust = 1.1, size = 4) +
+  scale_color_manual(values = cohort_cols, name = "Cohort") +
   labs(
-    x = "Serum albumin (g/L)",
-    y = "cfDNA mutation count",
-    color = "Cohort",
-    title = "Mutation burden vs serum albumin"
+    title = "Mutation count vs serum albumin",
+    x     = "Serum albumin (g/L)",
+    y     = "cfDNA mutation count"
   ) +
-  theme_classic() +
-  theme(legend.position = "none")
+  theme_classic(base_size = 10) +
+  theme(
+    plot.title      = element_text(face = "bold", size = 12),
+    legend.position = "none"
+  )
+
+ggsave("Figure2E_scatter_albumin.png", p5, width = 4, height = 4, dpi = 500)
 
 
-ggsave("Final Tables and Figures/Baseline_concordance/Figure2F_Albumin_scatter.png", p5,
-       width = 4, height = 4, dpi = 500)
+## Combine  
+combined <- p1 + plot_spacer() + p2 + p3 + p4 + p5 +
+  plot_layout(widths  = c(1.7, .2, 1, 1, 1, 1), 
+              nrow = 1, # 
+              heights = c(1)) +   # bottom row slightly shorter
+  plot_annotation(
+    title = "Baseline Concordance and Clinical Correlates",
+    theme = theme(
+      plot.title      = element_text(face = "bold", size = 14, hjust = 0.5),
+      plot.background = element_rect(fill = "white", colour = NA)
+    )
+  )
+
+ggsave("Final Tables and Figures/Baseline_concordance/Figure2D_combined.png",
+       combined,
+       width  = 16,
+       height = 4,
+       dpi    = 600)
+
+
+
+### As facet 
+# 1) define which x‐vars go in which panel
+panels <- tibble(
+  var       = c(
+    "BM_Mutation_Count",
+    "WGS_Tumor_Fraction_Blood_plasma_cfDNA",
+    "FS",
+    "Albumin"
+  ),
+  panel_lab = c(
+    "BM mutation count",
+    "cfDNA tumour fraction\n(ichorCNA)",
+    "Fragment-size score (FS)",
+    "Serum albumin (g/L)"
+  )
+)
+
+# 2) pivot your dat_base into long form
+df_long <- dat_base %>%
+  pivot_longer(
+    cols      = panels$var,
+    names_to  = "var",
+    values_to = "x"
+  ) %>%
+  left_join(panels, by="var")
+
+# 3) compute Spearman ρ and p for each panel
+corr_df <- df_long %>%
+  group_by(panel_lab) %>%
+  summarise(
+    rho = cor(
+      x, Blood_Mutation_Count,
+      method = "spearman",
+      use    = "complete.obs"   # <- NEW
+    ),
+    p   = cor.test(
+      x, Blood_Mutation_Count,
+      method = "spearman",
+      use    = "complete.obs"   # <- cor.test() understands it too
+    )$p.value,
+    .groups = "drop"
+  ) %>%
+  mutate(
+    p_text = if_else(p < 0.01, "p < 0.01", sprintf("p = %.2f", p)),
+    label  = sprintf("ρ = %.2f\n%s", rho, p_text)
+  )
+
+# 4) now make the faceted scatter
+p_combined <- ggplot(df_long, aes(x = x, y = Blood_Mutation_Count, colour = cohort)) +
+  geom_point(size = 2, alpha = 0.7) +
+  geom_smooth(method = "lm", se = FALSE, colour = "black", linetype = "dashed") +
+  facet_wrap(~ panel_lab, scales = "free_x", nrow = 1) +
+  # add the per‐panel ρ/p annotation
+  geom_text(
+    data = corr_df,
+    aes(x = Inf, y = Inf, label = label),
+    hjust = 1.1, vjust = 1.1,
+    size = 3.5,
+    inherit.aes = FALSE
+  ) +
+  scale_color_manual(
+    values = cohort_cols,   # your existing colours
+    labels = c(
+      "Frontline induction-transplant" = "Primary",
+      "Non-frontline"                  = "Test"
+    ),
+    name = "Cohort"
+  ) +
+  labs(
+    title = "Clinical correlates of cfDNA mutation burden",
+    x     = NULL,
+    y     = "cfDNA mutation count"
+  ) +
+  theme_classic(base_size = 11) +
+  theme(
+    plot.title      = element_text(face = "bold", size = 12, hjust = 0.5),
+    strip.text      = element_text(face = "bold", size = 10),
+    axis.text       = element_text(size = 9),
+    legend.position = "top"
+  )
+
+# 5) save
+ggsave("Final Tables and Figures/Baseline_concordance/Figure2D_facetted_scatter.png",
+       p_combined,
+       width  = 10,  # for a 4‐panel row
+       height = 4,
+       dpi    = 600)
+
+
+
+
+
+
+#### Now make a dumbell plot to show concordance between BM and cfDNA
+# 1) reshape, keep only frontline + TF strata
+event_tf_conc <- concordance_tbl %>%
+  filter(cohort == "Frontline induction-transplant",
+         tf_group %in% c("high_tf","low_tf")) %>%
+  transmute(
+    event    = event,
+    TF_group = factor(tf_group,
+                      levels = c("high_tf","low_tf"),
+                      labels = c("High TF","Low TF")),
+    sample   = if_else(wgs_source=="BM_cells","BM","cfDNA"),
+    conc     = concord * 100      # percent
+  )
+
+# 2) extract BM concordance at High TF, to define ordering
+bm_high <- event_tf_conc %>%
+  filter(TF_group=="High TF", sample=="BM") %>%
+  arrange(conc) %>%
+  pull(event)
+
+# 3) apply that ordering to the factor
+event_tf_conc <- event_tf_conc %>%
+  mutate(
+    event = factor(event, levels = bm_high)
+  )
+
+# Get overall
+overall_conc <- concordance_tbl %>%
+  filter(
+    cohort   == "Frontline induction-transplant",
+    tf_group == "all"
+  ) %>%
+  transmute(
+    event  = factor(event, levels = bm_high),    # same ordering
+    sample = if_else(wgs_source=="BM_cells","BM","cfDNA"),
+    conc   = concord * 100                       # percent
+  )
+
+# Overall sensetivity 
+sens_overall <- long %>%
+  filter(cohort   == "Frontline induction-transplant") %>%
+  group_by(event, wgs_source) %>%
+  summarise_concord() %>%         # gives sens, etc
+  ungroup() %>%
+  transmute(
+    event      = factor(event, levels = bm_high),
+    sample     = if_else(wgs_source=="BM_cells","BM","cfDNA"),
+    sens_pct   = sens * 100       # percent
+  )
+
+
+# 4) plot
+p_tf <- ggplot(event_tf_conc,
+               aes(x = conc, y = event, group = event)) +
+  # grey horizontal connector
+  geom_line(color="grey80", size=0.6) +
+  # two TF‐group points
+  geom_point(aes(colour = TF_group), size = 3) +
+  # one facet per sample
+  facet_wrap(~sample, nrow = 1) +
+  scale_colour_viridis_d(
+    option = "D", end = 0.8,
+    name = "Tumour fraction"
+  ) +
+  scale_x_continuous(
+    limits = c(0,100),
+    breaks = seq(0,100, by=25),
+    labels = function(x) paste0(x, "%"),
+    expand = expansion(mult = c(0, 0.02))
+  ) +
+  labs(
+    title = "SV/CNA concordance with FISH by tumour fraction",
+    x     = "Concordance with FISH",
+    y     = NULL
+  ) +
+  theme_classic(base_size = 10) +
+  theme(
+    plot.title      = element_text(face = "bold", size = 12, hjust = 0.5),
+    strip.text      = element_text(face = "bold"),
+    axis.text.y     = element_text(size = 9),
+    axis.text.x     = element_text(size = 8),
+    legend.position = "top",
+    panel.spacing   = unit(1, "lines")
+  )
+
+
+# 5) save
+ggsave("Final Tables and Figures/Baseline_concordance/Fig2B_event_concordance_by_TF.png", p_tf,
+       width = 5, height = 4, dpi = 600)
+
+
+## With sensetivity as red star
+tf_plot_df <- bind_rows(
+  # high/low TF
+  event_tf_conc %>%
+    rename(value = conc) %>%
+    transmute(event, sample, Measure = TF_group, value),
+  # overall sensitivity
+  sens_overall %>%
+    transmute(event, sample,
+              Measure = factor("Overall sensitivity",
+                               levels=c("High TF","Low TF","Overall sensitivity")),
+              value = sens_pct)
+) %>%
+  mutate(
+    Measure = factor(Measure, 
+                     levels=c("High TF","Low TF","Overall sensitivity"))
+  )
+
+# 2) the plot
+pretty_events <- c(
+  T_4_14   = "t(4;14)",
+  T_11_14  = "t(11;14)",
+  T_14_16  = "t(14;16)",
+  AMP_1Q   = "amp(1q)",
+  DEL_17P  = "del(17p)",
+  DEL_1P   = "del(1p)"
+)
+
+p_tf_sens2 <- ggplot(tf_plot_df, aes(x = value, y = event, group = event)) +
+  
+  # grey connector only for the TF strata
+  geom_line(
+    data = filter(tf_plot_df, Measure %in% c("High TF","Low TF")),
+    aes(x = value, y = event, group = event),
+    colour = "grey80", size = 0.6
+  ) +
+  
+  # all three measures as points
+  geom_point(aes(colour = Measure, shape = Measure),
+             size = 3, stroke = 1) +
+  
+  # facet by BM vs cfDNA
+  facet_wrap(~ sample, nrow = 1) +
+  
+  # Nice labels
+  scale_y_discrete(
+    labels = pretty_events
+  ) +
+  # single legend with both colour + shape
+  scale_colour_manual(
+    name   = "Concordance",
+    values = c(
+      "High TF"             = viridis(2, end = 0.8)[1],
+      "Low TF"              = viridis(2, end = 0.8)[2],
+      "Overall sensitivity" = "red"
+    )
+  ) +
+  scale_shape_manual(
+    name   = "Concordance",
+    values = c(
+      "High TF"             = 16,
+      "Low TF"              = 16,
+      "Overall sensitivity" = 4
+    )
+  ) +
+  
+  # nice breathing room at 0% and 100%
+  scale_x_continuous(
+    limits = c(0, 100),
+    breaks = seq(0, 100, 25),
+    labels = paste0(seq(0,100,25), "%"),
+    expand = expansion(mult = c(0.04, 0.04))
+  ) +
+  
+  labs(
+    title = "SV/CNA concordance with FISH (●) and overall sensitivity (x)",
+    x     = "Percent",
+    y     = NULL
+  ) +
+  
+  theme_classic(base_size = 11) +
+  theme(
+    plot.title      = element_text(face = "bold", size = 12, hjust = 0.5),
+    strip.text      = element_text(face = "bold"),
+    axis.text.y     = element_text(size = 9),
+    axis.text.x     = element_text(size = 8),
+    legend.position = "top",
+    legend.box      = "horizontal",
+    panel.spacing.x = unit(1.2, "lines")
+  )
+
+# 3) save
+ggsave(
+  "Final Tables and Figures/Baseline_concordance/Fig2B_event_concordance_with_sensitivity.png",
+  p_tf_sens2, width = 5.5, height = 4, dpi = 600
+)
+
+
+
+
+### Now go more into depth for the cfDNA-BM concordance and plot
+dir <- "Output_tables_2025"
+merged_mut   <- read_rds(file.path(dir, "merged_mut.rds"))
+merged_trans <- read_rds(file.path(dir, "merged_trans.rds"))
+merged_CNA   <- read_rds(file.path(dir, "merged_CNA.rds"))
+
+tf_cutoff <- 0.05   # 5% ctDNA threshold
+
+# 1) Build a per‐event × TF‐group performance table
+## First CNA
+perf_by_tf <- merged_CNA %>%
+  # only frontline, baseline blood samples
+  filter(
+    cohort                == "Frontline induction-transplant",
+    timepoint_info_blood  == "Baseline"
+  ) %>%
+  # assign each sample to Low / High TF
+  mutate(
+    tf_group = case_when(
+      is.na(Tumor_Fraction_blood)    ~ NA_character_,
+      Tumor_Fraction_blood >= tf_cutoff ~ "High TF",
+      TRUE                            ~ "Low TF"
+    )
+  ) %>%
+  
+  # pivot the five CNAs into long form
+  pivot_longer(
+    cols = matches("^(del1p|amp1q|del13q|del17p|hyperdiploid)_(BM|blood)$"),
+    names_to      = c("event","source"),
+    names_pattern = "(.*)_(BM|blood)$",
+    values_to     = "call"
+  ) %>%
+  # normalize calls to logical
+  mutate(
+    call   = call == "Yes",
+    source = if_else(source=="BM",   "BM", "cfDNA")
+  ) %>%
+  # spread BM vs blood side by side
+  pivot_wider(
+    id_cols    = c(Patient, event, tf_group),
+    names_from = source,
+    values_from= call
+  ) %>%
+  
+  # now summarise per‐event × TF‐group
+  group_by(event, tf_group) %>%
+  filter(!is.na(cfDNA), !is.na(BM)) %>% # remove when either is NA
+  summarise(
+    n            = dplyr::n(),                                    # samples
+    tp           = sum(cfDNA & BM,   na.rm=TRUE),
+    tn           = sum(!cfDNA & !BM, na.rm=TRUE),
+    fp           = sum(cfDNA & !BM,  na.rm=TRUE),
+    fn           = sum(!cfDNA & BM,  na.rm=TRUE),
+    sensitivity  = tp/(tp + fn),
+    specificity  = tn/(tn + fp),
+    concordance  = (tp + tn)/n,
+    .groups      = "drop"
+  )
+
+# 2) Add the “All”‐TF row for each event
+perf_all <- perf_by_tf %>%
+  filter(!is.na(tf_group)) %>%         # drop any NA‐TF rows
+  group_by(event) %>%
+  summarise(
+    n            = sum(n),
+    tp           = sum(tp),
+    tn           = sum(tn),
+    fp           = sum(fp),
+    fn           = sum(fn),
+    sensitivity  = tp/(tp + fn),
+    specificity  = tn/(tn + fp),
+    concordance  = (tp + tn)/n,
+    .groups      = "drop"
+  ) %>%
+  mutate(tf_group = "All")
+
+perf_tf_complete <- bind_rows(perf_by_tf, perf_all) %>%
+  mutate(
+    tf_group = factor(tf_group, levels = c("Low TF","High TF","All"))
+  )
+
+
+### Now redo for translocations 
+merged_trans <- merged_trans %>%
+  mutate(
+    Patient = str_remove(Patient_Timepoint, "_Baseline$")
+  )
+
+perf_by_tf <- merged_trans %>%
+  # only frontline, baseline blood samples
+  filter(
+    cohort                == "Frontline induction-transplant",
+    timepoint_info_blood  == "Baseline"
+  ) %>%
+  # assign each sample to Low / High TF
+  mutate(
+    tf_group = case_when(
+      is.na(Tumor_Fraction_blood)    ~ NA_character_,
+      Tumor_Fraction_blood >= tf_cutoff ~ "High TF",
+      TRUE                            ~ "Low TF"
+    )
+  ) %>%
+  
+  # pivot the five CNAs into long form
+  pivot_longer(
+    cols = matches("^(IGH_MAF|IGH_MYC|IGH_CCND1|IGH_FGFR3)_(BM|blood)$"),
+    names_to      = c("event","source"),
+    names_pattern = "(.*)_(BM|blood)$",
+    values_to     = "call"
+  ) %>%
+  # normalize calls to logical
+  mutate(
+    call   = call == "Yes",
+    source = if_else(source=="BM",   "BM", "cfDNA")
+  ) %>%
+  # spread BM vs blood side by side
+  pivot_wider(
+    id_cols    = c(Patient, event, tf_group),
+    names_from = source,
+    values_from= call
+  ) %>%
+  
+  # now summarise per‐event × TF‐group
+  group_by(event, tf_group) %>%
+  filter(!is.na(cfDNA), !is.na(BM)) %>% # remove when either is NA
+  summarise(
+    n            = dplyr::n(),                                    # samples
+    tp           = sum(cfDNA & BM,   na.rm=TRUE),
+    tn           = sum(!cfDNA & !BM, na.rm=TRUE),
+    fp           = sum(cfDNA & !BM,  na.rm=TRUE),
+    fn           = sum(!cfDNA & BM,  na.rm=TRUE),
+    sensitivity  = tp/(tp + fn),
+    specificity  = tn/(tn + fp),
+    concordance  = (tp + tn)/n,
+    .groups      = "drop"
+  )
+
+# 2) Add the “All”‐TF row for each event
+perf_all <- perf_by_tf %>%
+  filter(!is.na(tf_group)) %>%         # drop any NA‐TF rows
+  group_by(event) %>%
+  summarise(
+    n            = sum(n),
+    tp           = sum(tp),
+    tn           = sum(tn),
+    fp           = sum(fp),
+    fn           = sum(fn),
+    sensitivity  = tp/(tp + fn),
+    specificity  = tn/(tn + fp),
+    concordance  = (tp + tn)/n,
+    .groups      = "drop"
+  ) %>%
+  mutate(tf_group = "All")
+
+perf_tf_complete_trans <- bind_rows(perf_by_tf, perf_all) %>%
+  mutate(
+    tf_group = factor(tf_group, levels = c("Low TF","High TF","All"))
+  )
+
+## Now bind the two rows together 
+perf_tf_complete <- bind_rows(perf_tf_complete, perf_tf_complete_trans)
+
+## Add the mutations 
+concordance_global$event <- "Mutations"
+tmp <- concordance_global %>% filter(Cohort == "Frontline")
+tmp <- tmp %>% 
+  mutate(
+    tf_group = case_when(
+      tf_group == "high_tf" ~ "High TF",
+      tf_group == "low_tf"  ~ "Low TF",
+      tf_group == "all"     ~ "All",
+      TRUE             ~ tf_group
+    )
+  )
+
+perf_tf_complete <- bind_rows(perf_tf_complete, tmp)
+
+
+## Now make plot
+# 1) reshape, keep only frontline + TF strata
+event_conc <- perf_tf_complete %>%
+  filter(tf_group %in% c("High TF","Low TF")) %>%
+  transmute(
+    event    = event,
+    TF_group = factor(tf_group,
+                      levels = c("High TF","Low TF"),
+                      labels = c("High TF","Low TF")),
+    conc     = concordance * 100      # percent
+  )
+
+# 2) extract BM concordance at High TF, to define ordering
+bm_high <- event_conc %>%
+  filter(TF_group=="High TF") %>%
+  arrange(conc) %>%
+  pull(event)
+
+# 3) apply that ordering to the factor
+event_conc <- event_conc %>%
+  mutate(
+    event = factor(event, levels = bm_high)
+  )
+
+# Get overall
+overall_conc <- perf_tf_complete %>%
+  filter(tf_group %in% c("All")) %>%
+  transmute(
+    event  = factor(event, levels = bm_high),    # same ordering
+    conc     = concordance * 100      # percent
+  )
+
+# Overall sensetivity 
+sens_overall <- perf_tf_complete %>%
+  filter(tf_group %in% c("All")) %>%
+  transmute(
+    event  = factor(event, levels = bm_high),    # same ordering
+    sens_pct   = sensitivity* 100      # percent
+  )
+  
+## With sensetivity as red star
+tf_plot_df_BM <- bind_rows(
+  # high/low TF
+  event_conc %>%
+    rename(value = conc) %>%
+    transmute(event, Measure = TF_group, value),
+  # overall sensitivity
+  sens_overall %>%
+    transmute(event,
+              Measure = factor("Overall sensitivity",
+                               levels=c("High TF","Low TF","Overall sensitivity")),
+              value = sens_pct)
+) %>%
+  mutate(
+    Measure = factor(Measure, 
+                     levels=c("High TF","Low TF","Overall sensitivity"))
+  )
+
+# 2) the plot
+pretty_events <- c(
+  amp1q        = "amp(1q)",
+  del13q       = "del(13q)",
+  del17p       = "del(17p)",
+  del1p        = "del(1p)",
+  hyperdiploid = "hyperdiploid",
+  IGH_CCND1    = "t(11;14) IGH-CCND1",
+  IGH_FGFR3    = "t(4;14) IGH-FGFR3",
+  IGH_MAF      = "t(14;16) IGH-MAF",
+  IGH_MYC      = "t(8;14) IGH-MYC",
+  Mutations      = "Mutations"
+  
+)
+
+p_tf_sens <- ggplot(tf_plot_df_BM, aes(x = value, y = event, group = event)) +
+  
+  # grey connector only for the TF strata
+  geom_line(
+    data = filter(tf_plot_df_BM, Measure %in% c("High TF","Low TF")),
+    aes(x = value, y = event, group = event),
+    colour = "grey80", size = 0.6
+  ) +
+  
+  # all three measures as points
+  geom_point(aes(colour = Measure, shape = Measure),
+             size = 3, stroke = 1) +
+
+  # Nice labels
+  scale_y_discrete(
+    labels = pretty_events
+  ) +
+  # single legend with both colour + shape
+  scale_colour_manual(
+    name   = "Concordance",
+    values = c(
+      "High TF"             = viridis(2, end = 0.8)[1],
+      "Low TF"              = viridis(2, end = 0.8)[2],
+      "Overall sensitivity" = "red"
+    )
+  ) +
+  scale_shape_manual(
+    name   = "Concordance",
+    values = c(
+      "High TF"             = 16,
+      "Low TF"              = 16,
+      "Overall sensitivity" = 4
+    )
+  ) +
+  
+  # nice breathing room at 0% and 100%
+  scale_x_continuous(
+    limits = c(0, 100),
+    breaks = seq(0, 100, 25),
+    labels = paste0(seq(0,100,25), "%"),
+    expand = expansion(mult = c(0.04, 0.04))
+  ) +
+  
+  labs(
+    title = "BM vs cfDNA SV/CNA concordance (●) and sensitivity (x)",
+    x     = "Percent",
+    y     = NULL
+  ) +
+  
+  theme_classic(base_size = 11) +
+  theme(
+    plot.title      = element_text(face = "bold", size = 12, hjust = 0.5),
+    strip.text      = element_text(face = "bold"),
+    axis.text.y     = element_text(size = 9),
+    axis.text.x     = element_text(size = 8),
+    legend.position = "top",
+    legend.box      = "horizontal",
+    panel.spacing.x = unit(1.2, "lines")
+  )
+
+# 3) save
+ggsave(
+  "Final Tables and Figures/Baseline_concordance/Fig2C_event_concordance_between_BM_and_cfDNA_with_sensitivity.png",
+  p_tf_sens, width = 5, height = 4, dpi = 600
+)
+
+
+
+
+
+### Edit so it is 3 panel - one concordance, one sensetivity, one specificity 
+# 1.  Reshape:  Concordance, Sensitivity, Specificity  ×  TF-group
+perf_long <- perf_tf_complete %>%
+  filter(tf_group %in% c("High TF", "Low TF")) %>%         # keep only strata
+  pivot_longer(
+    cols      = c(concordance, sensitivity, specificity),
+    names_to  = "Metric",
+    values_to = "Value"
+  ) %>%
+  mutate(
+    Percent  = Value * 100,
+    TF_group = factor(tf_group, levels = c("High TF", "Low TF"))
+  )
+
+
+# 2.  Event ordering (by High-TF Concordance)
+event_order <- perf_long %>%
+  filter(Metric == "concordance", TF_group == "High TF") %>%
+  arrange(Percent) %>%
+  pull(event)
+
+perf_long <- perf_long %>%
+  mutate(event = factor(event, levels = event_order))
+
+# 4.  Plot
+p_3panel <- ggplot(perf_long,
+                   aes(x = Percent, y = event, group = event)) +
+  # grey connector between High / Low TF
+  geom_line(aes(group = interaction(event, Metric)),
+            colour = "grey80", linewidth = 0.6) +
+  # points for the two strata
+  geom_point(aes(colour = TF_group, shape = TF_group),
+             size = 3, stroke = 0.8) +
+  facet_wrap(~ Metric, nrow = 1,
+             labeller = labeller(Metric = c(
+               concordance = "Concordance",
+               sensitivity = "Sensitivity",
+               specificity = "Specificity"
+             ))) +
+  scale_y_discrete(labels = pretty_events) +
+  scale_x_continuous(
+    limits = c(0, 100),
+    breaks = seq(0, 100, 25),
+    labels = function(x) paste0(x, "%"),
+    expand = expansion(mult = c(0.05, 0.05))
+  ) +
+  scale_colour_manual(
+    values = c("High TF" = viridis(2, end = 0.8)[1],
+               "Low TF"  = viridis(2, end = 0.8)[2]),
+    name   = "Tumour fraction"
+  ) +
+  scale_shape_manual(
+    values = c("High TF" = 16, "Low TF" = 16),
+    name   = "Tumour fraction"
+  ) +
+  labs(
+    title = "BM vs cfDNA performance by ctDNA fraction",
+    x     = "Percent",
+    y     = NULL
+  ) +
+  theme_classic(base_size = 11) +
+  theme(
+    plot.title      = element_text(face = "bold", hjust = 0.5),
+    strip.text      = element_text(face = "bold"),
+    axis.text.y     = element_text(size = 9),
+    axis.text.x     = element_text(size = 8),
+    legend.position = "top",
+    legend.box      = "horizontal",
+    panel.spacing.x = unit(1.2, "lines")
+  )
+
+ggsave(
+  "Final Tables and Figures/Baseline_concordance/Fig2C_BM_cfDNA_conc_sens_spec_byTF.png",
+  p_3panel, width = 5.5, height = 4, dpi = 600
+)
+
+
+### Export additional important things 
+# =====================================================================
+# FINAL EXPORTS – put this block right before the script ends
+# =====================================================================
+outdir <- "Final Tables and Figures/Baseline_concordance/"
+
+## 1. R-objects (RDS) --------------------------------------------------
+saveRDS(long,                 file.path(outdir, "FISH_WGS_long_call_table.rds"))
+saveRDS(perf_tf_complete,     file.path(outdir, "BM_cfDNA_performance_byTF.rds"))
+saveRDS(perf_long,            file.path(outdir, "BM_cfDNA_performance_long_forPlot.rds"))
+saveRDS(tf_plot_df,            file.path(outdir, "FISH_BM_cfDNA_performance.rds"))
+
+## 2. Simple CSV / XLSX tables ----------------------------------------
+readr::write_csv(baseline_summary,
+                 file.path(outdir, "baseline_mutation_summary.csv"))
+
+readr::write_csv(pvals,
+                 file.path(outdir, "baseline_mutation_count_pvals.csv"))
+readr::write_csv(mean_jaccard,
+                 file.path(outdir, "mean_jaccard_baseline.csv"))
+
+## 3. (Optional) one XLSX workbook with the key performance tables -----
+writexl::write_xlsx(
+  list(
+    concordance_all          = concordance_tbl,
+    concordance_byTF_cohort  = results2,
+    BMcfDNA_perf_byTF        = perf_tf_complete,
+    FISH_perf = tf_plot_df
+  ),
+  path = file.path(outdir, "SV_CNA_performance_summary.xlsx")
+)
+
+message("✓ Additional outputs written to ", outdir)
+

@@ -424,6 +424,14 @@ spore_chemo_events <- all_events %>%
 # Export to CSV
 write_csv(spore_chemo_events, "spore_chemo_events.csv")
 
+## Export for Esteban to get more info 
+spore_all_events <- all_events %>%
+  filter(grepl("^SPORE", patient)) %>% 
+  mutate(end = NA) %>% 
+  filter(details != "ASCT")
+
+# Export to CSV
+write_csv(spore_all_events, "spore_all_events.csv")
 
 
  #### Now assemble plot 
