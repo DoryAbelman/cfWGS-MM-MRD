@@ -811,6 +811,9 @@ col_order      <- ord_df$Sample
 col_cohort_ord <- ord_df$Cohort
 col_tf_ord     <- ord_df$TumourFraction
 
+## Save it 
+write.csv(ord_df, "ordering_df_for_Figure_1.csv", row.names = F)
+
 # rename  cohort factor levels
 col_cohort_ord <- factor(
   col_cohort_ord,

@@ -892,7 +892,270 @@ ggsave("swimplot_combined_cohorts_wide_v2.png", p_combined,
 
 
 
-## Above is figure 1B
+## Above is figure 1A swim plot 
+
+
+
+
+#### Remove EK-09 pre-treatment and instead add star
+## Add other features to make nice 
+## Need to specify which patients have baseline BM and not 
+### ──────────────────────────────────────────────────────────────
+### 1.  Prepare the tumour-fraction table  (ord_df)
+### ──────────────────────────────────────────────────────────────
+# A) Standardise patient names (strip the "_Baseline")
+ord_df <- read.csv("ordering_df_for_Figure_1.csv")
+ord_df <- ord_df %>%
+  mutate(
+    patient = sub("_Baseline$", "", Sample),
+    
+    # map your 'Cohort' to the swim-plot cohort names
+    cohort  = recode(Cohort,
+                     "Primary" = "Front-line cohort",
+                     "Test"    = "Non-front-line cohort"),
+    
+    # sample-type flag for the y-axis label
+    sample_type = case_when(
+      Paired                     ~ "Paired",
+      !Paired & is.na(TumourFraction) ~ "BM only",
+      TRUE                       ~ "Blood only"
+    )
+  )
+
+### ──────────────────────────────────────────────────────────────
+### 2.  Re-order patients by cohort → descending tumour-fraction
+### ──────────────────────────────────────────────────────────────
+patient_order_combined <- ord_df %>%
+  mutate(
+    # NAs go to the very bottom of each cohort
+    sort_tf = if_else(is.na(TumourFraction), -Inf, TumourFraction),
+    cohort  = factor(cohort,
+                     levels = c("Front-line cohort", "Non-front-line cohort"))
+  ) %>%
+  arrange(cohort, desc(sort_tf)) %>%
+  mutate(y = row_number()) %>%
+  select(patient, cohort, y, TumourFraction, sample_type)
+
+# tack the new 'y' onto events
+events_combined <- events %>%
+  left_join(patient_order_combined, by = c("patient", "cohort")) %>%
+  mutate(y = y.y) %>%      # pull in the new y
+  select(-y.x, -y.y)       # drop the old and the suffixed copy
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 2) Tumour‐fraction strip
+# ─────────────────────────────────────────────────────────────────────────────
+ann_tf <- ggplot(patient_order_combined,
+                 aes(x = TumourFraction, y = y)) +
+  geom_path(colour = "grey70", size = 0.4) +
+  geom_point(colour = "grey20", size = 2) +
+  scale_x_continuous(
+    name   = "cfDNA tumour-fraction",
+    limits = c(0, max(patient_order_combined$TumourFraction, na.rm = TRUE)*1.05),
+    expand = c(0,0)
+  ) +
+  scale_y_reverse(
+    breaks = patient_order_combined$y,
+    labels = NULL
+  ) +
+  facet_grid(rows = vars(cohort), scales = "free_y", space = "free_y") +
+  theme_minimal(base_size = 8) +
+  theme(
+    panel.grid      = element_blank(),
+    axis.text.y     = element_blank(),
+    axis.title.y    = element_blank(),
+    axis.ticks.y    = element_blank(),
+    strip.text.y    = element_blank(),
+    plot.margin     = margin(r = 1, l = 1)
+  )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 3) Cohort colour bar
+# ─────────────────────────────────────────────────────────────────────────────
+cohort_cols <- c(
+  "Front-line cohort"     = "#1f77b4",
+  "Non-front-line cohort" = "#ff7f0e"
+)
+
+ann_cohort <- ggplot(patient_order_combined,
+                     aes(x = 0, y = y, fill = cohort)) +
+  geom_tile(height = 0.9) +
+  scale_fill_manual(
+    values = cohort_cols,
+    name   = "Cohort"
+  ) +
+  scale_y_reverse(
+    breaks = patient_order_combined$y,
+    labels = NULL
+  ) +
+  facet_grid(rows = vars(cohort), scales = "free_y", space = "free_y") +
+  scale_x_continuous(NULL, limits = c(-0.5,0.5), expand = c(0,0)) +
+  theme_void(base_size = 8) +
+  theme(
+    legend.position = "bottom",
+    plot.margin     = margin(r = 1, l = 1)
+  )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 4) Paired‐status bar
+# ─────────────────────────────────────────────────────────────────────────────
+paired_cols <- c(
+  "TRUE"  = "#2ca02c",
+  "FALSE" = "#d62728"
+)
+
+ann_paired <- ggplot(patient_order_combined,
+                     aes(x = 0, y = y, fill = factor(Paired))) +
+  geom_tile(height = 0.9) +
+  scale_fill_manual(
+    values = paired_cols,
+    name   = "Paired?"
+  ) +
+  scale_y_reverse(
+    breaks = patient_order_combined$y,
+    labels = paste0(patient_order_combined$patient)  # labels only here
+  ) +
+  facet_grid(rows = vars(cohort), scales = "free_y", space = "free_y") +
+  scale_x_continuous(NULL, limits = c(-0.5,0.5), expand = c(0,0)) +
+  theme_void(base_size = 8) +
+  theme(
+    axis.text.y     = element_text(size = 6, hjust = 1),
+    legend.position = "bottom",
+    plot.margin     = margin(r = 1, l = 1)
+  )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 5) Your swim‐plot (rebuilt on events_combined)
+# ─────────────────────────────────────────────────────────────────────────────
+p_swim <- ggplot() +
+  geom_segment(
+    data = events_combined %>% filter(is_interval, event == "Chemotherapy"),
+    aes(x = start_day, xend = end_day, y = y, yend = y, colour = chemo_group),
+    size = 5, lineend = "round"
+  ) +
+  geom_segment(
+    data = events_combined %>% filter(is_interval, event != "Chemotherapy"),
+    aes(x = start_day, xend = end_day, y = y, yend = y),
+    colour = "black", size = 5, lineend = "round"
+  ) +
+  geom_point(
+    data = events_combined %>% filter(!is_interval, event %in% names(shape_map)),
+    aes(x = start_day, y = y, shape = event),
+    colour = "black", fill = "white", stroke = 0.35, size = 2.6
+  ) +
+  scale_colour_manual(values = chemo_cols, name = "Chemotherapy regimen", drop = FALSE) +
+  scale_shape_manual(values = shape_map,   name = "Point events",          drop = FALSE) +
+  scale_x_continuous("Days from baseline", expand = expansion(mult = c(0.02,0.02))) +
+  scale_y_reverse(
+    breaks = patient_order_combined$y,
+    labels = patient_order_combined$patient,
+    name   = "Patient"
+  ) +
+  theme_minimal(base_size = 10) +
+  theme(
+    panel.grid.major.y = element_blank(),
+    panel.grid.minor.y = element_blank(),
+    axis.text.y        = element_blank(),  # hidden here, shown in ann_paired
+    axis.title.x       = element_text(size = 12, face = "bold"),
+    axis.title.y       = element_text(size = 12, face = "bold"),
+    legend.position    = "bottom",
+    legend.direction   = "horizontal",
+    legend.title       = element_text(size = 10),
+    legend.text        = element_text(size = 9),
+    legend.spacing.x   = unit(0.3, "cm")
+  ) +
+  guides(
+    colour = guide_legend(nrow = 2, byrow = TRUE),
+    shape  = guide_legend(nrow = 2, byrow = TRUE)
+  ) +
+  labs(title = "Swim Plot of Treatment Timelines") +
+  theme(plot.title = element_text(size = 16, face = "bold", hjust = 0.5))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 6) Patchwork: three left panels + swim plot
+# ─────────────────────────────────────────────────────────────────────────────
+final_plot <- ann_tf + ann_cohort + ann_paired + p_swim +
+  plot_layout(widths = c(0.25, 0.06, 0.08, 0.61), guides = "collect") &
+  theme(legend.position = "bottom")
+
+ggsave("Final Tables and Figures/swimplot_with_3_annotations.png",
+       final_plot,
+       width  = 14,
+       height = 10,
+       dpi    = 500)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+### ──────────────────────────────────────────────────────────────
+### 3.  Annotation panel  (left strip with coloured dots)
+### ──────────────────────────────────────────────────────────────
+ann <- ggplot(patient_order_combined,
+              aes(x = 0, y = y, colour = TumourFraction)) +
+  geom_point(size = 3) +
+  scale_colour_gradientn(
+    colours = c("#2166AC","#67A9CF","#D1E5F0",
+                "#FDDBC7","#EF8A62","#B2182B"),
+    na.value = "grey80",
+    name     = "Baseline cfDNA\nTumour-fraction"
+  ) +
+  scale_y_reverse(
+    breaks = patient_order_combined$y,
+    labels = paste0(patient_order_combined$patient,
+                    " (", patient_order_combined$sample_type, ")")
+  ) +
+  facet_grid(rows = vars(cohort), scales = "free_y", space = "free_y") +
+  theme_void(base_size = 9) +
+  theme(
+    strip.text.y    = element_blank(),
+    axis.text.y     = element_text(size = 6, hjust = 1),
+    legend.position = "bottom"
+  )
+
+### ──────────────────────────────────────────────────────────────
+### 4.  Update the swim-plot y-axis to use the same breaks
+### ──────────────────────────────────────────────────────────────
+p_combined <- p_combined +
+  scale_y_reverse(
+    breaks = patient_order_combined$y,
+    labels = patient_order_combined$patient,   # plain IDs (annotation panel shows extras)
+    name   = NULL
+  )
+
+### ──────────────────────────────────────────────────────────────
+### 5.  Stitch annotation + swim plot
+### ──────────────────────────────────────────────────────────────
+final_plot <- ann + p_combined +
+  plot_layout(widths = c(0.22, 0.78), guides = "collect") &
+  theme(legend.position = "bottom")
+
+ggsave("Final Tables and Figures/swimplot_with_tf_annotation_updated.png",
+       plot   = final_plot,
+       width  = 14, height = 10, dpi = 500)
+
+
 
 
 
