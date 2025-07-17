@@ -777,13 +777,13 @@ cohort_label <- cohort_df$Cohort[match(patients, cohort_df$Patient)]
 
 # 2. Map to desired labels
 col_cohort <- case_when(
-  cohort_label == "Frontline"      ~ "Primary",
+  cohort_label == "Frontline"      ~ "Train",
   cohort_label == "Non-frontline" ~ "Test",
   TRUE                             ~ NA_character_
 )
 
 # 3. Convert to factor with defined levels
-col_cohort <- factor(col_cohort, levels = c("Primary", "Test"))
+col_cohort <- factor(col_cohort, levels = c("Train", "Test"))
 
 # 4. Check distribution
 table(col_cohort, useNA = "ifany")
@@ -811,14 +811,39 @@ col_order      <- ord_df$Sample
 col_cohort_ord <- ord_df$Cohort
 col_tf_ord     <- ord_df$TumourFraction
 
+ord_df <- ord_df %>%
+  mutate(
+    patient = sub("_Baseline$", "", Sample),
+    
+    # map your 'Cohort' to the swim-plot cohort names
+    cohort  = recode(Cohort,
+                     "Train" = "Front-line cohort",
+                     "Test"    = "Non-front-line cohort"),
+    
+    # sample-type flag for the y-axis label
+    sample_type = case_when(
+      Paired                     ~ "Paired",
+      !Paired & is.na(TumourFraction) ~ "BM only",
+      TRUE                       ~ "Blood only"
+    )
+  )
+
+col_sample_type <- ord_df$sample_type
+
+# 3) make it a factor in the right plotting order
+col_sample_type <- factor(
+  col_sample_type,
+  levels = c("Blood only", "BM only", "Paired")
+)
+
 ## Save it 
 write.csv(ord_df, "ordering_df_for_Figure_1.csv", row.names = F)
 
 # rename  cohort factor levels
 col_cohort_ord <- factor(
   col_cohort_ord,
-  levels = c("Primary", "Test"),
-  labels = c("Primary", "Test")
+  levels = c("Train", "Test"),
+  labels = c("Train", "Test")
 )
 
 # 3) re‐order your matrices
@@ -887,7 +912,7 @@ patient_ids <- extract_pid(all_cols)
 bm_counts    <- dat_base$BM_Mutation_Count[    match(patient_ids, dat_base$Patient) ]
 blood_counts <- dat_base$Blood_Mutation_Count[ match(patient_ids, dat_base$Patient) ]
 
-# 2) set up continuous palette for all muts (you can pick your own colours):
+# 2) set up continuous palette for all muts:
 library(circlize)
 all_counts <- c(bm_counts, blood_counts)
 qnts       <- quantile(all_counts, probs = c(0, 0.5, 1), na.rm = TRUE)
@@ -902,6 +927,7 @@ count_pal <- colorRamp2(
 # 7b) Re-build the top annotation to include a little barplot of mutation counts
 top_ha <- HeatmapAnnotation(
   Cohort         = col_cohort_ord,
+  `Samples`  = col_sample_type, 
   `cfDNA Tumour\nFraction` = anno_points(
     col_tf_ord,
     axis = TRUE,            # this one is valid for anno_points
@@ -920,11 +946,21 @@ top_ha <- HeatmapAnnotation(
     na_col = "grey90"
   ),
   col = list(
-    Cohort = c(`Primary` = "#3182bd", `Test` = "#e6550d")
+    Cohort = c(`Train` = "#3182bd", `Test` = "#e6550d"),
+    `Samples` = c(
+      "Blood only" = "#CC6677",
+      "BM only"    = "#1f77b4",
+      "Paired"     = "#9467bd"
+    )
   ),
   annotation_name_side = "left",
   annotation_name_rot  = 0,
-  show_annotation_name = TRUE
+  show_annotation_name = TRUE,
+  show_legend = c(
+    Cohort         = FALSE,
+    Samples        = FALSE,
+    `cfDNA Tumour\nFraction` = FALSE
+  )
 )
 
 
@@ -954,6 +990,18 @@ lgd_count <- Legend(
   col_fun = count_pal,
   at      = qnts,
   labels  = round(qnts,2),
+  direction = "vertical"
+)
+
+# legend for samples avaialble 
+lgd_sampletype <- Legend(
+  title     = "Samples available", 
+  at        = c("Blood only", "BM only", "Paired"),
+  legend_gp = gpar(fill = c(
+    "Blood only" = "#CC6677",
+    "BM only"    = "#1f77b4",
+    "Paired"     = "#9467bd"
+  )),
   direction = "vertical"
 )
 
@@ -1140,7 +1188,7 @@ lgd_fish <- Legend(
 
 #  Build a "sample type" legend showing the triangle orientations
 # Not exact but works
-lgd_sampletype <- Legend(
+lgd_sampletype2 <- Legend(
   title     = "Sample type",
   labels    = c("Bone marrow", "cfDNA"),
   type      = "points",
@@ -1150,11 +1198,11 @@ lgd_sampletype <- Legend(
 )
 
 # save
-png("overlay_heatmap_BM_vs_cfDNA_updated_with_FISH_6.png", width = 14, height = 8, units = "in", res = 450)
+png("Final Tables and Figures/Figure_1B_overlay_heatmap_BM_vs_cfDNA_updated_with_FISH_7.png", width = 14, height = 8, units = "in", res = 450)
 draw(
   overlay_ht_2,
   annotation_legend_side = "right",  # where cohort legend goes
-  heatmap_legend_list    = list(lgd_mut, lgd_cna, lgd_count, lgd_sampletype, lgd_fish),
+  heatmap_legend_list    = list(lgd_sampletype, lgd_mut, lgd_cna, lgd_count, lgd_sampletype2, lgd_fish),
 )
 dev.off()
 

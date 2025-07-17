@@ -456,7 +456,547 @@ ggsave(
 )
 
 
-## Now for blood 
+### Edit style 
+# ─────────────────────────────────────────────────────────────
+# Prep: derive a patient-level relapse flag (any TP ≤180d)
+# ─────────────────────────────────────────────────────────────
+plot_df_pat <- plot_df %>%
+  group_by(Patient) %>%
+  mutate(
+    patient_relapse180 = any(replace_na(relapse_within_180, FALSE))
+  ) %>%
+  ungroup() %>%
+  mutate(
+    # make it an ordered factor for consistent legend / facet order
+    patient_relapse180 = factor(patient_relapse180,
+                                levels = c(FALSE, TRUE))
+  )
+
+# nice labels for the patient-level factor
+patient_relapse_labs <- c(
+  `FALSE` = "No relapse ≤180d",
+  `TRUE`  = "Relapse ≤180d (last TP)"
+)
+patient_relapse_labs_short <- c(
+  `FALSE` = "No relapse ≤180d",
+  `TRUE`  = "Relapse ≤180d"
+)
+
+
+
+# ===================================================================
+# VERSION 1
+# Lines coloured by *patient-level* relapse (any TP ≤180d)
+# (All points inherit the same colour as the line.)
+# ===================================================================
+p_traj_patientline <- ggplot(
+  plot_df_pat,
+  aes(x = Weeks_Since_Baseline, y = Value, group = Patient,
+      colour = patient_relapse180)
+) +
+  geom_line(alpha = 0.6) +
+  geom_point(size = 1.5, alpha = 0.8) +
+  facet_wrap(
+    ~ Metric,
+    scales   = "free_y",
+    ncol     = 4,
+    labeller = labeller(Metric = custom_labels)
+  ) +
+  scale_color_manual(
+    values = c(`FALSE` = "black", `TRUE` = "red"),
+    labels = patient_relapse_labs,
+    name   = "Patient relapse status"
+  ) +
+  labs(
+    x     = "Weeks Since Baseline",
+    y     = "Value",
+    title = "Longitudinal trajectories of MRD metrics from baseline BM mutation profiles"
+  ) +
+  theme_classic(base_size = 11) +
+  theme(
+    legend.position  = "bottom",
+    strip.background = element_rect(fill = "grey95", colour = NA)
+  )
+
+ggsave(
+  filename = file.path(outdir, "Fig3A_metrics_trajectories_BM_byPatientLine.png"),
+  plot     = p_traj_patientline,
+  device   = "png",
+  width    = 12,
+  height   = 4,
+  dpi      = 600
+)
+
+
+
+# ===================================================================
+# VERSION 2
+# Facet by patient-level relapse status *and* by Metric.
+# ===================================================================
+patient_relapse_labs_short <- c(
+  `FALSE` = "No relapse ≤180d",
+  `TRUE`  = "Relapse ≤180d"
+)
+
+# 1) Prep: patient-level flag
+plot_df_pat <- plot_df %>%
+  group_by(Patient) %>%
+  mutate(patient_relapse180 = any(replace_na(relapse_within_180, FALSE))) %>%
+  ungroup() %>%
+  mutate(
+    patient_relapse180 = factor(patient_relapse180, levels = c(FALSE, TRUE)),
+    relapse_within_180 = replace_na(relapse_within_180, FALSE)
+  )
+
+# 2) Build the two mini‑plots
+
+## A) Cumulative VAF
+df_cvaf <- filter(plot_df_pat, Metric == "cVAF")
+p_cvaf <- ggplot(df_cvaf, aes(Weeks_Since_Baseline, Value, group = Patient)) +
+  geom_line(color = "black", alpha = 0.6) +
+  geom_point(aes(color = relapse_within_180),
+             size = 1.8, alpha = 0.8) +
+  facet_wrap(~ patient_relapse180, nrow = 1,
+             labeller = labeller(patient_relapse180 = patient_relapse_labs_short)) +
+  scale_color_manual(
+    values = c(`FALSE` = "black", `TRUE` = "red"),
+    labels = c(`FALSE` = "No relapse ≤180d", `TRUE` = "Relapse ≤180d"),
+    name   = NULL
+  ) +
+  labs(
+    title = custom_labels["cVAF"],
+    x     = "Weeks Since Baseline",
+    y     = "Value"
+  ) +
+  theme_classic(base_size = 11) +
+  theme(strip.background = element_rect(fill = "grey95", colour = NA))
+
+## B) Proportion of Sites Detected
+df_sites <- filter(plot_df_pat, Metric == "sites")
+p_sites <- ggplot(df_sites, aes(Weeks_Since_Baseline, Value, group = Patient)) +
+  geom_line(color = "black", alpha = 0.6) +
+  geom_point(aes(color = relapse_within_180),
+             size = 1.8, alpha = 0.8) +
+  facet_wrap(~ patient_relapse180, nrow = 1,
+             labeller = labeller(patient_relapse180 = patient_relapse_labs_short)) +
+  scale_color_manual(
+    values = c(`FALSE` = "black", `TRUE` = "red"),
+    labels = c(`FALSE` = "No relapse ≤180d", `TRUE` = "Relapse ≤180d"),
+    name   = NULL
+  ) +
+  labs(
+    title = custom_labels["sites"],
+    x     = "Weeks Since Baseline",
+    y     = "Value"
+  ) +
+  theme_classic(base_size = 11) +
+  theme(strip.background = element_rect(fill = "grey95", colour = NA))
+
+# 3) Combine them side by side
+p_combined <- p_cvaf + p_sites + 
+  plot_annotation(
+    title = "Longitudinal trajectories of MRD metrics from baseline BM mutation profiles",
+    theme = theme(
+      plot.title = element_text(size = 18, face = "bold", hjust = 0.5)
+    )
+  ) & 
+  theme(legend.position = "bottom")
+
+# 4) Save
+ggsave(
+  filename = file.path(outdir, "Fig3A_sideBySide_lockedY.png"),
+  plot     = p_combined,
+  width    = 12,   # 4 panels across
+  height   = 4,
+  dpi      = 600
+)
+
+
+# 2) Build the two mini‑plots
+
+## A) Cumulative VAF
+df_cvaf <- filter(plot_df_pat, Metric == "cVAF_z")
+p_cvaf <- ggplot(df_cvaf, aes(Weeks_Since_Baseline, Value, group = Patient)) +
+  geom_line(color = "black", alpha = 0.6) +
+  geom_point(aes(color = relapse_within_180),
+             size = 1.8, alpha = 0.8) +
+  facet_wrap(~ patient_relapse180, nrow = 1,
+             labeller = labeller(patient_relapse180 = patient_relapse_labs_short)) +
+  scale_color_manual(
+    values = c(`FALSE` = "black", `TRUE` = "red"),
+    labels = c(`FALSE` = "No relapse ≤180d", `TRUE` = "Relapse ≤180d"),
+    name   = NULL
+  ) +
+  labs(
+    title = custom_labels["cVAF_z"],
+    x     = "Weeks Since Baseline",
+    y     = "Value"
+  ) +
+  theme_classic(base_size = 11) +
+  theme(strip.background = element_rect(fill = "grey95", colour = NA))
+
+## B) Proportion of Sites Detected
+df_sites <- filter(plot_df_pat, Metric == "sites_z")
+p_sites <- ggplot(df_sites, aes(Weeks_Since_Baseline, Value, group = Patient)) +
+  geom_line(color = "black", alpha = 0.6) +
+  geom_point(aes(color = relapse_within_180),
+             size = 1.8, alpha = 0.8) +
+  facet_wrap(~ patient_relapse180, nrow = 1,
+             labeller = labeller(patient_relapse180 = patient_relapse_labs_short)) +
+  scale_color_manual(
+    values = c(`FALSE` = "black", `TRUE` = "red"),
+    labels = c(`FALSE` = "No relapse ≤180d", `TRUE` = "Relapse ≤180d"),
+    name   = NULL
+  ) +
+  labs(
+    title = custom_labels["sites_z"],
+    x     = "Weeks Since Baseline",
+    y     = "Value"
+  ) +
+  theme_classic(base_size = 11) +
+  theme(strip.background = element_rect(fill = "grey95", colour = NA))
+
+# 3) Combine them side by side
+p_combined <- p_cvaf + p_sites + 
+     plot_annotation(
+      title = "Longitudinal trajectories of MRD metrics from baseline BM mutation profiles",
+      theme = theme(
+        plot.title = element_text(size = 18, face = "bold", hjust = 0.5)
+      )
+    ) & 
+      theme(legend.position = "bottom")
+    
+    
+# 4) Save
+ggsave(
+  filename = file.path(outdir, "Fig3A_sideBySide_lockedY_zscore.png"),
+  plot     = p_combined,
+  width    = 12,   # 4 panels across
+  height   = 4,
+  dpi      = 600
+)
+
+
+#### Add specific example of progressor vs non-progressor 
+### Need the full healthy control info for this 
+Merged_MRDetect_zscore <- readRDS("MRDetect_output_winter_2025/Processed_R_outputs/cfWGS_Winter2025All_MRDetect_with_Zscore_May2025.rds")
+
+## -----------------------------
+## USER PARAMS
+## -----------------------------
+pid        <- "CA-08"
+to_percent <- TRUE   # change to FALSE if Cumulative_VAF_BM already in % units
+hc_timept  <- c("01")  # acceptable baseline codes in healthy file
+
+
+## -----------------------------
+## 1.  Patient CA-08 longitudinal cVAF (from `dat`)
+## -----------------------------
+ca08_df <- dat %>%
+  filter(Patient == pid) %>%
+  select(Patient, Date, timepoint_info, Cumulative_VAF_BM) %>%
+  filter(!is.na(timepoint_info),
+         !is.na(Cumulative_VAF_BM)) %>%
+  arrange(Date) %>%
+  # Ensure unique timepoint_info order (chronological)
+  mutate(timepoint_info = factor(timepoint_info, levels = unique(timepoint_info))) %>%
+  # convert to % if required
+  mutate(
+    cVAF = if (to_percent) Cumulative_VAF_BM * 100 else Cumulative_VAF_BM
+  ) %>%
+  mutate(plot_group = "Patient CA-08")
+
+
+## capture ordered levels for later re-use (healthy facet)
+tp_levels <- levels(ca08_df$timepoint_info)
+
+
+## -----------------------------
+## 2.  Healthy-control background values
+##     (detection_rate_as_reads_detected_over_reads_checked)
+## -----------------------------
+hc_vals <- Merged_MRDetect_zscore %>%
+  filter(
+    Mut_source    == "BM_cells",
+    Filter_source == "STR_encode",
+    Study         == "CHARM_healthy",
+    Patient       == pid,
+    Sample_type   == "BM_cells",
+    Timepoint %in% hc_timept
+  ) %>%
+  pull(detection_rate_as_reads_detected_over_reads_checked)
+
+if (length(hc_vals) == 0) {
+  warning("No healthy-control rows found for CA-08 under supplied filters.")
+}
+
+# Convert to % if the patient values were scaled
+if (to_percent) hc_vals <- hc_vals * 100
+
+# Repeat the healthy-control distribution at *each* CA-08 timepoint
+# so the two facets have aligned x-axes & equal panel widths.
+hc_df <- tibble(
+  timepoint_info = factor(rep(tp_levels, each = length(hc_vals)), levels = tp_levels),
+  cVAF           = rep(hc_vals, times = length(tp_levels)),
+  plot_group     = "Healthy controls"
+)
+
+
+## -----------------------------
+## 3.  Bind and plot
+## -----------------------------
+# 1) Compute healthy‑control median (in same units as ca08_df$cVAF)
+median_hc <- median(hc_df$cVAF, na.rm = TRUE)
+
+# 2) Define custom, prettier x‑axis labels
+x_labels <- c(
+  "Diagnosis"         = "Diagnosis",
+  "Post_induction"    = "Post‑induction",
+  "1yr maintenance"   = "1‑year maintenance",
+  "1.5yr maintenance" = "1.5‑year maintenance",
+  "Relapse"           = "Relapse",
+  "Healthy_controls"  = "Healthy controls"
+)
+
+# 3) Re‑factor your patient df to include the Healthy_controls level
+#    (so that tick appears, but no red points/lines show there)
+all_levels <- c(levels(ca08_df$timepoint_info), "Healthy_controls")
+ca08_df2 <- ca08_df %>%
+  mutate(timepoint_info = factor(timepoint_info, levels = all_levels))
+
+# 4) Plot
+p_single3 <- ggplot(ca08_df, aes(x = timepoint_info, y = cVAF, group = 1)) +
+  # patient trajectory
+  geom_line(color = "red", size = 0.6) +
+  geom_point(color = "red", size = 2) +
+  # healthy‐control median as a dotted line
+  geom_hline(yintercept = median_hc,
+             linetype     = "dotted",
+             colour       = "black",
+             size         = 0.5) +
+  # healthy controls at the new "Healthy_controls" tick
+  geom_point(data = hc_df,
+             aes(x = timepoint_info, y = cVAF),
+             colour = "black", size = 1.2, alpha = 0.6,
+             position = position_jitter(width = 0.1, height = 0)
+  ) +
+  # nicer x labels
+  scale_x_discrete(labels = x_labels) +
+  # y‐axis percent (or raw) as before
+  scale_y_continuous(
+    name   = if (to_percent) "Tumour‑informed cumulative VAF (%)"
+    else "Tumour‑informed cumulative VAF",
+    labels = if (to_percent) scales::label_number(accuracy = 0.1)
+    else scales::waiver()
+  ) +
+  labs(
+    x     = NULL,
+    title = paste0("Tumour‑informed longitudinal tracking: Progressor")
+  ) +
+  theme_classic(base_size = 10) +
+  theme(
+    plot.title    = element_text(size = 12, face = "bold", hjust = 0.5),
+    plot.subtitle = element_text(size = 10, hjust = 0.5),
+    axis.text.x   = element_text(angle = 30, hjust = 1)
+  )
+
+ggsave(
+  file.path(outdir, "Fig2A_CA08_cVAF_vsHealthy_median_dotted.png"),
+  p_single3, width = 5, height = 3, dpi = 600
+)
+
+
+
+
+
+### As function
+## From this 2A and B is used
+library(rlang)
+make_cVAF_hc_plot <- function(pid,
+                              dat,
+                              merged,
+                              hc_timept    = c("01"),
+                              to_percent   = TRUE,
+                              tp_order     = NULL,
+                              show_hc_points = TRUE,
+                              hc_filters   = list(Mut_source="BM_cells",
+                                                  Filter_source="STR_encode",
+                                                  Study="CHARM_healthy",
+                                                  Sample_type="BM_cells"),
+                              return_data  = FALSE,
+                              progressor_color    = "red",
+                              nonprogressor_color = "black") {
+  
+  # ------------------ Patient longitudinal data ------------------
+  pat_df <- dat %>%
+    filter(.data$Patient == pid) %>%
+    select(Patient, Date, timepoint_info, Cumulative_VAF_BM,
+           Num_days_to_closest_relapse = any_of("Num_days_to_closest_relapse")) %>%
+    filter(!is.na(timepoint_info), !is.na(Cumulative_VAF_BM)) %>%
+    arrange(Date)
+  
+  if (nrow(pat_df) == 0) {
+    abort(paste0("No data found in `dat` for patient ", pid, "."))
+  }
+  
+  # Determine relapse / progressor status (≤180 days at ANY timepoint)
+  if (!"Num_days_to_closest_relapse" %in% names(pat_df)) {
+    pat_is_prog <- NA
+  } else {
+    pat_is_prog <- any(pat_df$Num_days_to_closest_relapse <= 180, na.rm = TRUE)
+  }
+  
+  # Choose colour & title suffix
+  pat_col <- if (isTRUE(pat_is_prog)) progressor_color else nonprogressor_color
+  title_suffix <- if (isTRUE(pat_is_prog)) "Progressor" else "Non‑progressor"
+  
+  # x-axis ordering
+  if (is.null(tp_order)) {
+    tp_levels <- unique(pat_df$timepoint_info)  # chronological because pat_df arranged by Date
+  } else {
+    # use supplied order but keep only levels that appear
+    tp_levels <- intersect(tp_order, unique(pat_df$timepoint_info))
+    # ensure we didn't lose any because of naming mismatches
+    missing_in_order <- setdiff(unique(pat_df$timepoint_info), tp_levels)
+    if (length(missing_in_order)) {
+      tp_levels <- c(tp_levels, missing_in_order)
+    }
+  }
+  
+  # add Healthy_controls at the end
+  tp_levels_all <- c(tp_levels, "Healthy_controls")
+  
+  pat_df <- pat_df %>%
+    mutate(
+      cVAF = if (to_percent) Cumulative_VAF_BM * 100 else Cumulative_VAF_BM,
+      timepoint_info = factor(timepoint_info, levels = tp_levels_all)
+    )
+  
+  # ------------------ Healthy-control values ------------------
+  # build filter expression from hc_filters
+  mf <- merged
+  if ("Mut_source"    %in% names(hc_filters)) mf <- mf %>% filter(.data$Mut_source    == hc_filters$Mut_source)
+  if ("Filter_source" %in% names(hc_filters)) mf <- mf %>% filter(.data$Filter_source == hc_filters$Filter_source)
+  if ("Study"         %in% names(hc_filters)) mf <- mf %>% filter(.data$Study         == hc_filters$Study)
+  if ("Sample_type"   %in% names(hc_filters)) mf <- mf %>% filter(.data$Sample_type   == hc_filters$Sample_type)
+  
+  # patient match + baseline timepoint(s)
+  mf <- mf %>%
+    filter(.data$Patient == pid,
+           .data$timepoint_info %in% hc_timept)
+  
+  hc_vals <- mf$detection_rate_as_reads_detected_over_reads_checked
+  
+  if (length(hc_vals) == 0) {
+    warning("No healthy-control rows found for patient ", pid, 
+            " under current filters; using NA median.")
+  }
+  
+  if (to_percent) hc_vals <- hc_vals * 100
+  
+  median_hc <- median(hc_vals, na.rm = TRUE)
+  
+  # Data frame for plotting raw HC points (if requested)
+  hc_df <- tibble(
+    timepoint_info = factor("Healthy_controls", levels = tp_levels_all),
+    cVAF           = hc_vals
+  )
+  
+  # ------------------ label mapping ------------------
+  # Use global object tp_label_map if exists; else auto-camel-case
+  if (exists("tp_label_map", inherits = TRUE)) {
+    lbl_map <- get("tp_label_map", inherits = TRUE)
+  } else {
+    lbl_map <- setNames(gsub("_", " ", tp_levels_all), tp_levels_all)
+  }
+  # ensure we have label for Healthy_controls
+  if (!"Healthy_controls" %in% names(lbl_map)) {
+    lbl_map["Healthy_controls"] <- "Healthy controls"
+  }
+  
+  # ------------------ Plot ------------------
+  p <- ggplot(pat_df, aes(x = timepoint_info, y = cVAF, group = 1)) +
+    geom_line(color = pat_col, linewidth = 0.6) +
+    geom_point(color = pat_col, size = 2) +
+    # dotted median (only if median not NA)
+    { if (!is.na(median_hc)) 
+      geom_hline(yintercept = median_hc,
+                 linetype = "dotted", colour = "black", linewidth = 0.5) 
+      else NULL } +
+    # HC jittered points at right tick (optional)
+    { if (show_hc_points && length(hc_vals)) 
+      geom_point(data = hc_df,
+                 aes(x = timepoint_info, y = cVAF),
+                 inherit.aes = FALSE,
+                 colour = "black", size = 1.2, alpha = 0.6,
+                 position = position_jitter(width = 0.1, height = 0)) 
+      else NULL } +
+    scale_x_discrete(labels = lbl_map) +
+    scale_y_continuous(
+      name   = if (to_percent) "Tumour‑informed cumulative VAF (%)" else "Tumour‑informed cumulative VAF",
+      labels = if (to_percent) label_number(accuracy = 0.1) else waiver()
+    ) +
+    labs(
+      x     = NULL,
+      title = paste0("Tumour‑informed longitudinal tracking: ", pid, " (", title_suffix, ")")
+    ) +
+    theme_classic(base_size = 9) +
+    theme(
+      plot.title  = element_text(size = 10.5, face = "bold", hjust = 0.5),
+      axis.text.x = element_text(angle = 30, hjust = 1)
+    )
+  
+  if (return_data) {
+    out <- list(plot = p,
+                patient_df = pat_df,
+                hc_df = hc_df,
+                median_hc = median_hc,
+                is_progressor = pat_is_prog)
+    return(out)
+  } else {
+    return(p)
+  }
+}
+
+ 
+all_pids <- cohort_df %>%
+  filter(Cohort == "Frontline") %>%
+  pull(Patient) %>%
+  unique() %>%
+  sort()
+
+
+# Optionally save each:
+for(pid in all_pids){
+  # Attempt to make the plot; if it errors, skip
+  p <- tryCatch(
+    make_cVAF_hc_plot(pid, dat, Merged_MRDetect_zscore,
+                      hc_timept = "Diagnosis", to_percent = TRUE),
+    error = function(e){
+      message("Skipping ", pid, ": ", e$message)
+      return(NULL)
+    }
+  )
+  
+  # If the plot was successfully created, save it
+  if(!is.null(p)){
+    ggsave(
+      filename = file.path(outdir, paste0(pid, "_cVAF_vsHealthy.png")),
+      plot     = p,
+      width    = 5,
+      height   = 3,
+      dpi      = 600
+    )
+  }
+}
+
+
+
+
+
+
+
+## Now work on blood muts
 # 1. Pivot to long form
 plot_df_blood <- dat %>%
   select(
@@ -483,14 +1023,6 @@ plot_df_blood <- dat %>%
   drop_na(Value)
 
 # 2. Plot
-# 1. Build the plot and save to a variable
-custom_labels <- c(
-  cVAF    = "Cumulative VAF",
-  cVAF_z  = "Cumulative VAF Z-score",
-  sites   = "Proportion of Sites Detected",
-  sites_z = "Proportion of Sites Detected Z-score"
-)
-
 p_traj <- ggplot(plot_df_blood, aes(x = Weeks_Since_Baseline, y = Value, group = Patient)) +
   geom_line(colour = "grey70", alpha = 0.4) +
   geom_point(aes(color = relapse_within_180), size = 1.5, alpha = 0.8) +
@@ -529,6 +1061,233 @@ ggsave(
   dpi      = 600
 )
 
+
+### Add other versions 
+### Edit style 
+# ─────────────────────────────────────────────────────────────
+# Prep: derive a patient-level relapse flag (any TP ≤180d)
+# ─────────────────────────────────────────────────────────────
+plot_df_pat <- plot_df_blood %>%
+  group_by(Patient) %>%
+  mutate(
+    patient_relapse180 = any(replace_na(relapse_within_180, FALSE))
+  ) %>%
+  ungroup() %>%
+  mutate(
+    # make it an ordered factor for consistent legend / facet order
+    patient_relapse180 = factor(patient_relapse180,
+                                levels = c(FALSE, TRUE))
+  )
+
+# nice labels for the patient-level factor
+patient_relapse_labs <- c(
+  `FALSE` = "No relapse ≤180d",
+  `TRUE`  = "Relapse ≤180d (last TP)"
+)
+patient_relapse_labs_short <- c(
+  `FALSE` = "No relapse ≤180d",
+  `TRUE`  = "Relapse ≤180d"
+)
+
+
+
+# ===================================================================
+# VERSION 1
+# Lines coloured by *patient-level* relapse (any TP ≤180d)
+# (All points inherit the same colour as the line.)
+# ===================================================================
+p_traj_patientline <- ggplot(
+  plot_df_pat,
+  aes(x = Weeks_Since_Baseline, y = Value, group = Patient,
+      colour = patient_relapse180)
+) +
+  geom_line(alpha = 0.6) +
+  geom_point(size = 1.5, alpha = 0.8) +
+  facet_wrap(
+    ~ Metric,
+    scales   = "free_y",
+    ncol     = 4,
+    labeller = labeller(Metric = custom_labels)
+  ) +
+  scale_color_manual(
+    values = c(`FALSE` = "black", `TRUE` = "red"),
+    labels = patient_relapse_labs,
+    name   = "Patient relapse status"
+  ) +
+  labs(
+    x     = "Weeks Since Baseline",
+    y     = "Value",
+    title = "Longitudinal trajectories of MRD metrics from baseline PB cfDNA mutation profiles"
+  ) +
+  theme_classic(base_size = 11) +
+  theme(
+    legend.position  = "bottom",
+    strip.background = element_rect(fill = "grey95", colour = NA)
+  )
+
+ggsave(
+  filename = file.path(outdir, "Fig3B_metrics_trajectories_blood_byPatientLine.png"),
+  plot     = p_traj_patientline,
+  device   = "png",
+  width    = 12,
+  height   = 4,
+  dpi      = 600
+)
+
+
+
+# ===================================================================
+# VERSION 2
+# Facet by patient-level relapse status *and* by Metric.
+# ===================================================================
+patient_relapse_labs_short <- c(
+  `FALSE` = "No relapse ≤180d",
+  `TRUE`  = "Relapse ≤180d"
+)
+
+# 1) Prep: patient-level flag
+plot_df_pat <- plot_df_blood %>%
+  group_by(Patient) %>%
+  mutate(patient_relapse180 = any(replace_na(relapse_within_180, FALSE))) %>%
+  ungroup() %>%
+  mutate(
+    patient_relapse180 = factor(patient_relapse180, levels = c(FALSE, TRUE)),
+    relapse_within_180 = replace_na(relapse_within_180, FALSE)
+  )
+
+# 2) Build the two mini‑plots
+
+## A) Cumulative VAF
+df_cvaf <- filter(plot_df_pat, Metric == "cVAF")
+p_cvaf <- ggplot(df_cvaf, aes(Weeks_Since_Baseline, Value, group = Patient)) +
+  geom_line(color = "black", alpha = 0.6) +
+  geom_point(aes(color = relapse_within_180),
+             size = 1.8, alpha = 0.8) +
+  facet_wrap(~ patient_relapse180, nrow = 1,
+             labeller = labeller(patient_relapse180 = patient_relapse_labs_short)) +
+  scale_color_manual(
+    values = c(`FALSE` = "black", `TRUE` = "red"),
+    labels = c(`FALSE` = "No relapse ≤180d", `TRUE` = "Relapse ≤180d"),
+    name   = NULL
+  ) +
+  labs(
+    title = custom_labels["cVAF"],
+    x     = "Weeks Since Baseline",
+    y     = "Value"
+  ) +
+  theme_classic(base_size = 11) +
+  theme(strip.background = element_rect(fill = "grey95", colour = NA))
+
+## B) Proportion of Sites Detected
+df_sites <- filter(plot_df_pat, Metric == "sites")
+p_sites <- ggplot(df_sites, aes(Weeks_Since_Baseline, Value, group = Patient)) +
+  geom_line(color = "black", alpha = 0.6) +
+  geom_point(aes(color = relapse_within_180),
+             size = 1.8, alpha = 0.8) +
+  facet_wrap(~ patient_relapse180, nrow = 1,
+             labeller = labeller(patient_relapse180 = patient_relapse_labs_short)) +
+  scale_color_manual(
+    values = c(`FALSE` = "black", `TRUE` = "red"),
+    labels = c(`FALSE` = "No relapse ≤180d", `TRUE` = "Relapse ≤180d"),
+    name   = NULL
+  ) +
+  labs(
+    title = custom_labels["sites"],
+    x     = "Weeks Since Baseline",
+    y     = "Value"
+  ) +
+  theme_classic(base_size = 11) +
+  theme(strip.background = element_rect(fill = "grey95", colour = NA))
+
+# 3) Combine them side by side
+p_combined <- p_cvaf + p_sites + 
+  plot_annotation(
+    title = "Longitudinal trajectories of MRD metrics from baseline PB cfDNA mutation profiles",
+    theme = theme(
+      plot.title = element_text(size = 18, face = "bold", hjust = 0.5)
+    )
+  ) & 
+  theme(legend.position = "bottom")
+
+# 4) Save
+ggsave(
+  filename = file.path(outdir, "Fig3B_sideBySide_lockedY_blood.png"),
+  plot     = p_combined,
+  width    = 12,   # 4 panels across
+  height   = 4,
+  dpi      = 600
+)
+
+
+# 2) Build the two mini‑plots
+
+## A) Cumulative VAF
+df_cvaf <- filter(plot_df_pat, Metric == "cVAF_z")
+p_cvaf <- ggplot(df_cvaf, aes(Weeks_Since_Baseline, Value, group = Patient)) +
+  geom_line(color = "black", alpha = 0.6) +
+  geom_point(aes(color = relapse_within_180),
+             size = 1.8, alpha = 0.8) +
+  facet_wrap(~ patient_relapse180, nrow = 1,
+             labeller = labeller(patient_relapse180 = patient_relapse_labs_short)) +
+  scale_color_manual(
+    values = c(`FALSE` = "black", `TRUE` = "red"),
+    labels = c(`FALSE` = "No relapse ≤180d", `TRUE` = "Relapse ≤180d"),
+    name   = NULL
+  ) +
+  labs(
+    title = custom_labels["cVAF_z"],
+    x     = "Weeks Since Baseline",
+    y     = "Value"
+  ) +
+  theme_classic(base_size = 11) +
+  theme(strip.background = element_rect(fill = "grey95", colour = NA))
+
+## B) Proportion of Sites Detected
+df_sites <- filter(plot_df_pat, Metric == "sites_z")
+p_sites <- ggplot(df_sites, aes(Weeks_Since_Baseline, Value, group = Patient)) +
+  geom_line(color = "black", alpha = 0.6) +
+  geom_point(aes(color = relapse_within_180),
+             size = 1.8, alpha = 0.8) +
+  facet_wrap(~ patient_relapse180, nrow = 1,
+             labeller = labeller(patient_relapse180 = patient_relapse_labs_short)) +
+  scale_color_manual(
+    values = c(`FALSE` = "black", `TRUE` = "red"),
+    labels = c(`FALSE` = "No relapse ≤180d", `TRUE` = "Relapse ≤180d"),
+    name   = NULL
+  ) +
+  labs(
+    title = custom_labels["sites_z"],
+    x     = "Weeks Since Baseline",
+    y     = "Value"
+  ) +
+  theme_classic(base_size = 11) +
+  theme(strip.background = element_rect(fill = "grey95", colour = NA))
+
+# 3) Combine them side by side
+p_combined <- p_cvaf + p_sites + 
+  plot_annotation(
+    title = "Longitudinal trajectories of MRD metrics from baseline PB cfDNA mutation profiles",
+    theme = theme(
+      plot.title = element_text(size = 18, face = "bold", hjust = 0.5)
+    )
+  ) & 
+  theme(legend.position = "bottom")
+
+
+# 4) Save
+ggsave(
+  filename = file.path(outdir, "Fig3B_sideBySide_lockedY_zscore_blood.png"),
+  plot     = p_combined,
+  width    = 12,   # 4 panels across
+  height   = 4,
+  dpi      = 600
+)
+
+
+
+
+
+
 ## Now for fragmentomics 
 # 1. Pivot to long form
 plot_df_fragmentomics <- dat %>%
@@ -555,11 +1314,22 @@ plot_df_fragmentomics <- dat %>%
   ) %>%
   drop_na(Value)
 
+### Flip the mean.coverage since has an inverse relationship 
+# 1) after your pivot_longer/drop_na, add a new y‐column:
+plot_df_fragmentomics2 <- plot_df_fragmentomics %>%
+  mutate(
+    # flip only Mean.Coverage by negating it
+    Value = if_else(Metric == "Mean.Coverage",
+                     -Value,
+                     Value))
+
+
 # 2. Plot
 # 1. Build the plot and save to a variable
 custom_labels <- c(
   FS                             = "Fragment-size score",
   Mean.Coverage                  = "cfDNA coverage at MM active regulatory sites",
+  Mean.Coverage.Flipped                  = "cfDNA coverage at MM active regulatory sites",
   Proportion.Short               = "Short-fragment proportion",
   WGS_Tumor_Fraction_Blood_plasma_cfDNA = "cfDNA tumor fraction (ichorCNA)"
 )
@@ -601,6 +1371,275 @@ ggsave(
   height   = 4,     # inches
   dpi      = 600
 )
+
+# Flipped version
+p_traj <- ggplot(plot_df_fragmentomics2, aes(x = Weeks_Since_Baseline, y = Value, group = Patient)) +
+  geom_line(colour = "grey70", alpha = 0.4) +
+  geom_point(aes(color = relapse_within_180), size = 1.5, alpha = 0.8) +
+  facet_wrap(
+    ~ Metric,
+    scales = "free_y",
+    ncol  = 4,
+    labeller = labeller(Metric = custom_labels)
+  ) +
+  scale_color_manual(
+    values = c(`FALSE` = "black", `TRUE` = "red"),
+    labels = c(`FALSE` = "No relapse ≤180d", `TRUE` = "Relapse ≤180 d"),
+    name   = "Relapse status",
+    na.value = "black",         # <- this makes NA points black
+    na.translate = FALSE      # ← drop NA from the legend since these patients didn't progress
+    
+  ) +
+  labs(
+    x     = "Weeks Since Baseline",
+    y     = "Value",
+    title = "Longitudinal trajectories of fragmentomic features"
+  ) +
+  theme_classic(base_size = 11) +
+  theme(
+    legend.position = "bottom",
+    strip.background = element_rect(fill = "grey95", colour = NA)
+  )
+
+# 2. Save as PNG in outdir
+ggsave(
+  filename = file.path(outdir, "Fig3C_metrics_trajectories_fragmentomics_flipped.png"),
+  plot     = p_traj,
+  device   = "png",
+  width    = 12,    # inches
+  height   = 4,     # inches
+  dpi      = 600
+)
+
+
+### Now other versions 
+### Edit style 
+# ─────────────────────────────────────────────────────────────
+# Prep: derive a patient-level relapse flag (any TP ≤180d)
+# ─────────────────────────────────────────────────────────────
+plot_df_pat <- plot_df_fragmentomics2 %>%
+  group_by(Patient) %>%
+  mutate(
+    patient_relapse180 = any(replace_na(relapse_within_180, FALSE))
+  ) %>%
+  ungroup() %>%
+  mutate(
+    # make it an ordered factor for consistent legend / facet order
+    patient_relapse180 = factor(patient_relapse180,
+                                levels = c(FALSE, TRUE))
+  )
+
+# nice labels for the patient-level factor
+patient_relapse_labs <- c(
+  `FALSE` = "No relapse ≤180d",
+  `TRUE`  = "Relapse ≤180d (last TP)"
+)
+patient_relapse_labs_short <- c(
+  `FALSE` = "No relapse ≤180d",
+  `TRUE`  = "Relapse ≤180d"
+)
+
+
+
+# ===================================================================
+# VERSION 1
+# Lines coloured by *patient-level* relapse (any TP ≤180d)
+# (All points inherit the same colour as the line.)
+# ===================================================================
+p_traj_patientline <- ggplot(
+  plot_df_pat,
+  aes(x = Weeks_Since_Baseline, y = Value, group = Patient,
+      colour = patient_relapse180)
+) +
+  geom_line(alpha = 0.6) +
+  geom_point(size = 1.5, alpha = 0.8) +
+  facet_wrap(
+    ~ Metric,
+    scales   = "free_y",
+    ncol     = 4,
+    labeller = labeller(Metric = custom_labels)
+  ) +
+  scale_color_manual(
+    values = c(`FALSE` = "black", `TRUE` = "red"),
+    labels = patient_relapse_labs,
+    name   = "Patient relapse status"
+  ) +
+  labs(
+    x     = "Weeks Since Baseline",
+    y     = "Value",
+    title = "Longitudinal trajectories of fragmentomic features"
+  ) +
+  theme_classic(base_size = 11) +
+  theme(
+    legend.position  = "bottom",
+    strip.background = element_rect(fill = "grey95", colour = NA)
+  )
+
+ggsave(
+  filename = file.path(outdir, "Fig3C_metrics_trajectories_blood_byPatientLine.png"),
+  plot     = p_traj_patientline,
+  device   = "png",
+  width    = 12,
+  height   = 4,
+  dpi      = 600
+)
+
+
+
+# ===================================================================
+# VERSION 2
+# Facet by patient-level relapse status *and* by Metric.
+# ===================================================================
+patient_relapse_labs_short <- c(
+  `FALSE` = "No relapse ≤180d",
+  `TRUE`  = "Relapse ≤180d"
+)
+
+# 1) Prep: patient-level flag
+plot_df_pat <- plot_df_fragmentomics2 %>%
+  group_by(Patient) %>%
+  mutate(patient_relapse180 = any(replace_na(relapse_within_180, FALSE))) %>%
+  ungroup() %>%
+  mutate(
+    patient_relapse180 = factor(patient_relapse180, levels = c(FALSE, TRUE)),
+    relapse_within_180 = replace_na(relapse_within_180, FALSE)
+  )
+
+# 2) Build the two mini‑plots
+
+## A) Cumulative VAF
+df_cvaf <- filter(plot_df_pat, Metric == "FS")
+p_cvaf <- ggplot(df_cvaf, aes(Weeks_Since_Baseline, Value, group = Patient)) +
+  geom_line(color = "black", alpha = 0.6) +
+  geom_point(aes(color = relapse_within_180),
+             size = 1.8, alpha = 0.8) +
+  facet_wrap(~ patient_relapse180, nrow = 1,
+             labeller = labeller(patient_relapse180 = patient_relapse_labs_short)) +
+  scale_color_manual(
+    values = c(`FALSE` = "black", `TRUE` = "red"),
+    labels = c(`FALSE` = "No relapse ≤180d", `TRUE` = "Relapse ≤180d"),
+    name   = NULL
+  ) +
+  labs(
+    title = custom_labels["FS"],
+    x     = "Weeks Since Baseline",
+    y     = "Value"
+  ) +
+  theme_classic(base_size = 11) +
+  theme(strip.background = element_rect(fill = "grey95", colour = NA))
+
+## B) Mean coverage (flipped)
+df_sites <- filter(plot_df_pat, Metric == "Mean.Coverage")
+p_sites <- ggplot(df_sites, aes(Weeks_Since_Baseline, -Value, group = Patient)) +
+  geom_line(color = "black", alpha = 0.6) +
+  geom_point(aes(color = relapse_within_180),
+             size = 1.8, alpha = 0.8) +
+  facet_wrap(~ patient_relapse180, nrow = 1,
+             labeller = labeller(patient_relapse180 = patient_relapse_labs_short)) +
+  scale_color_manual(
+    values = c(`FALSE` = "black", `TRUE` = "red"),
+    labels = c(`FALSE` = "No relapse ≤180d", `TRUE` = "Relapse ≤180d"),
+    name   = NULL
+  ) +
+  scale_y_reverse() +    
+  labs(
+    title = custom_labels["Mean.Coverage"],
+    x     = "Weeks Since Baseline",
+    y     = "Value"
+  ) +
+  theme_classic(base_size = 11) +
+  theme(strip.background = element_rect(fill = "grey95", colour = NA))
+
+# 3) Combine them side by side
+p_combined <- p_cvaf + p_sites + 
+  plot_annotation(
+    title = "Longitudinal trajectories of fragmentomic features",
+    theme = theme(
+      plot.title = element_text(size = 18, face = "bold", hjust = 0.5)
+    )
+  ) & 
+  theme(legend.position = "bottom")
+
+# 4) Save
+ggsave(
+  filename = file.path(outdir, "Fig3C_sideBySide_lockedY_fragmentomics.png"),
+  plot     = p_combined,
+  width    = 12,   # 4 panels across
+  height   = 4,
+  dpi      = 600
+)
+
+
+# 2) Now for next
+
+## A) Cumulative VAF
+df_cvaf <- filter(plot_df_pat, Metric == "Proportion.Short")
+p_cvaf <- ggplot(df_cvaf, aes(Weeks_Since_Baseline, Value, group = Patient)) +
+  geom_line(color = "black", alpha = 0.6) +
+  geom_point(aes(color = relapse_within_180),
+             size = 1.8, alpha = 0.8) +
+  facet_wrap(~ patient_relapse180, nrow = 1,
+             labeller = labeller(patient_relapse180 = patient_relapse_labs_short)) +
+  scale_color_manual(
+    values = c(`FALSE` = "black", `TRUE` = "red"),
+    labels = c(`FALSE` = "No relapse ≤180d", `TRUE` = "Relapse ≤180d"),
+    name   = NULL
+  ) +
+  labs(
+    title = custom_labels["Proportion.Short"],
+    x     = "Weeks Since Baseline",
+    y     = "Value"
+  ) +
+  theme_classic(base_size = 11) +
+  theme(strip.background = element_rect(fill = "grey95", colour = NA))
+
+## B) Proportion of Sites Detected
+df_sites <- filter(plot_df_pat, Metric == "WGS_Tumor_Fraction_Blood_plasma_cfDNA")
+p_sites <- ggplot(df_sites, aes(Weeks_Since_Baseline, Value, group = Patient)) +
+  geom_line(color = "black", alpha = 0.6) +
+  geom_point(aes(color = relapse_within_180),
+             size = 1.8, alpha = 0.8) +
+  facet_wrap(~ patient_relapse180, nrow = 1,
+             labeller = labeller(patient_relapse180 = patient_relapse_labs_short)) +
+  scale_color_manual(
+    values = c(`FALSE` = "black", `TRUE` = "red"),
+    labels = c(`FALSE` = "No relapse ≤180d", `TRUE` = "Relapse ≤180d"),
+    name   = NULL
+  ) +
+  labs(
+    title = custom_labels["WGS_Tumor_Fraction_Blood_plasma_cfDNA"],
+    x     = "Weeks Since Baseline",
+    y     = "Value"
+  ) +
+  theme_classic(base_size = 11) +
+  theme(strip.background = element_rect(fill = "grey95", colour = NA))
+
+# 3) Combine them side by side
+p_combined <- p_cvaf + p_sites + 
+  plot_annotation(
+    title = "Longitudinal trajectories of fragmentomic features",
+    theme = theme(
+      plot.title = element_text(size = 18, face = "bold", hjust = 0.5)
+    )
+  ) & 
+  theme(legend.position = "bottom")
+
+
+# 4) Save
+ggsave(
+  filename = file.path(outdir, "Fig3B_sideBySide_lockedY_2_fragmentomics.png"),
+  plot     = p_combined,
+  width    = 12,   # 4 panels across
+  height   = 4,
+  dpi      = 600
+)
+
+
+
+
+
+
+
 
 
 
