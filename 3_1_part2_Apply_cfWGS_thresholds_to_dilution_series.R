@@ -409,7 +409,7 @@ p_bm_spearman_actual <- ggplot(plot_df_bm, aes(x = LOD, y = value)) +
 
 # 4) Save to output directory
 ggsave(
-  filename = file.path(OUTPUT_DIR_FIGURES, "Fig_LOD_BM_metrics_spearman_actual_updated2_loglog.png"),
+  filename = file.path(OUTPUT_DIR_FIGURES, "Fig_LOD_BM_metrics_spearman_actual_updated2_loglog2.png"),
   plot     = p_bm_spearman_actual,
   width    = 8,
   height   = 4, 
@@ -510,6 +510,188 @@ ggsave(
   height   = 4,         # one‐line panel
   dpi      = 600
 )
+
+
+
+
+### Add log ticks and flip x-axis 
+# 1) compute the full set of decades you care about:
+decades     <- -10:10
+major_breaks <- 10^decades
+minor_breaks <- rep(1:9, times = length(decades)) * 
+  10^rep(decades, each = 9)
+
+# 2) restrict to the data range, so you don’t draw ticks off the ends:
+xr <- range(plot_df$LOD, na.rm = TRUE)
+major_breaks <- major_breaks[ major_breaks >= xr[1] & major_breaks <= xr[2] ]
+minor_breaks <- minor_breaks[ minor_breaks >= xr[1] & minor_breaks <= xr[2] ]
+
+
+p_bm_spearman_actual <- ggplot(plot_df_bm, aes(x = LOD, y = value)) +
+  geom_point(size = 2, alpha = 0.8) +
+  #geom_smooth(method = "lm", se = FALSE, size = 0.7) +
+  facet_wrap(~ feature,
+             scales   = "free_y",
+             labeller = as_labeller(facet_labels)) +
+  geom_text(
+    data    = annot_spear,
+    aes(x = 0.025, y = Inf, label = label),
+    hjust   = 0, vjust = 1.2,
+    size    = 3
+  ) + 
+  # scale_x_continuous(trans = trans_reverser('log10')) +
+  ## For reverse log: 
+  scale_x_continuous( 
+    trans  = compose_trans("log10", "reverse"),
+    breaks = major_breaks,
+    minor_breaks = minor_breaks, 
+    labels       = label_number(suffix = "%")
+  ) +
+  annotation_logticks(
+    sides = "b",   # draw bottom & top
+    base  = 10      # → long ticks at majors, short at minors
+  ) + 
+  # scale_x_log10(breaks = breaks, minor_breaks = minor_breaks, limits = c(0.0065,1)) + <- works but not reversed 
+  # annotation_logticks(sides = "b") +
+  scale_y_continuous() +
+  labs(
+    x = "Log tumour fraction (%)",
+    y = "Feature value"
+  ) +
+  theme_classic(base_size = 10) +
+  theme(
+    strip.text   = element_text(face = "bold"),
+    panel.border = element_rect(color = "black", fill = NA),
+    axis.ticks   = element_line(color = "black")
+  )
+
+
+
+# 4) Save to output directory
+ggsave(
+  filename = file.path(OUTPUT_DIR_FIGURES, "Fig_LOD_BM_metrics_spearman_actual_updated2_log_reversed_ticks.png"),
+  plot     = p_bm_spearman_actual,
+  width    = 8,
+  height   = 4, 
+  dpi      = 500
+)
+
+## Add call features 
+# 1) specify which of your features are the model‐probabilities
+prob_features <- c(
+  "BM_zscore_only_detection_rate_prob",  # BM cVAF Z-score model prob.
+  "BM_zscore_only_sites_prob"            # BM sites Z-score model prob.
+)
+
+# 2) define your thresholds (one per feature)
+thresholds <- tibble(
+  feature = c("BM_zscore_only_sites_prob",
+              "BM_zscore_only_detection_rate_prob"),
+  thr     = c(
+    bm_obj$thresholds["BM_zscore_only_sites"],
+    bm_obj$thresholds["BM_zscore_only_detection_rate"]
+  )
+)
+
+# 3) pull out only the prob data, join thresholds, and add a call flag
+plot_df_prob <- plot_df %>%
+  filter(feature %in% prob_features) %>%
+  left_join(thresholds, by = "feature") %>%
+  mutate(call = if_else(value > thr, "Positive", "Negative"))
+
+# 4) make the ggplot
+p_bm_prob <- ggplot(plot_df_prob, aes(x = LOD, y = value, color = call)) +
+  # horizontal line at the threshold, drawn in the right facet
+  geom_hline(
+    data = thresholds,
+    aes(yintercept = thr),
+    linetype = "dashed",
+    color    = "gray40"
+  ) +
+  geom_point(size = 2, alpha = 0.8) +
+  facet_wrap(~ feature,
+             scales   = "free_y",
+             labeller = as_labeller(facet_labels)) +
+#  scale_x_log10() +          # still log the x-axis if you like
+  scale_x_continuous( 
+    trans  = compose_trans("log10", "reverse"),
+    breaks = major_breaks,
+    minor_breaks = minor_breaks, 
+    labels       = label_number(suffix = "%")
+  ) +
+  annotation_logticks(
+    sides = "b",   # draw bottom & top
+    base  = 10      # → long ticks at majors, short at minors
+  ) + 
+  scale_color_manual(
+    values = c(Positive = "forestgreen", Negative = "gray60"),
+    na.value = "black"
+  ) +
+  labs(
+    x     = "Log tumour fraction (%)",
+    y     = "Model probability",
+    color = "Call"
+  ) +
+  theme_classic(base_size = 10) +
+  theme(
+    strip.text   = element_text(face = "bold"),
+    panel.border = element_rect(color = "black", fill = NA),
+    axis.ticks   = element_line(color = "black")
+  )
+
+# 5) preview or save
+p_bm_prob
+
+ggsave(
+  filename = file.path(OUTPUT_DIR_FIGURES, "Fig_LOD_BM_metrics_prob_calls_updated.png"),
+  plot     = p_bm_prob,
+  width    = 8,
+  height   = 4,
+  dpi      = 500
+)
+
+
+combined_plot <- p_bm_spearman_actual + p_bm_prob +
+  plot_layout(nrow = 1, widths = c(3, 2)) +
+  plot_annotation(
+    title = "Feature Concordance with Dilution Series",
+    theme = theme(
+      plot.title   = element_text(hjust = 0.5, face = "bold", size = 14),
+      plot.margin  = margin(5, 5, 5, 5),
+      plot.background = element_rect(fill = "white", colour = NA)
+    )
+  ) &
+  theme(
+    # this & theme() still applies to the individual panels
+    panel.border   = element_rect(colour = "black", fill = NA),
+    strip.text     = element_text(face = "bold")
+  )
+
+# draw it
+print(combined_plot)
+
+### Figure 4G
+# and save
+ggsave(
+  filename = file.path(OUTPUT_DIR_FIGURES, "Fig4G_LOD_combined_updated.png"),
+  plot     = combined_plot,
+  width    = 12,        # adjust as needed
+  height   = 4,         # one‐line panel
+  dpi      = 600
+)
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 #### Now do the overlap across all the features for 4H
