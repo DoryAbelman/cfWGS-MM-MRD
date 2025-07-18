@@ -1547,7 +1547,64 @@ write.csv(
 saveRDS(final_tbl, "Exported_data_tables_clinical/Censor_dates_per_patient_for_PFS.rds")
 
 
+### Add updated dates from Sarah 
+censor_dates_updated <- read.csv("Clinical data/M4/Censore_dates_per_patient_for_PFS_just_M4 SB.csv")
 
+censor_tbl <- censor_dates_updated %>% select(-CMRG.ID) %>%
+  mutate(across(where(is.character), str_trim)) %>%      # remove stray blanks
+  mutate(
+    relapsed    = if_else(tolower(Has.the.patient.Relapsed) == "yes", 1L, 0L),
+    relapse_dt  = dmy(If.yes..First.Relapse.Date , quiet = TRUE),
+    followup_dt = dmy(If.no..Date.of.last.follow.up, quiet = TRUE),
+    censor_date = coalesce(relapse_dt, followup_dt)       # relapse > last‑FU
+  ) %>% 
+  select(Patient, censor_date, relapsed)
+
+## join to existing baseline dates
+final_like_tbl <- censor_tbl %>% 
+  left_join(final_tbl |> select(Patient, baseline_date), by = "Patient") %>% 
+  relocate(baseline_date, .after = Patient)              # keep column order
+
+# See difference 
+# 3. For Patients in both, show which fields differ
+diff_by_patient <- full_join(final_tbl,
+                             final_like_tbl,
+                             by     = "Patient",
+                             suffix = c(".final", ".new")) %>%
+  filter(baseline_date.final != baseline_date.new |
+           censor_date.final   != censor_date.new   |
+           relapsed.final      != relapsed.new) %>%
+  select(Patient,
+         baseline_date.final, baseline_date.new,
+         censor_date.final,   censor_date.new,
+         relapsed.final,      relapsed.new)
+
+
+view(diff_by_patient)
+
+## Coalesce
+# 1. Drop EK-09 from the diff list
+diff_by_patient_flt <- diff_by_patient %>%
+  filter(Patient != "EK-09")
+
+# 2. Build the patch: keep baseline_date.final, the later censor_date,
+#    and now relapsed_new
+diff_update <- diff_by_patient_flt %>%
+  mutate(
+    censor_date = pmax(censor_date.final, censor_date.new, na.rm = TRUE)
+  ) %>%
+  transmute(
+    Patient,
+    baseline_date = baseline_date.final,
+    censor_date,
+    relapsed      = relapsed.new
+  )
+
+final_tbl_updated <- final_tbl %>%
+  rows_update(diff_update, by = "Patient")
+
+## Now export 
+saveRDS(final_tbl_updated, "Exported_data_tables_clinical/Censor_dates_per_patient_for_PFS_updated.rds")
 
 
 # ─── 23.  Get the patient info, number of patients with each feature ───────────────────────

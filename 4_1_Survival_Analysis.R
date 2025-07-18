@@ -14,8 +14,8 @@ library(tableone)      # optional – baseline table
 library(timeROC)       # optional – AUC vs time
 
 ## INPUT (already saved from your pipeline) ------------------------------
-final_tbl_rds <- "Exported_data_tables_clinical/Censor_dates_per_patient_for_PFS.rds"
-dat_rds       <- "output_tables_2025/all_patients_with_BM_and_blood_calls_updated5.rds"
+final_tbl_rds <- "Exported_data_tables_clinical/Censor_dates_per_patient_for_PFS_updated.rds"
+dat_rds       <- "Output_tables_2025/all_patients_with_BM_and_blood_calls_updated2.rds"
 
 ## OUTPUT ----------------------------------------------------------------------
 outdir <- "Output_tables_2025/detection_progression"
@@ -23,11 +23,15 @@ dir.create(outdir, showWarnings = FALSE, recursive = TRUE)
 
 ## ── 1.  LOAD & TIDY CORE TABLES ──────────────────────────────────────────────
 final_tbl <- readRDS(final_tbl_rds) %>%
+  rename_with(
+    tolower,
+    any_of(c("Baseline_Date", "Censor_date", "Relapsed"))
+  ) %>%
   transmute(
     Patient       = as.character(Patient),
-    baseline_date = as.Date(Baseline_Date),
-    censor_date   = as.Date(Censor_date),
-    relapsed      = as.integer(Relapsed)
+    baseline_date = as.Date(baseline_date),
+    censor_date   = as.Date(censor_date),
+    relapsed      = as.integer(relapsed)
   )
 
 dat <- readRDS(dat_rds) %>%
@@ -79,8 +83,8 @@ table(survival_df$timepoint_info)
 techs <- c(
   Flow_Binary        = "MFC",
   Adaptive_Binary    = "clonoSEQ",
-  BM_zscore_only_detection_rate_call    = "cfWGS_BM", 
-  Blood_zscore_only_sites_call = "cfWGS_PB_cfDNA"
+  BM_zscore_only_detection_rate_call    = "cfWGS of BM-derived mutations", 
+  Blood_zscore_only_sites_call = "cfWGS of PB‑cfDNA‑derived mutations"
 )
 
 # 3) All timepoints to cover
@@ -90,14 +94,25 @@ dpi_target <- 500
 # 4) Minimum n per group to plot
 min_n <- 5
 
+pal_2 <- viridis(2, option = "D", begin = 0.3, end = 0.7)   # nice mid‑range hues
+# old colors: palette = c("#E7B800","#2E9FDF")
+
+tp_labels <- c(
+  `diagnosis` = "diagnosis",
+  `post_transplant`    = "post‑ASCT",
+  `1yr maintenance` = "one year maintenance", 
+  `post_induction`    = "post‑induction"
+  )
+
 # 5) Loop
 for(tp in tps) {
+  nice_tp <- tp_labels[tp] %||% tp   # fall back to tp if no mappiht
   tp_dir <- file.path(outdir, gsub("\\s+","_", tp))  # sanitize folder name
   dir.create(tp_dir, recursive = TRUE, showWarnings = FALSE)
   
   for(var in names(techs)) {
     assay_lab <- techs[[var]]
-    fname     <- file.path(tp_dir, paste0("KM_", assay_lab, ".png"))
+    fname     <- file.path(tp_dir, paste0("KM_", assay_lab, "_", nice_tp, "_updated.png"))
     
     df_sub <- survival_df %>%
       filter(
@@ -135,15 +150,43 @@ for(tp in tps) {
       break.time.by   = 12,        # put ticks every 12 “units” (i.e. every 12 months)
       conf.int        = TRUE,
       risk.table      = TRUE,
-      palette         = c("#E7B800","#2E9FDF"),
-      legend.title    = paste0(assay_lab, " MRD"),
+      risk.table.title = "Number at risk",
+      risk.table.title.theme = element_text(hjust = 0),  # ← left‑align
+      palette         = pal_2,
+     # legend.title    = paste0(assay_lab, " MRD"),
+     legend.title    = "MRD status",
       # now we know two groups are present, so these two labels fit
       legend.labs     = c("MRD–","MRD+"),
-      xlab            = "Months since sample",
-      ylab            = "PFS",
-      title           = paste0(assay_lab, " MRD at ", tp),
-      risk.table.height = 0.25
+      xlab            = "Time since MRD assessment (months)",
+      ylab            = "Progression-free survival",
+      title = str_wrap(paste0("PFS stratified by ", assay_lab, " at ", nice_tp), width = 45),
+      risk.table.height = 0.25, 
+      ## Added theme 
+      ggtheme = theme_classic(base_size = 12) +
+        theme(
+          plot.title      = element_text(face = "bold", hjust = 0.5, size = 16),
+          legend.position = "top",
+          axis.line       = element_line(colour = "black"),
+          panel.grid.major = element_blank(),          # no grid
+          panel.grid.minor = element_blank(),
+          #  Make the tick‑labels (the numbers) larger:
+          axis.text.x      = element_text(size = 12),
+          axis.text.y      = element_text(size = 12),
+          axis.title.y      = element_text(size = 15),
+          axis.title.x      = element_text(size = 14)
+        ),
     )
+    
+    km$table <- km$table +
+      theme(
+        axis.title.y = element_blank(),
+        plot.title      = element_text(hjust = 0, face = "plain"),
+      )
+    
+    km$plot <- km$plot +
+      theme(
+        axis.title.x = element_blank()
+      )
     
     combined <- ggarrange(
       km$plot, km$table,
@@ -154,8 +197,8 @@ for(tp in tps) {
     ggsave(
       filename = fname,
       plot     = combined,
-      width    = 8, 
-      height   = 9,
+      width    = 7, 
+      height   = 8,
       dpi      = dpi_target
     )
   }

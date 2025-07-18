@@ -682,18 +682,6 @@ ggsave(
 
 
 
-
-
-
-
-
-
-
-
-
-
-
-
 #### Now do the overlap across all the features for 4H
 # 1) Select just the features you care about, in the order you want them
 selected_feats <- c(
@@ -1108,6 +1096,134 @@ ggsave(
   height   = 4,         # one‐line panel
   dpi      = 600
 )
+
+
+
+
+#### Now redo with flipped x-axis and log ticks
+
+# 3) Create plot with actual values and Spearman rho (log–log axes)
+p_blood_spearman_actual <- ggplot(plot_df_blood %>% filter(feature %in% c("detect_rate_blood", "z_score_detection_rate_blood", "zscore_blood")), aes(x = LOD, y = value)) +
+  geom_point(size = 2, alpha = 0.8) +
+  #geom_smooth(method = "lm", se = FALSE, size = 0.7) +
+  facet_wrap(~ feature,
+             scales   = "free_y",
+             labeller = as_labeller(facet_labels)) +
+  geom_text(
+    data    = annot_spear %>% filter(feature %in% c("detect_rate_blood", "z_score_detection_rate_blood", "zscore_blood")),
+    aes(x = 0.025, y = Inf, label = label),
+    hjust   = 0, vjust = 1.2,
+    size    = 3
+  ) +
+  scale_x_continuous( 
+    trans  = compose_trans("log10", "reverse"),
+    breaks = major_breaks,
+    minor_breaks = minor_breaks, 
+    labels       = label_number(suffix = "%")
+  ) +
+  annotation_logticks(
+    sides = "b",   # draw bottom & top
+    base  = 10      # → long ticks at majors, short at minors
+  ) + 
+  scale_y_continuous() +
+  labs(
+    x = "Log tumour fraction (%)",
+    y = "Feature value"
+  ) +
+  theme_classic(base_size = 10) +
+  theme(
+    strip.text   = element_text(face = "bold"),
+    panel.border = element_rect(color = "black", fill = NA),
+    axis.ticks   = element_line(color = "black")
+  )
+
+# 4) Save to output directory
+ggsave(
+  filename = file.path(OUTPUT_DIR_FIGURES, "Fig_LOD_blood_metrics_spearman_actual_updated2_log_flipped_ticks.png"),
+  plot     = p_blood_spearman_actual,
+  width    = 8,
+  height   = 4, 
+  dpi      = 500
+)
+
+
+p_blood_prob <- ggplot(plot_df_prob, aes(x = LOD, y = value, color = call)) +
+  # model-threshold lines for each facet
+  geom_hline(
+    data = thresholds,
+    aes(yintercept = thr),
+    linetype = "dashed",
+    color    = "gray40"
+  ) +
+  # confirmatory cutoff (0.457) only in the sites facet
+  geom_hline(
+    data = data.frame(feature = "Blood_zscore_only_sites_prob",
+                      thr     = 0.457),
+    aes(yintercept = thr),
+    linetype = "dashed",
+    color    = "steelblue"
+  ) +
+  geom_point(size = 2, alpha = 0.8) +
+  facet_wrap(~ feature,
+             scales   = "free_y",
+             labeller = as_labeller(facet_labels)
+  ) +
+  scale_x_continuous( 
+    trans  = compose_trans("log10", "reverse"),
+    breaks = major_breaks,
+    minor_breaks = minor_breaks, 
+    labels       = label_number(suffix = "%")
+  ) +
+  annotation_logticks(
+    sides = "b",   # draw bottom & top
+    base  = 10      # → long ticks at majors, short at minors
+  ) + 
+  scale_color_manual(
+    name   = "Call",
+    values = c(Negative     = "gray60",
+               Confirmatory = "steelblue",
+               Positive     = "forestgreen")
+  ) +
+  labs(
+    x     = "Log tumour fraction (%)",
+    y     = "Model probability",
+    color = "Call"
+  ) +
+  theme_classic(base_size = 10) +
+  theme(
+    strip.text   = element_text(face = "bold"),
+    panel.border = element_rect(color = "black", fill = NA),
+    axis.ticks   = element_line(color = "black"),
+    legend.position = "right"
+  )
+
+combined_plot <- p_blood_spearman_actual + p_blood_prob +
+  plot_layout(nrow = 1, widths = c(3, 2)) +
+  plot_annotation(
+    title = "Feature Concordance with Dilution Series",
+    theme = theme(
+      plot.title   = element_text(hjust = 0.5, face = "bold", size = 14),
+      plot.margin  = margin(5, 5, 5, 5),
+      plot.background = element_rect(fill = "white", colour = NA)
+    )
+  ) &
+  theme(
+    # this & theme() still applies to the individual panels
+    panel.border   = element_rect(colour = "black", fill = NA),
+    strip.text     = element_text(face = "bold")
+  )
+
+
+ggsave(
+  filename = file.path(OUTPUT_DIR_FIGURES, "Fig5G_LOD_combined_updated_reverse_log.png"),
+  plot     = combined_plot,
+  width    = 12,        # adjust as needed
+  height   = 4,         # one‐line panel
+  dpi      = 600
+)
+
+
+
 
 
 
