@@ -1584,6 +1584,7 @@ print(metrics_two)
 
 write_rds(metrics_two, file = file.path(outdir, "cfWGS_model_metrics_fixed_z_score_model_deeper_LOD.rds"))
 write_csv(metrics_two, file = file.path(outdir, "cfWGS_model_metrics_fixed_z_score_model_deeper_LOD.csv"))
+write.csv(all_metrics_rescored_primary, file = "Final Tables and Figures/Suplementary_Table_3_All_BM_Zscore_Model_Performance_Cutoffs.csv")
 
 
 # -----------------------------------------------------------------------------
@@ -1953,7 +1954,150 @@ ggsave(
 )
 
 
+### Add points on ROC where models selected 
+# ────────────────────────────────────────────────────────────────
+# A.  Build a tibble of (model, threshold) pairs to mark
+# ────────────────────────────────────────────────────────────────
+mark_tbl <- tribble(
+  ~combo,                          ~threshold,
+  "BM_zscore_only_sites",           0.501,
+  "BM_zscore_only_sites",           0.221,
+  "BM_zscore_only_detection_rate",  0.436
+)
 
+# ────────────────────────────────────────────────────────────────
+# B.  For each row in mark_tbl, compute FPR & TPR
+# ────────────────────────────────────────────────────────────────
+marker_pts <- pmap_dfr(mark_tbl, function(combo, threshold) {
+  
+  # retrieve fitted caret model & its predicted probs
+  prob <- predict(models_list[[combo]], newdata = valid_df, type = "prob")[ , positive_class]
+  
+  # truth vector (pos/neg as in earlier code)
+  truth <- valid_df$MRD_truth
+  
+  # binary calls at this threshold
+  pred_pos <- prob >= threshold
+  truth_pos <- truth == "pos"
+  
+  # confusion parts
+  tp <- sum(pred_pos & truth_pos)
+  fn <- sum(!pred_pos & truth_pos)
+  fp <- sum(pred_pos & !truth_pos)
+  tn <- sum(!pred_pos & !truth_pos)
+  
+  tibble(
+    combo      = combo,
+    threshold  = threshold,
+    fpr        = fp / (fp + tn),
+    tpr        = tp / (tp + fn)
+  )
+})
+
+# ensure same factor order as curves
+marker_pts$combo <- factor(marker_pts$combo, levels = levels(roc_df$combo))
+
+# ────────────────────────────────────────────────────────────────
+# C.  Add to roc_plot
+# ────────────────────────────────────────────────────────────────
+selected_models <- c("BM_zscore_only_sites", "BM_zscore_only_detection_rate")
+
+roc_plot_tmp <- roc_df %>%
+  filter(combo %in% selected_models) %>%               # keep only those two
+  ggplot(aes(x = fpr, y = tpr, colour = combo)) +
+  geom_line(size = 1) +
+  geom_abline(lty = 2, colour = "grey60") +
+  labs(
+    x      = "False-positive rate (1 − specificity)",
+    y      = "True-positive rate (sensitivity)",
+    colour = NULL,
+    title  = "Cross-validated ROC curves (nested 5×5 folds)"
+  ) +
+  theme_bw(12) +
+  theme(
+    legend.position    = c(0.63, 0.15),
+    legend.background  = element_rect(fill = alpha("white", 0.7), colour = NA),
+    legend.key.size    = unit(0.8, "lines"),
+    legend.text        = element_text(size = 10),
+    panel.grid         = element_blank()
+  ) +
+  scale_colour_manual(
+    # pick the same palette entries but only for your two models
+    values = okabe_ito8[ match(selected_models, levels(roc_df$combo)) ],
+    labels = legend_labels[selected_models]
+  )
+roc_plot_final <- roc_plot_tmp +
+  geom_point(
+    data    = marker_pts,
+    aes(x = fpr, y = tpr, shape = combo),
+    fill    = "white",
+    colour  = "black",
+    stroke  = 0.9,
+    size    = 3,
+    inherit.aes = FALSE
+  ) +
+  scale_shape_manual(
+    name   = "Marked thresholds",
+    values = c(
+      BM_zscore_only_sites           = 21,  # circle
+      BM_zscore_only_detection_rate  = 24   # triangle
+    ),
+    labels = c(
+      BM_zscore_only_sites          = "Sites model",
+      BM_zscore_only_detection_rate = "cVAF model"
+    )
+  ) +
+  guides(
+    # a) the shape legend for marked thresholds
+    shape = guide_legend(
+      title       = "Marked thresholds",
+      order       = 1,       # draw this first
+      ncol        = 1,
+      byrow       = FALSE,
+      keywidth    = unit(1.2, "lines"),
+      keyheight   = unit(1.2, "lines"),
+      override.aes = list(
+        fill   = "white",
+        colour = "black",
+        size   = 4,
+        stroke = 0.9
+      )
+    ),
+    # b) the colour legend for ROC curves
+    colour = guide_legend(
+      title       = "Model (AUC)",
+      order       = 2,       # draw this second
+      ncol        = 1,
+      byrow       = FALSE,
+      keywidth    = unit(2,   "lines"),
+      keyheight   = unit(0.5, "lines"),
+      override.aes = list(
+        size = 1.5           # slightly thicker lines in the key
+      )
+    )
+  ) +
+  theme(
+    # remove legend background box
+    legend.background = element_blank(),
+    legend.position       = c(0.72, 0.24),   # x=0.85 (near right), y=0.25 (higher)
+    # shrink the space between items
+    legend.spacing.y  = unit(0.2, "cm"),
+    legend.key        = element_blank(),
+    # style legend titles & text
+    legend.title      = element_text(face = "bold", size = 10),
+    legend.text       = element_text(size = 9), 
+    # title bold 
+    plot.title   = element_text(face = "bold", size = 13)
+  )
+
+
+ggsave(
+  file.path("Final Tables and Figures/Supp5A_ROC_performance.png"),
+  plot   = roc_plot_final,
+  width  = 5,
+  height = 4.25,
+  dpi    = 600
+)
 
 
 
@@ -2016,7 +2160,7 @@ p_tables <- ggplot(cm_df, aes(x = Pred, y = Obs, fill = Count)) +
   labs(
     x = "Predicted MRD status",
     y = "Observed MRD status",
-    title = "Confusion Tables at Youden Index in Primary Cohort"
+    title = "Confusion Tables at Youden Index in Training Cohort"
   ) +
   theme_minimal(base_size = 10) +
   theme(
@@ -2032,7 +2176,7 @@ p_tables <- ggplot(cm_df, aes(x = Pred, y = Obs, fill = Count)) +
 # ──────────────────────────────────────────────────────────────────────────────
 # 5) save
 ggsave(
-  "Final Tables and Figures/Fig4C_confusion_tables_primary.png",
+  "Final Tables and Figures/Fig4C_confusion_tables_primary_updated.png",
   plot   = p_tables,
   width  = 5,
   height = 2.75,
@@ -2214,7 +2358,7 @@ perf_plot <- ggplot(perf_df, aes(sens_mean, spec_mean, colour = combo)) +
     legend.position = c(0.05, 0.05),
     legend.justification = c(0,0),
     legend.background = element_rect(fill = alpha("white",0.7), colour=NA),
-    plot.title      = element_text(hjust=0.5)
+    plot.title      = element_text(hjust=0.5, face = "bold")
   )
 
 # ── 3) Combine with roc_plot ────────────────────────────────────────────────
@@ -2222,7 +2366,7 @@ combined_plot <- roc_plot + perf_plot + plot_layout(ncol = 2, widths = c(1,1))
 
 # ── 4) Export ───────────────────────────────────────────────────────────────
 ggsave(
-  filename = "Final Tables and Figures/combined_ROC_and_performance_nested_folds_bm_validation.png",
+  filename = "Final Tables and Figures/combined_ROC_and_performance_nested_folds_bm_validation_updated.png",
   plot     = combined_plot,
   width    = 12,
   height   = 6,
@@ -2298,7 +2442,7 @@ p_tables <- ggplot(cm_df, aes(x = Pred, y = Obs, fill = Count)) +
   labs(
     x = "Predicted MRD status",
     y = "Observed MRD status",
-    title = "Confusion Tables at Youden Index in Primary Cohort"
+    title = "Confusion Tables at Youden Index in Training Cohort"
   ) +
   theme_minimal(base_size = 10) +
   # reverse the Obs axis so neg is at the top
@@ -2763,6 +2907,158 @@ ggsave(
   height   = 6,
   dpi      = 500
 )
+
+
+
+
+### Add the metrics from dilution series 
+### Add points on ROC where models selected 
+# ────────────────────────────────────────────────────────────────
+# A.  Build a tibble of (model, threshold) pairs to mark
+# ────────────────────────────────────────────────────────────────
+mark_tbl <- tribble(
+  ~combo,                          ~threshold,
+  "Blood_zscore_only_sites",           0.523,
+  "Blood_zscore_only_sites",           0.457,
+  "Blood_rate_only",  0.432
+)
+
+# ────────────────────────────────────────────────────────────────
+# B.  For each row in mark_tbl, compute FPR & TPR
+# ────────────────────────────────────────────────────────────────
+marker_pts <- pmap_dfr(mark_tbl, function(combo, threshold) {
+  
+  # retrieve fitted caret model & its predicted probs
+  prob <- predict(models_list[[combo]], newdata = valid_df, type = "prob")[ , positive_class]
+  
+  # truth vector (pos/neg as in earlier code)
+  truth <- valid_df$MRD_truth
+  
+  # binary calls at this threshold
+  pred_pos <- prob >= threshold
+  truth_pos <- truth == "pos"
+  
+  # confusion parts
+  tp <- sum(pred_pos & truth_pos)
+  fn <- sum(!pred_pos & truth_pos)
+  fp <- sum(pred_pos & !truth_pos)
+  tn <- sum(!pred_pos & !truth_pos)
+  
+  tibble(
+    combo      = combo,
+    threshold  = threshold,
+    fpr        = fp / (fp + tn),
+    tpr        = tp / (tp + fn)
+  )
+})
+
+# ensure same factor order as curves
+marker_pts$combo <- factor(marker_pts$combo, levels = levels(roc_df$combo))
+
+# ────────────────────────────────────────────────────────────────
+# C.  Add to roc_plot
+# ────────────────────────────────────────────────────────────────
+selected_models <- c("Blood_zscore_only_sites", "Blood_rate_only")
+
+roc_plot_tmp <- roc_df %>%
+  filter(combo %in% selected_models) %>%               # keep only those two
+  ggplot(aes(x = fpr, y = tpr, colour = combo)) +
+  geom_line(size = 1) +
+  geom_abline(lty = 2, colour = "grey60") +
+  labs(
+    x      = "False-positive rate (1 − specificity)",
+    y      = "True-positive rate (sensitivity)",
+    colour = NULL,
+    title  = "Cross-validated ROC curves (nested 5×5 folds)"
+  ) +
+  theme_bw(12) +
+  theme(
+    legend.position    = c(0.63, 0.15),
+    legend.background  = element_rect(fill = alpha("white", 0.7), colour = NA),
+    legend.key.size    = unit(0.8, "lines"),
+    legend.text        = element_text(size = 10),
+    panel.grid         = element_blank()
+  ) +
+  scale_colour_manual(
+    # pick the same palette entries but only for your two models
+    values = okabe_ito8[ match(selected_models, levels(roc_df$combo)) ],
+    labels = legend_labels[selected_models]
+  )
+roc_plot_final <- roc_plot_tmp +
+  geom_point(
+    data    = marker_pts,
+    aes(x = fpr, y = tpr, shape = combo),
+    fill    = "white",
+    colour  = "black",
+    stroke  = 0.9,
+    size    = 3,
+    inherit.aes = FALSE
+  ) +
+  scale_shape_manual(
+    name   = "Marked thresholds",
+    values = c(
+      Blood_zscore_only_sites           = 21,  # circle
+      Blood_rate_only  = 24   # triangle
+    ),
+    labels = c(
+      Blood_zscore_only_sites          = "Sites model",
+      Blood_rate_only = "cVAF model"
+    )
+  ) +
+  guides(
+    # a) the shape legend for marked thresholds
+    shape = guide_legend(
+      title       = "Marked thresholds",
+      order       = 1,       # draw this first
+      ncol        = 1,
+      byrow       = FALSE,
+      keywidth    = unit(1.2, "lines"),
+      keyheight   = unit(1.2, "lines"),
+      override.aes = list(
+        fill   = "white",
+        colour = "black",
+        size   = 4,
+        stroke = 0.9
+      )
+    ),
+    # b) the colour legend for ROC curves
+    colour = guide_legend(
+      title       = "Model (AUC)",
+      order       = 2,       # draw this second
+      ncol        = 1,
+      byrow       = FALSE,
+      keywidth    = unit(2,   "lines"),
+      keyheight   = unit(0.5, "lines"),
+      override.aes = list(
+        size = 1.5           # slightly thicker lines in the key
+      )
+    )
+  ) +
+  theme(
+    # remove legend background box
+    legend.background = element_blank(),
+    legend.position       = c(0.72, 0.24),   # x=0.85 (near right), y=0.25 (higher)
+    # shrink the space between items
+    legend.spacing.y  = unit(0.2, "cm"),
+    legend.key        = element_blank(),
+    # style legend titles & text
+    legend.title      = element_text(face = "bold", size = 10),
+    legend.text       = element_text(size = 9), 
+    # title bold 
+    plot.title   = element_text(face = "bold", size = 13)
+  )
+
+
+ggsave(
+  file.path("Final Tables and Figures/Supp7D_ROC_performance_blood.png"),
+  plot   = roc_plot_final,
+  width  = 5,
+  height = 4.25,
+  dpi    = 600
+)
+
+
+
 
 
 ### Do ROC curve on validation for blood derived muts

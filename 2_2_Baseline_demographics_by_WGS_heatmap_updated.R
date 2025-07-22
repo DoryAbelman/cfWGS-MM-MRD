@@ -57,6 +57,13 @@ cna_data <- readRDS(file.path(export_dir, "cna_data.rds"))
 CNA_translocation <- readRDS("Jan2025_exported_data/CNA_translocation_June2025.rds") ## From 1_5 script
 mutation_data_total <- readRDS("Jan2025_exported_data/mutation_export_updated.rds")
 
+## Edit values after check 
+CNA_translocation <- CNA_translocation %>%
+  mutate(across(
+    starts_with("IGH_"),
+    ~ if_else(grepl("ZC-02", Sample), 0L, .)
+  ))
+
 # 3. cfDNA translocation tab (the 4‐call binary table you exported)
 translocation_data <- readRDS(
   file.path(export_dir, "translocation_data.rds")
@@ -1899,7 +1906,7 @@ message("All tables exported to ", outdir)
 
 
 ####### Supplementary code
-
+### Below here is not used in main MS
 
 # --- Step 8. Generate Summary Paragraphs -------------------------------------
 # Example paragraphs (you can further modify the text based on your desired style)
@@ -2025,7 +2032,7 @@ cat("In patients with tumor fractions of >5%,",
 
 
 
-##### Below here is testing
+##### Additional code
 BM_long <- combined_data_heatmap_BM_subset  %>% 
   select(
     Patient_Timepoint, Patient, cohort,

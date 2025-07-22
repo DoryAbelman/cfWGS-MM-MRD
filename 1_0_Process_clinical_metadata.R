@@ -810,6 +810,14 @@ updated_relapse <- bind_rows(updated_relapse, new_dates_esther) %>%
 ## Fix back to original name for consistency 
 Relapse_dates_full <- updated_relapse
 
+## Add additional dates from Sarah 
+new_rows <- tibble(
+  Patient = c("VA-24", "HP-05"),
+  Progression_date = as.Date(c("2024-12-11","2024-07-02"))
+)
+
+Relapse_dates_full <- bind_rows(Relapse_dates_full, new_rows)
+
 ## Export relapse dates 
 write.csv(Relapse_dates_full, file = "Relapse dates cfWGS updated.csv", row.names = F)
 write.csv(Relapse_dates_M4_clean, "Relapse_dates_M4_clean.csv", row.names = FALSE)
@@ -1159,6 +1167,7 @@ PFS_days <- max_days %>%
   )
 
 # Export the PFS_dates table to a CSV file
+# No longer used
 write.csv(PFS_days, file = "Exported_data_tables_clinical/PFS_days.csv", row.names = FALSE)
 
 ### Get the latest date per patient 

@@ -278,6 +278,7 @@ followup_hist <- pfs_front %>%
 
 # If you want to export the stats to CSV
 write_csv(followup_stats, file.path(outdir, "frontline_followup_summary.csv"))
+## Can use 1A for this as well 
 
 # 4.  Assays & timepoint definitions ------------------------------------------
 assays <- c(
@@ -421,6 +422,148 @@ write_csv(year_stats_blood, file.path(outdir, "frontline_1yr_sens_bloodcfWGS.csv
 
 
 
+### Make barplot for supplement 
+# ─────────────────────────────────────────────────────────────
+# 0.  Combine the two tables  → long format
+# ─────────────────────────────────────────────────────────────
+sens_df <- bind_rows(
+  post_stats_BM  %>% mutate(Timepoint = "Post-ASCT"),
+  year_stats_BM  %>% mutate(Timepoint = "Maintenance-1yr")
+) %>%
+  filter(Assay != "cfWGS_Blood") %>%
+  mutate(
+    # percentages for labelling
+    Sens_pct   = Sensitivity * 100,
+    # nicer assay labels for the x‑axis
+    Assay      = recode(Assay,
+                        clonoSEQ       = "clonoSEQ",
+                        Flow           = "MFC",
+                        cfWGS_BM       = "cfWGS")
+  )
+
+# ─────────────────────────────────────────────────────────────
+# 1.  Custom palette & base theme
+# ─────────────────────────────────────────────────────────────
+custom_cols <- c(
+  "Post-ASCT"       = "#31688E",  # deep teal
+  "Maintenance-1yr" = "#35B779"   # bright green
+)
+
+base_theme <- theme_minimal(base_size = 11) +
+  theme(
+    axis.title      = element_text(size = 11),
+    plot.title      = element_text(face = "bold", hjust = 0.5, size = 12),
+    axis.line       = element_line(colour = "black"),
+    panel.grid      = element_blank(),
+    legend.position = "top",
+    plot.margin     = margin(10, 10, 30, 10)
+  )
+
+# ─────────────────────────────────────────────────────────────
+# 2.  Build the grouped bar‑plot
+# ─────────────────────────────────────────────────────────────
+p_sens <- ggplot(sens_df,
+                 aes(x = Assay, y = Sens_pct, fill = Timepoint)) +
+  geom_col(position = position_dodge(width = 0.8),
+           width    = 0.7,
+           colour   = "black",
+           size     = 0.3) +
+  geom_text(aes(label = sprintf("%.0f%%", Sens_pct)),
+            position = position_dodge(width = 0.8),
+            vjust    = -0.3,
+            size     = 3.5) +
+  scale_fill_manual(
+    name   = "Timepoint",
+    values = custom_cols,
+    breaks = names(custom_cols)
+  ) +
+  scale_y_continuous(
+    limits = c(0, 100),
+    expand = expansion(mult = c(0, 0.02)),
+    labels = percent_format(scale = 1)
+  ) +
+  labs(
+    title = "Sensitivity of MRD assays among relapsing patients",
+    x     = "Technology",
+    y     = "Sensitivity"
+  ) +
+  base_theme +
+  theme(
+    axis.text.x = element_text(angle = 0, hjust = 1)
+  )
+
+print(p_sens)
+
+# ─────────────────────────────────────────────────────────────
+# 3.  Save
+# ─────────────────────────────────────────────────────────────
+ggsave(
+  filename = "Final Tables and Figures/Supp_6A_Fig_sensitivity_by_tech_training.png",
+  plot     = p_sens,
+  width    = 6,
+  height   = 4,
+  dpi      = 500
+)
+
+
+## Now for blood
+sens_df <- bind_rows(
+  post_stats_blood  %>% mutate(Timepoint = "Post-ASCT"),
+  year_stats_blood  %>% mutate(Timepoint = "Maintenance-1yr")
+) %>%
+  filter(Assay != "cfWGS_BM") %>%
+  mutate(
+    # percentages for labelling
+    Sens_pct   = Sensitivity * 100,
+    # nicer assay labels for the x‑axis
+    Assay      = recode(Assay,
+                        clonoSEQ       = "clonoSEQ",
+                        Flow           = "MFC",
+                        cfWGS_Blood       = "cfWGS")
+  )
+
+p_sens_blood <- ggplot(sens_df,
+                 aes(x = Assay, y = Sens_pct, fill = Timepoint)) +
+  geom_col(position = position_dodge(width = 0.8),
+           width    = 0.7,
+           colour   = "black",
+           size     = 0.3) +
+  geom_text(aes(label = sprintf("%.0f%%", Sens_pct)),
+            position = position_dodge(width = 0.8),
+            vjust    = -0.3,
+            size     = 3.5) +
+  scale_fill_manual(
+    name   = "Timepoint",
+    values = custom_cols,
+    breaks = names(custom_cols)
+  ) +
+  scale_y_continuous(
+    limits = c(0, 100),
+    expand = expansion(mult = c(0, 0.02)),
+    labels = percent_format(scale = 1)
+  ) +
+  labs(
+    title = "Sensitivity of MRD assays among relapsing patients",
+    x     = "Technology",
+    y     = "Sensitivity"
+  ) +
+  base_theme +
+  theme(
+    axis.text.x = element_text(angle = 0, hjust = 1)
+  )
+
+# ─────────────────────────────────────────────────────────────
+# 3.  Save
+# ─────────────────────────────────────────────────────────────
+ggsave(
+  filename = "Final Tables and Figures/Supp_8A_Fig_sensitivity_by_tech_training_blood.png",
+  plot     = p_sens,
+  width    = 6,
+  height   = 4,
+  dpi      = 500
+)
+
+
 
 
 #### Now get other results and do power analysis 
@@ -495,6 +638,43 @@ hr_fl      <- cox_fl$estimate
 ci_lo_fl   <- cox_fl$conf.low
 ci_hi_fl   <- cox_fl$conf.high
 
+
+## check clonoSEQ
+# fit the Kaplan–Meier curve
+df_km_clonoSEQ <- survival_df %>%
+  filter(
+    timepoint_info == "1yr maintenance",
+    !is.na(Adaptive_Binary)
+  )
+
+# fit the Kaplan–Meier curve
+fit_clonoSEQ <- survfit(
+  Surv(Time_to_event, Relapsed_Binary) ~ Adaptive_Binary,
+  data = df_km_clonoSEQ
+)
+
+sum_clonoSEQ24   <- summary(fit_clonoSEQ, times = t24)
+rfs_neg_clonoSEQ <- sum_clonoSEQ24$surv[1] * 100
+rfs_pos_clonoSEQ <- sum_clonoSEQ24$surv[2] * 100
+
+## 3. Median RFS by clonoSEQ ----
+fit_clonoSEQ <- survfit(
+  Surv(Time_to_event, Relapsed_Binary) ~ Adaptive_Binary,
+  data = df_km
+)
+med_clonoSEQ <- surv_median(fit_clonoSEQ)$median      # vector of two values
+med_neg_clonoSEQ <- med_clonoSEQ[1] / 30.44           # convert days→months
+med_pos_clonoSEQ <- med_clonoSEQ[2] / 30.44
+
+cox_clonoSEQ <- tidy(
+  coxph(Surv(Time_to_event, Relapsed_Binary) ~ Adaptive_Binary,
+        data = df_km),
+  exponentiate = TRUE, conf.int = TRUE
+)
+hr_clonoSEQ      <- cox_clonoSEQ$estimate
+ci_lo_clonoSEQ   <- cox_clonoSEQ$conf.low
+ci_hi_clonoSEQ   <- cox_clonoSEQ$conf.high
+
 ## 4. Spearman correlations ----
 # replace with your actual probability column:
 prob_var <- "BM_zscore_only_detection_rate_prob"  
@@ -555,6 +735,13 @@ metrics_1yr <- tibble(
   RFS24_fl_pos   = rfs_pos_fl,
   MedRFS_fl_neg  = med_neg_fl,
   MedRFS_fl_pos  = med_pos_fl,
+  RFS24_seq_neg  = rfs_neg_clonoSEQ,
+  RFS24_seq_pos  = rfs_pos_clonoSEQ,
+  MedRFS_seq_neg = med_neg_clonoSEQ,
+  MedRFS_seq_pos = med_pos_clonoSEQ,
+  HR_seq         = hr_clonoSEQ,
+  CI_low_seq     = ci_lo_clonoSEQ,
+  CI_high_seq    = ci_hi_clonoSEQ,
   HR_cf          = hr_cf,
   CI_low_cf      = ci_lo_cf,
   CI_high_cf     = ci_hi_cf,
@@ -630,6 +817,44 @@ hr_fl      <- cox_fl$estimate
 ci_lo_fl   <- cox_fl$conf.low
 ci_hi_fl   <- cox_fl$conf.high
 
+## Check clonoSEQ 
+# fit the Kaplan–Meier curve
+df_km_clonoSEQ <- survival_df %>%
+  filter(
+    timepoint_info == "post_transplant",
+    !is.na(Adaptive_Binary)
+  )
+
+# fit the Kaplan–Meier curve
+fit_clonoSEQ <- survfit(
+  Surv(Time_to_event, Relapsed_Binary) ~ Adaptive_Binary,
+  data = df_km_clonoSEQ
+)
+
+sum_clonoSEQ24   <- summary(fit_clonoSEQ, times = t24)
+rfs_neg_clonoSEQ <- sum_clonoSEQ24$surv[1] * 100
+rfs_pos_clonoSEQ <- sum_clonoSEQ24$surv[2] * 100
+
+## 3. Median RFS by clonoSEQ ----
+fit_clonoSEQ <- survfit(
+  Surv(Time_to_event, Relapsed_Binary) ~ Adaptive_Binary,
+  data = df_km
+)
+med_clonoSEQ <- surv_median(fit_clonoSEQ)$median      # vector of two values
+med_neg_clonoSEQ <- med_clonoSEQ[1] / 30.44           # convert days→months
+med_pos_clonoSEQ <- med_clonoSEQ[2] / 30.44
+
+cox_clonoSEQ <- tidy(
+  coxph(Surv(Time_to_event, Relapsed_Binary) ~ Adaptive_Binary,
+        data = df_km),
+  exponentiate = TRUE, conf.int = TRUE
+)
+hr_clonoSEQ      <- cox_clonoSEQ$estimate
+ci_lo_clonoSEQ   <- cox_clonoSEQ$conf.low
+ci_hi_clonoSEQ   <- cox_clonoSEQ$conf.high
+
+
+
 ## 4. Spearman correlations ----
 # replace with your actual probability column:
 prob_var <- "BM_zscore_only_detection_rate_prob"  
@@ -687,12 +912,19 @@ metrics_post_transplant <- tibble(
   RFS24_fl_pos   = rfs_pos_fl,
   MedRFS_fl_neg  = med_neg_fl,
   MedRFS_fl_pos  = med_pos_fl,
+  RFS24_seq_neg  = rfs_neg_clonoSEQ,
+  RFS24_seq_pos  = rfs_pos_clonoSEQ,
+  MedRFS_seq_neg = med_neg_clonoSEQ,
+  MedRFS_seq_pos = med_pos_clonoSEQ,
   HR_cf          = hr_cf,
   CI_low_cf      = ci_lo_cf,
   CI_high_cf     = ci_hi_cf,
   HR_fl          = hr_fl,
   CI_low_fl      = ci_lo_fl,
   CI_high_fl     = ci_hi_fl,
+  HR_seq         = hr_clonoSEQ,
+  CI_low_seq     = ci_lo_clonoSEQ,
+  CI_high_seq    = ci_hi_clonoSEQ,
   Spearman_prob  = rho1,
   Spearman_flow  = rho2,
   Events         = d,
@@ -719,7 +951,7 @@ write_csv(
 # (Optional) also save as RDS for later use
 saveRDS(
   progression_metrics,
-  file.path(outdir, "cfWGS_vs_flow_progression_summary.rds")
+  file.path(outdir, "cfWGS_vs_flow_progression_summary_updated.rds")
 )
 
 
@@ -787,6 +1019,41 @@ hr_fl      <- cox_fl$estimate
 ci_lo_fl   <- cox_fl$conf.low
 ci_hi_fl   <- cox_fl$conf.high
 
+# Now clonoSEQ
+df_km_clonoSEQ <- survival_df %>%
+  filter(
+    timepoint_info == "1yr maintenance",
+    !is.na(Adaptive_Binary)
+  )
+
+# fit the Kaplan–Meier curve
+fit_clonoSEQ <- survfit(
+  Surv(Time_to_event, Relapsed_Binary) ~ Adaptive_Binary,
+  data = df_km_clonoSEQ
+)
+
+sum_clonoSEQ24   <- summary(fit_clonoSEQ, times = t24)
+rfs_neg_clonoSEQ <- sum_clonoSEQ24$surv[1] * 100
+rfs_pos_clonoSEQ <- sum_clonoSEQ24$surv[2] * 100
+
+## 3. Median RFS by clonoSEQ ----
+fit_clonoSEQ <- survfit(
+  Surv(Time_to_event, Relapsed_Binary) ~ Adaptive_Binary,
+  data = df_km
+)
+med_clonoSEQ <- surv_median(fit_clonoSEQ)$median      # vector of two values
+med_neg_clonoSEQ <- med_clonoSEQ[1] / 30.44           # convert days→months
+med_pos_clonoSEQ <- med_clonoSEQ[2] / 30.44
+
+cox_clonoSEQ <- tidy(
+  coxph(Surv(Time_to_event, Relapsed_Binary) ~ Adaptive_Binary,
+        data = df_km),
+  exponentiate = TRUE, conf.int = TRUE
+)
+hr_clonoSEQ      <- cox_clonoSEQ$estimate
+ci_lo_clonoSEQ   <- cox_clonoSEQ$conf.low
+ci_hi_clonoSEQ   <- cox_clonoSEQ$conf.high
+
 ## 4. Spearman correlations ----
 # replace with your actual probability column:
 prob_var <- "Blood_zscore_only_sites_prob"  
@@ -847,6 +1114,13 @@ metrics_1yr <- tibble(
   RFS24_fl_pos   = rfs_pos_fl,
   MedRFS_fl_neg  = med_neg_fl,
   MedRFS_fl_pos  = med_pos_fl,
+  RFS24_seq_neg  = rfs_neg_clonoSEQ,
+  RFS24_seq_pos  = rfs_pos_clonoSEQ,
+  MedRFS_seq_neg = med_neg_clonoSEQ,
+  MedRFS_seq_pos = med_pos_clonoSEQ,
+  HR_seq         = hr_clonoSEQ,
+  CI_low_seq     = ci_lo_clonoSEQ,
+  CI_high_seq    = ci_hi_clonoSEQ,
   HR_cf          = hr_cf,
   CI_low_cf      = ci_lo_cf,
   CI_high_cf     = ci_hi_cf,
@@ -922,6 +1196,40 @@ hr_fl      <- cox_fl$estimate
 ci_lo_fl   <- cox_fl$conf.low
 ci_hi_fl   <- cox_fl$conf.high
 
+df_km_clonoSEQ <- survival_df %>%
+  filter(
+    timepoint_info == "post_transplant",
+    !is.na(Adaptive_Binary)
+  )
+
+# fit the Kaplan–Meier curve
+fit_clonoSEQ <- survfit(
+  Surv(Time_to_event, Relapsed_Binary) ~ Adaptive_Binary,
+  data = df_km_clonoSEQ
+)
+
+sum_clonoSEQ24   <- summary(fit_clonoSEQ, times = t24)
+rfs_neg_clonoSEQ <- sum_clonoSEQ24$surv[1] * 100
+rfs_pos_clonoSEQ <- sum_clonoSEQ24$surv[2] * 100
+
+## 3. Median RFS by clonoSEQ ----
+fit_clonoSEQ <- survfit(
+  Surv(Time_to_event, Relapsed_Binary) ~ Adaptive_Binary,
+  data = df_km
+)
+med_clonoSEQ <- surv_median(fit_clonoSEQ)$median      # vector of two values
+med_neg_clonoSEQ <- med_clonoSEQ[1] / 30.44           # convert days→months
+med_pos_clonoSEQ <- med_clonoSEQ[2] / 30.44
+
+cox_clonoSEQ <- tidy(
+  coxph(Surv(Time_to_event, Relapsed_Binary) ~ Adaptive_Binary,
+        data = df_km),
+  exponentiate = TRUE, conf.int = TRUE
+)
+hr_clonoSEQ      <- cox_clonoSEQ$estimate
+ci_lo_clonoSEQ   <- cox_clonoSEQ$conf.low
+ci_hi_clonoSEQ   <- cox_clonoSEQ$conf.high
+
 ## 4. Spearman correlations ----
 # replace with your actual probability column:
 prob_var <- "Blood_zscore_only_sites_prob"  
@@ -979,6 +1287,13 @@ metrics_post_transplant <- tibble(
   RFS24_fl_pos   = rfs_pos_fl,
   MedRFS_fl_neg  = med_neg_fl,
   MedRFS_fl_pos  = med_pos_fl,
+  RFS24_seq_neg  = rfs_neg_clonoSEQ,
+  RFS24_seq_pos  = rfs_pos_clonoSEQ,
+  MedRFS_seq_neg = med_neg_clonoSEQ,
+  MedRFS_seq_pos = med_pos_clonoSEQ,
+  HR_seq         = hr_clonoSEQ,
+  CI_low_seq     = ci_lo_clonoSEQ,
+  CI_high_seq    = ci_hi_clonoSEQ,
   HR_cf          = hr_cf,
   CI_low_cf      = ci_lo_cf,
   CI_high_cf     = ci_hi_cf,
@@ -1011,9 +1326,479 @@ write_csv(
 # (Optional) also save as RDS for later use
 saveRDS(
   progression_metrics_blood,
-  file.path(outdir, "cfWGS_vs_flow_progression_summaryy_blood_muts.rds")
+  file.path(outdir, "cfWGS_vs_flow_progression_summaryy_blood_muts_updated.rds")
 )
 
+
+
+### Make HR figure 
+# 1. reshape into long format
+hr_plot_df <- progression_metrics_blood %>%
+  select(Landmark,
+         HR_cf,   CI_low_cf,   CI_high_cf,
+         HR_fl,   CI_low_fl,   CI_high_fl,
+         HR_seq,   CI_low_seq,   CI_high_seq) %>%
+  pivot_longer(
+    cols      = -Landmark,
+    names_to  = c(".value", "Assay"),
+    names_pattern = "(HR|CI_low|CI_high)_(cf|fl|seq)"
+  ) %>%
+  mutate(
+    Assay = recode(Assay,
+                   cf = "cfWGS",
+                   fl = "MFC",
+                   seq = "clonoSEQ"),
+    Landmark = factor(Landmark,
+                      levels = c("post_transplant", "1yr_maintenance"),
+                      labels = c("Post‑ASCT", "Maintenance-1yr"))
+  )
+
+p_hr <- ggplot(hr_plot_df,
+               aes(x = HR, y = fct_rev(Landmark), colour = Assay)) +
+  # reference line
+  geom_vline(xintercept = 1, linetype = "dashed") +
+  
+  # 1) horizontal CIs
+  geom_errorbarh(
+    aes(xmin = CI_low, xmax = CI_high),
+    position = position_dodge(width = 0.6),
+    size     = 0.5
+  ) +
+  
+  # 2) dots at the HR
+  geom_point(
+    position = position_dodge(width = 0.6),
+    size     = 3
+  ) +
+  
+  # log scale axis
+  scale_x_continuous(
+    "Hazard ratio (log scale)",
+    trans        = "log10",
+    limits       = c(0.05, 16),           # start at 0.05
+    breaks       = c(0.05, 0.1, 0.25, 0.5, 1, 2, 4, 8, 16),
+    minor_breaks = c(
+      0.06, 0.08,      # between 0.05 & 0.1
+      0.15, 0.2,       # between 0.1 & 0.25
+      0.3, 0.4,        # between 0.25 & 0.5
+      0.6, 0.8,        # between 0.5 & 1
+      1.5,             # between 1 & 2
+      3, 6,            # between 2 & 4 & 8
+      12               # between 8 & 16
+    ),
+    labels = label_number(accuracy = .01)
+  ) +
+  annotation_logticks(
+    sides  = "b",
+    short  = unit(2, "pt"),
+    mid    = unit(4, "pt"),
+    long   = unit(6, "pt")
+  ) +
+  # colours
+  scale_colour_manual(
+    name   = NULL,
+    values = c("cfWGS" = "#35608DFF",
+               "MFC"   = "#43BF71FF",
+               "clonoSEQ"= "#E69F00FF"   # orange for clonoSEQ
+    )
+  ) +
+  
+  labs(
+    y        = NULL,
+    title    = "Relapse hazard ratios stratified by MRD assay\nand landmark timepoint",
+ #   subtitle = "cfWGS vs. MFC (95% CI)"
+  ) +
+  
+  # classic theme with no gridlines
+  theme_classic(base_size = 11) +
+  theme(
+    panel.grid         = element_blank(),   # no grid at all
+    plot.title         = element_text(face = "bold",
+                                      hjust = 0.5),  # bold + centered
+    panel.grid.major.y = element_blank(),
+    panel.grid.minor   = element_blank(),
+    legend.position    = "right",
+    legend.title       = element_text(size = 9),
+    legend.text        = element_text(size = 8)
+  )
+
+ggsave("Final Tables and Figures/F5X_cfWGS_blood_HR_updated.png",
+       p_hr, width = 6, height = 4, dpi = 600)
+
+
+
+### Now for BM derived muts
+hr_plot_df <- progression_metrics %>%
+  select(Landmark,
+         HR_cf,   CI_low_cf,   CI_high_cf,
+         HR_fl,   CI_low_fl,   CI_high_fl,
+         HR_seq,   CI_low_seq,   CI_high_seq) %>%
+  pivot_longer(
+    cols      = -Landmark,
+    names_to  = c(".value", "Assay"),
+    names_pattern = "(HR|CI_low|CI_high)_(cf|fl|seq)"
+  ) %>%
+  mutate(
+    Assay = recode(Assay,
+                   cf = "cfWGS",
+                   fl = "MFC",
+                   seq = "clonoSEQ"),
+    Landmark = factor(Landmark,
+                      levels = c("post_transplant", "1yr_maintenance"),
+                      labels = c("Post‑ASCT", "Maintenance-1yr"))
+  )
+
+p_hr_bm <- ggplot(hr_plot_df,
+               aes(x = HR, y = fct_rev(Landmark), colour = Assay)) +
+  # reference line
+  geom_vline(xintercept = 1, linetype = "dashed") +
+  
+  # 1) horizontal CIs
+  geom_errorbarh(
+    aes(xmin = CI_low, xmax = CI_high),
+    position = position_dodge(width = 0.6),
+    size     = 0.5
+  ) +
+  
+  # 2) dots at the HR
+  geom_point(
+    position = position_dodge(width = 0.6),
+    size     = 3
+  ) +
+  
+  # log scale axis
+  scale_x_log10(
+    "Hazard ratio (log scale)",
+    limits       = c(0.19, 200),           # now starts at 0.2
+    breaks       = c(0.2, 0.5, 1, 2, 5, 10, 20, 50, 100, 200),
+    minor_breaks = c(
+      0.25, 0.3, 0.4, 0.6, 0.8,    # between 0.2 & 1
+      1.5,           # between 1 & 2
+      3, 4,          # between 2 & 5
+      6, 8,          # between 5 & 10
+      15, 30,        # between 10 & 50
+      40, 60, 80,    # between 20 & 100
+      150            # between 100 & 200
+    ),
+    labels = function(x) {
+      sapply(x, function(xx) {
+        if (xx > 1) {
+          sprintf("%.0f", xx)
+        } else {
+          sprintf("%.2f", xx)
+        }
+      })
+    }
+  ) +
+  annotation_logticks(
+    sides = "b",
+    short = unit(2, "pt"),
+    mid   = unit(4, "pt"),
+    long  = unit(6, "pt")
+  ) +
+  # colours
+  scale_colour_manual(
+    name   = NULL,
+    values = c("cfWGS" = "#35608DFF",
+               "MFC"   = "#43BF71FF",
+               "clonoSEQ"= "#E69F00FF")   # orange for clonoSEQ
+  ) +
+  
+  labs(
+    y        = NULL,
+    title    = "Relapse hazard ratios stratified by MRD assay\nand landmark timepoint",
+    #  subtitle = "(95% CI)"
+  ) +
+  
+  # classic theme with no gridlines
+  theme_classic(base_size = 11) +
+  theme(
+    panel.grid         = element_blank(),   # no grid at all
+    panel.grid.major.y = element_blank(),
+    panel.grid.minor   = element_blank(),
+    plot.title         = element_text(face = "bold",
+                                      hjust = 0.5),  # bold + centered
+    legend.position    = "right",
+    legend.title       = element_text(size = 9),
+    legend.text        = element_text(size = 8)
+  )
+
+ggsave("Final Tables and Figures/Figure_4X_cfWGS_BM_HR_updated.png",
+       p_hr_bm, width = 6, height = 4, dpi = 600)
+
+
+
+
+
+
+
+
+
+
+### Now make time to relapse figure 
+df <- survival_df %>%                           # <- your tibble
+  # keep samples beyond baseline / diagnosis
+  filter(!str_detect(timepoint_info, regex("Diagnosis|Baseline", TRUE))) %>%
+  
+  # drop rows with missing probability or time
+  filter(!is.na(BM_zscore_only_detection_rate_prob),
+         !is.na(Time_to_event)) %>%
+  
+  # enforce non-negative time to event for relapse event visits a few days off from CMRG date
+  mutate(
+    days_before_event = pmax(Time_to_event, 0), # set negative values to 0 
+    mrd_status      = factor(
+      BM_zscore_only_detection_rate_call,
+      levels = c(0, 1),
+      labels = c("MRD-", "MRD+")
+    ),
+    progress_status = factor(
+      Relapsed_Binary,
+      levels = c(0, 1),
+      labels = c("No relapse", "Relapse")
+    ),
+    
+    # time *before* the anchor (positive value) → plot reversed
+    days_before_event = Time_to_event,    # keep positive for clarity
+    months_before_event = days_before_event/30.44
+  )
+
+## Only multiple points 
+df <- df %>%
+  group_by(Patient) %>% 
+  filter(dplyr::n() > 1) %>%   # keep only patients with >1 row
+  ungroup()
+
+# ────────────────────────────────────────────────────────────────
+# 2.  Plot  ──────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────
+youden_thresh <- 0.436
+max_mo <- max(df$months_before_event, na.rm = TRUE)  
+
+p_prob <- ggplot(df, aes(months_before_event, BM_zscore_only_detection_rate_prob, group = Patient)) +
+  
+  # 1) Youden line
+  geom_hline(yintercept = youden_thresh,
+             linetype = "dotted", colour = "gray40") +
+  
+  # 2) trajectories coloured by relapse
+  geom_line(aes(colour = progress_status),
+            size = 0.4, alpha = 0.4) +
+  
+  # 3) points: fill by relapse, stroke by MRD call, border black
+  geom_point(aes(
+    fill   = progress_status,
+    stroke = mrd_status
+  ),
+  shape  = 21,
+  colour = "black",
+  size   = 2
+  ) +
+  
+  # 4) event line
+  geom_vline(xintercept = 0, linetype = "dotted", colour = "gray40") +
+  
+  # 5) axes
+  scale_x_reverse(
+    name         = "Months before event or censor",
+    breaks       = seq(0, max_mo, by = 12),  # every 12 months
+    minor_breaks = seq(0, max_mo, by = 6)    # every 6 months
+  ) +
+  scale_y_continuous("cfWGS MRD probability",
+                     limits = c(0,1),
+                     labels = scales::percent_format(1)) +
+  
+  # 6) colour for relapse status
+  scale_colour_manual(
+    name   = "Patient outcome",
+    values = c("No relapse" = "#35608DFF",
+               "Relapse"    = "#43BF71FF")
+  ) +
+  scale_fill_manual(
+    name   = "Patient outcome",
+    values = c("No relapse" = "#35608DFF",
+               "Relapse"    = "#43BF71FF")
+  ) +
+  
+  # 7) stroke scale for MRD call
+  scale_discrete_manual(
+    aesthetics = "stroke",
+    values     = c("MRD-" = 0,    # no ring
+                   "MRD+" = 1), # visible ring
+    guide      = guide_legend(
+      title = "MRD call",
+      override.aes = list(
+        fill   = detect_cols["Both"] %||% c("MRD-"="#35608DFF","MRD+"="#43BF71FF"),
+        shape  = 21,
+        fill   = "white",    # <–– white interior, not green
+        size   = 4,
+        colour = "black",
+        stroke = c(0,1)
+      )
+    )
+  ) +
+  
+  # 8) clean up legends
+  guides(
+    colour = guide_legend(order = 1),
+    fill   = FALSE   # only show stroke legend for MRD
+  ) +
+  
+  labs(
+    title    = "cfWGS probability trajectories vs. time to relapse"
+  ) +
+  theme_classic(base_size = 11) +
+  theme(
+    panel.grid      = element_blank(),
+    plot.title      = element_text(face = "bold", hjust = 0.5),
+    plot.subtitle   = element_text(hjust = 0.5),
+    legend.position = "right", 
+    legend.title    = element_text(size = 11),   # 
+    legend.text     = element_text(size = 7)    # even smaller
+  )
+
+print(p_prob)
+
+
+# ────────────────────────────────────────────────────────────────
+# 3.  Export  ────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────
+ggsave("Final Tables and Figures/F4I_cfWGS_prob_vs_time_updated.png",
+       p_prob, width = 8, height = 4.5, dpi = 600)
+
+
+
+
+### Now redo for blood-derived muts
+df <- survival_df %>%                           # <- your tibble
+  # keep samples beyond baseline / diagnosis
+  filter(!str_detect(timepoint_info, regex("Diagnosis|Baseline", TRUE))) %>%
+  
+  # drop rows with missing probability or time
+  filter(!is.na(Blood_zscore_only_sites_prob),
+         !is.na(Time_to_event)) %>%
+  
+  # enforce non-negative time to event for relapse event visits a few days off from CMRG date
+  mutate(
+    days_before_event = pmax(Time_to_event, 0), # set negative values to 0 
+    mrd_status      = factor(
+      Blood_zscore_only_sites_call,
+      levels = c(0, 1),
+      labels = c("MRD-", "MRD+")
+    ),
+    progress_status = factor(
+      Relapsed_Binary,
+      levels = c(0, 1),
+      labels = c("No relapse", "Relapse")
+    ),
+    
+    # time *before* the anchor (positive value) → plot reversed
+    days_before_event = Time_to_event,    # keep positive for clarity
+    months_before_event = days_before_event/30.44
+  )
+
+## Only multiple points 
+df <- df %>%
+  group_by(Patient) %>% 
+  filter(dplyr::n() > 1) %>%   # keep only patients with >1 row
+  ungroup()
+
+# ────────────────────────────────────────────────────────────────
+# 2.  Plot  ──────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────
+youden_thresh <- 0.523
+max_mo <- max(df$months_before_event, na.rm = TRUE)  
+
+p_prob <- ggplot(df, aes(months_before_event, Blood_zscore_only_sites_prob, group = Patient)) +
+  
+  # 1) Youden line
+  geom_hline(yintercept = youden_thresh,
+             linetype = "dotted", colour = "gray40") +
+  
+  # 2) trajectories coloured by relapse
+  geom_line(aes(colour = progress_status),
+            size = 0.4, alpha = 0.4) +
+  
+  # 3) points: fill by relapse, stroke by MRD call, border black
+  geom_point(aes(
+    fill   = progress_status,
+    stroke = mrd_status
+  ),
+  shape  = 21,
+  colour = "black",
+  size   = 2
+  ) +
+  
+  # 4) event line
+  geom_vline(xintercept = 0, linetype = "dotted", colour = "gray40") +
+  
+  # 5) axes
+  scale_x_reverse(
+    name         = "Months before event or censor",
+    breaks       = seq(0, max_mo, by = 12),  # every 12 months
+    minor_breaks = seq(0, max_mo, by = 6)    # every 6 months
+  ) +
+  scale_y_continuous("cfWGS MRD probability",
+                     limits = c(0.4,0.9),
+                     labels = scales::percent_format(1)) +
+  
+  # 6) colour for relapse status
+  scale_colour_manual(
+    name   = "Patient outcome",
+    values = c("No relapse" = "#35608DFF",
+               "Relapse"    = "#43BF71FF")
+  ) +
+  scale_fill_manual(
+    name   = "Patient outcome",
+    values = c("No relapse" = "#35608DFF",
+               "Relapse"    = "#43BF71FF")
+  ) +
+  
+  # 7) stroke scale for MRD call
+  scale_discrete_manual(
+    aesthetics = "stroke",
+    values     = c("MRD-" = 0,    # no ring
+                   "MRD+" = 1), # visible ring
+    guide      = guide_legend(
+      title = "MRD call",
+      override.aes = list(
+        fill   = detect_cols["Both"] %||% c("MRD-"="#35608DFF","MRD+"="#43BF71FF"),
+        shape  = 21,
+        fill   = "white",    # <–– white interior, not green
+        size   = 4,
+        colour = "black",
+        stroke = c(0,1)
+      )
+    )
+  ) +
+  
+  # 8) clean up legends
+  guides(
+    colour = guide_legend(order = 1),
+    fill   = FALSE   # only show stroke legend for MRD
+  ) +
+  
+  labs(
+    title    = "cfWGS probability trajectories vs. time to relapse"
+  ) +
+  theme_classic(base_size = 11) +
+  theme(
+    panel.grid      = element_blank(),
+    plot.title      = element_text(face = "bold", hjust = 0.5),
+    plot.subtitle   = element_text(hjust = 0.5),
+    legend.position = "right", 
+    legend.title    = element_text(size = 11),   # 
+    legend.text     = element_text(size = 7)    # even smaller
+  )
+
+print(p_prob)
+
+
+# ────────────────────────────────────────────────────────────────
+# 3.  Export  ────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────
+ggsave("Final Tables and Figures/F5I_cfWGS_prob_vs_time_updated_blood_muts.png",
+       p_prob, width = 8, height = 4.5, dpi = 600)
 
 
 
@@ -1214,7 +1999,6 @@ results_blood %>%
 # define your windows of interest
 windows <- c(90, 180, 365, 730)
 
-# assuming you’ve already built df_sf (with Patient, sample_date, relapsed, relapse_date)
 # this will count, for each window:
 # - how many distinct patients relapsed within that window
 # - how many samples fall into that window
@@ -1238,12 +2022,161 @@ event_counts_BM <- map_dfr(windows, function(w) {
 print(event_counts_BM)
 
 
+## Make figure 
+# ────────────────────────────────────────────────────────────────────────────
+# 1) Prepare the data
+# ────────────────────────────────────────────────────────────────────────────
+sens_BM_df <- results_BM %>%
+  # if you want to drop the blood‑only assay, uncomment:
+  # filter(Assay != "cfWGS_Blood") %>%
+  
+  # turn Window_days into a nice factor
+  mutate(
+    Timepoint = factor(
+      Window_days,
+      levels = c(90, 180, 365, 730),
+      labels = c("90 days", "180 days", "365 days", "730 days")
+    ),
+    Sens_pct = Sensitivity * 100,
+    Assay = recode(
+      Assay,
+      Flow        = "MFC",
+      cfWGS_BM    = "cfWGS",
+    )
+  )
+
+sens_BM_df <- sens_BM_df %>% filter(Assay != "cfWGS_Blood")
+# ────────────────────────────────────────────────────────────────────────────
+# 2) Colours & theme (match your existing style)
+# ────────────────────────────────────────────────────────────────────────────
+custom_cols <- c(
+  "90 days"  = "#440154FF",
+  "180 days" = "#31688EFF",
+  "365 days" = "#35B779FF",
+  "730 days" = "#E69F00FF"
+)
+
+base_theme <- theme_minimal(base_size = 11) +
+  theme(
+    axis.title      = element_text(size = 11),
+    plot.title      = element_text(face = "bold", hjust = 0.5, size = 12),
+    axis.line       = element_line(colour = "black"),
+    panel.grid      = element_blank(),
+    legend.position = "top",
+    plot.margin     = margin(10, 10, 30, 10)
+  )
+
+# ────────────────────────────────────────────────────────────────────────────
+# 3) Build the grouped bar‑plot
+# ────────────────────────────────────────────────────────────────────────────
+p_sens_bm <- ggplot(sens_BM_df,
+                       aes(x = Assay, y = Sens_pct, fill = Timepoint)) +
+  geom_col(position = position_dodge(width = 0.8),
+           width    = 0.7,
+           colour   = "black",
+           size     = 0.3) +
+  geom_text(aes(label = sprintf("%.0f%%", Sens_pct)),
+            position = position_dodge(width = 0.8),
+            vjust    = -0.3,
+            size     = 3.5) +
+  scale_fill_manual(
+    name   = "Window",
+    values = custom_cols,
+    breaks = names(custom_cols)
+  ) +
+  scale_y_continuous(
+    limits = c(0, 100),
+    expand = expansion(mult = c(0, 0.02)),
+    labels = percent_format(scale = 1)
+  ) +
+  labs(
+    title = "Sensitivity of MRD assays over\nfollow‑up windows (Test Cohort)",
+    x     = "Assay",
+    y     = "Sensitivity"
+  ) +
+  base_theme +
+  theme(
+    axis.text.x = element_text(angle = 30, hjust = 1),
+    plot.title = element_text(size = 14)
+  )
+
+# ────────────────────────────────────────────────────────────────────────────
+# 4) (Optional) Save
+# ────────────────────────────────────────────────────────────────────────────
+ggsave("Final Tables and Figures/Supp_Fig_6_Fig_sensitivity_windows_BM_test_cohort.png",
+       plot = p_sens_bm,
+       width = 4.75, height = 6, dpi = 500)
+
+
+### Now remake for blood muts
+sens_blood_df <- results_blood %>%
+  # if you want to drop the blood‑only assay, uncomment:
+  # filter(Assay != "cfWGS_Blood") %>%
+  
+  # turn Window_days into a nice factor
+  mutate(
+    Timepoint = factor(
+      Window_days,
+      levels = c(90, 180, 365, 730),
+      labels = c("90 days", "180 days", "365 days", "730 days")
+    ),
+    Sens_pct = Sensitivity * 100,
+    Assay = recode(
+      Assay,
+      Flow        = "MFC",
+      cfWGS_Blood    = "cfWGS",
+    )
+  )
+
+sens_blood_df <- sens_blood_df %>% filter(Assay != "cfWGS_BM")
+
+p_sens_blood <- ggplot(sens_blood_df,
+                    aes(x = Assay, y = Sens_pct, fill = Timepoint)) +
+  geom_col(position = position_dodge(width = 0.8),
+           width    = 0.7,
+           colour   = "black",
+           size     = 0.3) +
+  geom_text(aes(label = sprintf("%.0f%%", Sens_pct)),
+            position = position_dodge(width = 0.8),
+            vjust    = -0.3,
+            size     = 3.5) +
+  scale_fill_manual(
+    name   = "Window",
+    values = custom_cols,
+    breaks = names(custom_cols)
+  ) +
+  scale_y_continuous(
+    limits = c(0, 100),
+    expand = expansion(mult = c(0, 0.02)),
+    labels = percent_format(scale = 1)
+  ) +
+  labs(
+    title = "Sensitivity of MRD assays over\nfollow‑up windows (Test Cohort)",
+    x     = "Assay",
+    y     = "Sensitivity"
+  ) +
+  base_theme +
+  theme(
+    axis.text.x = element_text(angle = 30, hjust = 1)
+  )
+
+# ────────────────────────────────────────────────────────────────────────────
+# 4) (Optional) Save
+# ────────────────────────────────────────────────────────────────────────────
+ggsave("Final Tables and Figures/Supp_Fig_8_Fig_sensitivity_windows_blood_test_cohort.png",
+       plot = p_sens_blood,
+       width = 5, height = 5, dpi = 500)
+
+
+
+
+
 ### Export this
 # full results (all patients with any assay)
-write_csv(
-  results,
-  file.path(outdir, "all_assays_timewindow_results.csv")
-)
+#write_csv(
+#  results,
+#  file.path(outdir, "all_assays_timewindow_results.csv")
+#)
 
 # BM‐cfWGS subset
 write_csv(

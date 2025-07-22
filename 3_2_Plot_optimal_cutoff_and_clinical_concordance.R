@@ -486,8 +486,13 @@ front_tbl <- dat %>%
     !is.na(landmark_tp),
     !is.na(Blood_zscore_only_sites_call)
   ) %>%
+  ## Add the screen column 
+  mutate(
+    Blood_zscore_screen_call  = as.integer(Blood_zscore_only_sites_prob >= 0.457),
+  ) %>%
+  
   pivot_longer(
-    cols      = c(Flow_Binary, Adaptive_Binary, Blood_zscore_only_sites_call),
+    cols      = c(Flow_Binary, Adaptive_Binary, Blood_zscore_only_sites_call, Blood_zscore_screen_call),
     names_to  = "Technology",
     values_to = "Result"
   ) %>%
@@ -504,7 +509,8 @@ front_tbl <- dat %>%
       Technology,
       Flow_Binary         = "MFC",
       Adaptive_Binary     = "clonoSEQ",
-      Blood_zscore_only_sites_call = "cfWGS"
+      Blood_zscore_only_sites_call = "cfWGS (confirm)",
+      Blood_zscore_screen_call = "cfWGS (screen)"
     )
   )
 
@@ -518,8 +524,12 @@ non_tbl <- dat %>%
     !is.na(Blood_zscore_only_detection_rate_call),
     !is.na(MRD_truth) # restrict to only ones with MRD for fair comparison
   ) %>%
+  ## Add the screen column 
+  mutate(
+    Blood_zscore_screen_call  = as.integer(Blood_zscore_only_sites_prob >= 0.457),
+  ) %>%
   pivot_longer(
-    cols      = c(Flow_Binary, Adaptive_Binary, Blood_zscore_only_sites_call),
+    cols      = c(Flow_Binary, Adaptive_Binary, Blood_zscore_only_sites_call, Blood_zscore_screen_call),
     names_to  = "Technology",
     values_to = "Result"
   ) %>%
@@ -536,7 +546,8 @@ non_tbl <- dat %>%
       Technology,
       Flow_Binary         = "MFC",
       Adaptive_Binary     = "clonoSEQ",
-      Blood_zscore_only_sites_call = "cfWGS" 
+      Blood_zscore_only_sites_call = "cfWGS (confirm)",
+      Blood_zscore_screen_call = "cfWGS (screen)"
     )
   )
 
@@ -573,7 +584,15 @@ combo_tbl <- combo_tbl %>%
     landmark_tp = factor(landmark_tp,
                          levels = c("Post-ASCT",
                                     "Maintenance-1yr",
-                                    "All timepoints"))
+                                    "All timepoints")),
+    Technology  = factor(Technology,
+                         levels = c(
+                           "cfWGS (screen)",
+                           "cfWGS (confirm)",
+                           "clonoSEQ",
+                           "MFC"
+                         ))
+    
   )
 
 p_pos_by_tech <- ggplot(combo_tbl, 
@@ -590,7 +609,7 @@ p_pos_by_tech <- ggplot(combo_tbl,
   geom_text(aes(label = sprintf("%d%%", round(pos_rate * 100))),
             position = position_dodge(width = 0.8),
             vjust    = -0.3,
-            size     = 3.5,
+            size     = 3,
             family   = "sans") +
   
   # ③ manual fill so it matches your other panels
@@ -604,7 +623,7 @@ p_pos_by_tech <- ggplot(combo_tbl,
   facet_wrap(~ Cohort, nrow = 1, scales = "free_x") +
   scale_y_continuous(
     labels = scales::percent_format(scale = 1),
-    expand = expansion(mult = c(0, 0.02)),
+    expand = expansion(mult = c(0, 0.1)),
     limits = c(0, 100)
   ) +
   
@@ -628,9 +647,9 @@ p_pos_by_tech <- ggplot(combo_tbl,
 
 # 4) Save
 ggsave(
-  filename = file.path(OUTPUT_DIR_FIGURES, "Fig_5I_Blood_positivity_by_tech_facet.png"),
+  filename = file.path(OUTPUT_DIR_FIGURES, "Fig_5I_Blood_positivity_by_tech_facet_updated.png"),
   plot     = p_pos_by_tech,
-  width    = 6,    # wider to accommodate two facets
+  width    = 6.5,    # wider to accommodate two facets
   height   = 4,
   dpi      = 500
 )
@@ -1114,11 +1133,11 @@ plot_cm <- function(df, main_title){
 ## ───────────────────────────────────────────────────────────────
 ## D.  Draw & save the three panels
 ## ───────────────────────────────────────────────────────────────
-p_post   <- plot_cm(cm_post ,  "Post-ASCT (Training Cohort)")
-p_maint  <- plot_cm(cm_maint,  "1yr Maintenance (Training Cohort)")
-p_non    <- plot_cm(cm_non ,   "Test Cohort")
+p_post   <- plot_cm(cm_post ,  "Confusion Matrix at Post-ASCT (Training Cohort)")
+p_maint  <- plot_cm(cm_maint,  "Confusion Matrix at 1‑Year Maintenance (Training Cohort)")
+p_non    <- plot_cm(cm_non ,   "Confusion Matrix of Test Cohort")
 
-ggsave("Final Tables and Figures/Fig4_confmat_post_ASCT.png",
+ggsave("Final Tables and Figures/Fig4_confmat_post_ASCT_updated.png",
        p_post,  width = 5, height = 2.75, dpi = 600)
 ggsave("Final Tables and Figures/Fig4_confmat_maintenance.png",
        p_maint, width = 5, height = 2.75, dpi = 600)
@@ -1167,6 +1186,41 @@ ggsave("Final Tables and Figures/Fig4J_confusion_matrices_all_three.png",
        height = 7,      # three panels tall
        dpi    = 600)
 
+## Side by side 
+combined_cm <- (p_post +
+                  theme(
+                    panel.spacing = unit(1, "lines"),
+                    plot.margin   = margin(5, 5, 5, 5),
+                    panel.clip    = "off"
+                  )
+) |  # <-- use | instead of / to put them side by side
+  (p_maint +
+     theme(
+       panel.spacing = unit(1, "lines"),
+       plot.margin   = margin(5, 5, 5, 5),
+       panel.clip    = "off"
+     )
+  ) |
+  (p_non +
+     theme(
+       panel.spacing = unit(1, "lines"),
+       plot.margin   = margin(5, 5, 5, 5),
+       panel.clip    = "off"
+     )
+  ) +
+  plot_layout(ncol = 3, widths = c(1, 1, 0.5)) &  # three columns
+  theme(
+    strip.text = element_text(face = "bold"),
+    plot.title = element_text(face = "bold", hjust = 0.5)
+  )
+
+
+# save
+ggsave("Final Tables and Figures/Fig4J_confusion_matrices_all_three_side_by_side.png",
+       combined_cm,
+       width  = 15,
+       height = 3,      # three panels tall
+       dpi    = 600)
 
 
 
@@ -1174,11 +1228,11 @@ ggsave("Final Tables and Figures/Fig4J_confusion_matrices_all_three.png",
 
 
 ### Now do for the blood samples 
-front_blood <- dat %>% filter(Cohort == "Frontline", !is.na(landmark)) %>% filter(!is.na(Blood_zscore_only_detection_rate_call))
-non_blood <- dat %>% filter(Cohort == "Non-frontline") %>% filter(!is.na(Blood_zscore_only_detection_rate_call))
+front_blood <- dat %>% filter(Cohort == "Frontline", !is.na(landmark)) %>% filter(!is.na(Blood_zscore_only_sites_call))
+non_blood <- dat %>% filter(Cohort == "Non-frontline") %>% filter(!is.na(Blood_zscore_only_sites_call))
 
 make_ct <- function(df,
-                    pred  = "Blood_zscore_only_detection_rate_call",   # cfWGS
+                    pred  = "Blood_zscore_only_sites_call",   # cfWGS
                     truth = "MRD_truth") {                          # reference
   out <- df %>%
     select(all_of(c(pred, truth))) %>%

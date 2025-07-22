@@ -156,6 +156,13 @@ dat_base <- dat_base %>%
 
 dat_base$cohort <- dat_base$Cohort ## for consistency 
 
+## Edit low confidence call
+dat_base <- dat_base %>%
+  mutate(across(
+    starts_with("WGS_IGH_"),
+    ~ if_else(grepl("ZC-02", Patient), 0L, .)
+  ))
+
 ## ------------------------------------------------------------------
 ## 4.  MAPPINGS  -----------------------------------------------------
 ## ------------------------------------------------------------------
@@ -665,6 +672,8 @@ flatten_corr <- function(r_mat, p_mat, n_mat) {
 
 all_corrs <- flatten_corr(r_mat, p_mat, n_mat)
 
+## Export this 
+write.csv(all_corrs %>% filter(!is.na(p_adj)), file = "Final Tables and Figures/Suplementary_Table_2_All_Feature_Correlations.csv")
 # Adjust p-value for multiple hypothesis test - although not needed since exploratory 
 all_corrs <- all_corrs %>%
   mutate(
@@ -827,13 +836,13 @@ p1 <- ggplot(plot_df, aes(cohort, MutCount, fill = cohort)) +
   ) +
   scale_x_discrete(
     labels = c(
-      "Frontline induction-transplant" = "Primary",
+      "Frontline induction-transplant" = "Training",
       "Non-frontline"                  = "Test"
     )
   ) +
   theme_classic(base_size = 11) +
   theme(
-    plot.title    = element_text(face = "bold", size = 12),
+    plot.title     = element_text(face = "bold", size = 12,  hjust = 0.5),
     plot.subtitle = element_text(size = 12),
     strip.text    = element_text(face = "bold"),
     legend.position = "none"
@@ -859,7 +868,7 @@ p1 <- ggplot(plot_df, aes(cohort, MutCount, fill = cohort)) +
   scale_fill_manual(values = cohort_cols) +
   scale_x_discrete(
     labels = c(
-      "Frontline induction-transplant" = "Primary",
+      "Frontline induction-transplant" = "Training",
       "Non-frontline"                  = "Test"
     )
   ) +
@@ -870,12 +879,12 @@ p1 <- ggplot(plot_df, aes(cohort, MutCount, fill = cohort)) +
   ) +
   theme_classic(base_size = 11) +
   theme(
-    plot.title     = element_text(face = "bold", size = 12),
+    plot.title     = element_text(face = "bold", size = 14,  hjust = 0.5),
     strip.text     = element_text(face = "bold"),
     legend.position = "none"
   )
 
-ggsave("Final Tables and Figures/Baseline_concordance/Figure2F_boxplot_with_bracket.png", p1, width = 5, height = 4, dpi = 600)
+ggsave("Final Tables and Figures/Baseline_concordance/Figure2F_boxplot_with_bracket.png", p1, width = 5, height = 4.25, dpi = 600)
 
 
 
@@ -902,7 +911,7 @@ p2 <- ggplot(plot_df, aes(cohort, WGS_Tumor_Fraction_Blood_plasma_cfDNA, fill = 
   scale_fill_manual(values = cohort_cols) +
   scale_x_discrete(
     labels = c(
-      "Frontline induction-transplant" = "Primary",
+      "Frontline induction-transplant" = "Training",
       "Non-frontline"                  = "Test"
     )
   ) +
@@ -914,7 +923,7 @@ p2 <- ggplot(plot_df, aes(cohort, WGS_Tumor_Fraction_Blood_plasma_cfDNA, fill = 
   geom_hline(yintercept = 0.05, linetype = "dashed", color = "black")+
   theme_classic(base_size = 11) +
   theme(
-    plot.title     = element_text(face = "bold", size = 12),
+    plot.title     = element_text(face = "bold", size = 12,  hjust = 0.5),
     strip.text     = element_text(face = "bold"),
     legend.position = "none"
   )
@@ -1127,7 +1136,7 @@ p_combined <- ggplot(df_long, aes(x = x, y = Blood_Mutation_Count, colour = coho
   scale_color_manual(
     values = cohort_cols,   # your existing colours
     labels = c(
-      "Frontline induction-transplant" = "Primary",
+      "Frontline induction-transplant" = "Training",
       "Non-frontline"                  = "Test"
     ),
     name = "Cohort"
@@ -1139,8 +1148,9 @@ p_combined <- ggplot(df_long, aes(x = x, y = Blood_Mutation_Count, colour = coho
   ) +
   theme_classic(base_size = 11) +
   theme(
-    plot.title      = element_text(face = "bold", size = 12, hjust = 0.5),
+    plot.title      = element_text(face = "bold", size = 14, hjust = 0.5),
     strip.text      = element_text(face = "bold", size = 10),
+    legend.text      = element_text(size = 11),
     axis.text       = element_text(size = 9),
     legend.position = "top"
   )
@@ -1244,7 +1254,7 @@ p_tf <- ggplot(event_tf_conc,
 
 
 # 5) save
-ggsave("Final Tables and Figures/Baseline_concordance/Fig2B_event_concordance_by_TF.png", p_tf,
+ggsave("Final Tables and Figures/Baseline_concordance/Fig2B_event_concordance_by_TF_updated.png", p_tf,
        width = 5, height = 4, dpi = 600)
 
 
@@ -1302,7 +1312,7 @@ p_tf_sens2 <- ggplot(tf_plot_df, aes(x = value, y = event, group = event)) +
     values = c(
       "High TF"             = viridis(2, end = 0.8)[1],
       "Low TF"              = viridis(2, end = 0.8)[2],
-      "Overall sensitivity" = "red"
+      "Overall sensitivity" = "black"
     )
   ) +
   scale_shape_manual(
@@ -1310,7 +1320,7 @@ p_tf_sens2 <- ggplot(tf_plot_df, aes(x = value, y = event, group = event)) +
     values = c(
       "High TF"             = 16,
       "Low TF"              = 16,
-      "Overall sensitivity" = 4
+      "Overall sensitivity" = 8
     )
   ) +
   
@@ -1323,7 +1333,7 @@ p_tf_sens2 <- ggplot(tf_plot_df, aes(x = value, y = event, group = event)) +
   ) +
   
   labs(
-    title = "SV/CNA concordance with FISH (●) and overall sensitivity (x)",
+    title = "SV/CNA concordance with FISH (●) and overall sensitivity",
     x     = "Percent",
     y     = NULL
   ) +
@@ -1341,7 +1351,7 @@ p_tf_sens2 <- ggplot(tf_plot_df, aes(x = value, y = event, group = event)) +
 
 # 3) save
 ggsave(
-  "Final Tables and Figures/Baseline_concordance/Fig2B_event_concordance_with_sensitivity.png",
+  "Final Tables and Figures/Baseline_concordance/Fig2B_event_concordance_with_sensitivity_updated.png",
   p_tf_sens2, width = 5.5, height = 4, dpi = 600
 )
 
@@ -1622,7 +1632,7 @@ p_tf_sens <- ggplot(tf_plot_df_BM, aes(x = value, y = event, group = event)) +
     values = c(
       "High TF"             = viridis(2, end = 0.8)[1],
       "Low TF"              = viridis(2, end = 0.8)[2],
-      "Overall sensitivity" = "red"
+      "Overall sensitivity" = "black"
     )
   ) +
   scale_shape_manual(
@@ -1630,7 +1640,7 @@ p_tf_sens <- ggplot(tf_plot_df_BM, aes(x = value, y = event, group = event)) +
     values = c(
       "High TF"             = 16,
       "Low TF"              = 16,
-      "Overall sensitivity" = 4
+      "Overall sensitivity" = 8
     )
   ) +
   
@@ -1643,7 +1653,7 @@ p_tf_sens <- ggplot(tf_plot_df_BM, aes(x = value, y = event, group = event)) +
   ) +
   
   labs(
-    title = "BM vs cfDNA SV/CNA concordance (●) and sensitivity (x)",
+    title = "BM vs cfDNA SV/CNA concordance (●) and sensitivity",
     x     = "Percent",
     y     = NULL
   ) +
@@ -1661,7 +1671,7 @@ p_tf_sens <- ggplot(tf_plot_df_BM, aes(x = value, y = event, group = event)) +
 
 # 3) save
 ggsave(
-  "Final Tables and Figures/Baseline_concordance/Fig2C_event_concordance_between_BM_and_cfDNA_with_sensitivity.png",
+  "Final Tables and Figures/Baseline_concordance/Fig2C_event_concordance_between_BM_and_cfDNA_with_sensitivity_updated.png",
   p_tf_sens, width = 5, height = 4, dpi = 600
 )
 
@@ -1741,7 +1751,7 @@ p_3panel <- ggplot(perf_long,
   )
 
 ggsave(
-  "Final Tables and Figures/Baseline_concordance/Fig2C_BM_cfDNA_conc_sens_spec_byTF.png",
+  "Final Tables and Figures/Baseline_concordance/Fig2C_BM_cfDNA_conc_sens_spec_byTF_updated.png",
   p_3panel, width = 5.5, height = 4, dpi = 600
 )
 
