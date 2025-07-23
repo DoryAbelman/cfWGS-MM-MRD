@@ -1380,15 +1380,15 @@ plot_cm <- function(df, main_title){
 ## ───────────────────────────────────────────────────────────────
 ## D.  Draw & save the three panels
 ## ───────────────────────────────────────────────────────────────
-p_post   <- plot_cm(cm_post ,  "Post-ASCT (Training Cohort)")
-p_maint  <- plot_cm(cm_maint,  "1yr Maintenance (Training Cohort)")
-p_non    <- plot_cm(cm_non ,   "Test Cohort")
+p_post   <- plot_cm(cm_post ,  "Confusion Matrix at Post-ASCT (Training Cohort)")
+p_maint  <- plot_cm(cm_maint,  "Confusion Matrix at 1‑Year Maintenance (Training Cohort)")
+p_non    <- plot_cm(cm_non ,   "Confusion Matrix of Test Cohort")
 
-ggsave("Final Tables and Figures/Fig5_confmat_post_ASCT_blood.png",
+ggsave("Final Tables and Figures/Fig5_confmat_post_ASCT_blood_updated.png",
        p_post,  width = 5, height = 2.75, dpi = 600)
-ggsave("Final Tables and Figures/Fig5_confmat_maintenance_blood.png",
+ggsave("Final Tables and Figures/Fig5_confmat_maintenance_blood_updated.png",
        p_maint, width = 5, height = 2.75, dpi = 600)
-ggsave("Final Tables and Figures/Fig5_confmat_nonfront_blood.png",
+ggsave("Final Tables and Figures/Fig5_confmat_nonfront_blood_updated.png",
        p_non,   width = 3, height = 2.75, dpi = 600)   # single facet – narrower
 
 ## As one 

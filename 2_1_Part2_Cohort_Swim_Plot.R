@@ -409,7 +409,7 @@ all_events <- all_events %>%
 all_events <- all_events %>% select(-Patient, -Progression_date)
   
 # Export all_events to CSV
-write_csv(all_events, "Final Tables and Figures/all_events_for_swim_plot_combined.csv")
+write_csv(all_events, "Final Tables and Figures/Supp_Table_1_all_events_for_swim_plot_combined.csv")
 
 # Export all_events to RDS
 saveRDS(all_events, "Final Tables and Figures/all_events_for_swim_plot_combined.rds")

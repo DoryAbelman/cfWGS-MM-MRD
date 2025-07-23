@@ -42,6 +42,8 @@ library(patchwork)
 library(DescTools)   # for CalibrationPlot()
 library(PRROC)      # pr.curve()
 library(scales)     # percent_format()
+library(stringr)
+library(forcats)
 
 # -----------------------------------------------------------------------------
 # 2. Data Import & Cohort Definition
@@ -1236,6 +1238,58 @@ write.csv(
 message("Exported validation metrics, nested‐CV metrics, models list, and thresholds to ", outdir)
 
 
+### Export cleaned version for supplementary tables
+# 1) pull out only the non‑all‑NA columns from your training results
+primary_clean <- all_primary %>%
+  select(where(~ !all(is.na(.)))) %>%   # drop any column that is entirely NA
+  mutate(cohort = "Training")           # tag it
+
+# 2) do the same for the validation set, and rename its cols to match the *_mean convention
+val_clean <- all_val %>%
+  select(where(~ !all(is.na(.)))) %>%
+  rename(
+    auc_mean       = auc_valid,
+    sens_mean      = sens_valid,
+    spec_mean      = spec_valid,
+    balacc_mean    = bal_accuracy,
+    ppv_mean       = ppv,
+    npv_mean       = npv,
+    f1_mean        = f1,
+    brier_mean     = brier,
+    pAUC90_mean    = pAUC90,
+    acc_mean       = accuracy,
+    sens95_mean    = sens_at_95_spec_valid,
+    spec95_mean    = spec_at_95_sens_valid
+  ) %>%
+  mutate(cohort = "Testing")
+
+# 3) stack them into one combined table
+combined_metrics <- bind_rows(primary_clean, val_clean) %>%
+  select(
+    -sens95_mean,
+    -spec95_mean,
+    -ppv_mean,
+    -npv_mean,
+    -f1_mean
+  )
+
+# 4) Export only the Fragmentomics models
+frag_tbl <- combined_metrics %>%
+  filter(startsWith(combo, "Fragmentomics_"))
+
+write_csv(
+  frag_tbl,
+  "Output_tables_2025/Supplementary_Table_4_Fragmentomics_Performance.csv"
+)
+
+# 2) Export all models
+write_csv(
+  combined_metrics,
+  "Output_tables_2025/Supplementary_Table_all_model_performance.csv"
+)
+
+
+
 
 
 ##### Now see sensetivity at 95% specificity in the all models file 
@@ -1932,7 +1986,7 @@ p_perf <- ggplot(plot_df, aes(x = combo, y = mean, fill = combo)) +
   labs(
     x     = NULL,
     y     = NULL,
-    title = "Test Cohort Performance"
+    title = "Test Cohort Performance at Youden Index"
   ) +
   theme_classic(base_size = 9) +
   theme(
@@ -1946,7 +2000,7 @@ p_perf <- ggplot(plot_df, aes(x = combo, y = mean, fill = combo)) +
 # ──────────────────────────────────────────────────────────────────────────────
 # 9. Save
 ggsave(
-  file.path("Final Tables and Figures/Fig4F_classifier_performance_bar_test_cohort.png"),
+  file.path("Final Tables and Figures/Fig4F_classifier_performance_bar_test_cohort_updated.png"),
   plot   = p_perf,
   width  = 4,
   height = 3,
@@ -2160,7 +2214,7 @@ p_tables <- ggplot(cm_df, aes(x = Pred, y = Obs, fill = Count)) +
   labs(
     x = "Predicted MRD status",
     y = "Observed MRD status",
-    title = "Confusion Tables at Youden Index in Training Cohort"
+    title = "Confusion Matrix at Youden Index in Training Cohort"
   ) +
   theme_minimal(base_size = 10) +
   theme(
@@ -2176,7 +2230,7 @@ p_tables <- ggplot(cm_df, aes(x = Pred, y = Obs, fill = Count)) +
 # ──────────────────────────────────────────────────────────────────────────────
 # 5) save
 ggsave(
-  "Final Tables and Figures/Fig4C_confusion_tables_primary_updated.png",
+  "Final Tables and Figures/Fig4C_confusion_tables_primary_updated2.png",
   plot   = p_tables,
   width  = 5,
   height = 2.75,
@@ -2225,7 +2279,7 @@ p_tables <- ggplot(cm_df, aes(x = Pred, y = Obs, fill = Count)) +
   labs(
     x = "Predicted MRD status",
     y = "Observed MRD status",
-    title = "Confusion Tables at Youden Index in Test Cohort"
+    title = "Confusion Matrix at Youden Index in Test Cohort"
   ) +
   scale_y_discrete(limits = c("pos", "neg")) +
   theme_minimal(base_size = 10) +
@@ -2242,7 +2296,7 @@ p_tables <- ggplot(cm_df, aes(x = Pred, y = Obs, fill = Count)) +
 # ──────────────────────────────────────────────────────────────────────────────
 # 5) save
 ggsave(
-  "Final Tables and Figures/Fig4C_confusion_tables_test.png",
+  "Final Tables and Figures/Fig4C_confusion_tables_test2.png",
   plot   = p_tables,
   width  = 5,
   height = 2.75,
@@ -2349,16 +2403,16 @@ perf_plot <- ggplot(perf_df, aes(sens_mean, spec_mean, colour = combo)) +
   labs(
     x     = "Mean sensitivity",
     y     = "Mean specificity",
-    title = "Test Samples Performance",
+    title = "Sensitivity vs. specificity of cfWGS models\nin the test cohort",
     colour = NULL
   ) +
-  theme_bw(14) +
+  theme_bw(12) +
   theme(
     panel.grid      = element_blank(),
     legend.position = c(0.05, 0.05),
     legend.justification = c(0,0),
     legend.background = element_rect(fill = alpha("white",0.7), colour=NA),
-    plot.title      = element_text(hjust=0.5, face = "bold")
+    plot.title      = element_text(hjust=0.5, face = "bold", size = 14)
   )
 
 # ── 3) Combine with roc_plot ────────────────────────────────────────────────
@@ -2374,10 +2428,10 @@ ggsave(
 )
 
 ggsave(
-  filename = "Final Tables and Figures/4E_performance_nested_folds_bm_validation.png",
+  filename = "Final Tables and Figures/4E_performance_nested_folds_bm_validation_updated.png",
   plot     = perf_plot,
   width    = 6,
-  height   = 4.5,
+  height   = 4,
   dpi      = 500
 )
 
@@ -2442,7 +2496,7 @@ p_tables <- ggplot(cm_df, aes(x = Pred, y = Obs, fill = Count)) +
   labs(
     x = "Predicted MRD status",
     y = "Observed MRD status",
-    title = "Confusion Tables at Youden Index in Training Cohort"
+    title = "Confusion Matrix at Youden Index in Training Cohort"
   ) +
   theme_minimal(base_size = 10) +
   # reverse the Obs axis so neg is at the top
@@ -2460,7 +2514,7 @@ p_tables <- ggplot(cm_df, aes(x = Pred, y = Obs, fill = Count)) +
 # ──────────────────────────────────────────────────────────────────────────────
 # 5) save
 ggsave(
-  "Final Tables and Figures/Fig5C_confusion_tables_primary_blood.png",
+  "Final Tables and Figures/Fig5C_confusion_tables_primary_blood2.png",
   plot   = p_tables,
   width  = 5,
   height = 2.75,
@@ -2509,7 +2563,7 @@ p_tables <- ggplot(cm_df, aes(x = Pred, y = Obs, fill = Count)) +
   labs(
     x = "Predicted MRD status",
     y = "Observed MRD status",
-    title = "Confusion Tables at Youden Index in Test Cohort"
+    title = "Confusion Matrix at Youden Index in Test Cohort"
   ) +
   theme_minimal(base_size = 10) +
   # reverse the Obs axis so neg is at the top
@@ -2527,7 +2581,7 @@ p_tables <- ggplot(cm_df, aes(x = Pred, y = Obs, fill = Count)) +
 # ──────────────────────────────────────────────────────────────────────────────
 # 5) save
 ggsave(
-  "Final Tables and Figures/Fig5C_confusion_tables_test_blood.png",
+  "Final Tables and Figures/Fig5C_confusion_tables_test_blood2.png",
   plot   = p_tables,
   width  = 5,
   height = 2.75,
@@ -2735,7 +2789,7 @@ p_perf <- ggplot(plot_df, aes(x = combo, y = mean, fill = combo)) +
   labs(
     x     = NULL,
     y     = NULL,
-    title = "Test Cohort Performance"
+    title = "Test Cohort Performance at Youden Index"
   ) +
   theme_classic(base_size = 9) +
   theme(
@@ -2749,7 +2803,7 @@ p_perf <- ggplot(plot_df, aes(x = combo, y = mean, fill = combo)) +
 # ──────────────────────────────────────────────────────────────────────────────
 # 9. Save
 ggsave(
-  file.path("Final Tables and Figures/Fig5F_classifier_performance_bar_test_cohort.png"),
+  file.path("Final Tables and Figures/Fig5F_classifier_performance_bar_test_cohort_updated.png"),
   plot   = p_perf,
   width  = 4,
   height = 3,
@@ -3166,16 +3220,16 @@ perf_plot <- ggplot(perf_df %>% filter(!str_starts(combo, "Fragment")), aes(sens
   labs(
     x     = "Mean sensitivity",
     y     = "Mean specificity",
-    title = "Test Samples Performance",
+    title = "Sensitivity vs. specificity of cfWGS models\nin the test cohort",
     colour = NULL
   ) +
-  theme_bw(14) +
+  theme_bw(12) +
   theme(
     panel.grid      = element_blank(),
     legend.position = c(0.05, 0.05),
     legend.justification = c(0,0),
     legend.background = element_rect(fill = alpha("white",0.7), colour=NA),
-    plot.title      = element_text(hjust=0.5)
+    plot.title      = element_text(hjust=0.5, face = "bold", size = 14)
   )
 
 # ── 3) Combine with roc_plot ────────────────────────────────────────────────
@@ -3191,10 +3245,10 @@ ggsave(
 )
 
 ggsave(
-  filename = "Final Tables and Figures/5E_performance_nested_folds_bm_validation.png",
+  filename = "Final Tables and Figures/5E_performance_nested_folds_blood_validation_updated.png",
   plot     = perf_plot,
   width    = 6,
-  height   = 4.5,
+  height   = 4,
   dpi      = 500
 )
 
@@ -3312,16 +3366,16 @@ perf_plot <- ggplot(perf_df, aes(sens_mean, spec_mean, colour = combo)) +
   labs(
     x     = "Mean sensitivity",
     y     = "Mean specificity",
-    title = "Test Samples Performance",
+    title = "Sensitivity vs. specificity of cfWGS models\nin the test cohort",
     colour = NULL
   ) +
-  theme_bw(14) +
+  theme_bw(12) +
   theme(
     panel.grid      = element_blank(),
     legend.position = c(0.05, 0.05),
     legend.justification = c(0,0),
     legend.background = element_rect(fill = alpha("white",0.7), colour=NA),
-    plot.title      = element_text(hjust=0.5)
+    plot.title      = element_text(hjust=0.5, face = "bold", size = 14)
   )
 
 # ── 3) Combine with roc_plot ────────────────────────────────────────────────
@@ -3337,10 +3391,10 @@ ggsave(
 )
 
 ggsave(
-  filename = "Final Tables and Figures/4E_performance_nested_folds_bm_validation.png",
+  filename = "Final Tables and Figures/4E_performance_nested_folds_bm_validation_updated.png",
   plot     = perf_plot,
   width    = 6,
-  height   = 4.5,
+  height   = 4,
   dpi      = 500
 )
 

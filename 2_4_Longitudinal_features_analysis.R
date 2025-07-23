@@ -371,9 +371,10 @@ write_csv(sig_corrs, file.path(outdir, "mrd_metric_lab_sig_correlations.csv"))
 ## ───── 7. Figures – all filtered on !is.na for the plotted feature ──────────
 ## Helper for paired violin/box with spaghetti
 ## 9.1  Utilities ------------------------------------------------------------
-baseline_dates <- readRDS("Exported_data_tables_clinical/Censor_dates_per_patient_for_PFS.rds")
+baseline_dates <- readRDS("Exported_data_tables_clinical/Censor_dates_per_patient_for_PFS_updated.rds")
+baseline_dates$Baseline_Date <- baseline_dates$baseline_date # for consistency
 
-dat <- dat_clean %>%
+  dat <- dat_clean %>%
   left_join(baseline_dates, by = "Patient") %>%
   mutate(
     Weeks_Since_Baseline = as.numeric(difftime(Date, Baseline_Date, units = "weeks")),
@@ -519,7 +520,7 @@ p_traj_patientline <- ggplot(
   )
 
 ggsave(
-  filename = file.path(outdir, "Fig3A_metrics_trajectories_BM_byPatientLine.png"),
+  filename = file.path(outdir, "Fig3A_metrics_trajectories_BM_byPatientLine_2.png"),
   plot     = p_traj_patientline,
   device   = "png",
   width    = 12,
@@ -552,8 +553,35 @@ plot_df_pat <- plot_df %>%
 
 ## A) Cumulative VAF
 df_cvaf <- filter(plot_df_pat, Metric == "cVAF")
+
+## If wanted segmented line 
+df_cvaf_seg <- df_cvaf %>%
+  arrange(Patient, Weeks_Since_Baseline) %>%
+  group_by(Patient) %>%
+  mutate(
+    x    = Weeks_Since_Baseline,
+    y    = Value,
+    xend = lead(Weeks_Since_Baseline),
+    yend = lead(Value),
+    # segment should turn red if its *end* point is a relapse
+    seg_relapse = lead(relapse_within_180, default = FALSE)
+  ) %>%
+  filter(!is.na(xend)) %>%
+  ungroup()
+
 p_cvaf <- ggplot(df_cvaf, aes(Weeks_Since_Baseline, Value, group = Patient)) +
-  geom_line(color = "black", alpha = 0.6) +
+  #geom_line(color = "black", alpha = 0.6) +
+  # coloured segments
+  geom_segment(
+    data = df_cvaf_seg,
+    aes(
+      x      = x,   y    = y,
+      xend   = xend, yend = yend,
+      colour = seg_relapse
+    ),
+    size  = 0.4,
+    alpha = 0.6
+  ) +
   geom_point(aes(color = relapse_within_180),
              size = 1.8, alpha = 0.8) +
   facet_wrap(~ patient_relapse180, nrow = 1,
@@ -573,8 +601,33 @@ p_cvaf <- ggplot(df_cvaf, aes(Weeks_Since_Baseline, Value, group = Patient)) +
 
 ## B) Proportion of Sites Detected
 df_sites <- filter(plot_df_pat, Metric == "sites")
+df_sites_seg <- df_sites %>%
+  arrange(Patient, Weeks_Since_Baseline) %>%
+  group_by(Patient) %>%
+  mutate(
+    x    = Weeks_Since_Baseline,
+    y    = Value,
+    xend = lead(Weeks_Since_Baseline),
+    yend = lead(Value),
+    # segment should turn red if its *end* point is a relapse
+    seg_relapse = lead(relapse_within_180, default = FALSE)
+  ) %>%
+  filter(!is.na(xend)) %>%
+  ungroup()
+
 p_sites <- ggplot(df_sites, aes(Weeks_Since_Baseline, Value, group = Patient)) +
-  geom_line(color = "black", alpha = 0.6) +
+ # geom_line(color = "black", alpha = 0.6) +
+  # coloured segments
+  geom_segment(
+    data = df_sites_seg,
+    aes(
+      x      = x,   y    = y,
+      xend   = xend, yend = yend,
+      colour = seg_relapse
+    ),
+    size  = 0.4,
+    alpha = 0.6
+  ) +
   geom_point(aes(color = relapse_within_180),
              size = 1.8, alpha = 0.8) +
   facet_wrap(~ patient_relapse180, nrow = 1,
@@ -604,7 +657,7 @@ p_combined <- p_cvaf + p_sites +
 
 # 4) Save
 ggsave(
-  filename = file.path(outdir, "Fig3A_sideBySide_lockedY.png"),
+  filename = file.path(outdir, "Fig3A_sideBySide_lockedY_segmented.png"),
   plot     = p_combined,
   width    = 12,   # 4 panels across
   height   = 4,
@@ -612,12 +665,37 @@ ggsave(
 )
 
 
-# 2) Build the two mini‑plots
+# 2) Build the two mini‑plots for other features
 
 ## A) Cumulative VAF
 df_cvaf <- filter(plot_df_pat, Metric == "cVAF_z")
+df_cvaf_seg <- df_cvaf %>%
+  arrange(Patient, Weeks_Since_Baseline) %>%
+  group_by(Patient) %>%
+  mutate(
+    x    = Weeks_Since_Baseline,
+    y    = Value,
+    xend = lead(Weeks_Since_Baseline),
+    yend = lead(Value),
+    # segment should turn red if its *end* point is a relapse
+    seg_relapse = lead(relapse_within_180, default = FALSE)
+  ) %>%
+  filter(!is.na(xend)) %>%
+  ungroup()
+
 p_cvaf <- ggplot(df_cvaf, aes(Weeks_Since_Baseline, Value, group = Patient)) +
-  geom_line(color = "black", alpha = 0.6) +
+ # geom_line(color = "black", alpha = 0.6) +
+  # coloured segments
+  geom_segment(
+    data = df_cvaf_seg,
+    aes(
+      x      = x,   y    = y,
+      xend   = xend, yend = yend,
+      colour = seg_relapse
+    ),
+    size  = 0.4,
+    alpha = 0.6
+  ) +
   geom_point(aes(color = relapse_within_180),
              size = 1.8, alpha = 0.8) +
   facet_wrap(~ patient_relapse180, nrow = 1,
@@ -637,8 +715,32 @@ p_cvaf <- ggplot(df_cvaf, aes(Weeks_Since_Baseline, Value, group = Patient)) +
 
 ## B) Proportion of Sites Detected
 df_sites <- filter(plot_df_pat, Metric == "sites_z")
+df_sites_seg <- df_sites %>%
+  arrange(Patient, Weeks_Since_Baseline) %>%
+  group_by(Patient) %>%
+  mutate(
+    x    = Weeks_Since_Baseline,
+    y    = Value,
+    xend = lead(Weeks_Since_Baseline),
+    yend = lead(Value),
+    # segment should turn red if its *end* point is a relapse
+    seg_relapse = lead(relapse_within_180, default = FALSE)
+  ) %>%
+  filter(!is.na(xend)) %>%
+  ungroup()
+
 p_sites <- ggplot(df_sites, aes(Weeks_Since_Baseline, Value, group = Patient)) +
-  geom_line(color = "black", alpha = 0.6) +
+ # geom_line(color = "black", alpha = 0.6) +
+  geom_segment(
+    data = df_sites_seg,
+    aes(
+      x      = x,   y    = y,
+      xend   = xend, yend = yend,
+      colour = seg_relapse
+    ),
+    size  = 0.4,
+    alpha = 0.6
+  ) +
   geom_point(aes(color = relapse_within_180),
              size = 1.8, alpha = 0.8) +
   facet_wrap(~ patient_relapse180, nrow = 1,
@@ -669,7 +771,7 @@ p_combined <- p_cvaf + p_sites +
     
 # 4) Save
 ggsave(
-  filename = file.path(outdir, "Fig3A_sideBySide_lockedY_zscore.png"),
+  filename = file.path(outdir, "Fig3A_sideBySide_lockedY_zscore_segmented.png"),
   plot     = p_combined,
   width    = 12,   # 4 panels across
   height   = 4,
@@ -1159,8 +1261,33 @@ plot_df_pat <- plot_df_blood %>%
 
 ## A) Cumulative VAF
 df_cvaf <- filter(plot_df_pat, Metric == "cVAF")
+df_cvaf_seg <- df_cvaf %>%
+  arrange(Patient, Weeks_Since_Baseline) %>%
+  group_by(Patient) %>%
+  mutate(
+    x    = Weeks_Since_Baseline,
+    y    = Value,
+    xend = lead(Weeks_Since_Baseline),
+    yend = lead(Value),
+    # segment should turn red if its *end* point is a relapse
+    seg_relapse = lead(relapse_within_180, default = FALSE)
+  ) %>%
+  filter(!is.na(xend)) %>%
+  ungroup()
+
 p_cvaf <- ggplot(df_cvaf, aes(Weeks_Since_Baseline, Value, group = Patient)) +
-  geom_line(color = "black", alpha = 0.6) +
+#  geom_line(color = "black", alpha = 0.6) +
+  # coloured segments
+  geom_segment(
+    data = df_cvaf_seg,
+    aes(
+      x      = x,   y    = y,
+      xend   = xend, yend = yend,
+      colour = seg_relapse
+    ),
+    size  = 0.4,
+    alpha = 0.6
+  ) +
   geom_point(aes(color = relapse_within_180),
              size = 1.8, alpha = 0.8) +
   facet_wrap(~ patient_relapse180, nrow = 1,
@@ -1180,8 +1307,33 @@ p_cvaf <- ggplot(df_cvaf, aes(Weeks_Since_Baseline, Value, group = Patient)) +
 
 ## B) Proportion of Sites Detected
 df_sites <- filter(plot_df_pat, Metric == "sites")
+df_sites_seg <- df_sites %>%
+  arrange(Patient, Weeks_Since_Baseline) %>%
+  group_by(Patient) %>%
+  mutate(
+    x    = Weeks_Since_Baseline,
+    y    = Value,
+    xend = lead(Weeks_Since_Baseline),
+    yend = lead(Value),
+    # segment should turn red if its *end* point is a relapse
+    seg_relapse = lead(relapse_within_180, default = FALSE)
+  ) %>%
+  filter(!is.na(xend)) %>%
+  ungroup()
+
+
 p_sites <- ggplot(df_sites, aes(Weeks_Since_Baseline, Value, group = Patient)) +
-  geom_line(color = "black", alpha = 0.6) +
+  #geom_line(color = "black", alpha = 0.6) +
+  geom_segment(
+    data = df_sites_seg,
+    aes(
+      x      = x,   y    = y,
+      xend   = xend, yend = yend,
+      colour = seg_relapse
+    ),
+    size  = 0.4,
+    alpha = 0.6
+  ) +
   geom_point(aes(color = relapse_within_180),
              size = 1.8, alpha = 0.8) +
   facet_wrap(~ patient_relapse180, nrow = 1,
@@ -1211,7 +1363,7 @@ p_combined <- p_cvaf + p_sites +
 
 # 4) Save
 ggsave(
-  filename = file.path(outdir, "Fig3B_sideBySide_lockedY_blood.png"),
+  filename = file.path(outdir, "Fig3B_sideBySide_lockedY_blood_segmented.png"),
   plot     = p_combined,
   width    = 12,   # 4 panels across
   height   = 4,
@@ -1223,8 +1375,32 @@ ggsave(
 
 ## A) Cumulative VAF
 df_cvaf <- filter(plot_df_pat, Metric == "cVAF_z")
+df_cvaf_seg <- df_cvaf %>%
+  arrange(Patient, Weeks_Since_Baseline) %>%
+  group_by(Patient) %>%
+  mutate(
+    x    = Weeks_Since_Baseline,
+    y    = Value,
+    xend = lead(Weeks_Since_Baseline),
+    yend = lead(Value),
+    # segment should turn red if its *end* point is a relapse
+    seg_relapse = lead(relapse_within_180, default = FALSE)
+  ) %>%
+  filter(!is.na(xend)) %>%
+  ungroup()
+
 p_cvaf <- ggplot(df_cvaf, aes(Weeks_Since_Baseline, Value, group = Patient)) +
-  geom_line(color = "black", alpha = 0.6) +
+#  geom_line(color = "black", alpha = 0.6) +
+  geom_segment(
+    data = df_cvaf_seg,
+    aes(
+      x      = x,   y    = y,
+      xend   = xend, yend = yend,
+      colour = seg_relapse
+    ),
+    size  = 0.4,
+    alpha = 0.6
+  ) +
   geom_point(aes(color = relapse_within_180),
              size = 1.8, alpha = 0.8) +
   facet_wrap(~ patient_relapse180, nrow = 1,
@@ -1244,8 +1420,33 @@ p_cvaf <- ggplot(df_cvaf, aes(Weeks_Since_Baseline, Value, group = Patient)) +
 
 ## B) Proportion of Sites Detected
 df_sites <- filter(plot_df_pat, Metric == "sites_z")
+df_sites_seg <- df_sites %>%
+  arrange(Patient, Weeks_Since_Baseline) %>%
+  group_by(Patient) %>%
+  mutate(
+    x    = Weeks_Since_Baseline,
+    y    = Value,
+    xend = lead(Weeks_Since_Baseline),
+    yend = lead(Value),
+    # segment should turn red if its *end* point is a relapse
+    seg_relapse = lead(relapse_within_180, default = FALSE)
+  ) %>%
+  filter(!is.na(xend)) %>%
+  ungroup()
+
+
 p_sites <- ggplot(df_sites, aes(Weeks_Since_Baseline, Value, group = Patient)) +
-  geom_line(color = "black", alpha = 0.6) +
+#  geom_line(color = "black", alpha = 0.6) +
+  geom_segment(
+    data = df_sites_seg,
+    aes(
+      x      = x,   y    = y,
+      xend   = xend, yend = yend,
+      colour = seg_relapse
+    ),
+    size  = 0.4,
+    alpha = 0.6
+  ) +
   geom_point(aes(color = relapse_within_180),
              size = 1.8, alpha = 0.8) +
   facet_wrap(~ patient_relapse180, nrow = 1,
@@ -1276,7 +1477,7 @@ p_combined <- p_cvaf + p_sites +
 
 # 4) Save
 ggsave(
-  filename = file.path(outdir, "Fig3B_sideBySide_lockedY_zscore_blood.png"),
+  filename = file.path(outdir, "Fig3B_sideBySide_lockedY_zscore_blood_segmented.png"),
   plot     = p_combined,
   width    = 12,   # 4 panels across
   height   = 4,
@@ -1509,8 +1710,32 @@ plot_df_pat <- plot_df_fragmentomics2 %>%
 
 ## A) Cumulative VAF
 df_cvaf <- filter(plot_df_pat, Metric == "FS")
+df_cvaf_seg <- df_cvaf %>%
+  arrange(Patient, Weeks_Since_Baseline) %>%
+  group_by(Patient) %>%
+  mutate(
+    x    = Weeks_Since_Baseline,
+    y    = Value,
+    xend = lead(Weeks_Since_Baseline),
+    yend = lead(Value),
+    # segment should turn red if its *end* point is a relapse
+    seg_relapse = lead(relapse_within_180, default = FALSE)
+  ) %>%
+  filter(!is.na(xend)) %>%
+  ungroup()
+
 p_cvaf <- ggplot(df_cvaf, aes(Weeks_Since_Baseline, Value, group = Patient)) +
-  geom_line(color = "black", alpha = 0.6) +
+  # geom_line(color = "black", alpha = 0.6) +
+  geom_segment(
+    data = df_cvaf_seg,
+    aes(
+      x      = x,   y    = y,
+      xend   = xend, yend = yend,
+      colour = seg_relapse
+    ),
+    size  = 0.4,
+    alpha = 0.6
+  ) +
   geom_point(aes(color = relapse_within_180),
              size = 1.8, alpha = 0.8) +
   facet_wrap(~ patient_relapse180, nrow = 1,
@@ -1530,8 +1755,34 @@ p_cvaf <- ggplot(df_cvaf, aes(Weeks_Since_Baseline, Value, group = Patient)) +
 
 ## B) Mean coverage (flipped)
 df_sites <- filter(plot_df_pat, Metric == "Mean.Coverage")
+df_sites_seg <- df_sites %>%
+  arrange(Patient, Weeks_Since_Baseline) %>%
+  group_by(Patient) %>%
+  mutate(
+    x    = Weeks_Since_Baseline,
+    y    = Value,
+    xend = lead(Weeks_Since_Baseline),
+    yend = lead(Value),
+    # segment should turn red if its *end* point is a relapse
+    seg_relapse = lead(relapse_within_180, default = FALSE)
+  ) %>%
+  filter(!is.na(xend)) %>%
+  ungroup()
+
 p_sites <- ggplot(df_sites, aes(Weeks_Since_Baseline, -Value, group = Patient)) +
-  geom_line(color = "black", alpha = 0.6) +
+ # geom_line(color = "black", alpha = 0.6) +
+  geom_segment(
+    data = df_sites_seg,
+    aes(
+      x      = x,
+      y      = -y,
+      xend   = xend,
+      yend   = -yend,
+      colour = seg_relapse
+    ),
+    size  = 0.4,
+    alpha = 0.6
+  ) +
   geom_point(aes(color = relapse_within_180),
              size = 1.8, alpha = 0.8) +
   facet_wrap(~ patient_relapse180, nrow = 1,
@@ -1562,7 +1813,7 @@ p_combined <- p_cvaf + p_sites +
 
 # 4) Save
 ggsave(
-  filename = file.path(outdir, "Fig3C_sideBySide_lockedY_fragmentomics.png"),
+  filename = file.path(outdir, "Fig3C_sideBySide_lockedY_fragmentomics_segmented.png"),
   plot     = p_combined,
   width    = 12,   # 4 panels across
   height   = 4,
@@ -1574,8 +1825,32 @@ ggsave(
 
 ## A) Cumulative VAF
 df_cvaf <- filter(plot_df_pat, Metric == "Proportion.Short")
+df_cvaf_seg <- df_cvaf %>%
+  arrange(Patient, Weeks_Since_Baseline) %>%
+  group_by(Patient) %>%
+  mutate(
+    x    = Weeks_Since_Baseline,
+    y    = Value,
+    xend = lead(Weeks_Since_Baseline),
+    yend = lead(Value),
+    # segment should turn red if its *end* point is a relapse
+    seg_relapse = lead(relapse_within_180, default = FALSE)
+  ) %>%
+  filter(!is.na(xend)) %>%
+  ungroup()
+
 p_cvaf <- ggplot(df_cvaf, aes(Weeks_Since_Baseline, Value, group = Patient)) +
-  geom_line(color = "black", alpha = 0.6) +
+  # geom_line(color = "black", alpha = 0.6) +
+  geom_segment(
+    data = df_cvaf_seg,
+    aes(
+      x      = x,   y    = y,
+      xend   = xend, yend = yend,
+      colour = seg_relapse
+    ),
+    size  = 0.4,
+    alpha = 0.6
+  ) +
   geom_point(aes(color = relapse_within_180),
              size = 1.8, alpha = 0.8) +
   facet_wrap(~ patient_relapse180, nrow = 1,
@@ -1595,8 +1870,33 @@ p_cvaf <- ggplot(df_cvaf, aes(Weeks_Since_Baseline, Value, group = Patient)) +
 
 ## B) Proportion of Sites Detected
 df_sites <- filter(plot_df_pat, Metric == "WGS_Tumor_Fraction_Blood_plasma_cfDNA")
+df_sites_seg <- df_sites %>%
+  arrange(Patient, Weeks_Since_Baseline) %>%
+  group_by(Patient) %>%
+  mutate(
+    x    = Weeks_Since_Baseline,
+    y    = Value,
+    xend = lead(Weeks_Since_Baseline),
+    yend = lead(Value),
+    # segment should turn red if its *end* point is a relapse
+    seg_relapse = lead(relapse_within_180, default = FALSE)
+  ) %>%
+  filter(!is.na(xend)) %>%
+  ungroup()
+
+
 p_sites <- ggplot(df_sites, aes(Weeks_Since_Baseline, Value, group = Patient)) +
-  geom_line(color = "black", alpha = 0.6) +
+ #  geom_line(color = "black", alpha = 0.6) +
+  geom_segment(
+    data = df_sites_seg,
+    aes(
+      x      = x,   y    = y,
+      xend   = xend, yend = yend,
+      colour = seg_relapse
+    ),
+    size  = 0.4,
+    alpha = 0.6
+  ) +
   geom_point(aes(color = relapse_within_180),
              size = 1.8, alpha = 0.8) +
   facet_wrap(~ patient_relapse180, nrow = 1,
@@ -1627,7 +1927,7 @@ p_combined <- p_cvaf + p_sites +
 
 # 4) Save
 ggsave(
-  filename = file.path(outdir, "Fig3B_sideBySide_lockedY_2_fragmentomics.png"),
+  filename = file.path(outdir, "Fig3B_sideBySide_lockedY_2_fragmentomics_segmented.png"),
   plot     = p_combined,
   width    = 12,   # 4 panels across
   height   = 4,
