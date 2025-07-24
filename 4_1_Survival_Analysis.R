@@ -2090,11 +2090,7 @@ ggsave(file.path(outdir, "Fig_time_to_relapse_infinity_no_reverse_sites.png"),
 
 
 
-
-
-
-
-
+### Redo other way for blood derived muts 
 ### Now redo for blood-derived muts
 df <- survival_df %>%                           # <- your tibble
   # keep samples beyond baseline / diagnosis
@@ -2124,7 +2120,7 @@ df <- survival_df %>%                           # <- your tibble
   )
 
 ## Only multiple points 
-df <- df %>%
+df_slim <- df %>%
   group_by(Patient) %>% 
   filter(dplyr::n() > 1) %>%   # keep only patients with >1 row
   ungroup()
@@ -2133,9 +2129,9 @@ df <- df %>%
 # 2.  Plot  ──────────────────────────────────────────────────────
 # ────────────────────────────────────────────────────────────────
 youden_thresh <- 0.523
-max_mo <- max(df$months_before_event, na.rm = TRUE)  
+max_mo <- max(df_slim$months_before_event, na.rm = TRUE)  
 
-p_prob <- ggplot(df, aes(months_before_event, Blood_zscore_only_sites_prob, group = Patient)) +
+p_prob <- ggplot(df_slim, aes(months_before_event, Blood_zscore_only_sites_prob, group = Patient)) +
   
   # 1) Youden line
   geom_hline(yintercept = youden_thresh,
@@ -2225,6 +2221,157 @@ print(p_prob)
 # ────────────────────────────────────────────────────────────────
 ggsave("Final Tables and Figures/F5I_cfWGS_prob_vs_time_updated_blood_muts.png",
        p_prob, width = 8, height = 4.5, dpi = 600)
+
+
+
+
+## Way Trevor was thinking 
+### Instead change the scale to match what Trevor was thinking 
+df_plot <- df %>%
+  mutate(days_before_event = months_before_event * 30.44) %>%   # months → days
+  group_by(Patient) %>%
+  filter(
+    progress_status == "Relapse" |                       # keep all progressors
+      row_number() == which.min(days_before_event)       # keep *latest* censor
+  ) %>%
+  ungroup()
+
+max_days <- ceiling(max(df_plot$days_before_event, na.rm = TRUE) / 180) * 180
+
+
+## 1)  Build the scatter plot                                  
+p_time <- ggplot(df_plot,
+                 aes(x = Blood_zscore_only_sites_call,
+                     y = days_before_event)) +
+  
+  # ① dashed horizontal line at “event” (0 days)
+  #  geom_hline(yintercept = 0, linetype = "dotted", colour = "grey40") +
+  
+  # ② points – colour = outcome, stroke = MRD call
+  geom_point(aes(colour = progress_status,
+                 fill   = progress_status,
+                 stroke = mrd_status),
+             shape  = 21,
+             size   = 3,
+             colour = "black") +
+  
+  # ③ axes
+  scale_x_continuous(
+    "cfWGS MRD probability",
+    limits = c(0, 1),
+    labels = scales::percent_format(accuracy = 1),
+    breaks = seq(0, 1, by = 0.1)
+  ) +
+  scale_y_reverse(
+    "Days until relapse (or censor)",
+    limits = c(max_days, 0),
+    breaks = seq(0, max_days, by = 180),      # every ~6 months
+    minor_breaks = seq(0, max_days, by = 90)  # every 3 months
+  ) +
+  
+  # ④ colours for relapse status
+  scale_colour_manual(
+    name   = "Patient outcome",
+    values = c("No relapse" = "#35608DFF",
+               "Relapse"    = "#43BF71FF")
+  ) +
+  scale_fill_manual(
+    name   = "Patient outcome",
+    values = c("No relapse" = "#35608DFF",
+               "Relapse"    = "#43BF71FF")
+  ) +
+  
+  # ⑤ stroke scale for MRD call
+  scale_discrete_manual(
+    aesthetics = "stroke",
+    values     = c("MRD-" = 0, "MRD+" = 1.1),   # ring only if MRD+
+    guide = guide_legend(
+      title          = "MRD call",
+      override.aes   = list(shape = 21,
+                            size  = 4,
+                            colour = "black",
+                            fill   = "white",
+                            stroke = c(0, 1.1))
+    )
+  ) +
+  
+  # ⑥ theme / labels
+  labs(
+    title = "Time to relapse vs. cfWGS MRD probability for blood derived muts"
+  ) +
+  theme_classic(base_size = 11) +
+  theme(
+    panel.grid      = element_blank(),
+    plot.title      = element_text(face = "bold", hjust = 0.5),
+    legend.position = "right",
+    legend.title    = element_text(size = 11),
+    legend.text     = element_text(size = 8)
+  )
+
+# save
+ggsave(file.path(outdir, "Fig_time_to_relapse_vs_prob_blood.png"),
+       p_time, width = 6, height = 4, dpi = 600)
+
+
+### Show non-relapsers as infinity
+# 1) compute days & a “days_plot” that sends non-relapsers to ∞
+plot_df2 <- df %>%
+  mutate(days_before_event = months_before_event * 30.44) %>%        # months→days
+  group_by(Patient) %>%
+  filter(
+    progress_status == "Relapse" |                                 # keep all relapsers
+      row_number() == which.min(days_before_event)                   # for non-relapsers, keep their last sample
+  ) %>%
+  ungroup()
+
+# define axis maximum and “infinity” sentinel
+max_days <- ceiling(max(plot_df2$days_before_event, na.rm = TRUE) / 180) * 180
+overflow <- max_days + 30   # a little beyond the longest follow‑up
+
+plot_df2 <- plot_df2 %>%
+  mutate(
+    days_plot = if_else(progress_status == "No relapse", overflow, days_before_event)
+  )
+
+
+## Check corrs 
+# 1) subset to relapsers
+rel_df <- plot_df2 %>%
+  filter(progress_status == "Relapse")
+
+# 2) run cor.test for each metric
+spearman_prob <- cor.test(
+  rel_df$BM_zscore_only_detection_rate_prob,
+  rel_df$days_before_event,
+  method = "spearman"
+)
+
+spearman_zscore <- cor.test(
+  rel_df$zscore_BM,
+  rel_df$days_before_event,
+  method = "spearman"
+)
+
+spearman_detect_rate <- cor.test(
+  rel_df$detect_rate_BM,
+  rel_df$days_before_event,
+  method = "spearman"
+)
+
+# 3) print them
+cat("\n--- cfWGS model probability vs days ---\n")
+print(spearman_prob)
+
+cat("\n--- zscore_BM vs days ---\n")
+print(spearman_zscore)
+
+cat("\n--- detect_rate_BM vs days ---\n")
+print(spearman_detect_rate)
+
+
+
+
+
 
 
 

@@ -978,8 +978,15 @@ top_ha <- HeatmapAnnotation(
 # 1) Build one Legend for the mutation types
 lgd_mut <- Legend(
   title     = "Mutation Type",
-  at        = c("Truncating", "Missense", "Splice_Site", "Other", "No Mutation"),
-  legend_gp = gpar(fill = pal_mut[c("Truncating","Missense","Splice_Site","Other","No Mutation")]),
+  at        = c("Truncating", "Missense", "Splice_Site", "Other", "No Mutation", "Missing"),
+  legend_gp = gpar(fill = c(
+    pal_mut["Truncating"],
+    pal_mut["Missense"],
+    pal_mut["Splice_Site"],
+    pal_mut["Other"],
+    pal_mut["No Mutation"],
+    pal_na              # ← grey for missing
+  )),
   direction = "vertical"
 )
 
@@ -1002,7 +1009,7 @@ lgd_count <- Legend(
 
 # legend for samples avaialble 
 lgd_sampletype <- Legend(
-  title     = "Samples available", 
+  title     = "Samples Available", 
   at        = c("Blood only", "BM only", "Paired"),
   legend_gp = gpar(fill = c(
     "Blood only" = "#CC6677",
@@ -1011,6 +1018,18 @@ lgd_sampletype <- Legend(
   )),
   direction = "vertical"
 )
+
+# legend for samples avaialble 
+lgd_cohort <- Legend(
+  title     = "Cohort", 
+  at        = c("Train", "Test"),
+  legend_gp = gpar(fill = c(
+    "Train" = "#3182bd",
+    "Test"    = "#e6550d"
+  ))
+)
+
+
 
 n_slices <- length(unique(row_group))
 
@@ -1205,18 +1224,46 @@ lgd_sampletype2 <- Legend(
 )
 
 # save
-png("Final Tables and Figures/Figure_1B_overlay_heatmap_BM_vs_cfDNA_updated_with_FISH_7.png", width = 14, height = 8, units = "in", res = 450)
+png("Final Tables and Figures/Figure_1B_overlay_heatmap_BM_vs_cfDNA_updated_with_FISH_8.png", width = 14, height = 8, units = "in", res = 450)
 draw(
   overlay_ht_2,
+  column_title        = "Oncoprint of Genomic Alterations in Bone Marrow versus cfDNA Samples",
+  column_title_gp     = gpar(fontsize = 16, fontface = "bold"),
   annotation_legend_side = "right",  # where cohort legend goes
-  heatmap_legend_list    = list(lgd_sampletype, lgd_mut, lgd_cna, lgd_count, lgd_sampletype2, lgd_fish),
+  heatmap_legend_list    = list(lgd_cohort, lgd_sampletype, lgd_mut, lgd_cna, lgd_count, lgd_fish),
 )
 dev.off()
 
+# Removed lgd_sampletype2
 
 
 
+## Add dummy legend for sample type shapes
+legend_df <- data.frame(
+  x           = c(1, 2),
+  y           = c(1, 1),
+  sample_type = c("Bone marrow", "cfDNA")
+)
 
+# 2) Plot
+ggplot(legend_df, aes(x = x, y = y, shape = sample_type, fill = sample_type)) +
+  geom_point(size = 5, stroke = 0.5, colour = "black") +
+  scale_shape_manual(
+    name   = "Sample type",
+    values = c("Bone marrow" = 24, "cfDNA" = 25)  # 24 = triangle up, 25 = triangle down
+  ) +
+  scale_fill_manual(
+    name   = "Sample type",
+    values = c("Bone marrow" = "black", "cfDNA" = "white")
+  ) +
+  guides(
+    shape = guide_legend(override.aes = list(fill = c("black", "white")))
+  ) +
+  theme_void() +
+  theme(
+    legend.position = "bottom",
+    legend.title    = element_text(face = "bold")
+  )
 
 
 

@@ -214,8 +214,8 @@ relapse_dates_full <- read_csv(
 )
 
 # b) sample‐collection / censor dates per patient
-censor_tbl <- readRDS("Exported_data_tables_clinical/Censor_dates_per_patient_for_PFS.rds")
-
+censor_tbl <- readRDS("Exported_data_tables_clinical/Censor_dates_per_patient_for_PFS_updated.rds")
+censor_tbl$Baseline_Date <- censor_tbl$baseline_date # for consistency
 
 # 2) Build a “Relapse” events table ----------------------------------------
 relapse_events <- relapse_dates_full %>%
@@ -254,9 +254,9 @@ followup_events <- censor_tbl %>%
   transmute(
     patient = Patient,
     event   = "Last follow-up",
-    start   = Censor_date,
+    start   = censor_date,
     end     = start,
-    details = paste0("Relapsed: ", Relapsed)
+    details = paste0("Relapsed: ", relapsed)
   )
 
 
@@ -298,7 +298,6 @@ cfDNA_events <- combined_clinical_data_updated %>%
 dat <- read.csv("Final_aggregate_table_cfWGS_features_with_clinical_and_demographics_updated5.csv")
 
 
-# 1. MFC‐based MRD test events
 mfc_events <- dat %>%
   filter(!is.na(Flow_Binary)) %>%
   mutate(
@@ -329,6 +328,18 @@ clonoseq_events <- dat %>%
     end,
     details
   )
+
+# Get everythong as date 
+# e.g. if bm_events has character dates in “YYYY‑MM‑DD” form:
+bm_events <- bm_events %>% 
+  mutate(
+    start = as_date(start),      # parse “2020‑07‑23” into Date
+    end   = as_date(end)         # if end is also character
+  )
+
+# repeat for any other dfs with char dates...
+cfDNA_events   <- cfDNA_events   %>% mutate(start = as_date(start), end = as_date(end))
+followup_events<- followup_events%>% mutate(start = as_date(start), end = as_date(end))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -407,12 +418,117 @@ all_events <- all_events %>%
   )
 
 all_events <- all_events %>% select(-Patient, -Progression_date)
-  
+
+
+### Add new info from Sarah and Esther 
+M4_new <- read_excel("Clinical data/M4/Updated dates from Sarah for swim plot - DA edited.xlsx")
+IMG_new <- read_excel("Clinical data/IMMAGINE/Updated_data_esther.xlsx")
+
+  # 1) Parse the M4_new dates into Date class
+  M4_new2 <- M4_new %>%
+  mutate(
+    start = dmy(start),
+    end   = dmy(end)
+  )
+
+# 2) Drop from all_events any rows that share patient+event+start with M4_new2
+all_events_clean <- all_events %>%
+  anti_join(
+    M4_new2 %>% select(patient, event, start),
+    by = c("patient", "event", "start")
+  )
+
+# 3) Bind them back together and (optionally) re‑order
+all_events_updated <- bind_rows(all_events_clean, M4_new2) %>%
+  arrange(patient, start)
+
+
+# 1) Convert IMG_new’s POSIXct columns to Date
+IMG_new2 <- IMG_new %>%
+  mutate(
+    start = as_date(start),
+    end   = as_date(end)
+  )
+
+# 2) Drop all “Transplant” rows for IMG‑181 and IMG‑098 from your master table
+all_events_clean <- all_events_updated %>%
+  filter(!(patient %in% c("IMG-181","IMG-098") & event == "Transplant"))
+
+# 3) (Optional) also guard against exact dupes on patient+event+start
+all_events_clean <- all_events_clean %>%
+  anti_join(
+    IMG_new2 %>% filter(event=="Transplant") %>% select(patient, event, start),
+    by = c("patient","event","start")
+  )
+
+# 4) Finally bind your cleaned master with the new rows
+all_events <- bind_rows(all_events_clean, IMG_new2) %>%
+  arrange(patient, start)
+
+## Ensure ASCT treated as transplant 
+all_events <- all_events %>%
+  mutate(
+    event = if_else(
+      details == "ASCT",    # when TRUE…
+      "Transplant",         # …use this
+      event,                # when FALSE…
+      missing = event       # …and when NA, also use this
+    )
+  )
+
+## Now if ongoing put to the latest timepoint have on patient for chemotherapy or progression 
+# define which events to fall back on if there is no next Chemo/Transplant
+fallback_events <- c("Relapse", "Last follow-up")
+
+# 2) For each patient, stretch only Chemo rows whose end == start
+all_events_updated <- all_events %>%
+  group_by(patient) %>%
+  arrange(start) %>%
+  group_modify(~ {
+    df <- .
+    
+    for (i in seq_len(nrow(df))) {
+      if (
+        !is.na(df$event[i]) &&
+        df$event[i] == "Chemotherapy" &&
+        !is.na(df$start[i]) &&
+        !is.na(df$end[i]) &&
+        df$end[i] == df$start[i]
+      ) {
+        # 1) Next Chemo or Transplant
+        next_chemo_tx <- df$start[
+          df$event %in% c("Chemotherapy", "Transplant") &
+            df$start > df$start[i]
+        ]
+        
+        if (length(next_chemo_tx) > 0) {
+          df$end[i] <- min(next_chemo_tx)
+        } else {
+          # 2) Fallback: earliest Relapse/Last followup AFTER this chemo start
+          future_fallback <- df$start[
+            df$event %in% fallback_events &
+              df$start > df$start[i]
+          ]
+          if (length(future_fallback) > 0) {
+            df$end[i] <- min(future_fallback)
+          }
+          # else leave df$end[i] as-is (or set to NA if you prefer)
+        }
+      }
+    }
+    
+    df
+  }) %>%
+  ungroup()
+
+
+
+all_events <- all_events_updated
 # Export all_events to CSV
-write_csv(all_events, "Final Tables and Figures/Supp_Table_1_all_events_for_swim_plot_combined.csv")
+write_csv(all_events, "Final Tables and Figures/Supp_Table_1_all_events_for_swim_plot_combined_updated.csv")
 
 # Export all_events to RDS
-saveRDS(all_events, "Final Tables and Figures/all_events_for_swim_plot_combined.rds")
+saveRDS(all_events, "Final Tables and Figures/all_events_for_swim_plot_combined_updated2.rds")
 
 
 ## Export for Esteban to get more info 
@@ -438,7 +554,7 @@ write_csv(spore_all_events, "spore_all_events.csv")
 # ──────────────────────────────────────────────────────────────────────
 # 1. LOAD DATA
 # ──────────────────────────────────────────────────────────────────────
-events   <- read_csv("Final Tables and Figures/all_events_for_swim_plot_combined.csv",
+events   <- read_csv("Final Tables and Figures/Supp_Table_1_all_events_for_swim_plot_combined_updated.csv",
                      col_types = cols(
                        patient = col_character(),
                        event   = col_character(),
@@ -490,6 +606,15 @@ baseline_non <- combined_clinical_data_updated %>%
   filter(patient %in% non_ids)
 
 # bind the two sets of baseline dates
+# parse baseline_date in baseline_non to Date
+baseline_non <- baseline_non %>%
+  mutate(baseline_date = ymd(baseline_date))
+
+# (Optional) if baseline_front ended up as character too, parse it likewise:
+baseline_front <- baseline_front %>%
+  mutate(baseline_date = as_date(baseline_date))
+
+# now bind
 baseline_tbl <- bind_rows(baseline_front, baseline_non)
 
 # re‐join and drop any patients w/o a computed baseline
@@ -521,26 +646,26 @@ events <- events %>%
 # ─────────────────────────────────────────────────────────────────────────────
 # 4. EXTEND ONE-DAY CHEMO BARS → 30 d BEFORE NEXT CHEMO START
 # ─────────────────────────────────────────────────────────────────────────────
-chemo_adj <- events %>%
-  filter(event == "Chemotherapy") %>%
-  arrange(patient, start_day) %>%
-  group_by(patient) %>%
-  mutate(next_start = lead(start_day)) %>%
-  mutate(end_day = if_else(end_day == start_day & !is.na(next_start) &
-                             (next_start - 30 > start_day),
-                           next_start - 30, end_day)) %>%
-  select(patient, start_day, end_day)
+#chemo_adj <- events %>%
+#  filter(event == "Chemotherapy") %>%
+#  arrange(patient, start_day) %>%
+#  group_by(patient) %>%
+#  mutate(next_start = lead(start_day)) %>%
+#  mutate(end_day = if_else(end_day == start_day & !is.na(next_start) &
+#                             (next_start - 30 > start_day),
+#                           next_start - 30, end_day)) %>%
+#  select(patient, start_day, end_day)
 
-events <- events %>%
-  left_join(chemo_adj, by = c("patient", "start_day"),
-            suffix = c("", "_new")) %>%
-  mutate(
-    end_day = coalesce(end_day_new, end_day),
-    end     = baseline_date + days(end_day),
-    is_interval = if_else(event == "Chemotherapy" & end_day > start_day,
-                          TRUE, is_interval)
-  ) %>%
-  select(-ends_with("_new"))
+#events <- events %>%
+#  left_join(chemo_adj, by = c("patient", "start_day"),
+#            suffix = c("", "_new")) %>%
+#  mutate(
+#    end_day = coalesce(end_day_new, end_day),
+#    end     = baseline_date + days(end_day),
+#    is_interval = if_else(event == "Chemotherapy" & end_day > start_day,
+#                          TRUE, is_interval)
+#  ) %>%
+#  select(-ends_with("_new"))
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 5. REGIMEN → COLOUR GROUP
@@ -775,10 +900,10 @@ combined_plot <- p_front / p_non +
     )
   )
 
-ggsave("swimplot_by_cohort_v3.pdf", combined_plot,
+ggsave("swimplot_by_cohort_v4.pdf", combined_plot,
        width = 12, height = 10, device = cairo_pdf)
 
-ggsave("swimplot_by_cohort_v3.png", combined_plot,
+ggsave("swimplot_by_cohort_v4.png", combined_plot,
        width = 12, height = 10, dpi = 300)
 
 
@@ -787,7 +912,7 @@ ggsave("swimplot_by_cohort_v3.png", combined_plot,
 # Export the front-line cohort plot
 # Export the non-front-line cohort plot
 ggsave(
-  filename = "swimplot_nonfrontline_cohort.png",
+  filename = "swimplot_nonfrontline_cohort_updated.png",
   plot     = p_non,
   width    = 10,
   height   = 2,
@@ -795,7 +920,7 @@ ggsave(
 )
 
 ggsave(
-  filename = "swimplot_frontline_cohort.png",
+  filename = "swimplot_frontline_cohort_updated.png",
   plot     = p_front,
   width    = 10,
   height   = 10,
@@ -885,9 +1010,9 @@ p_combined <- p_combined +
 
 # D) Display / Save
 print(p_combined)
-ggsave("swimplot_combined_cohorts_v2.png", p_combined,
+ggsave("swimplot_combined_cohorts_v3.png", p_combined,
        width = 10, height = 12, dpi = 500)
-ggsave("swimplot_combined_cohorts_wide_v2.png", p_combined,
+ggsave("swimplot_combined_cohorts_wide_v3.png", p_combined,
        width = 16, height = 12, dpi = 500)
 
 
@@ -911,7 +1036,7 @@ ord_df <- ord_df %>%
     
     # map your 'Cohort' to the swim-plot cohort names
     cohort  = recode(Cohort,
-                     "Primary" = "Front-line cohort",
+                     "Train" = "Front-line cohort",
                      "Test"    = "Non-front-line cohort"),
     
     # sample-type flag for the y-axis label
@@ -927,8 +1052,8 @@ ord_df <- ord_df %>%
 ### ──────────────────────────────────────────────────────────────
 patient_order_combined <- ord_df %>%
   mutate(
-    cohort = factor(cohort,
-                    levels = c("Front-line cohort", "Non-front-line cohort"))
+    cohort = factor(Cohort,
+                    levels = c("Train", "Test"))
   ) %>%
   group_by(cohort) %>%
   mutate(y = row_number()) %>%
@@ -981,10 +1106,10 @@ ann_tf <- ggplot(patient_order_combined,
 # 3) Cohort colour bar
 # ─────────────────────────────────────────────────────────────────────────────
 # 1) Recode the cohort labels
-patient_order_combined <- patient_order_combined %>%
-  mutate(cohort = recode(cohort,
-                         "Front-line cohort"     = "Train",
-                         "Non-front-line cohort" = "Test"))
+#patient_order_combined <- patient_order_combined %>%
+#  mutate(cohort = recode(cohort,
+#                         "Front-line cohort"     = "Train",
+#                         "Non-front-line cohort" = "Test"))
 
 # 2) Define your new colour mapping
 cohort_cols <- c(
@@ -1144,13 +1269,13 @@ final_plot <- ann_tf + ann_cohort + ann_paired + p_swim +
     )
   )
 
-ggsave("Final Tables and Figures/Figure1A_swimplot_with_3_annotations.png",
+ggsave("Final Tables and Figures/Figure1A_swimplot_with_3_annotations_updated.png",
        final_plot,
        width  = 15,
        height = 10,
        dpi    = 500)
 
-ggsave("Final Tables and Figures/Figure1A_swimplot_with_3_annotations_wide.png",
+ggsave("Final Tables and Figures/Figure1A_swimplot_with_3_annotations_wide_updated.png",
        final_plot,
        width  = 18,
        height = 10,
@@ -1158,23 +1283,456 @@ ggsave("Final Tables and Figures/Figure1A_swimplot_with_3_annotations_wide.png",
 
 
 
+### Edit to be simpler - less shapes, clearer
+# 1) Collapse to two point types
+
+lastfu_tbl <- followup_events %>%
+  filter(
+    event   == "Last follow-up",
+    details == "Relapsed: 0"
+  ) %>%
+  group_by(patient) %>%
+  summarise(
+    last_followup = max(start, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+events_combined2 <- events_combined %>%
+  left_join(lastfu_tbl, by = "patient") %>%
+  mutate(
+    is_ongoing = is_interval &
+      event == "Chemotherapy" &
+      ( is.na(end) | end == last_followup )
+  )
+
+events_combined2 <- events_combined2 %>%
+  mutate(
+    point_type = case_when(
+      event %in% c("BM sample collection", "cfDNA sample collection") ~ "Sample collection",
+      event %in% c("MRD (MFC)", "MRD (clonoSEQ)")                       ~ "Clinical MRD assay",
+      TRUE                                                             ~ NA_character_
+    ),
+    is_progression = event == "Progression",
+    is_transplant  = event == "Transplant"
+    )  
+
+events_combined2 <- events_combined2 %>%
+  mutate(
+    # if event is NA, replace with "Baseline"
+    event = if_else(is.na(event), "Baseline", event)
+  )
+
+events_combined2 <- events_combined2 %>%
+  mutate(
+    across(
+      starts_with("is_"),       # pick every column whose name starts with "is_"
+      ~ replace_na(.x, FALSE)   # turn any NA into FALSE
+    )
+  )
+
+# 2) Shapes for the two point types
+shape_map_simple <- c(
+  "Sample collection" = 16,  # circle
+  "Clinical MRD assay"         = 17   #  triangle
+)
+
+events_combined2 <- events_combined2 %>%
+  mutate(
+    chemo_group_simple = case_when(
+      event != "Chemotherapy" ~ NA_character_,
+      # IMiDs
+      str_detect(details, regex("Lenalidomide|Rev|Pom(Dex|D)|Iberdomide", TRUE)) ~ "IMiD-based",
+      # Proteasome inhibitors
+      str_detect(details, regex("CY[Bb]OR|Bort|Carfil|KD|Ixa|Ixazomib", TRUE))   ~ "PI-based",
+      # Antibodies
+      str_detect(details, regex("Dara|Daratumumab|Elranatamab", TRUE))           ~ "Antibody-based",
+      # fallback
+      TRUE                                                                      ~ "Other"
+    )
+  )
+
+# Previously treated 
+pretx_list <- c("EK-09", "IMG-098", "SPORE_0009")
+events_combined2 <- events_combined2 %>%
+  mutate(
+    previously_treated = patient %in% pretx_list
+  )
+
+# Limit early chemo bars
+events_combined2 <- events_combined2 %>%
+  mutate(
+    start_day_plot = if_else(
+      event == "Chemotherapy",
+      pmax(start_day, 0),  # cap at 0 only for chemo
+      start_day_plot               # otherwise leave as‐is
+    ),
+    end_day_plot = if_else(
+      event == "Chemotherapy",
+      pmax(end_day, 0),    # cap at 0 only for chemo
+      start_day_plot                 # otherwise leave as‐is
+    )
+  )
+
+## Add ongoing to patient who stopped maintenance early 
+events_combined2 <- events_combined2 %>%
+  mutate(
+    is_ongoing = if_else(
+      patient == "VA-02" & event == "Last follow-up",
+      TRUE,
+      is_ongoing
+    )
+  )
+
+chemo_cols_simple <- c(
+  "IMiD-based"     = "#009E73",  # the same green you use for MRD+/maintenance curves
+  "PI-based"       = "#E69F00",  # that classic orange from your cohort bars
+  "Antibody-based" = "#0072B2",  # the deep blue used on your panel A ROC lines
+  "Other"          = "#999999"   # neutral grey as a fallback
+)
+
+## Other 
+chemo_cols_simple <- c(
+  "IMiD-based"     = "#35B779FF",  # the same green you use for MRD+/maintenance curves
+  "PI-based"       = "#E69F00FF",  # that classic orange from your cohort bars
+  "Antibody-based" = "#9467bd",  # the deep blue used on your panel A ROC lines
+  "Other"          = "#999999"   # neutral grey as a fallback
+)
+
+# Original
+chemo_cols_simple <- c(
+  "IMiD-based"         = "#1b9e77",
+  "PI-based"           = "#d95f02",
+  "Antibody-based"     = "#7570b3",
+  "Other"              = "#999999"
+)
+
+## Change to weeks 
+events_combined2 <- events_combined2 %>%
+  mutate(
+    start_week_plot = start_day_plot/7,
+    end_week_plot = end_day_plot/7
+    )
+
+## Months
+events_combined2 <- events_combined2 %>%
+  mutate(
+    start_month_plot = start_day_plot/30.44,
+    end_month_plot = end_day_plot/30.44
+  )
+
+xmax <- max(events_combined2$end_week_plot, na.rm=TRUE) * 1.05
+max_months <- ceiling(xmax * 7 / 30.44)  # if xmax is in weeks, convert to months
+month_breaks <- seq(0, max_months, by = 3)
+
+## Consolidate Points
+events_combined2 <- events_combined2 %>%
+  mutate(
+    event_type = case_when(
+      is_transplant      ~ "Transplant",
+      is_progression     ~ "Progression",
+      is_ongoing         ~ "Ongoing",
+      point_type == "Sample collection" ~ "Sample collection",
+      point_type == "MRD assay"         ~ "Clinical MRD assay",
+      TRUE               ~ NA_character_
+    )
+  )
+
+
+## Reorder 
+# 1) Compute total follow‑up per patient
+patient_order_tbl <- events_combined2 %>%
+  group_by(Cohort, patient) %>%
+  summarise(
+    # use end_day if available, otherwise start_day
+    followup = max(coalesce(end_day, start_day), na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  # within each cohort, sort descending so longest follow‑up is first
+  arrange(Cohort, desc(followup))
+
+# 2) Pull out the ordered patient vector
+patient_order <- patient_order_tbl %>% pull(patient)
+
+# 3) Re‑factor your patient column
+events_combined2 <- events_combined2 %>%
+  mutate(
+    patient = factor(patient, levels = patient_order)
+  )  
+
+# 3) Plot
+p_swim <- ggplot() +
+  # Chemo intervals (coloured)
+  geom_segment(
+    data = events_combined2 %>% filter(is_interval, event == "Chemotherapy"),
+    aes(x = start_month_plot, xend = end_month_plot, y = patient, yend = patient, colour = chemo_group_simple),
+    linewidth = 5, lineend = "round"
+  ) +
+  # Other intervals (black)
+  geom_segment(
+    data = events_combined2 %>% filter(is_interval, event != "Chemotherapy"),
+    aes(x = start_month_plot, xend = end_month_plot, y = patient, yend = patient),
+    colour = "black", linewidth = 5, lineend = "round"
+  ) +
+  # Point events (ONLY two shapes)
+  geom_point(
+    data = events_combined2 %>% filter(!is_interval, !is.na(point_type)),
+    aes(x = start_month_plot, y = patient, shape = point_type),
+    size = 2.6, stroke = 0.35, colour = "black", fill = "white"
+  ) +
+  # Progression tick (vertical line across the bar)
+  geom_text(
+    data   = events_combined2 %>% filter(is_progression),
+    aes(x = start_month_plot, y = patient),
+    label    = "|",          # single vertical bar
+    fontface = "bold",       # bold weight
+    size     = 5,            # tweak to taste
+    colour   = "red"
+  ) +
+  # Last follow-up arrow
+  geom_segment(
+    data = events_combined2 %>% filter(is_ongoing),
+    aes(
+      x    = end_month_plot,
+      xend = end_month_plot + 50/30.44,      # arrow extends 50 days to the right
+      y    = patient,
+      yend = patient
+    ),
+    colour = "black",
+    linewidth = 0.6,
+    lineend   = "butt",                # so the bar doesn’t cap‑over the arrow
+    arrow     = arrow(
+      length = unit(2, "mm"),          # size of the arrow head
+      ends   = "last",                 # only draw the head at the end
+      type   = "closed"                # filled triangle
+    )
+  ) +
+  # Transplant "T"
+  geom_text(
+    data = events_combined2 %>% filter(is_transplant),
+    aes(x = start_month_plot, y = patient, label = "T"),
+    fontface = "bold", size = 3
+  ) +
+  # Previously treated 
+  geom_point(
+    data = filter(events_combined2, previously_treated),
+    aes(x = -40/30.44, y = patient),
+    shape  = 8,        # asterisk/star glyph
+    size   = 2,        # adjust as needed
+    colour = "black"
+  ) +
+  # Scales
+  scale_colour_manual(values = chemo_cols_simple, name = "Chemotherapy regimen", drop = FALSE) +
+  scale_shape_manual(values = shape_map_simple, name = "Point events", drop = FALSE) +
+  scale_x_continuous(
+    "\nMonths since baseline",
+    limits = c(-1.4, max(month_breaks)),
+    breaks = month_breaks,
+    labels = as.character,
+    minor_breaks = minor_breaks, # minor ticks every 3 months
+    expand = expansion(mult = c(0.01, 0.01))
+  ) +
+  scale_y_discrete(labels = NULL, limits = rev(levels(events_combined2$patient))) +
+  theme_bw(base_size = 10) +
+  theme(
+    panel.grid.major.y = element_blank(),
+    panel.grid.minor.y = element_blank(),
+    panel.grid.major.x = element_blank(),  # ← turns off vertical grid lines
+    panel.grid.minor.x = element_blank(),  # ← turns off minor vertical grid lines
+    axis.text.y        = element_blank(),
+    axis.text.x        = element_text(size = 12),
+    axis.title.x       = element_text(size = 12, face = "bold"),
+    axis.title.y       = element_text(size = 12, face = "bold"),
+    legend.position    = "bottom",
+    legend.direction   = "horizontal",
+    legend.title       = element_text(size = 8),
+    legend.text        = element_text(size = 8),
+    legend.spacing.x   = unit(0.3, "cm"),
+    plot.title         = element_text(size = 16, face = "bold", hjust = 0.5)
+  ) +
+  guides(
+    colour = guide_legend(nrow = 2, byrow = TRUE),
+    shape  = guide_legend(nrow = 1, byrow = TRUE)
+  ) +
+  labs(title = "Swim Plot of Treatment Timelines", y = NULL)
+
+p_swim <- p_swim +
+  scale_y_discrete(
+    # by default it will use the patient factor levels
+    limits = rev(levels(events_combined2$patient))
+  ) 
+
+## Change order 
+p_swim <- p_swim + 
+  scale_y_discrete(
+    limits = rev(levels(events_combined2$patient)),
+    breaks = NULL    # no ticks or labels
+  )
+
+ggsave("Final Tables and Figures/Test_swim.png",
+       p_swim,
+       width  = 15,
+       height = 10,
+       dpi    = 500)
+
+### Add back cohort and paired status 
+# 2) Define your new colour mapping
+cohort_cols <- c(
+  "Train" = "#1f77b4",
+  "Test"  = "#e6550d"
+)
+
+
+ann_cohort <- ggplot(patient_order_combined,
+                     aes(x = 1, y = patient, fill = cohort)) +
+  geom_tile(width = 0.9, height = 0.9) +
+  scale_fill_manual(values = cohort_cols, name = "Cohort") +
+  scale_x_continuous(name   = "Cohort", limits = c(0.5, 1.5), expand = c(0, 0), breaks = NULL) +
+  scale_y_discrete(expand = c(0, 0),   limits = rev(patient_order)) +
+  theme_minimal(base_size = 8) +
+  theme(
+    panel.grid      = element_blank(),
+    axis.title.y    = element_blank(),
+    axis.title.x    = element_text(size = 10, hjust = 0.5, lineheight = 0.8),
+    axis.ticks.x    = element_blank(),
+    axis.ticks.y    = element_blank(),
+    axis.text.y     = element_text(size = 10, hjust = 1, lineheight = 0.8), # For patients
+    plot.margin     = margin(0, 0, 0, 0)
+  )
+
+paired_cols <- c(
+  "Paired"     = "#9467bd",  # purple
+  "BM only"    = "#1f77b4",  # blue (same as Front‑line cohort)
+  "Blood only" = "#CC6677"   # red (same as LEN‑based chemo)
+)
+
+
+ann_paired <- ggplot(patient_order_combined,
+                     aes(x = 1, y = patient, fill = factor(sample_type))) +
+  geom_tile(width = 0.9, height = 0.9) +
+  scale_fill_manual(values = paired_cols, name = "Baseline samples available") +
+  scale_x_continuous(name   = "Samples\navailable", limits = c(0.5, 1.5), expand = c(0, 0), breaks = NULL) +
+  scale_y_discrete(
+    limits = rev(patient_order),
+    expand = c(0, 0)
+  ) +
+  theme_minimal(base_size = 8) +
+  theme(
+    panel.grid      = element_blank(),
+    axis.title.y    = element_blank(),
+    axis.ticks.y    = element_blank(),
+    axis.text.y     = element_blank(),
+    axis.ticks.x    = element_blank(),
+    plot.margin     = margin(0, 0, 0, 0)
+  )
 
 
 
+## Assemble final plot
+final_plot <- ann_cohort + p_swim +
+  plot_layout(widths = c(0.05, 0.95),
+              guides = "collect") &
+  theme(
+    # position & spacing
+    legend.position  = "right",
+    legend.box       = "vertical",
+    legend.spacing.y = unit(0.2, "cm"),
+    # unify title/text/key sizes
+    legend.title     = element_text(size = 8),
+    legend.text      = element_text(size = 7),
+    legend.key.size  = unit(0.8, "lines")
+  ) &
+  guides(
+    fill   = guide_legend(
+      nrow          = 1,
+      byrow         = TRUE,
+      title.position = "top",
+      label.theme   = element_text(size = 7),
+      title.theme   = element_text(size = 8)
+    ),
+    colour = guide_legend(
+      nrow          = 4,
+      byrow         = TRUE,
+      title.position = "top",
+      label.theme   = element_text(size = 7),
+      title.theme   = element_text(size = 8)
+    ),
+    shape  = guide_legend(
+      nrow          = 3,
+      byrow         = TRUE,
+      title.position = "top",
+      label.theme   = element_text(size = 7),
+      title.theme   = element_text(size = 8),
+      override.aes  = list(size = 2.6)  # match your point size
+    )
+  )
+
+ggsave("Final Tables and Figures/Figure1A_swimplot_with_3_annotations_updated2.png",
+       final_plot,
+       width  = 15,
+       height = 10,
+       dpi    = 500)
+
+ggsave("Final Tables and Figures/Figure1A_swimplot_with_3_annotations_wide_updated2.png",
+       final_plot,
+       width  = 16.5,
+       height = 10,
+       dpi    = 500)
 
 
 
+## Add legend 
 
+# 1) Build a dummy data.frame with one row per symbol
+legend_df <- data.frame(
+  y     = c(3, 2, 1),
+  label = c("Transplant", "Progression", "Ongoing")
+)
 
+# 2) Make the legend plot
+p_symbols <- ggplot(legend_df, aes(y = y)) +
+  # Title
+  ggtitle("Symbols") +
+  # 2a) Transplant: a bold "T"
+  geom_text(
+    data = subset(legend_df, label=="Transplant"),
+    aes(x = 0, label = "T"),
+    fontface = "bold",
+    size     = 6
+  ) +
+  # 2b) Progression: red vertical line
+  geom_text(
+    data = subset(legend_df, label=="Progression"),
+    aes(x = 0, y = y),
+    label    = "|",          # single vertical bar
+    fontface = "bold",       # bold weight
+    size     = 6,            # match your other legend sizes
+    colour   = "red"
+  ) +
+  # 2c) Ongoing: black right arrow
+  geom_segment(
+    data = subset(legend_df, label=="Ongoing"),
+    aes(x = 0, xend = 0.6, yend = y),
+    arrow   = arrow(length = unit(4, "mm"), ends="last", type="closed"),
+    colour  = "black",
+    size    = 1
+  ) +
+  # text labels
+  geom_text(
+    aes(x = 1.2, label = label),
+    hjust = 0,
+    size  = 5
+  ) +
+  # clean up
+  scale_y_continuous(limits = c(0.5, 3.5), expand = c(0,0)) +
+  scale_x_continuous(limits = c(-0.2, 2), expand = c(0,0)) +
+  theme_void() +
+  theme(
+    plot.title      = element_text(size=14, face="bold", hjust=0),
+    plot.margin     = margin(5,5,5,5)
+  )
 
-
-
-
-
-
-
-
-
+# 3) (Optional) view it
+print(p_symbols)
 
 
 
