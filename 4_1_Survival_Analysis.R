@@ -15,10 +15,10 @@ library(timeROC)       # optional – AUC vs time
 
 ## INPUT (already saved from your pipeline) ------------------------------
 final_tbl_rds <- "Exported_data_tables_clinical/Censor_dates_per_patient_for_PFS_updated.rds"
-dat_rds       <- "Output_tables_2025/all_patients_with_BM_and_blood_calls_updated2.rds"
+dat_rds       <- "Output_tables_2025/all_patients_with_BM_and_blood_calls_updated3.rds"
 
 ## OUTPUT ----------------------------------------------------------------------
-outdir <- "Output_tables_2025/detection_progression"
+outdir <- "Output_tables_2025/detection_progression_updated"
 dir.create(outdir, showWarnings = FALSE, recursive = TRUE)
 
 ## ── 1.  LOAD & TIDY CORE TABLES ──────────────────────────────────────────────
@@ -44,6 +44,13 @@ dat <- readRDS(dat_rds) %>%
 ## Limit to frontline 
 dat <- dat %>% filter(Cohort == "Frontline")
 
+## Do rescored 
+dat <- dat %>%
+  ## Add the screen column 
+  mutate(
+    BM_base_zscore_screen_call  = as.integer(BM_base_zscore_prob >= 0.350),
+  )
+
 ## ── 2.  BUILD PFS TABLE (patient-level) ──────────────────────────────────────
 survival_df <- dat %>%
   mutate(
@@ -68,7 +75,7 @@ survival_df <- dat %>%
     Flow_Binary, Adaptive_Binary, Rapid_Novor_Binary,
     Flow_pct_cells, Adaptive_Frequency,
     PET_Binary,
-    BM_zscore_only_detection_rate_call, BM_zscore_only_detection_rate_prob,
+    BM_base_zscore_call, BM_base_zscore_prob, BM_base_zscore_screen_call,
     Blood_zscore_only_sites_call, Blood_zscore_only_sites_prob
   )
 
@@ -83,7 +90,8 @@ table(survival_df$timepoint_info)
 techs <- c(
   Flow_Binary        = "MFC",
   Adaptive_Binary    = "clonoSEQ",
-  BM_zscore_only_detection_rate_call    = "cfWGS of BM-derived mutations", 
+  BM_base_zscore_call    = "cfWGS of BM-derived mutations", 
+  BM_base_zscore_screen_call    = "cfWGS of BM-derived mutations (high sensetivity)", 
   Blood_zscore_only_sites_call = "cfWGS of PB‑cfDNA‑derived mutations"
 )
 
@@ -102,7 +110,7 @@ tp_labels <- c(
   `post_transplant`    = "post‑ASCT",
   `1yr maintenance` = "one year maintenance", 
   `post_induction`    = "post‑induction"
-  )
+)
 
 # 5) Loop
 for(tp in tps) {
@@ -153,8 +161,8 @@ for(tp in tps) {
       risk.table.title = "Number at risk",
       risk.table.title.theme = element_text(hjust = 0),  # ← left‑align
       palette         = pal_2,
-     # legend.title    = paste0(assay_lab, " MRD"),
-     legend.title    = "MRD status",
+      # legend.title    = paste0(assay_lab, " MRD"),
+      legend.title    = "MRD status",
       # now we know two groups are present, so these two labels fit
       legend.labs     = c("MRD–","MRD+"),
       xlab            = "Time since MRD assessment (months)",
@@ -282,10 +290,10 @@ write_csv(followup_stats, file.path(outdir, "frontline_followup_summary.csv"))
 
 # 4.  Assays & timepoint definitions ------------------------------------------
 assays <- c(
-#  EasyM  = "Rapid_Novor_Binary",
+  #  EasyM  = "Rapid_Novor_Binary",
   clonoSEQ = "Adaptive_Binary",
   Flow     = "Flow_Binary",
-  cfWGS_BM    = "BM_zscore_only_detection_rate_call",
+  cfWGS_BM    = "BM_base_zscore_call",
   cfWGS_Blood    = "Blood_zscore_only_sites_call"
 )
 
@@ -523,7 +531,7 @@ sens_df <- bind_rows(
   )
 
 p_sens_blood <- ggplot(sens_df,
-                 aes(x = Assay, y = Sens_pct, fill = Timepoint)) +
+                       aes(x = Assay, y = Sens_pct, fill = Timepoint)) +
   geom_col(position = position_dodge(width = 0.8),
            width    = 0.7,
            colour   = "black",
@@ -572,12 +580,12 @@ ggsave(
 df_km <- survival_df %>%
   filter(
     timepoint_info == "1yr maintenance",
-    !is.na(BM_zscore_only_detection_rate_call)
+    !is.na(BM_base_zscore_call)
   )
 
 ## 2. 24-month RFS by cfWGS BM ----
 fit_cf <- survfit(
-  Surv(Time_to_event, Relapsed_Binary) ~ BM_zscore_only_detection_rate_call,
+  Surv(Time_to_event, Relapsed_Binary) ~ BM_base_zscore_call,
   data = df_km
 )
 # survival probabilities at 24 months:
@@ -589,7 +597,7 @@ rfs_neg_cf <- sum_cf$surv[1] * 100
 rfs_pos_cf <- sum_cf$surv[2] * 100
 
 cox_cf <- tidy(
-  coxph(Surv(Time_to_event, Relapsed_Binary) ~ BM_zscore_only_detection_rate_call,
+  coxph(Surv(Time_to_event, Relapsed_Binary) ~ BM_base_zscore_call,
         data = df_km),
   exponentiate = TRUE, conf.int = TRUE
 )
@@ -677,7 +685,7 @@ ci_hi_clonoSEQ   <- cox_clonoSEQ$conf.high
 
 ## 4. Spearman correlations ----
 # replace with your actual probability column:
-prob_var <- "BM_zscore_only_detection_rate_prob"  
+prob_var <- "BM_base_zscore_prob"  
 ct1 <- cor.test(df_km[[prob_var]], df_km$Time_to_event, method = "spearman")
 rho1 <- ct1$estimate; p1 <- ct1$p.value
 
@@ -686,7 +694,7 @@ rho2 <- ct2$estimate; p2 <- ct2$p.value
 
 ## 5. Power diagnostics ----
 d      <- sum(df_km$Relapsed_Binary)
-prop_p <- mean(df_km$BM_zscore_only_detection_rate_call==1)
+prop_p <- mean(df_km$BM_base_zscore_call==1)
 zα     <- qnorm(1-0.05/2); zβ <- qnorm(0.80)
 hr80   <- exp(2*(zα+zβ) / sqrt(d * prop_p * (1-prop_p)))
 
@@ -763,12 +771,12 @@ metrics_1yr <- tibble(
 df_km <- survival_df %>%
   filter(
     timepoint_info == "post_transplant",
-    !is.na(BM_zscore_only_detection_rate_call)
+    !is.na(BM_base_zscore_call)
   )
 
 ## 2. 24-month RFS by cfWGS BM ----
 fit_cf <- survfit(
-  Surv(Time_to_event, Relapsed_Binary) ~ BM_zscore_only_detection_rate_call,
+  Surv(Time_to_event, Relapsed_Binary) ~ BM_base_zscore_call,
   data = df_km
 )
 # survival probabilities at 24 months:
@@ -780,7 +788,7 @@ rfs_neg_cf <- sum_cf$surv[1] * 100
 rfs_pos_cf <- sum_cf$surv[2] * 100
 
 cox_cf <- tidy(
-  coxph(Surv(Time_to_event, Relapsed_Binary) ~ BM_zscore_only_detection_rate_call,
+  coxph(Surv(Time_to_event, Relapsed_Binary) ~ BM_base_zscore_call,
         data = df_km),
   exponentiate = TRUE, conf.int = TRUE
 )
@@ -857,7 +865,7 @@ ci_hi_clonoSEQ   <- cox_clonoSEQ$conf.high
 
 ## 4. Spearman correlations ----
 # replace with your actual probability column:
-prob_var <- "BM_zscore_only_detection_rate_prob"  
+prob_var <- "BM_base_zscore_prob"  
 ct1 <- cor.test(df_km[[prob_var]], df_km$Time_to_event, method = "spearman")
 rho1 <- ct1$estimate; p1 <- ct1$p.value
 
@@ -866,7 +874,7 @@ rho2 <- ct2$estimate; p2 <- ct2$p.value
 
 ## 5. Power diagnostics ----
 d      <- sum(df_km$Relapsed_Binary)
-prop_p <- mean(df_km$BM_zscore_only_detection_rate_call==1)
+prop_p <- mean(df_km$BM_base_zscore_call==1)
 zα     <- qnorm(1-0.05/2); zβ <- qnorm(0.80)
 hr80   <- exp(2*(zα+zβ) / sqrt(d * prop_p * (1-prop_p)))
 
@@ -1406,7 +1414,7 @@ p_hr <- ggplot(hr_plot_df,
   labs(
     y        = NULL,
     title    = "Relapse hazard ratios stratified by MRD assay\nand landmark timepoint",
- #   subtitle = "cfWGS vs. MFC (95% CI)"
+    #   subtitle = "cfWGS vs. MFC (95% CI)"
   ) +
   
   # classic theme with no gridlines
@@ -1449,7 +1457,7 @@ hr_plot_df <- progression_metrics %>%
   )
 
 p_hr_bm <- ggplot(hr_plot_df,
-               aes(x = HR, y = fct_rev(Landmark), colour = Assay)) +
+                  aes(x = HR, y = fct_rev(Landmark), colour = Assay)) +
   # reference line
   geom_vline(xintercept = 1, linetype = "dashed") +
   
@@ -1541,14 +1549,14 @@ df <- survival_df %>%                           # <- your tibble
   filter(!str_detect(timepoint_info, regex("Diagnosis|Baseline", TRUE))) %>%
   
   # drop rows with missing probability or time
-  filter(!is.na(BM_zscore_only_detection_rate_prob),
+  filter(!is.na(BM_base_zscore_prob),
          !is.na(Time_to_event)) %>%
   
   # enforce non-negative time to event for relapse event visits a few days off from CMRG date
   mutate(
     days_before_event = pmax(Time_to_event, 0), # set negative values to 0 
     mrd_status      = factor(
-      BM_zscore_only_detection_rate_call,
+      BM_base_zscore_call,
       levels = c(0, 1),
       labels = c("MRD-", "MRD+")
     ),
@@ -1575,7 +1583,7 @@ df_slim <- df %>%
 youden_thresh <- 0.436
 max_mo <- max(df_slim$months_before_event, na.rm = TRUE)  
 
-p_prob <- ggplot(df_slim, aes(months_before_event, BM_zscore_only_detection_rate_prob, group = Patient)) +
+p_prob <- ggplot(df_slim, aes(months_before_event, BM_base_zscore_prob, group = Patient)) +
   
   # 1) Youden line
   geom_hline(yintercept = youden_thresh,
@@ -1684,11 +1692,11 @@ max_days <- ceiling(max(df_plot$days_before_event, na.rm = TRUE) / 180) * 180
 ## 1)  Build the scatter plot                                  
 ## ─────────────────────────────────────────────────────────────
 p_time <- ggplot(df_plot,
-                 aes(x = BM_zscore_only_detection_rate_prob,
+                 aes(x = BM_base_zscore_prob,
                      y = days_before_event)) +
   
   # ① dashed horizontal line at “event” (0 days)
-#  geom_hline(yintercept = 0, linetype = "dotted", colour = "grey40") +
+  #  geom_hline(yintercept = 0, linetype = "dotted", colour = "grey40") +
   
   # ② points – colour = outcome, stroke = MRD call
   geom_point(aes(colour = progress_status,
@@ -1784,7 +1792,7 @@ rel_df <- plot_df2 %>%
 
 # 2) run cor.test for each metric
 spearman_prob <- cor.test(
-  rel_df$BM_zscore_only_detection_rate_prob,
+  rel_df$BM_base_zscore_prob,
   rel_df$days_before_event,
   method = "spearman"
 )
@@ -1815,7 +1823,7 @@ print(spearman_detect_rate)
 # 2) compute Spearman rho on the relapsers
 spearman_res <- with(
   filter(plot_df2, progress_status == "Relapse"),
-  cor.test(BM_zscore_only_detection_rate_prob,
+  cor.test(BM_base_zscore_prob,
            days_before_event,
            method = "spearman")
 )
@@ -1827,7 +1835,7 @@ pval <- spearman_res$p.value
 
 # 3) make the scatter
 p_time_inf <- ggplot(plot_df2,
-                     aes(x = BM_zscore_only_detection_rate_prob,
+                     aes(x = BM_base_zscore_prob,
                          y = days_plot)) +
   
   # Youden threshold (if you still want it)
@@ -1903,7 +1911,7 @@ p_time_inf <- ggplot(plot_df2,
 
 # 4) render / save
 ggsave(file.path(outdir, "Fig_time_to_relapse_infinity_no_reverse.png"),
-        p_time_inf, width = 6, height = 4, dpi = 600)
+       p_time_inf, width = 6, height = 4, dpi = 600)
 
 
 
@@ -2034,7 +2042,7 @@ p_time_inf <- ggplot(plot_df2,
   
   scale_x_continuous(
     "cfWGS z-score of proportion of sites detected",
-   ) +
+  ) +
   # colours
   scale_colour_manual(
     "Patient outcome",
@@ -2341,7 +2349,7 @@ rel_df <- plot_df2 %>%
 
 # 2) run cor.test for each metric
 spearman_prob <- cor.test(
-  rel_df$BM_zscore_only_detection_rate_prob,
+  rel_df$BM_base_zscore_prob,
   rel_df$days_before_event,
   method = "spearman"
 )
@@ -2396,7 +2404,7 @@ dat <- readRDS(dat_rds) %>%
 # 1) Your assays vector
 assays <- c(
   Flow         = "Flow_Binary",
-  cfWGS_BM     = "BM_zscore_only_detection_rate_call",
+  cfWGS_BM     = "BM_base_zscore_call",
   cfWGS_Blood  = "Blood_zscore_only_sites_call"
 )
 
@@ -2416,7 +2424,7 @@ df_sf <- dat %>%
     Patient,
     sample_date = as.Date(Date),
     Flow_Binary,
-    BM_zscore_only_detection_rate_call,
+    BM_base_zscore_call,
     Blood_zscore_only_sites_call
   ) %>%
   # keep rows with at least one assay result
@@ -2439,7 +2447,7 @@ df_sf2 <- df_sf %>%
   filter(Progression_date >= sample_date) %>%
   group_by(Patient, sample_date,
            Flow_Binary,
-           BM_zscore_only_detection_rate_call,
+           BM_base_zscore_call,
            Blood_zscore_only_sites_call) %>%
   slice_min(Progression_date, with_ties = FALSE) %>%
   ungroup() %>%
@@ -2503,7 +2511,7 @@ results %>%
 #### Now do only for those who got the cfWGS test done 
 
 # 5a) Restrict to BM-cfWGS subset, then loop ------------------------------
-bm_col     <- assays["cfWGS_BM"]    # "BM_zscore_only_detection_rate_call"
+bm_col     <- assays["cfWGS_BM"]    # "BM_base_zscore_call"
 df_sf_BM   <- df_sf %>% filter(!is.na(.data[[bm_col]]))
 
 results_BM <- map_dfr(windows, function(w) {
@@ -2643,7 +2651,7 @@ base_theme <- theme_minimal(base_size = 11) +
 # 3) Build the grouped bar‑plot
 # ────────────────────────────────────────────────────────────────────────────
 p_sens_bm <- ggplot(sens_BM_df,
-                       aes(x = Assay, y = Sens_pct, fill = Timepoint)) +
+                    aes(x = Assay, y = Sens_pct, fill = Timepoint)) +
   geom_col(position = position_dodge(width = 0.8),
            width    = 0.7,
            colour   = "black",
@@ -2704,7 +2712,7 @@ sens_blood_df <- results_blood %>%
 sens_blood_df <- sens_blood_df %>% filter(Assay != "cfWGS_BM")
 
 p_sens_blood <- ggplot(sens_blood_df,
-                    aes(x = Assay, y = Sens_pct, fill = Timepoint)) +
+                       aes(x = Assay, y = Sens_pct, fill = Timepoint)) +
   geom_col(position = position_dodge(width = 0.8),
            width    = 0.7,
            colour   = "black",
@@ -2794,7 +2802,7 @@ write_csv(
 
 ### See at what pont an increase occured 
 # 1) choose the probability column you want to analyze:
-assay_prob <- "BM_zscore_only_detection_rate_prob"  # or "BM_zscore_only_detection_rate_prob"
+assay_prob <- "BM_base_zscore_prob"  # or "BM_base_zscore_prob"
 
 ## Reload dat 
 dat <- readRDS(dat_rds) %>%
@@ -2830,7 +2838,7 @@ survival_df <- dat %>%
     Flow_Binary, Adaptive_Binary, Rapid_Novor_Binary,
     Flow_pct_cells, Adaptive_Frequency,
     PET_Binary,
-    BM_zscore_only_detection_rate_call, BM_zscore_only_detection_rate_prob,
+    BM_base_zscore_call, BM_base_zscore_prob,
     Blood_zscore_only_sites_call, Blood_zscore_only_sites_prob, Cumulative_VAF_BM, Cumulative_VAF_blood,
     zscore_BM, zscore_blood, z_score_detection_rate_BM, z_score_detection_rate_blood, detect_rate_BM, detect_rate_blood
   )
@@ -3007,7 +3015,7 @@ survival_df <- dat %>%
     Flow_Binary, Adaptive_Binary, Rapid_Novor_Binary,
     Flow_pct_cells, Adaptive_Frequency,
     PET_Binary,
-    BM_zscore_only_detection_rate_call, BM_zscore_only_detection_rate_prob,
+    BM_base_zscore_call, BM_base_zscore_prob,
     Blood_zscore_only_sites_call, Blood_zscore_only_sites_prob, Cumulative_VAF_BM, Cumulative_VAF_blood
   )
 

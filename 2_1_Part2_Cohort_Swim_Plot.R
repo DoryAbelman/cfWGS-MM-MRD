@@ -525,7 +525,7 @@ all_events_updated <- all_events %>%
 
 all_events <- all_events_updated
 # Export all_events to CSV
-write_csv(all_events, "Final Tables and Figures/Supp_Table_1_all_events_for_swim_plot_combined_updated.csv")
+write_csv(all_events %>% select(-details_2), "Final Tables and Figures/Supp_Table_1_all_events_for_swim_plot_combined_updated.csv")
 
 # Export all_events to RDS
 saveRDS(all_events, "Final Tables and Figures/all_events_for_swim_plot_combined_updated2.rds")
@@ -1305,6 +1305,13 @@ events_combined2 <- events_combined %>%
       ( is.na(end) | end == last_followup )
   )
 
+# Turn off is_ongoing for VA-02 since treatment stopped
+events_combined2 <- events_combined2 %>%
+  left_join(lastfu_tbl, by = "patient") %>%
+  mutate(
+      is_ongoing = if_else(patient == "VA-02", FALSE, is_ongoing)
+  )
+
 events_combined2 <- events_combined2 %>%
   mutate(
     point_type = case_when(
@@ -1374,14 +1381,14 @@ events_combined2 <- events_combined2 %>%
   )
 
 ## Add ongoing to patient who stopped maintenance early 
-events_combined2 <- events_combined2 %>%
-  mutate(
-    is_ongoing = if_else(
-      patient == "VA-02" & event == "Last follow-up",
-      TRUE,
-      is_ongoing
-    )
-  )
+#events_combined2 <- events_combined2 %>%
+#  mutate(
+#    is_ongoing = if_else(
+#      patient == "VA-02" & event == "Last follow-up",
+#      TRUE,
+#      is_ongoing
+#    )
+#  )
 
 chemo_cols_simple <- c(
   "IMiD-based"     = "#009E73",  # the same green you use for MRD+/maintenance curves
@@ -1440,7 +1447,7 @@ events_combined2 <- events_combined2 %>%
 
 ## Reorder 
 # 1) Compute total follow‑up per patient
-patient_order_tbl <- events_combined2 %>%
+patient_order_tbl <- events_combined2 %>% filter(!(patient == "VA-02" & event == "Last follow-up")) # remove this since not plotted
   group_by(Cohort, patient) %>%
   summarise(
     # use end_day if available, otherwise start_day

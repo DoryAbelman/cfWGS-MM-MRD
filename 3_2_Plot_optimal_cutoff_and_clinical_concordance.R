@@ -45,9 +45,9 @@ library(scales)   # for percent_format()
 # -------- 1.  Read processed data & thresholds ------------------------------
 outdir   <- "Output_tables_2025"
 OUTPUT_DIR_FIGURES    <- "Output_figures_2025"
-dat      <- readRDS(file.path(outdir, "all_patients_with_BM_and_blood_calls_updated2.rds"))
-PATH_MODEL_LIST       <- "~/Documents/Thesis_work/R/M4/Projects/High_risk_MM_baselinbe_relapse_marrow/Output_tables_2025/selected_combo_models_2025-06-17.rds"
-PATH_THRESHOLD_LIST   <- "~/Documents/Thesis_work/R/M4/Projects/High_risk_MM_baselinbe_relapse_marrow/Output_tables_2025/selected_combo_thresholds_2025-06-17.rds"
+dat      <- readRDS(file.path(outdir, "all_patients_with_BM_and_blood_calls_updated3.rds"))
+PATH_MODEL_LIST       <- "~/Documents/Thesis_work/R/M4/Projects/High_risk_MM_baselinbe_relapse_marrow/Output_tables_2025/selected_combo_models_2025-07-25.rds"
+PATH_THRESHOLD_LIST   <- "~/Documents/Thesis_work/R/M4/Projects/High_risk_MM_baselinbe_relapse_marrow/Output_tables_2025/selected_combo_thresholds_2025-07-25.rds"
 
 selected_models <- readRDS(PATH_MODEL_LIST)
 selected_thr    <- readRDS(PATH_THRESHOLD_LIST)
@@ -82,10 +82,10 @@ front_tbl <- dat %>%
   filter(
     Cohort == "Frontline",
     !is.na(landmark_tp),
-    !is.na(BM_zscore_only_detection_rate_call)
+    !is.na(BM_base_zscore_call)
   ) %>%
   pivot_longer(
-    cols      = c(Flow_Binary, Adaptive_Binary, BM_zscore_only_detection_rate_call),
+    cols      = c(Flow_Binary, Adaptive_Binary, BM_base_zscore_call),
     names_to  = "Technology",
     values_to = "Result"
   ) %>%
@@ -102,7 +102,7 @@ front_tbl <- dat %>%
       Technology,
       Flow_Binary         = "MFC",
       Adaptive_Binary     = "clonoSEQ",
-      BM_zscore_only_detection_rate_call = "cfWGS"
+      BM_base_zscore_call = "cfWGS"
     )
   )
 
@@ -113,11 +113,11 @@ non_tbl <- dat %>%
   filter(!timepoint_info %in% c("Baseline", "Diagnosis")) %>% 
   filter(
     Cohort == "Non-frontline",
-    !is.na(BM_zscore_only_detection_rate_call),
+    !is.na(BM_base_zscore_call),
     !is.na(MRD_truth) # restrict to only ones with MRD for fair comparison
   ) %>%
   pivot_longer(
-    cols      = c(Flow_Binary, Adaptive_Binary, BM_zscore_only_detection_rate_call),
+    cols      = c(Flow_Binary, Adaptive_Binary, BM_base_zscore_call),
     names_to  = "Technology",
     values_to = "Result"
   ) %>%
@@ -134,7 +134,7 @@ non_tbl <- dat %>%
       Technology,
       Flow_Binary         = "MFC",
       Adaptive_Binary     = "clonoSEQ",
-      BM_zscore_only_detection_rate_call = "cfWGS" 
+      BM_base_zscore_call = "cfWGS" 
   )
   )
 
@@ -142,12 +142,12 @@ non_tbl <- dat %>%
 ## Export
 readr::write_csv(
   front_tbl,
-  file.path(outdir, "Positivity_by_Landmark_TimePoint_BoneMarrow_Frontline_updated.csv")
+  file.path(outdir, "Positivity_by_Landmark_TimePoint_BoneMarrow_Frontline_updated2.csv")
 )
 
 readr::write_csv(
   non_tbl,
-  file.path(outdir, "Positivity_All_TimePoints_BoneMarrow_NonFrontline_updated.csv")
+  file.path(outdir, "Positivity_All_TimePoints_BoneMarrow_NonFrontline_updated2.csv")
 )
 
 
@@ -287,7 +287,7 @@ p_front_grouped <- ggplot(front_tbl,
   plot_theme
 
 ggsave(
-  filename = file.path(OUTPUT_DIR_FIGURES, "Fig_4I_BM_positivity_by_tech_updated.png"),
+  filename = file.path(OUTPUT_DIR_FIGURES, "Fig_4I_BM_positivity_by_tech_updated2.png"),
   plot     = p_front_grouped,
   width    = 6,
   height   = 4,
@@ -339,7 +339,7 @@ p_non_grouped <- ggplot(non_tbl,
 
 # 4) save
 ggsave(
-  filename = file.path(OUTPUT_DIR_FIGURES, "Fig_BM_positivity_by_tech_later_line.png"),
+  filename = file.path(OUTPUT_DIR_FIGURES, "Fig_BM_positivity_by_tech_later_line2.png"),
   plot     = p_front_grouped,
   width    = 6,
   height   = 4,
@@ -388,7 +388,7 @@ p_non_grouped <- ggplot(non_tbl,
   plot_theme
 
 ggsave(
-  filename = file.path(OUTPUT_DIR_FIGURES, "Fig_4I_BM_positivity_by_tech_updated_non_frontline.png"),
+  filename = file.path(OUTPUT_DIR_FIGURES, "Fig_4I_BM_positivity_by_tech_updated_non_frontline2.png"),
   plot     = p_non_grouped,
   width    = 3.5,
   height   = 4,
@@ -465,7 +465,7 @@ p_pos_by_tech <- ggplot(combo_tbl,
 
 # 4) Save
 ggsave(
-  filename = file.path(OUTPUT_DIR_FIGURES, "Fig_4I_BM_positivity_by_tech_facet.png"),
+  filename = file.path(OUTPUT_DIR_FIGURES, "Fig_4I_BM_positivity_by_tech_facet2.png"),
   plot     = p_pos_by_tech,
   width    = 6,    # wider to accommodate two facets
   height   = 4,
@@ -690,28 +690,28 @@ dat <- dat %>%
 
 # ---------------------------------------------------------------------------
 # 3.  FRONTLINE: concordance & positivity  -----------------------------------
-front <- dat %>% filter(Cohort == "Frontline", !is.na(landmark)) %>% filter(!is.na(BM_zscore_only_detection_rate_call))
+front <- dat %>% filter(Cohort == "Frontline", !is.na(landmark)) %>% filter(!is.na(BM_base_zscore_call))
 
 # --- 3a. Pairwise concordance at Post‑ASCT ----------------------------------
 pa   <- front %>% filter(landmark == "Post_ASCT")
 post_conc <- bind_rows(
-  pair_concord(pa, "BM_zscore_only_detection_rate_call", "Adaptive_Binary"),
-  pair_concord(pa, "BM_zscore_only_detection_rate_call", "Flow_Binary"),
+  pair_concord(pa, "BM_base_zscore_call", "Adaptive_Binary"),
+  pair_concord(pa, "BM_base_zscore_call", "Flow_Binary"),
   pair_concord(pa, "Adaptive_Binary",  "Flow_Binary")
 )
 
 # --- 3b. Pairwise concordance at Maintenance --------------------------------
 ma   <- front %>% filter(landmark == "Maintenance")
 maint_conc <- bind_rows(
-  pair_concord(ma, "BM_zscore_only_detection_rate_call", "Adaptive_Binary"),
-  pair_concord(ma, "BM_zscore_only_detection_rate_call", "Flow_Binary")
+  pair_concord(ma, "BM_base_zscore_call", "Adaptive_Binary"),
+  pair_concord(ma, "BM_base_zscore_call", "Flow_Binary")
 )
 
 # --- 3c. Positivity counts ---------------------------------------------------
 pos_tbl <- front %>%
   filter(landmark %in% c("Post_ASCT", "Maintenance")) %>%
   pivot_longer(
-    cols      = c(BM_zscore_only_detection_rate_call, Adaptive_Binary, Flow_Binary),
+    cols      = c(BM_base_zscore_call, Adaptive_Binary, Flow_Binary),
     names_to  = "Test",
     values_to = "Result"
   ) %>%
@@ -722,6 +722,15 @@ pos_tbl <- front %>%
     tot = dplyr::n(),
     .groups = "drop"
   )
+
+## for non-frontline 
+non <- dat %>% filter(Cohort == "Non-frontline") %>% filter(!is.na(BM_base_zscore_call)) %>% filter(timepoint_info != "Baseline") %>% 
+  filter(timepoint_info != "Diagnosis")
+
+non_conc <- pair_concord(non, "BM_base_zscore_call", "Flow_Binary")
+
+
+
 
 # ---------------------------------------------------------------------------
 # 4.  FRONTLINE PPV / NPV for BM_zscore_only_detection_rate_call --------------------------------
@@ -761,19 +770,19 @@ print(ppv_maint)
 
 # ---------------------------------------------------------------------------
 # 5.  NON-FRONTLINE cohort ----------------------------------------------------
-non <- dat %>% filter(Cohort == "Non-frontline") %>% filter(!is.na(BM_zscore_only_detection_rate_call))
+non <- dat %>% filter(Cohort == "Non-frontline") %>% filter(!is.na(BM_base_zscore_call))
 
-non_cm <- dat %>%
+non_cm <- non %>%
   filter(Cohort != "Frontline",
-         !is.na(BM_zscore_only_detection_rate_call),
+         !is.na(BM_base_zscore_call),
          !is.na(MRD_truth)) %>%
-  tabyl(BM_zscore_only_detection_rate_call, MRD_truth) %>%
+  tabyl(BM_base_zscore_call, MRD_truth) %>%
   # ensure integer rows 0 and 1 exist
   complete(
-    BM_zscore_only_detection_rate_call = c(0L, 1L), 
+    BM_base_zscore_call = c(0L, 1L), 
     fill = list(`0` = 0, `1` = 0)
   ) %>%
-  column_to_rownames("BM_zscore_only_detection_rate_call")
+  column_to_rownames("BM_base_zscore_call")
 
 
 # extract counts
@@ -829,31 +838,31 @@ if (write_para) {
   r <- function(a,b,df) df %>% filter(test_a==a, test_b==b) %>% pull(conc_rate)
   
   # post‑ASCT numbers
-  X  <- g("BM_zscore_only_detection_rate_call","Adaptive_Binary", post_conc)
-  Y  <- n("BM_zscore_only_detection_rate_call","Adaptive_Binary", post_conc)
-  XX <- sprintf("%.0f", 100*r("BM_zscore_only_detection_rate_call","Adaptive_Binary", post_conc))
-  Xp <- g("BM_zscore_only_detection_rate_call","Flow_Binary", post_conc)
-  Yp <- n("BM_zscore_only_detection_rate_call","Flow_Binary", post_conc)
-  XXp<- sprintf("%.0f", 100*r("BM_zscore_only_detection_rate_call","Flow_Binary", post_conc))
+  X  <- g("BM_base_zscore_call","Adaptive_Binary", post_conc)
+  Y  <- n("BM_base_zscore_call","Adaptive_Binary", post_conc)
+  XX <- sprintf("%.0f", 100*r("BM_base_zscore_call","Adaptive_Binary", post_conc))
+  Xp <- g("BM_base_zscore_call","Flow_Binary", post_conc)
+  Yp <- n("BM_base_zscore_call","Flow_Binary", post_conc)
+  XXp<- sprintf("%.0f", 100*r("BM_base_zscore_call","Flow_Binary", post_conc))
   Z  <- g("Adaptive_Binary","Flow_Binary", post_conc)
   W  <- n("Adaptive_Binary","Flow_Binary", post_conc)
   YY <- sprintf("%.0f",100*r("Adaptive_Binary","Flow_Binary", post_conc))
   
   # discordant counts
   n_cf_pos_cl_neg <- post_conc %>%
-    filter(test_a=="BM_zscore_only_detection_rate_call", test_b=="Adaptive_Binary") %>%
+    filter(test_a=="BM_base_zscore_call", test_b=="Adaptive_Binary") %>%
     pull(a_pos_b_neg)
   m_cf_neg_cl_pos <- post_conc %>%
-    filter(test_a=="BM_zscore_only_detection_rate_call", test_b=="Adaptive_Binary") %>%
+    filter(test_a=="BM_base_zscore_call", test_b=="Adaptive_Binary") %>%
     pull(a_neg_b_pos)
   
   # maintenance
-  A  <- g("BM_zscore_only_detection_rate_call","Adaptive_Binary", maint_conc)
-  B  <- n("BM_zscore_only_detection_rate_call","Adaptive_Binary", maint_conc)
-  AA <- sprintf("%.0f",100*r("BM_zscore_only_detection_rate_call","Adaptive_Binary", maint_conc))
-  C  <- g("BM_zscore_only_detection_rate_call","Flow_Binary", maint_conc)
-  D  <- n("BM_zscore_only_detection_rate_call","Flow_Binary", maint_conc)
-  BB <- sprintf("%.0f",100*r("BM_zscore_only_detection_rate_call","Flow_Binary", maint_conc))
+  A  <- g("BM_base_zscore_call","Adaptive_Binary", maint_conc)
+  B  <- n("BM_base_zscore_call","Adaptive_Binary", maint_conc)
+  AA <- sprintf("%.0f",100*r("BM_base_zscore_call","Adaptive_Binary", maint_conc))
+  C  <- g("BM_base_zscore_call","Flow_Binary", maint_conc)
+  D  <- n("BM_base_zscore_call","Flow_Binary", maint_conc)
+  BB <- sprintf("%.0f",100*r("BM_base_zscore_call","Flow_Binary", maint_conc))
   
   p <- ppv_post$PPV; q <- ppv_post$NPV
   p2<- ppv_maint$PPV; q2<- ppv_maint$NPV
@@ -864,7 +873,7 @@ if (write_para) {
     Of the discordant post-ASCT samples, cfWGS was positive/ clonoSEQ negative in {n_cf_pos_cl_neg} cases and negative/ clonoSEQ positive in {m_cf_neg_cl_pos}. 
     At the 1-year maintenance timepoint, cfWGS agreed with clonoSEQ in {A}/{B} ({AA}%) samples and with MFC in {C}/{D} ({BB}%). 
     The PPV and NPV of cfWGS were {sprintf('%.0f',p*100)}% and {sprintf('%.0f',q*100)}% at post-ASCT, and {sprintf('%.0f',p2*100)}% and {sprintf('%.0f',q2*100)}% at maintenance. 
-    In the non-frontline cohort, sensitivity and specificity of cfWGS were {sprintf('%.0f',stats_out$nonfront_sens*100)}% and {sprintf('%.0f',stats_out$nonfront_spec*100)}%, with an overall positivity rate of {stats_out$nonfront_pos %>% filter(Test=='BM_zscore_only_detection_rate_call') %>% summarise(sprintf('%.0f%%', 100*pos/tot)) %>% pull()}.
+    In the non-frontline cohort, sensitivity and specificity of cfWGS were {sprintf('%.0f',stats_out$nonfront_sens*100)}% and {sprintf('%.0f',stats_out$nonfront_spec*100)}%, with an overall positivity rate of {stats_out$nonfront_pos %>% filter(Test=='BM_base_zscore_call') %>% summarise(sprintf('%.0f%%', 100*pos/tot)) %>% pull()}.
   ")
   
   cat(para)
@@ -873,7 +882,7 @@ if (write_para) {
 
 ### Get PPV and NPV seperately across technologies rather than on MRD truth
 # 1.  General PPV/NPV helper that takes any truth column  -------------------
-ppv_npv_any <- function(df, pred_col = "BM_zscore_only_detection_rate_call", truth_col) {
+ppv_npv_any <- function(df, pred_col = "BM_base_zscore_call", truth_col) {
   tbl <- table(
     Pred  = df[[pred_col]],
     Truth = df[[truth_col]],
@@ -905,14 +914,14 @@ pa <- dat %>%
 # 3.  Compute PPV/NPV vs. clonoSEQ  --------------------------------------
 ppv_clono <- ppv_npv_any(
   df        = pa %>% filter(!is.na(Adaptive_Binary)),
-  pred_col  = "BM_zscore_only_detection_rate_call",
+  pred_col  = "BM_base_zscore_call",
   truth_col = "Adaptive_Binary"
 )
 
 # 4.  Compute PPV/NPV vs. MFC  ------------------------------------------
 ppv_mfc <- ppv_npv_any(
   df        = pa %>% filter(!is.na(Flow_Binary)),
-  pred_col  = "BM_zscore_only_detection_rate_call",
+  pred_col  = "BM_base_zscore_call",
   truth_col = "Flow_Binary"
 )
 
@@ -925,12 +934,12 @@ pa <- dat %>%
   filter(Cohort == "Frontline", landmark == "Maintenance")
 ppv_clono <- ppv_npv_any(
   df        = pa %>% filter(!is.na(Adaptive_Binary)),
-  pred_col  = "BM_zscore_only_detection_rate_call",
+  pred_col  = "BM_base_zscore_call",
   truth_col = "Adaptive_Binary"
 )
 ppv_mfc <- ppv_npv_any(
   df        = pa %>% filter(!is.na(Flow_Binary)),
-  pred_col  = "BM_zscore_only_detection_rate_call",
+  pred_col  = "BM_base_zscore_call",
   truth_col = "Flow_Binary"
 )
 
@@ -941,7 +950,7 @@ pa <- dat %>%
   filter(Cohort == "Non-frontline")
 ppv_mfc <- ppv_npv_any(
   df        = pa %>% filter(!is.na(Flow_Binary)),
-  pred_col  = "BM_zscore_only_detection_rate_call",
+  pred_col  = "BM_base_zscore_call",
   truth_col = "Flow_Binary"
 )
 
@@ -967,13 +976,13 @@ readr::write_csv(
   file.path(outdir, "Frontline_BoneMarrow_Positivity_PostASCT_and_Maintenance.csv")
 )
 
-# 4. Export PPV/NPV at Post-ASCT for BM_zscore_only_detection_rate_call
+# 4. Export PPV/NPV at Post-ASCT for BM_base_zscore_call
 readr::write_csv(
   ppv_post,
   file.path(outdir, "Frontline_BoneMarrow_PostASCT_PPV_NPV.csv")
 )
 
-# 5. Export PPV/NPV at Maintenance for BM_zscore_only_detection_rate_call
+# 5. Export PPV/NPV at Maintenance for BM_base_zscore_call
 readr::write_csv(
   ppv_maint,
   file.path(outdir, "Frontline_BoneMarrow_Maintenance_PPV_NPV.csv")
@@ -985,7 +994,7 @@ readr::write_csv(
 #### Now make contingency table 
 # helper: build a tidy 2 × 2 contingency table ----------------------------
 make_ct <- function(df,
-                    pred  = "BM_zscore_only_detection_rate_call",   # cfWGS
+                    pred  = "BM_base_zscore_call",   # cfWGS
                     truth = "MRD_truth") {                          # reference
   out <- df %>%
     select(all_of(c(pred, truth))) %>%
@@ -1548,7 +1557,7 @@ id_cols   <- c("Patient", "Sample_Code", "Timepoint", "timepoint_info")
 # Columns that explain why calls differ
 aux_cols  <- c("Adaptive_Frequency",              # clonoSEQ cumulative VAF (rename to your actual column name)
                "Flow_pct_cells",                     # MFC % cells; rename if needed
-               "BM_zscore_only_detection_rate_call",  "BM_zscore_only_sites_call",              # cfWGS probability (before threshold)
+               "BM_base_zscore_call",  "BM_zscore_only_sites_call",  "BM_base_zscore_call", "BM_base_zscore_prob",           # cfWGS probability (before threshold)
                "FS", "Mean.Coverage", "detect_rate_BM", "zscore_BM", 
                "WGS_Tumor_Fraction_Blood_plasma_cfDNA",
                "BM_MutCount_Baseline", "Blood_MutCount_Baseline", "FS_outlier", "Mean.Coverage_outlier")
@@ -1564,7 +1573,7 @@ if (length(missing)) warning("These columns are missing: ", paste(missing, colla
 # 2.  Build one combined table ---------------------------------------------
 combined_discord_tbl <- dat %>%
   filter(
-    !is.na(BM_zscore_only_detection_rate_call),
+    !is.na(BM_base_zscore_call),
     !is.na(landmark),                             # only landmark timepoints
     (!is.na(Adaptive_Binary) | !is.na(Flow_Binary))
   ) %>%
@@ -1583,9 +1592,9 @@ combined_discord_tbl <- dat %>%
     ),
     # Define discordance/concordance category
     category = case_when(
-      BM_zscore_only_detection_rate_call == 1L & Reference == 0L ~
+      BM_base_zscore_call == 1L & Reference == 0L ~
         paste0("cfWGS_pos / ", Comparator, "_neg"),
-      BM_zscore_only_detection_rate_call == 0L & Reference == 1L ~
+      BM_base_zscore_call == 0L & Reference == 1L ~
         paste0("cfWGS_neg / ", Comparator, "_pos"),
       TRUE ~ "concordant"
     )
@@ -1607,7 +1616,7 @@ combined_discord_tbl_slim <- combined_discord_tbl %>% filter(category != "concor
 # 3.  (Optional) write out to CSV ------------------------------------------
 write.csv(
   combined_discord_tbl,
-  file.path(outdir_discordances, "combined_discordance_table.csv"),
+  file.path(outdir, "Supplementary_Table_combined_discordance_table_BM.csv"),
   row.names = FALSE
 )
 
@@ -1616,9 +1625,10 @@ write.csv(
 ### Do for non-frontline now at all timepoints
 combined_discord_tbl_non_frontline <- dat %>%
   filter(
-    !is.na(BM_zscore_only_detection_rate_call),
+    !is.na(BM_base_zscore_call),
     (!is.na(Adaptive_Binary) | !is.na(Flow_Binary))
   ) %>%
+  filter(Cohort == "Non-frontline") %>%
   pivot_longer(
     cols      = c(Adaptive_Binary, Flow_Binary),
     names_to  = "Comparator",
@@ -1634,9 +1644,9 @@ combined_discord_tbl_non_frontline <- dat %>%
     ),
     # Define discordance/concordance category
     category = case_when(
-      BM_zscore_only_detection_rate_call == 1L & Reference == 0L ~
+      BM_base_zscore_call == 1L & Reference == 0L ~
         paste0("cfWGS_pos / ", Comparator, "_neg"),
-      BM_zscore_only_detection_rate_call == 0L & Reference == 1L ~
+      BM_base_zscore_call == 0L & Reference == 1L ~
         paste0("cfWGS_neg / ", Comparator, "_pos"),
       TRUE ~ "concordant"
     )
@@ -1656,7 +1666,7 @@ combined_discord_tbl_non_frontline <- dat %>%
 ## Export 
 write.csv(
   combined_discord_tbl_non_frontline,
-  file.path(outdir_discordances, "combined_discordance_table_all_timepoints.csv"),
+  file.path(outdir, "Supplementary_Table_combined_discordance_table_BM_non_frontline.csv"),
   row.names = FALSE
 )
 

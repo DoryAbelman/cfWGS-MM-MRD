@@ -235,7 +235,7 @@ print(results)
 
 
 # -----------------------------------------------------------------------------
-# 5. Single 5-fold CV
+# 5. Single 5-fold CV - not used in manuscript but for testing only 
 # -----------------------------------------------------------------------------
 
 #### See if different combination of features would be better
@@ -384,7 +384,7 @@ saveRDS(model_list,
 
 
 # -----------------------------------------------------------------------------
-# 6. Repeated CV
+# 6. Repeated CV - not used in manuscript but for testing only 
 # -----------------------------------------------------------------------------
 
 ###### Now do a repeated 5x5 cross validation to improve generalizability 
@@ -650,9 +650,9 @@ for(i in seq_len(nrow(selected_rows))) {
 
 
 
-
+### This is main model used in manuscript
 # -----------------------------------------------------------------------------
-# 7. Elastic-Net Classifier Training & Nested CV
+# 7. Elastic-Net Classifier Training & Nested CV - main model
 # -----------------------------------------------------------------------------
 
 ### Next do a full nested cross validation 5x5 with hyperparameter tuning 
@@ -757,6 +757,7 @@ train_fragmentomics <- train_df %>%
 hold_fragmentomics  <- hold_df %>%
   drop_na(all_of(c("MRD_truth", frag_preds)))
 
+## RUN the nested cross-validation
 # Outer 5-fold nested CV
 run_nested_with_validation <- function(train_data,
                                        valid_data,           # ◀ NEW: pass your hold-out cohort here
@@ -770,8 +771,12 @@ run_nested_with_validation <- function(train_data,
                              k = 5,
                              returnTrain = TRUE)
   
+  outer_preds <- list()    # one element per combo
+  
   # 2) Loop over each feature-combo
   results <- purrr::imap(combo_list, function(preds, label) {
+    
+    combo_fold_preds <- vector("list", length(outer_folds))  # collect per fold
     
     # 2a) Collect per‐fold metrics
     combo_metrics <- purrr::map_dfr(seq_along(outer_folds), function(i) {
@@ -783,12 +788,27 @@ run_nested_with_validation <- function(train_data,
       train_cc <- train_out %>% drop_na(MRD_truth, all_of(preds))
       test_cc  <- test_out  %>% drop_na(MRD_truth, all_of(preds))
       
+      # Export diagnostics
+      message(sprintf("[%s | fold %d] n_train=%d  n_test=%d  classes(train)=%d  classes(test)=%d",
+                      label, i,
+                      nrow(train_cc), nrow(test_cc),
+                      n_distinct(train_cc$MRD_truth),
+                      n_distinct(test_cc$MRD_truth)))
+      
       # SKIP if either side is too small or single‐class
-      if (nrow(train_cc) < 20 ||
-          n_distinct(train_cc$MRD_truth) < 2 ||
+    #  if ( # nrow(train_cc) < 20 || removed this criteria
+    #      n_distinct(train_cc$MRD_truth) < 2 ||
+    #      n_distinct(test_cc$MRD_truth)  < 2) {
+    #    return(NULL)
+    #  }
+      
+      if (n_distinct(train_cc$MRD_truth) < 2 ||
           n_distinct(test_cc$MRD_truth)  < 2) {
+        message("‑‑ fold dropped: missing class after drop_na()")
         return(NULL)
       }
+      
+      message("‑‑ fold kept: fitting model now")
       
       # build formula
       f <- reformulate(preds, response = "MRD_truth")
@@ -816,6 +836,8 @@ run_nested_with_validation <- function(train_data,
       
       # 2c) predict on outer test
       probs    <- predict(fit, newdata = test_cc, type = "prob")[[positive_class]]
+      message("    --> length(probs) = ", length(probs))
+      
       roc_o    <- pROC::roc(test_cc$MRD_truth, probs,
                             quiet  = TRUE,
                             levels = c("neg","pos"))
@@ -825,6 +847,14 @@ run_nested_with_validation <- function(train_data,
                      ret         = "threshold")
       )
       youden_t <- as.numeric(youden_t[1])
+      
+      ## --- store the raw predictions for later plotting ----
+      combo_fold_preds[[i]] <<- tibble(
+        combo = label,
+        fold  = i,
+        truth = test_cc$MRD_truth,
+        prob  = probs
+      )
       
       # pull out single‐value sens/spec
       sens_o <- pROC::coords(roc_o, x = youden_t,
@@ -839,26 +869,26 @@ run_nested_with_validation <- function(train_data,
                                x      = 0.95,
                                input  = "specificity",
                                ret    = "sensitivity",
-                               transpose = FALSE)[1]
+                               transpose = FALSE)[[1]]
       
       # specificity at 95% sensitivity
       spec95_o <- pROC::coords(roc_o,
                                x      = 0.95,
                                input  = "sensitivity",
                                ret    = "specificity",
-                               transpose = FALSE)[1]
+                               transpose = FALSE)[[1]]
       
       # PPV / NPV at Youden threshold
       ppv_o    <- pROC::coords(roc_o,
                                x      = youden_t,
                                input  = "threshold",
                                ret    = "ppv",
-                               transpose = FALSE)[1]
+                               transpose = FALSE)[[1]]
       npv_o    <- pROC::coords(roc_o,
                                x      = youden_t,
                                input  = "threshold",
                                ret    = "npv",
-                               transpose = FALSE)[1]
+                               transpose = FALSE)[[1]]
       
       # F1 and balanced accuracy
       f1_o     <- 2 * ppv_o * sens_o / (ppv_o + sens_o)
@@ -897,6 +927,10 @@ run_nested_with_validation <- function(train_data,
                              (test_cc$MRD_truth == positive_class))
       )
     })
+    
+    # --- NEW: bind the fold‑level predictions for this combo
+    preds_df <- bind_rows(combo_fold_preds)
+    message("   --> preds_df rows for ", label, " = ", nrow(preds_df))
     
     # 2d) summarize across *kept* folds
     nested_summary <- combo_metrics %>%
@@ -1034,7 +1068,8 @@ run_nested_with_validation <- function(train_data,
       final_fit  = final_fit,
       bestTune   = final_fit$bestTune,
       validation = validation_summary,
-      threshold  = threshold_full        
+      threshold  = threshold_full,
+      preds_df   = preds_df           # <‑‑  NEW: stash the preds in the result
     )
   })
   
@@ -1044,13 +1079,17 @@ run_nested_with_validation <- function(train_data,
   best_tunes         <- map(results, "bestTune")
   validation_metrics <- map_dfr(results, "validation")
   thresholds         <- map_dbl(results, "threshold") # collect thresholds
+  outer_predictions  <- map_dfr(results, "preds_df") # ---  NEW: bind all combos’ outer‑fold predictions
+  
+  message("Rows in outer_predictions = ", nrow(outer_predictions))
   
   list(
     nested_metrics     = nested_metrics,
     models             = models,
     best_tunes         = best_tunes,
     validation_metrics = validation_metrics,
-    thresholds         = thresholds 
+    thresholds         = thresholds,
+    outer_predictions  = outer_predictions   ### NEW  –– outer predictions are here
   )
 }
 
@@ -1076,6 +1115,36 @@ nested_fragmentomics_validation_updated2 <- run_nested_with_validation(
   combo_list    = combos_fragmentomics,
   positive_class = "pos"
 )
+
+
+## Store again (updated function)
+set.seed(2025)
+nested_bm_validation_updated3 <- run_nested_with_validation(
+  train_data = train_bm,
+  valid_data = hold_bm,
+  combo_list = combos_bm,
+  positive_class = "pos"
+)
+
+set.seed(2025)
+nested_blood_validation_updated3 <- run_nested_with_validation(
+  train_data = train_blood,
+  valid_data = hold_blood,
+  combo_list = combos_blood,
+  positive_class = "pos"
+)
+
+set.seed(2025)
+nested_fragmentomics_validation_updated3 <- run_nested_with_validation(
+  train_data    = train_fragmentomics,
+  valid_data    = hold_fragmentomics,
+  combo_list    = combos_fragmentomics,
+  positive_class = "pos"
+)
+
+
+bm_preds <- nested_bm_validation_updated3$outer_predictions
+
 
 ## For testing - just when need quick iteration on script 
 # 1) Minimal combos list with only BM_base
@@ -1105,16 +1174,21 @@ saveRDS(nested_bm_validation_updated2, file = "nested_bm_validation_updated2.rds
 saveRDS(nested_blood_validation_updated2, file = "nested_blood_validation_updated2.rds")
 saveRDS(nested_fragmentomics_validation_updated2, file = "nested_fragmentomics_validation_updated2.rds")
 
+## Export the models that are updated
+saveRDS(nested_bm_validation_updated3, file = "nested_bm_validation_updated3.rds")
+saveRDS(nested_blood_validation_updated3, file = "nested_blood_validation_updated3.rds")
+saveRDS(nested_fragmentomics_validation_updated3, file = "nested_fragmentomics_validation_updated3.rds")
 
 
-
+## For consistency 
+nested_bm_validation_updated2 <- nested_bm_validation_updated3
+nested_blood_validation_updated2 <- nested_blood_validation_updated3
+nested_blood_validation_updated2 <- nested_blood_validation_updated3
 
 # -----------------------------------------------------------------------------
-# 8. Model Selection & Persistence
+# 8.Get Model Metrics Together and Exported
 # -----------------------------------------------------------------------------
 
-
-### Now fit on entire dataset
 # All validation metrics in one tibble
 all_val <- bind_rows(
   nested_bm_validation_updated2$validation_metrics,
@@ -1175,15 +1249,18 @@ wanted <- c(
   # BM-only models
   "BM_zscore_only_sites",              # best BM by AUC
   "BM_zscore_only_detection_rate",     # best BM by sensitivity
+  "BM_base_zscore",     # best BM by sensitivity
+  
   
   # Blood-only models
-  "Blood_rate_only",                   # best blood by AUC
+  "Blood_base",   #  best blood by AUC
+  "Blood_rate_only",                   # second best blood by AUC
   "Blood_plus_fragment_min",           # best blood by accuracy
   "Blood_zscore_only_detection_rate",  # best blood by sensitivity
   "Blood_zscore_only_sites",  # best blood in validation cohort
   
   # Fragmentomics-only models
-  "Fragmentomics_min",             # best fragmentomics in validation cohort and good sens
+  "Fragmentomics_tumor_fraction_only",             # best fragmentomics in validation cohort and good sens
   "Fragmentomics_mean_coverage_only"   # best auc in primary and accuracy
 )
 
@@ -1197,9 +1274,9 @@ selected_models   <- all_models[selected_combos]
 selected_thr      <- all_thresholds[selected_combos]
 
 saveRDS(selected_models,
-        file = file.path(outdir, "selected_combo_models_2025-06-19.rds"))
+        file = file.path(outdir, "selected_combo_models_2025-07-25.rds"))
 saveRDS(selected_thr,
-        file = file.path(outdir, "selected_combo_thresholds_2025-06-19.rds"))
+        file = file.path(outdir, "selected_combo_thresholds_2025-07-25.rds"))
 
 
 # -----------------------------------------------------------------------------
@@ -1263,6 +1340,31 @@ val_clean <- all_val %>%
   ) %>%
   mutate(cohort = "Testing")
 
+
+
+# 1. Helper to pull the first (and only) column out of any data.frame columns
+flatten_df_cols <- function(df) {
+  is_df <- vapply(df, is.data.frame, logical(1))
+  df[is_df] <- lapply(df[is_df], function(x) x[[1]])
+  df
+}
+
+# 2. Helper to clean up the sens95/spec95 names
+fix_names <- function(df) {
+  names(df) <- sub("sens95_mean\\$sensitivity", "sens95_mean", names(df))
+  names(df) <- sub("spec95_mean\\$specificity", "spec95_mean", names(df))
+  df
+}
+
+# Apply to both data sets
+primary_clean <- primary_clean %>%
+  flatten_df_cols() %>%
+  fix_names()
+
+val_clean <- val_clean %>%
+  flatten_df_cols() %>%
+  fix_names()
+
 # 3) stack them into one combined table
 combined_metrics <- bind_rows(primary_clean, val_clean) %>%
   select(
@@ -1284,10 +1386,14 @@ write_csv(
 
 # 2) Export all models
 write_csv(
-  combined_metrics,
-  "Output_tables_2025/Supplementary_Table_all_model_performance.csv"
+  primary_clean,
+  "Final Tables and Figures/Supplementary_Table_3_All_Model_performance_nested_CV_updated.csv"
 )
 
+write_csv(
+  val_clean,
+  "Final Tables and Figures/Supplementary_Table_5_All_Model_performance_nested_CV_updated_on_testing_cohort.csv"
+)
 
 
 
@@ -1428,8 +1534,8 @@ data_scored <- apply_selected(
 
 
 ### Save this 
-saveRDS(data_scored, file = file.path(outdir, "all_patients_with_BM_and_blood_calls_updated2.rds"))
-write_csv(data_scored, file = file.path(outdir, "all_patients_with_BM_and_blood_calls_updated2.csv"))
+saveRDS(data_scored, file = file.path(outdir, "all_patients_with_BM_and_blood_calls_updated3.rds"))
+write_csv(data_scored, file = file.path(outdir, "all_patients_with_BM_and_blood_calls_updated3.csv"))
 
 
 
@@ -1603,6 +1709,58 @@ write_csv(metrics_at_95spec, file = file.path(outdir, "cfWGS_model_metrics_fixed
 
 write_rds(metrics_at_95sens, file = file.path(outdir, "cfWGS_model_metrics_fixed_95sens.rds"))
 write_csv(metrics_at_95sens, file = file.path(outdir, "cfWGS_model_metrics_fixed_95sens_updated.csv"))
+
+
+## Tidy into one thing 
+# 1. Tidy up and rename columns on each
+youden_tbl <- metrics_youden %>%
+  rename(
+    Model                 = model,
+    Threshold_Youden      = threshold,
+    Sensitivity_Youden    = sensitivity,
+    Specificity_Youden    = specificity,
+    PPV_Youden            = ppv,
+    NPV_Youden            = npv,
+    Accuracy_Youden       = accuracy,
+    BalancedAcc_Youden    = bal_accuracy,
+    F1_Youden             = f1
+  )
+
+spec95_tbl <- metrics_at_95spec %>%
+  rename(
+    Model                   = model,
+    Threshold_95Spec        = threshold,
+    Sensitivity_95Spec      = sensitivity,
+    Specificity_95Spec      = specificity,
+    Accuracy_95Spec         = accuracy
+  )
+
+sens95_tbl <- metrics_at_95sens %>%
+  rename(
+    Model                   = model,
+    Threshold_95Sens        = threshold,
+    Sensitivity_95Sens      = sensitivity,
+    Specificity_95Sens      = specificity,
+    Accuracy_95Sens         = accuracy
+  )
+
+# 2. Join them all together
+all_perf_metrics <- youden_tbl %>%
+  left_join(spec95_tbl, by = "Model") %>%
+  left_join(sens95_tbl, by = "Model")
+
+# 3. Export as a single supplementary Excel (or CSV)
+library(writexl)    # or use write.csv if you prefer CSV
+write_xlsx(
+  list(`All Performance Metrics` = all_perf_metrics),
+  path = "Final Tables and Figures/Supplementary_Table_4_All_Model_Metrics_Refit.xlsx"
+)
+
+# — or, if you prefer CSV:
+write.csv(all_perf_metrics, 
+          "Final Tables and Figures/Supplementary_Table_4_All_Model_Metrics_Refit.csv", 
+          row.names = FALSE)
+
 
 
 

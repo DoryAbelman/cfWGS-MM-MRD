@@ -15,8 +15,8 @@ library(patchwork)   # optional – for combining plots, if needed
 library(virdis)
 
 # ── 1. FILE PATHS ───────────────────────────────────────────────────────────
-PATH_MODEL_LIST       <- "~/Documents/Thesis_work/R/M4/Projects/High_risk_MM_baselinbe_relapse_marrow/Output_tables_2025/selected_combo_models_2025-06-19.rds"
-PATH_THRESHOLD_LIST   <- "~/Documents/Thesis_work/R/M4/Projects/High_risk_MM_baselinbe_relapse_marrow/Output_tables_2025/selected_combo_thresholds_2025-06-19.rds"
+PATH_MODEL_LIST       <- "~/Documents/Thesis_work/R/M4/Projects/High_risk_MM_baselinbe_relapse_marrow/Output_tables_2025/selected_combo_models_2025-07-25.rds"
+PATH_THRESHOLD_LIST   <- "~/Documents/Thesis_work/R/M4/Projects/High_risk_MM_baselinbe_relapse_marrow/Output_tables_2025/selected_combo_thresholds_2025-07-25.rds"
 PATH_DILUTION_FRAGMENTOMICS         <- "~/Documents/Thesis_work/R/M4/Projects/High_risk_MM_baselinbe_relapse_marrow/Results_Fragmentomics/Dilution_series/key_fragmentomics_info_dilution_series.rds"
 PATH_DILUTION_PROCESSED_MRDetect    <- "~/Documents/Thesis_work/R/M4/Projects/High_risk_MM_baselinbe_relapse_marrow/MRDetect_output_winter_2025/Processed_R_outputs/cfWGS_Winter2025Dilution_series_May2025_with_zscore.rds"
 PATH_DILUTION_CLINICAL  <- "~/Documents/Thesis_work/R/M4/Projects/High_risk_MM_baselinbe_relapse_marrow/Fragmentomics_data/Dilution_series/Metadata_dilution_series.csv"
@@ -33,6 +33,8 @@ if (!dir.exists(OUTPUT_DIR_FIGURES)) dir.create(OUTPUT_DIR_FIGURES, recursive = 
 # ── 2. LOAD SAVED MODELS & THRESHOLDS ───────────────────────────────────────
 selected_models <- readRDS(PATH_MODEL_LIST)
 selected_thr    <- readRDS(PATH_THRESHOLD_LIST)
+bm_obj <- readRDS("nested_bm_validation_updated3.rds")
+
 
 # ── 3. LOAD AND ASSEMBLE DILUTION SERIES DATA ────────────────────────────────
 frag_df     <- read_rds(PATH_DILUTION_FRAGMENTOMICS)
@@ -197,12 +199,12 @@ feature_cols <- c(
   "Proportion.Short", "FS",
   "WGS_Tumor_Fraction_Blood_plasma_cfDNA",
   "BM_zscore_only_sites_prob",
+  "BM_base_zscore_prob",
   "BM_zscore_only_detection_rate_prob",
   "Blood_zscore_only_detection_rate_prob",
   "Blood_rate_only_prob",
   "Blood_zscore_only_sites_prob",
   "Blood_plus_fragment_min_prob",
-  "Fragmentomics_min_prob",
   "Fragmentomics_mean_coverage_only_prob"
 )
 
@@ -225,7 +227,7 @@ corr_tbl <- plot_df %>%
   arrange(desc(r2))
 
 ## save the full table for the supplement
-write_csv(corr_tbl, file.path(OUTPUT_DIR_TABLES, "Supp_Table_LOD_feature_correlations_updated2.csv"))
+write_csv(corr_tbl, file.path(OUTPUT_DIR_TABLES, "Supplementary_Table_6_LOD_feature_correlations_with_dilution_series.csv"))
 
 ## ----------------------------------------------------------------------
 ## 3.  Pick “interesting” features  -------------------------------------
@@ -299,11 +301,11 @@ annot_df <- corr_bm %>%
 
 # 4) nicer facet labels
 facet_labels <- c(
-  BM_zscore_only_sites_prob                 = "BM sites model prob.",
+  BM_base_zscore_prob                 = "Combined Model Probability",
   BM_zscore_only_detection_rate_prob             = "BM cVAF model prob.",
-  detect_rate_BM                     = "BM cVAF",
-  z_score_detection_rate_BM    = "BM cVAF Z-score",
-  zscore_BM             = "BM sites Z-score"
+  detect_rate_BM                     = "Cumulative VAF (cVAF)",
+  z_score_detection_rate_BM    = "cVAF Z‑Score",
+  zscore_BM             = "Prop. Muta Sites Detected Z-score"
 )
 # 5) clean ggplot - pearson 
 p_bm <- ggplot(plot_df_bm, aes(x = LOD, y = value)) +
@@ -409,7 +411,7 @@ p_bm_spearman_actual <- ggplot(plot_df_bm, aes(x = LOD, y = value)) +
 
 # 4) Save to output directory
 ggsave(
-  filename = file.path(OUTPUT_DIR_FIGURES, "Fig_LOD_BM_metrics_spearman_actual_updated2_loglog2.png"),
+  filename = file.path(OUTPUT_DIR_FIGURES, "Fig_LOD_BM_metrics_spearman_actual_updated2_log_3.png"),
   plot     = p_bm_spearman_actual,
   width    = 8,
   height   = 4, 
@@ -420,17 +422,25 @@ ggsave(
  ## Add call features 
 # 1) specify which of your features are the model‐probabilities
 prob_features <- c(
-  "BM_zscore_only_detection_rate_prob",  # BM cVAF Z-score model prob.
-  "BM_zscore_only_sites_prob"            # BM sites Z-score model prob.
+#  "BM_zscore_only_detection_rate_prob",  # BM cVAF Z-score model prob.
+ # "BM_zscore_only_sites_prob"            # BM sites Z-score model prob.
+  "BM_base_zscore_prob"
 )
 
 # 2) define your thresholds (one per feature)
+# thresholds <- tibble(
+#   feature = c("BM_zscore_only_sites_prob",
+#               "BM_zscore_only_detection_rate_prob"),
+#   thr     = c(
+#     bm_obj$thresholds["BM_zscore_only_sites"],
+#     bm_obj$thresholds["BM_zscore_only_detection_rate"]
+#   )
+# )
+
 thresholds <- tibble(
-  feature = c("BM_zscore_only_sites_prob",
-              "BM_zscore_only_detection_rate_prob"),
+  feature = c("BM_base_zscore_prob"),
   thr     = c(
-    bm_obj$thresholds["BM_zscore_only_sites"],
-    bm_obj$thresholds["BM_zscore_only_detection_rate"]
+    bm_obj$thresholds["BM_base_zscore"]
   )
 )
 
@@ -474,7 +484,7 @@ p_bm_prob <- ggplot(plot_df_prob, aes(x = LOD, y = value, color = call)) +
 p_bm_prob
 
 ggsave(
-  filename = file.path(OUTPUT_DIR_FIGURES, "Fig_LOD_BM_metrics_prob_calls.png"),
+  filename = file.path(OUTPUT_DIR_FIGURES, "Fig_LOD_BM_metrics_prob_calls_updated2.png"),
   plot     = p_bm_prob,
   width    = 8,
   height   = 4,
@@ -483,7 +493,7 @@ ggsave(
 
 
 combined_plot <- p_bm_spearman_actual + p_bm_prob +
-  plot_layout(nrow = 1, widths = c(3, 2)) +
+  plot_layout(nrow = 1, widths = c(3, 1)) +
   plot_annotation(
     title = "Feature Concordance with Dilution Series",
     theme = theme(
@@ -504,7 +514,7 @@ print(combined_plot)
 ### Figure 4G
 # and save
 ggsave(
-  filename = file.path(OUTPUT_DIR_FIGURES, "Fig4G_LOD_combined.png"),
+  filename = file.path(OUTPUT_DIR_FIGURES, "Fig4G_LOD_combined_updated2.png"),
   plot     = combined_plot,
   width    = 12,        # adjust as needed
   height   = 4,         # one‐line panel
@@ -577,22 +587,6 @@ ggsave(
 )
 
 ## Add call features 
-# 1) specify which of your features are the model‐probabilities
-prob_features <- c(
-  "BM_zscore_only_detection_rate_prob",  # BM cVAF Z-score model prob.
-  "BM_zscore_only_sites_prob"            # BM sites Z-score model prob.
-)
-
-# 2) define your thresholds (one per feature)
-thresholds <- tibble(
-  feature = c("BM_zscore_only_sites_prob",
-              "BM_zscore_only_detection_rate_prob"),
-  thr     = c(
-    bm_obj$thresholds["BM_zscore_only_sites"],
-    bm_obj$thresholds["BM_zscore_only_detection_rate"]
-  )
-)
-
 # 3) pull out only the prob data, join thresholds, and add a call flag
 plot_df_prob <- plot_df %>%
   filter(feature %in% prob_features) %>%
@@ -643,7 +637,7 @@ p_bm_prob <- ggplot(plot_df_prob, aes(x = LOD, y = value, color = call)) +
 p_bm_prob
 
 ggsave(
-  filename = file.path(OUTPUT_DIR_FIGURES, "Fig_LOD_BM_metrics_prob_calls_updated.png"),
+  filename = file.path(OUTPUT_DIR_FIGURES, "Fig_LOD_BM_metrics_prob_calls_updated2.png"),
   plot     = p_bm_prob,
   width    = 8,
   height   = 4,
@@ -652,9 +646,9 @@ ggsave(
 
 
 combined_plot <- p_bm_spearman_actual + p_bm_prob +
-  plot_layout(nrow = 1, widths = c(3, 2)) +
+  plot_layout(nrow = 1, widths = c(3, 1)) +
   plot_annotation(
-    title = "Feature Concordance with Dilution Series",
+    title = "Correlation of cfDNA Feature Values with Tumor Fraction in a Controlled Dilution Series",
     theme = theme(
       plot.title   = element_text(hjust = 0.5, face = "bold", size = 14),
       plot.margin  = margin(5, 5, 5, 5),
@@ -673,9 +667,9 @@ print(combined_plot)
 ### Figure 4G
 # and save
 ggsave(
-  filename = file.path(OUTPUT_DIR_FIGURES, "Fig4G_LOD_combined_updated.png"),
+  filename = file.path(OUTPUT_DIR_FIGURES, "Fig4G_LOD_combined_updated3.png"),
   plot     = combined_plot,
-  width    = 12,        # adjust as needed
+  width    = 11,        # adjust as needed
   height   = 4,         # one‐line panel
   dpi      = 600
 )
@@ -696,9 +690,9 @@ selected_feats <- c(
 
 # your custom labels
 custom_labels <- c(
-  detect_rate_BM                              = "BM cVAF",
-  z_score_detection_rate_BM                   = "BM cVAF Z-score",
-  zscore_BM                                   = "BM sites Z-score",
+  detect_rate_BM                              = "Cumulative VAF (cVAF)",
+  z_score_detection_rate_BM                   = "cVAF Z‑Score",
+  zscore_BM                                   = "Prop. Mutant Sites\nDetected Z-score",
   FS                                          = "Fragment-size score",
   Mean.Coverage                               = "MM regulatory\ncoverage",
   Proportion.Short                            = "Short-fragment\nproportion",
@@ -739,7 +733,7 @@ p_corr_nice <- ggplot(plot_df2, aes(x = r, y = feature)) +
   theme_minimal(base_size = 8) +
   theme(
     plot.title.position = "plot",
-    plot.title        = element_text(face = "bold", size = 12, hjust = 0),
+    plot.title        = element_text(face = "bold", size = 12, hjust = 0.5),
     axis.text.y       = element_text(size = 8),
     axis.text.x       = element_text(size = 8),
     axis.title.x      = element_text(size = 8, margin = margin(t = 4)),
@@ -754,9 +748,9 @@ p_corr_nice <- ggplot(plot_df2, aes(x = r, y = feature)) +
 
 # print or save
 print(p_corr_nice)
-ggsave(filename = file.path(OUTPUT_DIR_FIGURES, "Fig4H_feature_corr_lollipop_nice.png"), 
+ggsave(filename = file.path(OUTPUT_DIR_FIGURES, "Fig4H_feature_corr_lollipop_nice2.png"), 
        p_corr_nice, 
-       width = 3.55, height = 4, dpi = 600)
+       width = 3.55, height = 3.75, dpi = 600)
 
 
 
