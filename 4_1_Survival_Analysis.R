@@ -294,6 +294,7 @@ assays <- c(
   clonoSEQ = "Adaptive_Binary",
   Flow     = "Flow_Binary",
   cfWGS_BM    = "BM_base_zscore_call",
+  cfWGS_BM_screen    = "BM_base_zscore_screen_call",
   cfWGS_Blood    = "Blood_zscore_only_sites_call"
 )
 
@@ -585,7 +586,7 @@ df_km <- survival_df %>%
 
 ## 2. 24-month RFS by cfWGS BM ----
 fit_cf <- survfit(
-  Surv(Time_to_event, Relapsed_Binary) ~ BM_base_zscore_call,
+  Surv(Time_to_event, Relapsed_Binary) ~ BM_base_zscore_screen_call,
   data = df_km
 )
 # survival probabilities at 24 months:
@@ -597,7 +598,7 @@ rfs_neg_cf <- sum_cf$surv[1] * 100
 rfs_pos_cf <- sum_cf$surv[2] * 100
 
 cox_cf <- tidy(
-  coxph(Surv(Time_to_event, Relapsed_Binary) ~ BM_base_zscore_call,
+  coxph(Surv(Time_to_event, Relapsed_Binary) ~ BM_base_zscore_screen_call,
         data = df_km),
   exponentiate = TRUE, conf.int = TRUE
 )
@@ -694,7 +695,7 @@ rho2 <- ct2$estimate; p2 <- ct2$p.value
 
 ## 5. Power diagnostics ----
 d      <- sum(df_km$Relapsed_Binary)
-prop_p <- mean(df_km$BM_base_zscore_call==1)
+prop_p <- mean(df_km$BM_base_zscore_screen_call==1)
 zα     <- qnorm(1-0.05/2); zβ <- qnorm(0.80)
 hr80   <- exp(2*(zα+zβ) / sqrt(d * prop_p * (1-prop_p)))
 
@@ -771,12 +772,12 @@ metrics_1yr <- tibble(
 df_km <- survival_df %>%
   filter(
     timepoint_info == "post_transplant",
-    !is.na(BM_base_zscore_call)
+    !is.na(BM_base_zscore_screen_call)
   )
 
 ## 2. 24-month RFS by cfWGS BM ----
 fit_cf <- survfit(
-  Surv(Time_to_event, Relapsed_Binary) ~ BM_base_zscore_call,
+  Surv(Time_to_event, Relapsed_Binary) ~ BM_base_zscore_screen_call,
   data = df_km
 )
 # survival probabilities at 24 months:
@@ -788,7 +789,7 @@ rfs_neg_cf <- sum_cf$surv[1] * 100
 rfs_pos_cf <- sum_cf$surv[2] * 100
 
 cox_cf <- tidy(
-  coxph(Surv(Time_to_event, Relapsed_Binary) ~ BM_base_zscore_call,
+  coxph(Surv(Time_to_event, Relapsed_Binary) ~ BM_base_zscore_screen_call,
         data = df_km),
   exponentiate = TRUE, conf.int = TRUE
 )
@@ -874,7 +875,7 @@ rho2 <- ct2$estimate; p2 <- ct2$p.value
 
 ## 5. Power diagnostics ----
 d      <- sum(df_km$Relapsed_Binary)
-prop_p <- mean(df_km$BM_base_zscore_call==1)
+prop_p <- mean(df_km$BM_base_zscore_screen_call==1)
 zα     <- qnorm(1-0.05/2); zβ <- qnorm(0.80)
 hr80   <- exp(2*(zα+zβ) / sqrt(d * prop_p * (1-prop_p)))
 
@@ -1531,7 +1532,7 @@ p_hr_bm <- ggplot(hr_plot_df,
     legend.text        = element_text(size = 8)
   )
 
-ggsave("Final Tables and Figures/Figure_4X_cfWGS_BM_HR_updated.png",
+ggsave("Final Tables and Figures/Figure_4X_cfWGS_BM_HR_updated2.png",
        p_hr_bm, width = 6, height = 4, dpi = 600)
 
 
@@ -1556,7 +1557,7 @@ df <- survival_df %>%                           # <- your tibble
   mutate(
     days_before_event = pmax(Time_to_event, 0), # set negative values to 0 
     mrd_status      = factor(
-      BM_base_zscore_call,
+      BM_base_zscore_screen_call,
       levels = c(0, 1),
       labels = c("MRD-", "MRD+")
     ),
@@ -2404,7 +2405,7 @@ dat <- readRDS(dat_rds) %>%
 # 1) Your assays vector
 assays <- c(
   Flow         = "Flow_Binary",
-  cfWGS_BM     = "BM_base_zscore_call",
+  cfWGS_BM     = "BM_base_zscore_screen_call",
   cfWGS_Blood  = "Blood_zscore_only_sites_call"
 )
 
@@ -2424,7 +2425,7 @@ df_sf <- dat %>%
     Patient,
     sample_date = as.Date(Date),
     Flow_Binary,
-    BM_base_zscore_call,
+    BM_base_zscore_screen_call,
     Blood_zscore_only_sites_call
   ) %>%
   # keep rows with at least one assay result
@@ -2447,7 +2448,7 @@ df_sf2 <- df_sf %>%
   filter(Progression_date >= sample_date) %>%
   group_by(Patient, sample_date,
            Flow_Binary,
-           BM_base_zscore_call,
+           BM_base_zscore_screen_call,
            Blood_zscore_only_sites_call) %>%
   slice_min(Progression_date, with_ties = FALSE) %>%
   ungroup() %>%
@@ -2511,7 +2512,7 @@ results %>%
 #### Now do only for those who got the cfWGS test done 
 
 # 5a) Restrict to BM-cfWGS subset, then loop ------------------------------
-bm_col     <- assays["cfWGS_BM"]    # "BM_base_zscore_call"
+bm_col     <- assays["cfWGS_BM"]    # "BM_base_zscore_screen_call"
 df_sf_BM   <- df_sf %>% filter(!is.na(.data[[bm_col]]))
 
 results_BM <- map_dfr(windows, function(w) {
@@ -2684,7 +2685,7 @@ p_sens_bm <- ggplot(sens_BM_df,
 # ────────────────────────────────────────────────────────────────────────────
 # 4) (Optional) Save
 # ────────────────────────────────────────────────────────────────────────────
-ggsave("Final Tables and Figures/Supp_Fig_6_Fig_sensitivity_windows_BM_test_cohort.png",
+ggsave("Final Tables and Figures/Supp_Fig_6_Fig_sensitivity_windows_BM_test_cohort_updated.png",
        plot = p_sens_bm,
        width = 4.75, height = 6, dpi = 500)
 
@@ -2812,6 +2813,12 @@ dat <- readRDS(dat_rds) %>%
     timepoint_info = tolower(timepoint_info)
   )
 
+## Do rescored 
+dat <- dat %>%
+  ## Add the screen column 
+  mutate(
+    BM_base_zscore_screen_call  = as.integer(BM_base_zscore_prob >= 0.350),
+  )
 
 ### Now see how early it was to progression
 survival_df <- dat %>%
@@ -2838,7 +2845,7 @@ survival_df <- dat %>%
     Flow_Binary, Adaptive_Binary, Rapid_Novor_Binary,
     Flow_pct_cells, Adaptive_Frequency,
     PET_Binary,
-    BM_base_zscore_call, BM_base_zscore_prob,
+    BM_base_zscore_call, BM_base_zscore_prob, BM_base_zscore_screen_call,
     Blood_zscore_only_sites_call, Blood_zscore_only_sites_prob, Cumulative_VAF_BM, Cumulative_VAF_blood,
     zscore_BM, zscore_blood, z_score_detection_rate_BM, z_score_detection_rate_blood, detect_rate_BM, detect_rate_blood
   )

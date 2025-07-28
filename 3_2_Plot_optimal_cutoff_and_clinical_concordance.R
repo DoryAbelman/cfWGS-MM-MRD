@@ -84,8 +84,12 @@ front_tbl <- dat %>%
     !is.na(landmark_tp),
     !is.na(BM_base_zscore_call)
   ) %>%
+  ## Add the screen column 
+  mutate(
+    BM_base_zscore_screen_call  = as.integer(BM_base_zscore_call >= 0.350),
+  ) %>%
   pivot_longer(
-    cols      = c(Flow_Binary, Adaptive_Binary, BM_base_zscore_call),
+    cols      = c(Flow_Binary, Adaptive_Binary, BM_base_zscore_call, BM_base_zscore_screen_call),
     names_to  = "Technology",
     values_to = "Result"
   ) %>%
@@ -102,9 +106,12 @@ front_tbl <- dat %>%
       Technology,
       Flow_Binary         = "MFC",
       Adaptive_Binary     = "clonoSEQ",
-      BM_base_zscore_call = "cfWGS"
+      BM_base_zscore_call = "cfWGS",
+      BM_base_zscore_screen_call = "cfWGS (screen)"
+      
     )
   )
+
 
 # ---------------------------------------------------------------------------
 #  4.  NON‑FRONTLINE cohort: pooled positivity -------------------------------

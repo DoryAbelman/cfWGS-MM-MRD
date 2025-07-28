@@ -34,6 +34,7 @@ if (!dir.exists(OUTPUT_DIR_FIGURES)) dir.create(OUTPUT_DIR_FIGURES, recursive = 
 selected_models <- readRDS(PATH_MODEL_LIST)
 selected_thr    <- readRDS(PATH_THRESHOLD_LIST)
 bm_obj <- readRDS("nested_bm_validation_updated3.rds")
+blood_obj <- readRDS("nested_blood_validation_updated3.rds")
 
 
 # ── 3. LOAD AND ASSEMBLE DILUTION SERIES DATA ────────────────────────────────
@@ -201,6 +202,7 @@ feature_cols <- c(
   "BM_zscore_only_sites_prob",
   "BM_base_zscore_prob",
   "BM_zscore_only_detection_rate_prob",
+  "Blood_base_prob",
   "Blood_zscore_only_detection_rate_prob",
   "Blood_rate_only_prob",
   "Blood_zscore_only_sites_prob",
@@ -767,7 +769,8 @@ ggsave(filename = file.path(OUTPUT_DIR_FIGURES, "Fig4H_feature_corr_lollipop_nic
 blood_features <- c(
   "detect_rate_blood",                          
   "zscore_blood",                               
-  "z_score_detection_rate_blood",              
+  "z_score_detection_rate_blood",     
+  "Blood_base_prob",
   "Blood_zscore_only_detection_rate_prob",   
   "Blood_zscore_only_sites_prob",
  "Blood_rate_only_prob",                      
@@ -795,11 +798,12 @@ annot_df <- corr_blood %>%
 
 # 4) nicer facet labels
 facet_labels <- c(
+  Blood_base_prob                 = "Combined Model Probability",
   Blood_zscore_only_sites_prob                 = "Blood sites model prob.",
   Blood_zscore_only_detection_rate_prob             = "Blood cVAF model prob.",
-  detect_rate_blood                     = "Blood cVAF",
-  z_score_detection_rate_blood    = "Blood cVAF Z-score",
-  zscore_blood             = "Blood sites Z-score"
+  detect_rate_blood                     = "Cumulative VAF (cVAF)",
+  z_score_detection_rate_blood    = "cVAF Z-score",
+  zscore_blood             = "Prop. Sites Detected Z-score"
 )
 # 5) clean ggplot - pearson 
 p_blood <- ggplot(plot_df_blood, aes(x = LOD, y = value)) +
@@ -839,8 +843,16 @@ corr_blood_spearman <- plot_df_blood %>%
 # 2) Prepare annotation
 annot_spear <- corr_blood_spearman %>%
   mutate(
-    p_text = if_else(p < 0.01, "p < 0.01", paste0("p = ", signif(p, 2))),
-    label  = paste0("ρ = ", round(rho, 2), "\n", p_text)
+    p_text = if_else(
+      p < 0.01,
+      "p < 0.01",
+      sprintf("p = %.2f", p)
+    ),
+    label = paste0(
+      sprintf("ρ = %.2f", rho),
+      "\n",
+      p_text
+    )
   )
 
 # 3) Create plot with actual values and Spearman rho
@@ -915,20 +927,34 @@ ggsave(
 
 ## Add call features 
 # 1) specify which of your features are the model‐probabilities
+# prob_features <- c(
+#   "Blood_zscore_only_detection_rate_prob",  # Blood cVAF Z-score model prob.
+#   "Blood_zscore_only_sites_prob"            # Blood sites Z-score model prob.
+# )
+
 prob_features <- c(
-  "Blood_zscore_only_detection_rate_prob",  # Blood cVAF Z-score model prob.
-  "Blood_zscore_only_sites_prob"            # Blood sites Z-score model prob.
+  "Blood_base_prob",  # Blood cVAF Z-score model prob.
+  "Blood_zscore_only_sites_prob"
 )
 
 # 2) define your thresholds (one per feature)
+# thresholds <- tibble(
+#   feature = c("Blood_zscore_only_sites_prob",
+#               "Blood_zscore_only_detection_rate_prob"),
+#   thr     = c(
+#     blood_obj$thresholds["Blood_zscore_only_sites"],
+#     blood_obj$thresholds["Blood_zscore_only_detection_rate"]
+#   )
+# )
+
 thresholds <- tibble(
-  feature = c("Blood_zscore_only_sites_prob",
-              "Blood_zscore_only_detection_rate_prob"),
+  feature = c("Blood_base_prob", "Blood_zscore_only_sites_prob"),
   thr     = c(
-    blood_obj$thresholds["Blood_zscore_only_sites"],
-    blood_obj$thresholds["Blood_zscore_only_detection_rate"]
+    blood_obj$thresholds["Blood_base"],
+    blood_obj$thresholds["Blood_zscore_only_sites"]
   )
 )
+
 
 # 3) pull out only the prob data, join thresholds, and add a call flag
 plot_df_prob <- plot_df_blood %>%
@@ -981,7 +1007,7 @@ ggsave(
 combined_plot <- p_blood_spearman_actual + p_blood_prob +
   plot_layout(nrow = 1, widths = c(3, 2)) +
   plot_annotation(
-    title = "Feature Concordance with Dilution Series",
+    title = "Correlation of cfDNA Feature Values with Tumor Fraction in a Controlled Dilution Series",
     theme = theme(
       plot.title   = element_text(hjust = 0.5, face = "bold", size = 14),
       plot.margin  = margin(5, 5, 5, 5),
@@ -1002,7 +1028,7 @@ print(combined_plot)
 ggsave(
   filename = file.path(OUTPUT_DIR_FIGURES, "Fig5G_LOD_combined.png"),
   plot     = combined_plot,
-  width    = 12,        # adjust as needed
+  width    = 11,        # adjust as needed
   height   = 4,         # one‐line panel
   dpi      = 600
 )
@@ -1084,7 +1110,7 @@ combined_plot <- p_blood_spearman_actual + p_blood_prob +
 
 
 ggsave(
-  filename = file.path(OUTPUT_DIR_FIGURES, "Fig5G_LOD_combined_updated.png"),
+  filename = file.path(OUTPUT_DIR_FIGURES, "Fig5G_LOD_combined_updated2.png"),
   plot     = combined_plot,
   width    = 12,        # adjust as needed
   height   = 4,         # one‐line panel
@@ -1133,7 +1159,7 @@ p_blood_spearman_actual <- ggplot(plot_df_blood %>% filter(feature %in% c("detec
 
 # 4) Save to output directory
 ggsave(
-  filename = file.path(OUTPUT_DIR_FIGURES, "Fig_LOD_blood_metrics_spearman_actual_updated2_log_flipped_ticks.png"),
+  filename = file.path(OUTPUT_DIR_FIGURES, "Fig_LOD_blood_metrics_spearman_actual_updated2_log_flipped_ticks2.png"),
   plot     = p_blood_spearman_actual,
   width    = 8,
   height   = 4, 
@@ -1194,7 +1220,7 @@ p_blood_prob <- ggplot(plot_df_prob, aes(x = LOD, y = value, color = call)) +
 combined_plot <- p_blood_spearman_actual + p_blood_prob +
   plot_layout(nrow = 1, widths = c(3, 2)) +
   plot_annotation(
-    title = "Feature Concordance with Dilution Series",
+    title = "Correlation of cfDNA Feature Values with Tumor Fraction in a Controlled Dilution Series",
     theme = theme(
       plot.title   = element_text(hjust = 0.5, face = "bold", size = 14),
       plot.margin  = margin(5, 5, 5, 5),
@@ -1209,7 +1235,7 @@ combined_plot <- p_blood_spearman_actual + p_blood_prob +
 
 
 ggsave(
-  filename = file.path(OUTPUT_DIR_FIGURES, "Fig5G_LOD_combined_updated_reverse_log.png"),
+  filename = file.path(OUTPUT_DIR_FIGURES, "Fig5G_LOD_combined_updated_reverse_log3.png"),
   plot     = combined_plot,
   width    = 12,        # adjust as needed
   height   = 4,         # one‐line panel

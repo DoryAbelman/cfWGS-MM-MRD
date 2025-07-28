@@ -1183,7 +1183,7 @@ saveRDS(nested_fragmentomics_validation_updated3, file = "nested_fragmentomics_v
 ## For consistency 
 nested_bm_validation_updated2 <- nested_bm_validation_updated3
 nested_blood_validation_updated2 <- nested_blood_validation_updated3
-nested_blood_validation_updated2 <- nested_blood_validation_updated3
+nested_fragmentomics_validation_updated2 <- nested_fragmentomics_validation_updated3
 
 # -----------------------------------------------------------------------------
 # 8.Get Model Metrics Together and Exported
@@ -1807,26 +1807,47 @@ write.csv(all_metrics_rescored_primary, file = "Final Tables and Figures/Supleme
 bm_obj      <- nested_bm_validation_updated2
 models_list <- bm_obj$models            # named list of caret models
 valid_df    <- train_bm                  # must contain MRD_truth + all predictors
+bm_preds <- nested_bm_validation_updated2$outer_predictions
+
+
 
 # ── 1. ROC curves on the hold-out cohort ─────────────────────────────────
-roc_dfs <- imap(models_list,
-                function(fit, label) {
-                  # caret::predict returns a data-frame; pull out the column for the + class
-                  prob <- predict(fit, newdata = valid_df, type = "prob")[ , positive_class]
-                  
-                  roc_obj <- roc(response   = valid_df$MRD_truth,
-                                 predictor  = prob,
-                                 levels     = c("neg", "pos"),   # neg first, pos second
-                                 direction  = "<",
-                                 quiet      = TRUE)
-                  
-                  tibble(
-                    combo = label,
-                    fpr   = 1 - roc_obj$specificities,
-                    tpr   = roc_obj$sensitivities,
-                    auc   = as.numeric(auc(roc_obj))
-                  )
-                })
+# roc_dfs <- imap(models_list,
+#                 function(fit, label) {
+#                   # caret::predict returns a data-frame; pull out the column for the + class
+#                   prob <- predict(fit, newdata = valid_df, type = "prob")[ , positive_class]
+#                   
+#                   roc_obj <- roc(response   = valid_df$MRD_truth,
+#                                  predictor  = prob,
+#                                  levels     = c("neg", "pos"),   # neg first, pos second
+#                                  direction  = "<",
+#                                  quiet      = TRUE)
+#                   
+#                   tibble(
+#                     combo = label,
+#                     fpr   = 1 - roc_obj$specificities,
+#                     tpr   = roc_obj$sensitivities,
+#                     auc   = as.numeric(auc(roc_obj))
+#                   )
+#                 })
+
+# 1) Compute one ROC curve per combo from your outer‑fold preds to get the nested CV version 
+roc_dfs <- bm_preds %>% 
+  group_by(combo) %>% 
+  group_map(~{
+    roc_obj <- roc(.x$truth, .x$prob,
+                   levels    = c("neg","pos"),
+                   direction = "<",
+                   quiet     = TRUE)
+    tibble(
+      combo = .y$combo,
+      fpr   = 1 - roc_obj$specificities,
+      tpr   = roc_obj$sensitivities,
+      auc   = as.numeric(auc(roc_obj))
+    )
+  }) %>% 
+  bind_rows()
+
 
 roc_df  <- bind_rows(roc_dfs)
 auc_tbl <- roc_df %>% distinct(combo, auc)
@@ -1876,7 +1897,7 @@ roc_plot <- ggplot(roc_df, aes(x = fpr, y = tpr, colour = combo)) +
     x      = "False-positive rate (1 − specificity)",
     y      = "True-positive rate (sensitivity)",
     colour = NULL,              # no title above the legend
-    title  = "Cross-validated ROC curves (nested 5×5 folds)"
+    title  = "Pooled Outer‑Fold ROC Curve\n(nested 5×5 CV)"
   ) +
   theme_bw(14) +
   theme(
@@ -1884,7 +1905,8 @@ roc_plot <- ggplot(roc_df, aes(x = fpr, y = tpr, colour = combo)) +
     legend.background  = element_rect(fill = alpha("white", 0.7), colour = NA),
     legend.key.size    = unit(0.8, "lines"),
     legend.text        = element_text(size = 10),
-    panel.grid = element_blank()
+    panel.grid = element_blank(),
+    plot.title      = element_text(hjust = 0.5, face = "bold")
   ) +
   scale_colour_manual(
     values = okabe_ito8[1:length(levels(roc_df$combo))],
@@ -1916,7 +1938,7 @@ perf_plot <- ggplot(perf_df, aes(x = sens_mean, y = spec_mean, colour = combo)) 
   labs(
     x     = "Mean sensitivity (CV)",
     y     = "Mean specificity (CV)",
-    title = "Cross-validated performance (nested 5×5 folds)"
+    title = "Fold‑Wise Sensitivity & Specificity\n(mean ± SD)"
   ) +
   # reuse the Okabe-Ito palette
   scale_colour_manual(
@@ -1926,7 +1948,7 @@ perf_plot <- ggplot(perf_df, aes(x = sens_mean, y = spec_mean, colour = combo)) 
   theme(
     panel.grid      = element_blank(),
     legend.position = "none",
-    plot.title      = element_text(hjust = 0.5),
+    plot.title      = element_text(hjust = 0.5, face = "bold"),
     axis.title      = element_text(size = 13),
     axis.text       = element_text(size = 11)
   )
@@ -1936,7 +1958,7 @@ combined_plot <- roc_plot + perf_plot + plot_layout(ncol = 2, widths = c(1,1))
 
 # ── 4) Export ───────────────────────────────────────────────────────────────
 ggsave(
-  filename = "Final Tables and Figures/combined_ROC_and_performance_nested_folds_bm.png",
+  filename = "Final Tables and Figures/combined_ROC_and_performance_nested_folds_bm_updated.png",
   plot     = combined_plot,
   width    = 12,
   height   = 6,
@@ -2323,12 +2345,12 @@ ggsave(
 bm_obj <- nested_bm_validation_updated2
 thresh <- bm_obj$thresholds
 mods   <- bm_obj$models[c("BM_zscore_only_sites",
-                          "BM_zscore_only_detection_rate")]
+                          "BM_base_zscore")]
 
 # nice labels
 model_labs <- c(
   "Sites model" = "BM_zscore_only_sites",
-  "cVAF model"  = "BM_zscore_only_detection_rate"
+  "Combined model"  = "BM_base_zscore"
 )
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -2376,7 +2398,7 @@ p_tables <- ggplot(cm_df, aes(x = Pred, y = Obs, fill = Count)) +
   ) +
   theme_minimal(base_size = 10) +
   theme(
-    strip.text        = element_text(face = "bold"),
+    strip.text        = element_text(face = "bold", size = 10),
     axis.text.y       = element_text(size = 9),
     axis.text.x       = element_text(size = 9, vjust = 0),
     axis.title        = element_text(size = 10),
@@ -2388,7 +2410,7 @@ p_tables <- ggplot(cm_df, aes(x = Pred, y = Obs, fill = Count)) +
 # ──────────────────────────────────────────────────────────────────────────────
 # 5) save
 ggsave(
-  "Final Tables and Figures/Fig4C_confusion_tables_primary_updated2.png",
+  "Final Tables and Figures/Fig4C_confusion_tables_primary_updated3.png",
   plot   = p_tables,
   width  = 5,
   height = 2.75,
@@ -2442,7 +2464,7 @@ p_tables <- ggplot(cm_df, aes(x = Pred, y = Obs, fill = Count)) +
   scale_y_discrete(limits = c("pos", "neg")) +
   theme_minimal(base_size = 10) +
   theme(
-    strip.text        = element_text(face = "bold"),
+    strip.text        = element_text(face = "bold", size = 10),
     axis.text.y       = element_text(size = 9),
     axis.text.x       = element_text(size = 9, vjust = 0),
     axis.title        = element_text(size = 10),
@@ -2454,7 +2476,7 @@ p_tables <- ggplot(cm_df, aes(x = Pred, y = Obs, fill = Count)) +
 # ──────────────────────────────────────────────────────────────────────────────
 # 5) save
 ggsave(
-  "Final Tables and Figures/Fig4C_confusion_tables_test2.png",
+  "Final Tables and Figures/Fig4C_confusion_tables_test3.png",
   plot   = p_tables,
   width  = 5,
   height = 2.75,
@@ -2605,13 +2627,13 @@ ggsave(
 blood_obj      <- nested_blood_validation_updated2
 
 thresh <- blood_obj$thresholds
-mods   <- blood_obj$models[c("Blood_rate_only",
+mods   <- blood_obj$models[c("Blood_base",
                           "Blood_zscore_only_sites")]
 
 # nice labels
 model_labs <- c(
-  "Sites model" = "Blood_zscore_only_sites",
-  "cVAF model"  = "Blood_rate_only"
+  "Combined model" = "Blood_base",
+  "Sites model"  = "Blood_zscore_only_sites"
 )
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -2660,7 +2682,7 @@ p_tables <- ggplot(cm_df, aes(x = Pred, y = Obs, fill = Count)) +
   # reverse the Obs axis so neg is at the top
   scale_y_discrete(limits = c("pos", "neg")) +
   theme(
-    strip.text        = element_text(face = "bold"),
+    strip.text        = element_text(face = "bold", size = 10),
     axis.text.y       = element_text(size = 9),
     axis.text.x       = element_text(size = 9, vjust = 0),
     axis.title        = element_text(size = 10),
@@ -2672,7 +2694,7 @@ p_tables <- ggplot(cm_df, aes(x = Pred, y = Obs, fill = Count)) +
 # ──────────────────────────────────────────────────────────────────────────────
 # 5) save
 ggsave(
-  "Final Tables and Figures/Fig5C_confusion_tables_primary_blood2.png",
+  "Final Tables and Figures/Fig5C_confusion_tables_primary_blood3.png",
   plot   = p_tables,
   width  = 5,
   height = 2.75,
@@ -2727,7 +2749,7 @@ p_tables <- ggplot(cm_df, aes(x = Pred, y = Obs, fill = Count)) +
   # reverse the Obs axis so neg is at the top
   scale_y_discrete(limits = c("pos", "neg")) +
   theme(
-    strip.text        = element_text(face = "bold"),
+    strip.text        = element_text(face = "bold", size = 10),
     axis.text.y       = element_text(size = 9),
     axis.text.x       = element_text(size = 9, vjust = 0),
     axis.title        = element_text(size = 10),
@@ -2739,7 +2761,7 @@ p_tables <- ggplot(cm_df, aes(x = Pred, y = Obs, fill = Count)) +
 # ──────────────────────────────────────────────────────────────────────────────
 # 5) save
 ggsave(
-  "Final Tables and Figures/Fig5C_confusion_tables_test_blood2.png",
+  "Final Tables and Figures/Fig5C_confusion_tables_test_blood3.png",
   plot   = p_tables,
   width  = 5,
   height = 2.75,
@@ -2977,26 +2999,43 @@ ggsave(
 # For convenience
 models_list <- blood_obj$models            # named list of caret models
 valid_df    <- train_blood                  # must contain MRD_truth + all predictors
+blood_preds <- blood_obj$outer_predictions
 
 # ── 1. ROC curves on the hold-out cohort ─────────────────────────────────
-roc_dfs <- imap(models_list,
-                function(fit, label) {
-                  # caret::predict returns a data-frame; pull out the column for the + class
-                  prob <- predict(fit, newdata = valid_df, type = "prob")[ , positive_class]
-                  
-                  roc_obj <- roc(response   = valid_df$MRD_truth,
-                                 predictor  = prob,
-                                 levels     = c("neg", "pos"),   # neg first, pos second
-                                 direction  = "<",
-                                 quiet      = TRUE)
-                  
-                  tibble(
-                    combo = label,
-                    fpr   = 1 - roc_obj$specificities,
-                    tpr   = roc_obj$sensitivities,
-                    auc   = as.numeric(auc(roc_obj))
-                  )
-                })
+# roc_dfs <- imap(models_list,
+#                 function(fit, label) {
+#                   # caret::predict returns a data-frame; pull out the column for the + class
+#                   prob <- predict(fit, newdata = valid_df, type = "prob")[ , positive_class]
+#                   
+#                   roc_obj <- roc(response   = valid_df$MRD_truth,
+#                                  predictor  = prob,
+#                                  levels     = c("neg", "pos"),   # neg first, pos second
+#                                  direction  = "<",
+#                                  quiet      = TRUE)
+#                   
+#                   tibble(
+#                     combo = label,
+#                     fpr   = 1 - roc_obj$specificities,
+#                     tpr   = roc_obj$sensitivities,
+#                     auc   = as.numeric(auc(roc_obj))
+#                   )
+#                 })
+
+roc_dfs <- blood_preds %>% 
+  group_by(combo) %>% 
+  group_map(~{
+    roc_obj <- roc(.x$truth, .x$prob,
+                   levels    = c("neg","pos"),
+                   direction = "<",
+                   quiet     = TRUE)
+    tibble(
+      combo = .y$combo,
+      fpr   = 1 - roc_obj$specificities,
+      tpr   = roc_obj$sensitivities,
+      auc   = as.numeric(auc(roc_obj))
+    )
+  }) %>% 
+  bind_rows()
 
 # Rebuild roc_df without any Fragmentomics_ combos as re-trained later
 roc_df <- bind_rows(roc_dfs) %>%
@@ -3051,7 +3090,7 @@ roc_plot <- ggplot(roc_df, aes(x = fpr, y = tpr, colour = combo)) +
     x      = "False-positive rate (1 − specificity)",
     y      = "True-positive rate (sensitivity)",
     colour = NULL,              # no title above the legend
-    title  = "Cross-validated ROC curves (nested 5×5 folds)"
+    title  = "Pooled Outer‑Fold ROC Curve\n(nested 5×5 CV)"
   ) +
   theme_bw(14) +
   theme(
@@ -3059,6 +3098,7 @@ roc_plot <- ggplot(roc_df, aes(x = fpr, y = tpr, colour = combo)) +
     legend.background  = element_rect(fill = alpha("white", 0.7), colour = NA),
     legend.key.size    = unit(0.8, "lines"),
     legend.text        = element_text(size = 10),
+    plot.title      = element_text(hjust = 0.5, face = "bold"),
     panel.grid = element_blank()
   ) +
   scale_colour_manual(
@@ -3093,7 +3133,7 @@ perf_plot <- ggplot(perf_df, aes(x = sens_mean, y = spec_mean, colour = combo)) 
   labs(
     x     = "Mean sensitivity (CV)",
     y     = "Mean specificity (CV)",
-    title = "Cross-validated performance (nested 5×5 folds)"
+    title = "Fold‑Wise Sensitivity & Specificity\n(mean ± SD)"
   ) +
   # reuse the Okabe-Ito palette
   scale_colour_manual(
@@ -3103,7 +3143,7 @@ perf_plot <- ggplot(perf_df, aes(x = sens_mean, y = spec_mean, colour = combo)) 
   theme(
     panel.grid      = element_blank(),
     legend.position = "none",
-    plot.title      = element_text(hjust = 0.5),
+    plot.title      = element_text(hjust = 0.5, face = "bold"),
     axis.title      = element_text(size = 13),
     axis.text       = element_text(size = 11)
   )
@@ -3113,7 +3153,7 @@ combined_plot <- roc_plot + perf_plot + plot_layout(ncol = 2, widths = c(1,1))
 
 # ── 4) Export ───────────────────────────────────────────────────────────────
 ggsave(
-  filename = "Final Tables and Figures/5A_combined_ROC_and_performance_nested_folds_blood_features.png",
+  filename = "Final Tables and Figures/5A_combined_ROC_and_performance_nested_folds_blood_features_updated.png",
   plot     = combined_plot,
   width    = 12,
   height   = 6,
@@ -3689,29 +3729,48 @@ ggsave(
 # -----------------------------------------------------------------------------
 #### Plot to see what the model looks like
 # For convenience
-bm_obj      <- nested_fragmentomics_validation_updated2
-models_list <- bm_obj$models            # named list of caret models
-valid_df    <- train_bm                  # must contain MRD_truth + all predictors
+fragmentomics_obj      <- nested_fragmentomics_validation_updated2
+models_list <- fragmentomics_obj$models            # named list of caret models
+valid_df    <- train_fragmentomics                  # must contain MRD_truth + all predictors
+fragmentomics_preds <- nested_fragmentomics_validation_updated2$outer_predictions
 
 # ── 1. ROC curves on the hold-out cohort ─────────────────────────────────
-roc_dfs <- imap(models_list,
-                function(fit, label) {
-                  # caret::predict returns a data-frame; pull out the column for the + class
-                  prob <- predict(fit, newdata = valid_df, type = "prob")[ , positive_class]
-                  
-                  roc_obj <- roc(response   = valid_df$MRD_truth,
-                                 predictor  = prob,
-                                 levels     = c("neg", "pos"),   # neg first, pos second
-                                 direction  = "<",
-                                 quiet      = TRUE)
-                  
-                  tibble(
-                    combo = label,
-                    fpr   = 1 - roc_obj$specificities,
-                    tpr   = roc_obj$sensitivities,
-                    auc   = as.numeric(auc(roc_obj))
-                  )
-                })
+# roc_dfs <- imap(models_list,
+#                 function(fit, label) {
+#                   # caret::predict returns a data-frame; pull out the column for the + class
+#                   prob <- predict(fit, newdata = valid_df, type = "prob")[ , positive_class]
+#                   
+#                   roc_obj <- roc(response   = valid_df$MRD_truth,
+#                                  predictor  = prob,
+#                                  levels     = c("neg", "pos"),   # neg first, pos second
+#                                  direction  = "<",
+#                                  quiet      = TRUE)
+#                   
+#                   tibble(
+#                     combo = label,
+#                     fpr   = 1 - roc_obj$specificities,
+#                     tpr   = roc_obj$sensitivities,
+#                     auc   = as.numeric(auc(roc_obj))
+#                   )
+#                 })
+
+## On the pooled outer fold predictions 
+# 1) Compute one ROC curve per combo from your outer‑fold preds
+roc_dfs <- fragmentomics_preds %>% 
+  group_by(combo) %>% 
+  group_map(~{
+    roc_obj <- roc(.x$truth, .x$prob,
+                   levels    = c("neg","pos"),
+                   direction = "<",
+                   quiet     = TRUE)
+    tibble(
+      combo = .y$combo,
+      fpr   = 1 - roc_obj$specificities,
+      tpr   = roc_obj$sensitivities,
+      auc   = as.numeric(auc(roc_obj))
+    )
+  }) %>% 
+  bind_rows()
 
 roc_df  <- bind_rows(roc_dfs)
 auc_tbl <- roc_df %>% distinct(combo, auc)
@@ -3761,7 +3820,7 @@ roc_plot <- ggplot(roc_df, aes(x = fpr, y = tpr, colour = combo)) +
     x      = "False-positive rate (1 − specificity)",
     y      = "True-positive rate (sensitivity)",
     colour = NULL,              # no title above the legend
-    title  = "Cross-validated ROC curves (nested 5×5 folds)"
+    title  = "Pooled Outer‑Fold ROC Curve\n(nested 5×5 CV)"
   ) +
   theme_bw(14) +
   theme(
@@ -3769,6 +3828,7 @@ roc_plot <- ggplot(roc_df, aes(x = fpr, y = tpr, colour = combo)) +
     legend.background  = element_rect(fill = alpha("white", 0.7), colour = NA),
     legend.key.size    = unit(0.8, "lines"),
     legend.text        = element_text(size = 10),
+    plot.title      = element_text(hjust = 0.5, face = "bold"),
     panel.grid = element_blank()
   ) +
   scale_colour_manual(
@@ -3778,7 +3838,7 @@ roc_plot <- ggplot(roc_df, aes(x = fpr, y = tpr, colour = combo)) +
 
 
 # ── 2) Prepare perf_df with the same factor‐ordering as roc_df ───────────────
-perf_df <- bm_obj$nested_metrics %>%
+perf_df <- fragmentomics_obj$nested_metrics %>%
   select(combo, sens_mean, sens_sd, spec_mean, spec_sd) %>%
   # force the same ordering of combos
   mutate(combo = factor(combo, levels = levels(roc_df$combo)))
@@ -3801,8 +3861,8 @@ perf_plot <- ggplot(perf_df, aes(x = sens_mean, y = spec_mean, colour = combo)) 
   labs(
     x     = "Mean sensitivity (CV)",
     y     = "Mean specificity (CV)",
-    title = "Cross-validated performance (nested 5×5 folds)"
-  ) +
+    title = "Fold‑Wise Sensitivity & Specificity\n(mean ± SD)"
+    ) +
   # reuse the Okabe-Ito palette
   scale_colour_manual(
     values = okabe_ito8[ seq_along(levels(perf_df$combo)) ]
@@ -3811,7 +3871,7 @@ perf_plot <- ggplot(perf_df, aes(x = sens_mean, y = spec_mean, colour = combo)) 
   theme(
     panel.grid      = element_blank(),
     legend.position = "none",
-    plot.title      = element_text(hjust = 0.5),
+    plot.title      = element_text(hjust = 0.5, face = "bold"),
     axis.title      = element_text(size = 13),
     axis.text       = element_text(size = 11)
   )
@@ -3821,7 +3881,7 @@ combined_plot <- roc_plot + perf_plot + plot_layout(ncol = 2, widths = c(1,1))
 
 # ── 4) Export ───────────────────────────────────────────────────────────────
 ggsave(
-  filename = "Final Tables and Figures/combined_ROC_and_performance_nested_folds_fragmentomics.png",
+  filename = "Final Tables and Figures/combined_ROC_and_performance_nested_folds_fragmentomics_updated2.png",
   plot     = combined_plot,
   width    = 12,
   height   = 6,
