@@ -74,7 +74,6 @@ dat <- dat %>%                # <‑‑ your master data
 # "Adaptive_Binary"-> clonoSEQ
 # Go with adaptive first, and then if NA take clonoSEQ
 #truth_choice <- "either"
-
 dat <- dat %>% 
   mutate(
     MRD_truth = case_when(

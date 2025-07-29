@@ -76,7 +76,7 @@ survival_df <- dat %>%
     Flow_pct_cells, Adaptive_Frequency,
     PET_Binary,
     BM_base_zscore_call, BM_base_zscore_prob, BM_base_zscore_screen_call,
-    Blood_zscore_only_sites_call, Blood_zscore_only_sites_prob
+    Blood_zscore_only_sites_call, Blood_zscore_only_sites_prob, Blood_base_prob, Blood_base_call
   )
 
 # sanity checks
@@ -94,6 +94,10 @@ techs <- c(
   BM_base_zscore_screen_call    = "cfWGS of BM-derived mutations (high sensetivity)", 
   Blood_zscore_only_sites_call = "cfWGS of PB‑cfDNA‑derived mutations"
 )
+
+# techs <- c(
+#   Blood_base_call = "cfWGS of PB‑cfDNA‑derived mutations (combined model)"
+# )
 
 # 3) All timepoints to cover
 tps <- unique(survival_df$timepoint_info)
@@ -114,7 +118,12 @@ tp_labels <- c(
 
 # 5) Loop
 for(tp in tps) {
-  nice_tp <- tp_labels[tp] %||% tp   # fall back to tp if no mappiht
+#  nice_tp <- tp_labels[tp] %||% tp   # fall back to tp if no mappiht
+  # instead of  %||% line:
+  nice_tp <- as.character(tp_labels[tp])
+  if (is.na(nice_tp) || nice_tp == "") nice_tp <- as.character(tp)
+  
+  
   tp_dir <- file.path(outdir, gsub("\\s+","_", tp))  # sanitize folder name
   dir.create(tp_dir, recursive = TRUE, showWarnings = FALSE)
   
@@ -1540,10 +1549,6 @@ ggsave("Final Tables and Figures/Figure_4X_cfWGS_BM_HR_updated2.png",
 
 
 
-
-
-
-
 ### Now make time to relapse figure 
 df <- survival_df %>%                           # <- your tibble
   # keep samples beyond baseline / diagnosis
@@ -1581,31 +1586,33 @@ df_slim <- df %>%
 # ────────────────────────────────────────────────────────────────
 # 2.  Plot  ──────────────────────────────────────────────────────
 # ────────────────────────────────────────────────────────────────
-youden_thresh <- 0.436
-max_mo <- max(df_slim$months_before_event, na.rm = TRUE)  
+youden_thresh <- 0.4096829
+youden_thresh2 <- 0.35
 
-p_prob <- ggplot(df_slim, aes(months_before_event, BM_base_zscore_prob, group = Patient)) +
+max_mo <- max(df$months_before_event, na.rm = TRUE)  
+
+p_prob <- ggplot(df, aes(months_before_event, BM_base_zscore_prob, group = Patient)) +
   
   # 1) Youden line
   geom_hline(yintercept = youden_thresh,
              linetype = "dotted", colour = "gray40") +
   
+  geom_hline(yintercept = youden_thresh2,
+             linetype = "dotted", colour = "gray40") +
   # 2) trajectories coloured by relapse
   geom_line(aes(colour = progress_status),
             size = 0.4, alpha = 0.4) +
   
   # 3) points: fill by relapse, stroke by MRD call, border black
   geom_point(aes(
-    fill   = progress_status,
-    stroke = mrd_status
-  ),
+    fill   = progress_status),
   shape  = 21,
   colour = "black",
   size   = 2
   ) +
   
   # 4) event line
-  geom_vline(xintercept = 0, linetype = "dotted", colour = "gray40") +
+  #geom_vline(xintercept = 0, linetype = "dotted", colour = "gray40") +
   
   # 5) axes
   scale_x_reverse(
@@ -1613,7 +1620,7 @@ p_prob <- ggplot(df_slim, aes(months_before_event, BM_base_zscore_prob, group = 
     breaks       = seq(0, max_mo, by = 12),  # every 12 months
     minor_breaks = seq(0, max_mo, by = 6)    # every 6 months
   ) +
-  scale_y_continuous("cfWGS MRD probability",
+  scale_y_continuous("cfWGS MRD probability (%)",
                      limits = c(0,1),
                      labels = scales::percent_format(1)) +
   
@@ -1629,23 +1636,21 @@ p_prob <- ggplot(df_slim, aes(months_before_event, BM_base_zscore_prob, group = 
                "Relapse"    = "#43BF71FF")
   ) +
   
-  # 7) stroke scale for MRD call
-  scale_discrete_manual(
-    aesthetics = "stroke",
-    values     = c("MRD-" = 0,    # no ring
-                   "MRD+" = 1), # visible ring
-    guide      = guide_legend(
-      title = "MRD call",
-      override.aes = list(
-        fill   = detect_cols["Both"] %||% c("MRD-"="#35608DFF","MRD+"="#43BF71FF"),
-        shape  = 21,
-        fill   = "white",    # <–– white interior, not green
-        size   = 4,
-        colour = "black",
-        stroke = c(0,1)
-      )
-    )
-  ) +
+  # # 7) stroke scale for MRD call
+  # scale_discrete_manual(
+  #   aesthetics = "stroke",
+  #   values     = c("MRD-" = 0, "MRD+" = 1),
+  #   guide      = guide_legend(
+  #     title = "MRD call",
+  #     override.aes = list(
+  #       shape  = 21,
+  #       fill   = "white",   # white interior in legend, makes stroke obvious
+  #       size   = 4,
+  #       colour = "black",
+  #       stroke = c(0, 1)
+  #     )
+  #   )
+  # ) +
   
   # 8) clean up legends
   guides(
@@ -1654,16 +1659,16 @@ p_prob <- ggplot(df_slim, aes(months_before_event, BM_base_zscore_prob, group = 
   ) +
   
   labs(
-    title    = "cfWGS probability trajectories vs. time to relapse"
+    title    = "Longitudinal cfWGS MRD Probability by Patient Outcome"
   ) +
   theme_classic(base_size = 11) +
   theme(
     panel.grid      = element_blank(),
     plot.title      = element_text(face = "bold", hjust = 0.5),
     plot.subtitle   = element_text(hjust = 0.5),
-    legend.position = "right", 
+    legend.position = "bottom", 
     legend.title    = element_text(size = 11),   # 
-    legend.text     = element_text(size = 7)    # even smaller
+    legend.text     = element_text(size = 10)    # even smaller
   )
 
 print(p_prob)
@@ -1672,8 +1677,8 @@ print(p_prob)
 # ────────────────────────────────────────────────────────────────
 # 3.  Export  ────────────────────────────────────────────────────
 # ────────────────────────────────────────────────────────────────
-ggsave("Final Tables and Figures/F4I_cfWGS_prob_vs_time_updated.png",
-       p_prob, width = 8, height = 4.5, dpi = 600)
+ggsave("Final Tables and Figures/F4I_cfWGS_prob_vs_time_updated3.png",
+       p_prob, width = 6, height = 4.5, dpi = 600)
 
 
 
@@ -1688,6 +1693,9 @@ df_plot <- df %>%
   ungroup()
 
 max_days <- ceiling(max(df_plot$days_before_event, na.rm = TRUE) / 180) * 180
+
+df_plot <- df_plot %>%
+  mutate(Time_to_event = if_else(Time_to_event >= -30 & Time_to_event < 0, 0, Time_to_event))
 
 ## ─────────────────────────────────────────────────────────────
 ## 1)  Build the scatter plot                                  
@@ -1760,8 +1768,10 @@ p_time <- ggplot(df_plot,
     legend.text     = element_text(size = 8)
   )
 
+print(p_time)
+
 # save
-ggsave(file.path(outdir, "Fig_time_to_relapse_vs_prob.png"),
+ggsave(file.path(outdir, "Fig_time_to_relapse_vs_prob2.png"),
        p_time, width = 6, height = 4, dpi = 600)
 
 
@@ -1778,7 +1788,7 @@ plot_df2 <- df %>%
 
 # define axis maximum and “infinity” sentinel
 max_days <- ceiling(max(plot_df2$days_before_event, na.rm = TRUE) / 180) * 180
-overflow <- max_days + 30   # a little beyond the longest follow‑up
+overflow <- max_days + 180   # a little beyond the longest follow‑up
 
 plot_df2 <- plot_df2 %>%
   mutate(
@@ -1821,6 +1831,10 @@ cat("\n--- detect_rate_BM vs days ---\n")
 print(spearman_detect_rate)
 
 
+# Edit days
+plot_df2 <- plot_df2 %>%
+  mutate(days_plot = if_else(days_plot >= -30 & days_plot <= 0, 0, days_plot))
+
 # 2) compute Spearman rho on the relapsers
 spearman_res <- with(
   filter(plot_df2, progress_status == "Relapse"),
@@ -1840,266 +1854,77 @@ p_time_inf <- ggplot(plot_df2,
                          y = days_plot)) +
   
   # Youden threshold (if you still want it)
-  geom_hline(yintercept = overflow, linetype = "dotted", colour = "grey40") +
+  geom_vline(xintercept = 0.35, linetype = "dotted", colour = "grey40") +
   
   # points coloured by relapse; stroke = MRD call
   geom_point(aes(colour = progress_status,
-                 fill   = progress_status,
-                 stroke = mrd_status),
+                 fill   = progress_status),
              shape = 21, size = 3, colour = "black") +
   
   # ∞‐aware y‐axis
   scale_y_continuous(
     "Days until relapse (or ∞ for censor)",
-    limits = c(0, overflow),  # now increasing from 0 to overflow
+    limits = c(0, overflow),
     breaks = c(seq(0, 1620, by = 180), overflow),
-    labels = c(as.character(seq(0, 1620, by = 180)), "∞")
+    labels = c(seq(0, 1620, by = 180), "∞")
   ) +
   
   # x‐axis as percent
   scale_x_continuous(
     "cfWGS MRD probability",
     limits = c(0,1),
-    breaks = seq(0,1,by=0.1),
+    breaks = seq(0,1,by=0.2),
     labels = scales::percent_format(accuracy=1)
   ) +
   
   # colours
   scale_colour_manual(
     "Patient outcome",
-    values = c("No relapse" = "#35608DFF", "Relapse" = "#43BF71FF")
+    values = c("No relapse" = "black", "Relapse" = "red")
   ) +
   scale_fill_manual(
     "Patient outcome",
-    values = c("No relapse" = "#35608DFF", "Relapse" = "#43BF71FF")
-  ) +
-  
-  # stroke legend for MRD call
-  scale_discrete_manual(
-    aesthetics = "stroke",
-    values     = c("MRD-" = 0, "MRD+" = 1),
-    guide      = guide_legend(
-      title = "MRD call",
-      override.aes = list(
-        shape  = 21,
-        size   = 4,
-        fill   = "white",
-        colour = "black",
-        stroke = c(0,1)
-      )
-    )
-  ) +
-  
-  # annotate Spearman
-  annotate("text",
-           x = 0.02,      # left margin
-           y = 1400,
-           label = sprintf("Spearman ρ = %.2f,\np = %.3f", rho, pval),
-           hjust = 0,
-           size = 3) +
-  
-  # clean theme
-  theme_classic(base_size = 11) +
-  theme(
-    panel.grid      = element_blank(),
-    plot.title      = element_text(face = "bold", hjust = 0.5),
-    legend.position = "right",
-    legend.title    = element_text(size = 11),
-    legend.text     = element_text(size = 8)
-  ) +
-  
-  labs(title = "Time to relapse vs. cfWGS MRD probability")
-
-# 4) render / save
-ggsave(file.path(outdir, "Fig_time_to_relapse_infinity_no_reverse.png"),
-       p_time_inf, width = 6, height = 4, dpi = 600)
-
-
-
-### Other metrics 
-# 3) make the scatter
-rho  <- spearman_detect_rate$estimate
-pval <- spearman_detect_rate$p.value
-
-
-p_time_inf <- ggplot(plot_df2,
-                     aes(x = detect_rate_BM,
-                         y = days_plot)) +
-  
-  # Youden threshold (if you still want it)
-  geom_hline(yintercept = overflow, linetype = "dotted", colour = "grey40") +
-  
-  # points coloured by relapse; stroke = MRD call
-  geom_point(aes(colour = progress_status,
-                 fill   = progress_status,
-                 stroke = mrd_status),
-             shape = 21, size = 3, colour = "black") +
-  
-  # ∞‐aware y‐axis
-  scale_y_continuous(
-    "Days until relapse (or ∞ for censor)",
-    limits = c(0, overflow),  # now increasing from 0 to overflow
-    breaks = c(seq(0, 1620, by = 180), overflow),
-    labels = c(as.character(seq(0, 1620, by = 180)), "∞")
-  ) +
-  
-  # x‐axis as percent
-  scale_x_log10(
-    "cfWGS detection rate (log scale)",
-    limits      = c(1e-4, 0.07),                   # can’t include zero
-    breaks      = c(1e-4, 1e-3, 1e-2, 1e-1),       # your major decades
-    minor_breaks= c(
-      2e-4, 5e-4,   # between 1e-4 & 1e-3
-      2e-3, 5e-3,   # between 1e-3 & 1e-2
-      2e-2, 5e-2    # between 1e-2 & 1e-1
-    ),
-    labels      = scales::percent_format(accuracy = 0.1)
-  ) +
-  annotation_logticks(
-    sides = "b",     # draw ticks on the bottom axis
-    short = unit(2, "pt"),
-    mid   = unit(4, "pt"),
-    long  = unit(6, "pt")
-  ) +
-  # colours
-  scale_colour_manual(
-    "Patient outcome",
-    values = c("No relapse" = "#35608DFF", "Relapse" = "#43BF71FF")
-  ) +
-  scale_fill_manual(
-    "Patient outcome",
-    values = c("No relapse" = "#35608DFF", "Relapse" = "#43BF71FF")
-  ) +
-  
-  # stroke legend for MRD call
-  scale_discrete_manual(
-    aesthetics = "stroke",
-    values     = c("MRD-" = 0, "MRD+" = 1),
-    guide      = guide_legend(
-      title = "MRD call",
-      override.aes = list(
-        shape  = 21,
-        size   = 4,
-        fill   = "white",
-        colour = "black",
-        stroke = c(0,1)
-      )
-    )
+    values = c("No relapse" = "black", "Relapse" = "red")
   ) +
   
   # annotate Spearman
   annotate("text",
            x = 0.01,      # left margin
-           y = 1500,
-           label = sprintf("Spearman ρ = %.2f,\np = %.3f", rho, pval),
+           y = 1650,
+           label = sprintf("ρ = %.2f\np = %.2f", rho, pval),
            hjust = 0,
-           size = 3) +
+           size = 3.5) +
   
   # clean theme
   theme_classic(base_size = 11) +
   theme(
     panel.grid      = element_blank(),
-    plot.title      = element_text(face = "bold", hjust = 0.5),
-    legend.position = "right",
+    plot.title      = element_text(face = "bold", hjust = 0.5, size = 12),
+    legend.position = "bottom",
     legend.title    = element_text(size = 11),
-    legend.text     = element_text(size = 8)
+    legend.text     = element_text(size = 10)
   ) +
   
-  labs(title = "Time to relapse vs. detection rate")
+  labs(title = "Association Between cfWGS MRD Probability\nand Time to Relapse")
+
+print(p_time_inf)
 
 # 4) render / save
-ggsave(file.path(outdir, "Fig_time_to_relapse_infinity_no_reverse_detection_rate.png"),
-       p_time_inf, width = 6, height = 4, dpi = 600)
+ggsave(file.path(outdir, "Fig_4I_time_to_relapse_infinity_no_reverse2_BM_muts.png"),
+       p_time_inf, width = 6, height = 5, dpi = 600)
 
-
-
-
-### Now z-score of sites
-# 3) make the scatter
-rho  <- spearman_zscore$estimate
-pval <- spearman_zscore$p.value
-
-
-p_time_inf <- ggplot(plot_df2,
-                     aes(x = zscore_BM,
-                         y = days_plot)) +
-  
-  # Youden threshold (if you still want it)
-  geom_hline(yintercept = overflow, linetype = "dotted", colour = "grey40") +
-  
-  # points coloured by relapse; stroke = MRD call
-  geom_point(aes(colour = progress_status,
-                 fill   = progress_status,
-                 stroke = mrd_status),
-             shape = 21, size = 3, colour = "black") +
-  
-  # ∞‐aware y‐axis
-  scale_y_continuous(
-    "Days until relapse (or ∞ for censor)",
-    limits = c(0, overflow),  # now increasing from 0 to overflow
-    breaks = c(seq(0, 1620, by = 180), overflow),
-    labels = c(as.character(seq(0, 1620, by = 180)), "∞")
-  ) +
-  
-  scale_x_continuous(
-    "cfWGS z-score of proportion of sites detected",
-  ) +
-  # colours
-  scale_colour_manual(
-    "Patient outcome",
-    values = c("No relapse" = "#35608DFF", "Relapse" = "#43BF71FF")
-  ) +
-  scale_fill_manual(
-    "Patient outcome",
-    values = c("No relapse" = "#35608DFF", "Relapse" = "#43BF71FF")
-  ) +
-  
-  # stroke legend for MRD call
-  scale_discrete_manual(
-    aesthetics = "stroke",
-    values     = c("MRD-" = 0, "MRD+" = 1),
-    guide      = guide_legend(
-      title = "MRD call",
-      override.aes = list(
-        shape  = 21,
-        size   = 4,
-        fill   = "white",
-        colour = "black",
-        stroke = c(0,1)
-      )
-    )
-  ) +
-  
-  # annotate Spearman
-  annotate("text",
-           x = 230,      # left margin
-           y = 1500,
-           label = sprintf("Spearman ρ = %.2f,\np = %.3f", rho, pval),
-           hjust = 0,
-           size = 3) +
-  
-  # clean theme
-  theme_classic(base_size = 11) +
-  theme(
-    panel.grid      = element_blank(),
-    plot.title      = element_text(face = "bold", hjust = 0.5),
-    legend.position = "right",
-    legend.title    = element_text(size = 11),
-    legend.text     = element_text(size = 8)
-  ) +
-  
-  labs(title = "Time to relapse vs. z-score of proportion of sites detected")
-
-# 4) render / save
-ggsave(file.path(outdir, "Fig_time_to_relapse_infinity_no_reverse_sites.png"),
-       p_time_inf, width = 6, height = 4, dpi = 600)
+plot_df2 %>%
+  filter(
+    is.na(BM_base_zscore_prob) | is.na(days_plot) |
+      BM_base_zscore_prob < 0 | BM_base_zscore_prob > 1 |
+      days_plot < 0 | days_plot > overflow
+  )
 
 
 
 
 
-
-### Redo other way for blood derived muts 
+### Redo now for blood derived muts 
 ### Now redo for blood-derived muts
 df <- survival_df %>%                           # <- your tibble
   # keep samples beyond baseline / diagnosis
@@ -2137,10 +1962,10 @@ df_slim <- df %>%
 # ────────────────────────────────────────────────────────────────
 # 2.  Plot  ──────────────────────────────────────────────────────
 # ────────────────────────────────────────────────────────────────
-youden_thresh <- 0.523
+youden_thresh <- 0.5226406
 max_mo <- max(df_slim$months_before_event, na.rm = TRUE)  
 
-p_prob <- ggplot(df_slim, aes(months_before_event, Blood_zscore_only_sites_prob, group = Patient)) +
+p_prob <- ggplot(df, aes(months_before_event, Blood_zscore_only_sites_prob, group = Patient)) +
   
   # 1) Youden line
   geom_hline(yintercept = youden_thresh,
@@ -2152,16 +1977,14 @@ p_prob <- ggplot(df_slim, aes(months_before_event, Blood_zscore_only_sites_prob,
   
   # 3) points: fill by relapse, stroke by MRD call, border black
   geom_point(aes(
-    fill   = progress_status,
-    stroke = mrd_status
-  ),
-  shape  = 21,
-  colour = "black",
-  size   = 2
+    fill   = progress_status),
+    shape  = 21,
+    colour = "black",
+    size   = 2
   ) +
   
   # 4) event line
-  geom_vline(xintercept = 0, linetype = "dotted", colour = "gray40") +
+  #geom_vline(xintercept = 0, linetype = "dotted", colour = "gray40") +
   
   # 5) axes
   scale_x_reverse(
@@ -2169,8 +1992,8 @@ p_prob <- ggplot(df_slim, aes(months_before_event, Blood_zscore_only_sites_prob,
     breaks       = seq(0, max_mo, by = 12),  # every 12 months
     minor_breaks = seq(0, max_mo, by = 6)    # every 6 months
   ) +
-  scale_y_continuous("cfWGS MRD probability",
-                     limits = c(0.4,0.9),
+  scale_y_continuous("cfWGS MRD probability (%)",
+                     limits = c(0.4,1),
                      labels = scales::percent_format(1)) +
   
   # 6) colour for relapse status
@@ -2185,23 +2008,21 @@ p_prob <- ggplot(df_slim, aes(months_before_event, Blood_zscore_only_sites_prob,
                "Relapse"    = "#43BF71FF")
   ) +
   
-  # 7) stroke scale for MRD call
-  scale_discrete_manual(
-    aesthetics = "stroke",
-    values     = c("MRD-" = 0,    # no ring
-                   "MRD+" = 1), # visible ring
-    guide      = guide_legend(
-      title = "MRD call",
-      override.aes = list(
-        fill   = detect_cols["Both"] %||% c("MRD-"="#35608DFF","MRD+"="#43BF71FF"),
-        shape  = 21,
-        fill   = "white",    # <–– white interior, not green
-        size   = 4,
-        colour = "black",
-        stroke = c(0,1)
-      )
-    )
-  ) +
+  # # 7) stroke scale for MRD call
+  # scale_discrete_manual(
+  #   aesthetics = "stroke",
+  #   values     = c("MRD-" = 0, "MRD+" = 1),
+  #   guide      = guide_legend(
+  #     title = "MRD call",
+  #     override.aes = list(
+  #       shape  = 21,
+  #       fill   = "white",   # white interior in legend, makes stroke obvious
+  #       size   = 4,
+  #       colour = "black",
+  #       stroke = c(0, 1)
+  #     )
+  #   )
+  # ) +
   
   # 8) clean up legends
   guides(
@@ -2210,16 +2031,16 @@ p_prob <- ggplot(df_slim, aes(months_before_event, Blood_zscore_only_sites_prob,
   ) +
   
   labs(
-    title    = "cfWGS probability trajectories vs. time to relapse"
+    title    = "Longitudinal cfWGS MRD Probability by Patient Outcome"
   ) +
   theme_classic(base_size = 11) +
   theme(
     panel.grid      = element_blank(),
-    plot.title      = element_text(face = "bold", hjust = 0.5),
+    plot.title      = element_text(face = "bold", hjust = 0.5, size = 14),
     plot.subtitle   = element_text(hjust = 0.5),
-    legend.position = "right", 
+    legend.position = "bottom", 
     legend.title    = element_text(size = 11),   # 
-    legend.text     = element_text(size = 7)    # even smaller
+    legend.text     = element_text(size = 10)    # even smaller
   )
 
 print(p_prob)
@@ -2228,9 +2049,8 @@ print(p_prob)
 # ────────────────────────────────────────────────────────────────
 # 3.  Export  ────────────────────────────────────────────────────
 # ────────────────────────────────────────────────────────────────
-ggsave("Final Tables and Figures/F5I_cfWGS_prob_vs_time_updated_blood_muts.png",
-       p_prob, width = 8, height = 4.5, dpi = 600)
-
+ggsave("Final Tables and Figures/F5I_cfWGS_prob_vs_time_updated3_blood.png",
+       p_prob, width = 6, height = 4.5, dpi = 600)
 
 
 
@@ -2247,10 +2067,14 @@ df_plot <- df %>%
 
 max_days <- ceiling(max(df_plot$days_before_event, na.rm = TRUE) / 180) * 180
 
+df_plot <- df_plot %>%
+  mutate(Time_to_event = if_else(Time_to_event >= -30 & Time_to_event < 0, 0, Time_to_event))
 
+## ─────────────────────────────────────────────────────────────
 ## 1)  Build the scatter plot                                  
+## ─────────────────────────────────────────────────────────────
 p_time <- ggplot(df_plot,
-                 aes(x = Blood_zscore_only_sites_call,
+                 aes(x = Blood_zscore_only_sites_prob,
                      y = days_before_event)) +
   
   # ① dashed horizontal line at “event” (0 days)
@@ -2306,7 +2130,7 @@ p_time <- ggplot(df_plot,
   
   # ⑥ theme / labels
   labs(
-    title = "Time to relapse vs. cfWGS MRD probability for blood derived muts"
+    title = "Time to relapse vs. cfWGS MRD probability"
   ) +
   theme_classic(base_size = 11) +
   theme(
@@ -2317,8 +2141,10 @@ p_time <- ggplot(df_plot,
     legend.text     = element_text(size = 8)
   )
 
+print(p_time)
+
 # save
-ggsave(file.path(outdir, "Fig_time_to_relapse_vs_prob_blood.png"),
+ggsave(file.path(outdir, "Fig_time_to_relapse_vs_prob2.png"),
        p_time, width = 6, height = 4, dpi = 600)
 
 
@@ -2335,7 +2161,7 @@ plot_df2 <- df %>%
 
 # define axis maximum and “infinity” sentinel
 max_days <- ceiling(max(plot_df2$days_before_event, na.rm = TRUE) / 180) * 180
-overflow <- max_days + 30   # a little beyond the longest follow‑up
+overflow <- max_days + 180   # a little beyond the longest follow‑up
 
 plot_df2 <- plot_df2 %>%
   mutate(
@@ -2350,19 +2176,7 @@ rel_df <- plot_df2 %>%
 
 # 2) run cor.test for each metric
 spearman_prob <- cor.test(
-  rel_df$BM_base_zscore_prob,
-  rel_df$days_before_event,
-  method = "spearman"
-)
-
-spearman_zscore <- cor.test(
-  rel_df$zscore_BM,
-  rel_df$days_before_event,
-  method = "spearman"
-)
-
-spearman_detect_rate <- cor.test(
-  rel_df$detect_rate_BM,
+  rel_df$Blood_zscore_only_sites_prob,
   rel_df$days_before_event,
   method = "spearman"
 )
@@ -2371,11 +2185,97 @@ spearman_detect_rate <- cor.test(
 cat("\n--- cfWGS model probability vs days ---\n")
 print(spearman_prob)
 
-cat("\n--- zscore_BM vs days ---\n")
-print(spearman_zscore)
 
-cat("\n--- detect_rate_BM vs days ---\n")
-print(spearman_detect_rate)
+# Edit days
+plot_df2 <- plot_df2 %>%
+  mutate(days_plot = if_else(days_plot >= -35 & days_plot <= 0, 0, days_plot))
+
+# 2) compute Spearman rho on the relapsers
+spearman_res <- with(
+  filter(plot_df2, progress_status == "Relapse"),
+  cor.test(Blood_zscore_only_sites_prob,
+           days_before_event,
+           method = "spearman")
+)
+
+## Check other metrics
+# 2A) pull out estimate + p‑value
+rho  <- spearman_res$estimate
+pval <- spearman_res$p.value
+
+# 3) make the scatter
+p_time_inf <- ggplot(plot_df2,
+                     aes(x = Blood_zscore_only_sites_prob,
+                         y = days_plot)) +
+  
+  # Youden threshold (if you still want it)
+  geom_vline(xintercept = youden_thr, linetype = "dotted", colour = "grey40") +
+  
+  # points coloured by relapse; stroke = MRD call
+  geom_point(aes(colour = progress_status,
+                 fill   = progress_status),
+             shape = 21, size = 3, colour = "black") +
+  
+  # ∞‐aware y‐axis
+  scale_y_continuous(
+    "Days until relapse (or ∞ for censor)",
+    limits = c(0, overflow),
+    breaks = c(seq(0, 1620, by = 180), overflow),
+    labels = c(seq(0, 1620, by = 180), "∞")
+  ) +
+  
+  # x‐axis as percent
+  scale_x_continuous(
+    "cfWGS MRD probability (%)",
+    limits = c(0.4,0.9),
+    breaks = seq(0,1,by=0.1),
+    labels = scales::percent_format(accuracy=1)
+  ) +
+  
+  # colours
+  scale_colour_manual(
+    "Patient outcome",
+    values = c("No relapse" = "black", "Relapse" = "red")
+  ) +
+  scale_fill_manual(
+    "Patient outcome",
+    values = c("No relapse" = "black", "Relapse" = "red")
+  ) +
+  
+  # annotate Spearman
+  annotate("text",
+           x = 0.80,      # left margin
+           y = 1650,
+           label = sprintf("ρ = %.2f\np = %.2f", rho, pval),
+           hjust = 0,
+           size = 3.5) +
+  
+  # clean theme
+  theme_classic(base_size = 11) +
+  theme(
+    panel.grid      = element_blank(),
+    plot.title      = element_text(face = "bold", hjust = 0.5, size = 12),
+    legend.position = "bottom",
+    legend.title    = element_text(size = 11),
+    legend.text     = element_text(size = 10)
+  ) +
+  
+  labs(title = "Association Between cfWGS MRD Probability\nand Time to Relapse")
+
+print(p_time_inf)
+
+# 4) render / save
+ggsave(file.path(outdir, "Fig_5_I_time_to_relapse_infinity_no_reverse2_blood_muts.png"),
+       p_time_inf, width = 6, height = 5, dpi = 600)
+
+tmp <- plot_df2 %>%
+  filter(
+    is.na(Blood_zscore_only_sites_prob) | is.na(days_plot) |
+      Blood_zscore_only_sites_prob < 0.4 | Blood_zscore_only_sites_prob > 0.9 |
+      days_plot < 0 | days_plot > overflow
+  )
+
+
 
 
 

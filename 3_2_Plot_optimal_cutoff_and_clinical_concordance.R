@@ -89,7 +89,7 @@ front_tbl <- dat %>%
     BM_base_zscore_screen_call  = as.integer(BM_base_zscore_call >= 0.350),
   ) %>%
   pivot_longer(
-    cols      = c(Flow_Binary, Adaptive_Binary, BM_base_zscore_call, BM_base_zscore_screen_call),
+    cols      = c(Flow_Binary, Adaptive_Binary, BM_base_zscore_call),
     names_to  = "Technology",
     values_to = "Result"
   ) %>%
@@ -107,7 +107,7 @@ front_tbl <- dat %>%
       Flow_Binary         = "MFC",
       Adaptive_Binary     = "clonoSEQ",
       BM_base_zscore_call = "cfWGS",
-      BM_base_zscore_screen_call = "cfWGS (screen)"
+   #   BM_base_zscore_screen_call = "cfWGS (screen)"
       
     )
   )
@@ -395,7 +395,7 @@ p_non_grouped <- ggplot(non_tbl,
   plot_theme
 
 ggsave(
-  filename = file.path(OUTPUT_DIR_FIGURES, "Fig_4I_BM_positivity_by_tech_updated_non_frontline2.png"),
+  filename = file.path(OUTPUT_DIR_FIGURES, "Fig_4I_BM_positivity_by_tech_updated_non_frontline4.png"),
   plot     = p_non_grouped,
   width    = 3.5,
   height   = 4,
@@ -460,9 +460,9 @@ p_pos_by_tech <- ggplot(combo_tbl,
   ) +
   
   # ⑥ clean up the theme to match p_perf
-  theme_classic(base_size = 10) +
+  theme_classic(base_size = 11) +
   theme(
-    plot.title      = element_text(face = "bold", size = 12, hjust = 0.5),
+    plot.title      = element_text(face = "bold", size = 14, hjust = 0.5),
     strip.text      = element_text(face = "bold", size = 11),
     axis.text.x     = element_text(angle = 30, hjust = 1, size = 9),
     axis.text.y     = element_text(size = 9),
@@ -642,9 +642,9 @@ p_pos_by_tech <- ggplot(combo_tbl,
   ) +
   
   # ⑥ clean up the theme to match p_perf
-  theme_classic(base_size = 10) +
+  theme_classic(base_size = 11) +
   theme(
-    plot.title      = element_text(face = "bold", size = 12, hjust = 0.5),
+    plot.title      = element_text(face = "bold", size = 14, hjust = 0.5),
     strip.text      = element_text(face = "bold", size = 11),
     axis.text.x     = element_text(angle = 30, hjust = 1, size = 9),
     axis.text.y     = element_text(size = 9),
@@ -654,7 +654,7 @@ p_pos_by_tech <- ggplot(combo_tbl,
 
 # 4) Save
 ggsave(
-  filename = file.path(OUTPUT_DIR_FIGURES, "Fig_5I_Blood_positivity_by_tech_facet_updated.png"),
+  filename = file.path(OUTPUT_DIR_FIGURES, "Fig_5I_Blood_positivity_by_tech_facet_updated3.png"),
   plot     = p_pos_by_tech,
   width    = 6.5,    # wider to accommodate two facets
   height   = 4,
@@ -777,7 +777,7 @@ print(ppv_maint)
 
 # ---------------------------------------------------------------------------
 # 5.  NON-FRONTLINE cohort ----------------------------------------------------
-non <- dat %>% filter(Cohort == "Non-frontline") %>% filter(!is.na(BM_base_zscore_call))
+non <- dat %>% filter(Cohort == "Non-frontline") %>% filter(!is.na(BM_base_zscore_call)) %>% filter(timepoint_info != "Diagnosis")  %>% filter(timepoint_info != "Baseline")
 
 non_cm <- non %>%
   filter(Cohort != "Frontline",
@@ -807,7 +807,7 @@ spec_non
 # Overall positivity non‑frontline
 non_pos <- non %>%
   pivot_longer(
-    cols      = c(BM_zscore_only_detection_rate_call, Flow_Binary),
+    cols      = c(BM_base_zscore_call, Flow_Binary),
     names_to  = "Test",
     values_to = "Result"
   ) %>%
@@ -954,7 +954,8 @@ bind_rows(ppv_clono, ppv_mfc)
 
 ## Now for non-frontline 
 pa <- dat %>%
-  filter(Cohort == "Non-frontline")
+  filter(Cohort == "Non-frontline") %>% filter(timepoint_info != "Diagnosis")
+
 ppv_mfc <- ppv_npv_any(
   df        = pa %>% filter(!is.na(Flow_Binary)),
   pred_col  = "BM_base_zscore_call",
@@ -968,31 +969,31 @@ bind_rows(ppv_mfc)
 # 1. Export post-ASCT pairwise concordance (frontline BM)
 readr::write_csv(
   post_conc,
-  file.path(outdir, "Frontline_BoneMarrow_PostASCT_Pairwise_Concordance.csv")
+  file.path(outdir, "Frontline_BoneMarrow_PostASCT_Pairwise_Concordance2.csv")
 )
 
 # 2. Export maintenance-timepoint pairwise concordance (frontline BM)
 readr::write_csv(
   maint_conc,
-  file.path(outdir, "Frontline_BoneMarrow_Maintenance_Pairwise_Concordance.csv")
+  file.path(outdir, "Frontline_BoneMarrow_Maintenance_Pairwise_Concordance2.csv")
 )
 
 # 3. Export frontline positivity counts by test & landmark (Post_ASCT + Maintenance)
 readr::write_csv(
   pos_tbl,
-  file.path(outdir, "Frontline_BoneMarrow_Positivity_PostASCT_and_Maintenance.csv")
+  file.path(outdir, "Frontline_BoneMarrow_Positivity_PostASCT_and_Maintenance2.csv")
 )
 
 # 4. Export PPV/NPV at Post-ASCT for BM_base_zscore_call
 readr::write_csv(
   ppv_post,
-  file.path(outdir, "Frontline_BoneMarrow_PostASCT_PPV_NPV.csv")
+  file.path(outdir, "Frontline_BoneMarrow_PostASCT_PPV_NPV2.csv")
 )
 
 # 5. Export PPV/NPV at Maintenance for BM_base_zscore_call
 readr::write_csv(
   ppv_maint,
-  file.path(outdir, "Frontline_BoneMarrow_Maintenance_PPV_NPV.csv")
+  file.path(outdir, "Frontline_BoneMarrow_Maintenance_PPV_NPV2.csv")
 )
 
 
@@ -1050,7 +1051,7 @@ writexl::write_xlsx(
     "Contingency_Maintenance"   = ct_maint,
     "Contingency_NonFrontline"  = ct_nonfront
   ),
-  path = file.path(outdir, "cfWGS_vs_MRD_truth_contingency_tables.xlsx")
+  path = file.path(outdir, "cfWGS_vs_MRD_truth_contingency_tables2.xlsx")
 )
 
 ### Now do to MFC and clonoSEQ seperately 
@@ -1075,7 +1076,7 @@ writexl::write_xlsx(
     "Maintenance_vs_clonoSEQ"  = ct_maint_Clono,
     "NonFront_vs_Flow"         = ct_non_Flow
   ),
-  path = file.path(outdir, "cfWGS_contingency_vs_Flow_clonoSEQ.xlsx")
+  path = file.path(outdir, "cfWGS_contingency_vs_Flow_clonoSEQ2.xlsx")
 )
 
 
@@ -1153,11 +1154,11 @@ p_post   <- plot_cm(cm_post ,  "Confusion Matrix at Post-ASCT (Training Cohort)"
 p_maint  <- plot_cm(cm_maint,  "Confusion Matrix at 1‑Year Maintenance (Training Cohort)")
 p_non    <- plot_cm(cm_non ,   "Confusion Matrix of Test Cohort")
 
-ggsave("Final Tables and Figures/Fig4_confmat_post_ASCT_updated.png",
+ggsave("Final Tables and Figures/Fig4_confmat_post_ASCT_updated2.png",
        p_post,  width = 5, height = 2.75, dpi = 600)
-ggsave("Final Tables and Figures/Fig4_confmat_maintenance.png",
+ggsave("Final Tables and Figures/Fig4_confmat_maintenance2.png",
        p_maint, width = 5, height = 2.75, dpi = 600)
-ggsave("Final Tables and Figures/Fig4_confmat_nonfront.png",
+ggsave("Final Tables and Figures/Fig4_confmat_nonfront2.png",
        p_non,   width = 3, height = 2.75, dpi = 600)   # single facet – narrower
 
 ## As one 
@@ -1196,7 +1197,7 @@ combined_cm <- (p_post  +
 
 
 # save
-ggsave("Final Tables and Figures/Fig4J_confusion_matrices_all_three.png",
+ggsave("Final Tables and Figures/Fig4J_confusion_matrices_all_three_2.png",
        combined_cm,
        width  = 4,
        height = 7,      # three panels tall
@@ -1232,7 +1233,7 @@ combined_cm <- (p_post +
 
 
 # save
-ggsave("Final Tables and Figures/Fig4J_confusion_matrices_all_three_side_by_side.png",
+ggsave("Final Tables and Figures/Fig4J_confusion_matrices_all_three_side_by_side2.png",
        combined_cm,
        width  = 15,
        height = 3,      # three panels tall
@@ -1297,7 +1298,7 @@ writexl::write_xlsx(
     "Contingency_Maintenance"   = ct_maint,
     "Contingency_NonFrontline"  = ct_nonfront
   ),
-  path = file.path(outdir, "cfWGS_vs_MRD_truth_contingency_tables_blood.xlsx")
+  path = file.path(outdir, "cfWGS_vs_MRD_truth_contingency_tables_blood2.xlsx")
 )
 
 ### Now do to MFC and clonoSEQ seperately 
@@ -1322,7 +1323,7 @@ writexl::write_xlsx(
     "Maintenance_vs_clonoSEQ"  = ct_maint_Clono,
     "NonFront_vs_Flow"         = ct_non_Flow
   ),
-  path = file.path(outdir, "cfWGS_contingency_vs_Flow_clonoSEQ_blood_calls.xlsx")
+  path = file.path(outdir, "cfWGS_contingency_vs_Flow_clonoSEQ_blood_calls_2.xlsx")
 )
 
 
@@ -1400,11 +1401,11 @@ p_post   <- plot_cm(cm_post ,  "Confusion Matrix at Post-ASCT (Training Cohort)"
 p_maint  <- plot_cm(cm_maint,  "Confusion Matrix at 1‑Year Maintenance (Training Cohort)")
 p_non    <- plot_cm(cm_non ,   "Confusion Matrix of Test Cohort")
 
-ggsave("Final Tables and Figures/Fig5_confmat_post_ASCT_blood_updated.png",
+ggsave("Final Tables and Figures/Fig5_confmat_post_ASCT_blood_updated2.png",
        p_post,  width = 5, height = 2.75, dpi = 600)
-ggsave("Final Tables and Figures/Fig5_confmat_maintenance_blood_updated.png",
+ggsave("Final Tables and Figures/Fig5_confmat_maintenance_blood_updated2.png",
        p_maint, width = 5, height = 2.75, dpi = 600)
-ggsave("Final Tables and Figures/Fig5_confmat_nonfront_blood_updated.png",
+ggsave("Final Tables and Figures/Fig5_confmat_nonfront_blood_updated2.png",
        p_non,   width = 3, height = 2.75, dpi = 600)   # single facet – narrower
 
 ## As one 
@@ -1763,10 +1764,8 @@ print(by_comp)
 
 ## 4L: LOD of cfWGS vs MFC/clonoSEQ discordances
 
-# ──────────────────────────────────────────────────────────────────────────────
 # 1.  Build plotting data  (front-line only, both comparators)  ───────────────
-# ──────────────────────────────────────────────────────────────────────────────
-lod_cfWGS   <- 0.0001   # 0.011 % 
+lod_cfWGS   <- 0.00011   # 0.011 % 
 lod_cfWGS_blood   <- 0.00061   # 0.061 %
 
 lod_clonoMF <- 1e-5      # 10-5  (for both MFC & clonoSEQ)
@@ -1776,13 +1775,12 @@ shape_pal <- c(
   `not detected` = 4    # open cross
 )
 
-# ──────────────────────────────────────────────────────────────────────────────
 # 2.  Build the plotting data  ────────────────────────────────────────────────
 plot_df <- dat %>%
   mutate(Flow_pct_cells = Flow_pct_cells/100) %>% # to be consistent
   filter(
     Cohort == "Frontline",
-    !is.na(z_score_detection_rate_BM),
+    !is.na(BM_base_zscore_prob),
     !is.na(landmark_tp),
     !is.na(Adaptive_Frequency) | !is.na(Flow_pct_cells)
   ) %>%
@@ -1809,27 +1807,24 @@ plot_df <- dat %>%
       TRUE                     ~ NA_integer_
     ),
     
-    cfwgs_bin = BM_zscore_only_detection_rate_call,
+    cfwgs_bin = BM_base_zscore_call,
     concord   = (cfwgs_bin == ref_binary),
-    detected  = if_else(x_val > 0 & detect_rate_BM > 0,
+    detected  = if_else(BM_base_zscore_call == 1,
                         "detected", "not detected")
   ) %>%
   ungroup() %>%
   mutate(
     x_plot   = if_else(x_val <= 1e-6, 1e-6, x_val),
-    y_plot   = if_else(detect_rate_BM <= 1e-5, 1e-5, detect_rate_BM),
+    y_plot   = if_else(BM_base_zscore_prob <= 1e-5, 1e-5, BM_base_zscore_prob),
     category = if_else(concord, "concordant", "discordant")
+  ) %>% 
+  select(
+    Patient, Sample_Code, landmark_tp, Comparator, x_val, x_plot,
+    BM_base_zscore_prob, y_plot,
+    ref_binary, cfwgs_bin, concord, detected, category,
+    Num_days_to_closest_relapse, Flow_Binary, Adaptive_Binary
   )
 
-# ──────────────────────────────────────────────────────────────────────────────
-# 3.  Draw  ───────────────────────────────────────────────────────────────────
-# relapse palette
-col_relapse <- c(
-  `Relapsed ≤365 d`     = "red",
-  `No relapse ≤365 d`   = "black"
-)
-
-# ──────────────────────────────────────────────────────────────────────────────
 # 2) Add shape & relapse flags
 plot_df2 <- plot_df %>%
   mutate(
@@ -1846,183 +1841,6 @@ plot_df2 <- plot_df %>%
       missing = "No relapse ≤365 d"
     )
   )
-    
-# ──────────────────────────────────────────────────────────────────────────────
-# 3) Plot
-p_scatter2 <- ggplot(plot_df2,
-                     aes(x = x_plot, y = y_plot,
-                         shape  = shape_cat,
-                         colour = relapse_cat)) +
-  
-  # LOD lines
-  geom_hline(yintercept = lod_cfWGS,   linetype = "dashed", colour = "grey50") +
-  geom_vline(xintercept = lod_clonoMF, linetype = "dashed", colour = "grey50") +
-  
-  # points
-  geom_point(size = 3, alpha = 0.85) +
-  
-  # Shape legend
-  scale_shape_manual(
-    name = "Detection pattern",
-    values = c(
-      "cfWGS only"       = 24,  # ▲
-      "Comparator only"  = 25,  # ▼
-      "Both detected"    = 16,  # ●
-      "Neither detected" = 15   # ■
-    )
-  ) +
-  
-  # relapse colours
-  scale_colour_manual(values = col_relapse, name = "Relapse") +
-  
-  # log–log scales with “Not detected” at half‐LOD
-  scale_x_log10(
-    breaks = c(1e-6, 1e-5, 1e-4, 1e-3, 1e-2),
-    labels = c("Not detected", "0.001%", "0.01%", "0.1%", "1%")
-  ) +
-  scale_y_log10(
-    breaks = c(1e-5, 1e-4, 1e-3, 1e-2),
-    labels = c("Not detected", "0.01%", "0.1%", "1%")
-  ) +
-  
-  # facets
-  facet_wrap(~ Comparator, nrow = 1) +
-  
-  # labels & theme
-  labs(
-    title = "cfWGS vs clinical MRD assays (Frontline cohort)",
-    x     = "Comparator MRD level",
-    y     = "cfWGS cVAF"
-  ) +
-  theme_classic(base_size = 11) +
-  theme(
-    plot.title      = element_text(face = "bold", hjust = 0.5),
-    strip.text      = element_text(face = "bold"),
-    legend.position = "bottom"
-  )
-
-ggsave("Final Tables and Figures/Fig4K_cfWGS_vs_MFC_clonoSEQ.png",
-       p_scatter2,
-       width  = 7,
-       height = 3.5,
-       dpi    = 600)
-       
-
-### Clean up this plot to look prettier and match other styles more
-# Make sure landmark_timepoint is a factor in the order you want:
-plot_df2 <- plot_df2 %>%
-  mutate(
-    landmark_timepoint = factor(landmark_tp,
-                                levels = c("Post‑ASCT", "Maintenance‑1yr")),
-    shape_cat = factor(shape_cat, 
-                       levels = c("cfWGS only", "Comparator only", "Both", "Neither")),
-    relapse_cat = factor(relapse_cat, levels = c("Relapsed ≤365 d", "No relapse ≤365 d"))
-  )
-
-p_scatter2 <- ggplot(plot_df2,
-                     aes(x      = x_plot,
-                         y      = y_plot,
-                         shape  = shape_cat,
-                         colour = relapse_cat)) +
-  # LOD lines
-  geom_hline(yintercept = lod_cfWGS,   linetype = "dashed", colour = "grey80") +
-  geom_vline(xintercept = lod_clonoMF, linetype = "dashed", colour = "grey80") +
-  
-  # points
-  geom_point(size = 3, alpha = 0.9) +
-  
-  # shape legend
-  scale_shape_manual(
-    name   = "Detection pattern",
-    values = c(
-      "cfWGS only"       = 24,  # ▲
-      "Comparator only"  = 25,  # ▼
-      "Both"    = 16,  # ●
-      "Neither" = 15   # ■
-    ),
-    guide = guide_legend(override.aes = list(size = 4, alpha = 1))
-  ) +
-  
-  # relapse colours
-  scale_colour_manual(
-    name   = "Relapse",
-    values = col_relapse,
-    guide  = guide_legend(order = 2, override.aes = list(shape = 16, size = 4))
-  ) +
-  
-  # log–log axes with a little breathing room
-  scale_x_log10(
-    breaks = c(1e-6, 1e-5, 1e-4, 1e-3, 1e-2, 1e-1),
-    labels = c("Not detected", "0.001%", "0.01%", "0.1%", "1%", "10%"),
-    expand = expansion(mult = c(0.05, 0.05))
-  ) +
-  scale_y_log10(
-    breaks = c(1e-5, 1e-4, 1e-3, 1e-2),
-    labels = c("Not detected", "0.01%", "0.1%", "1%"),
-    expand = expansion(mult = c(0.05, 0.05))
-  ) +
-  
-  # two-dimensional faceting
-  facet_grid(
-    rows = vars(landmark_timepoint),
-    cols = vars(Comparator),
-    labeller = label_wrap_gen(10)    # wrap long facet labels if needed
-  ) +
-  
-  # titles & theme
-  labs(
-    title = "cfWGS vs clinical MRD assays (Training cohort)",
-    x     = "Comparator MRD level",
-    y     = "cfWGS cVAF"
-  ) +
-  theme_bw(base_size = 10) +
-  theme(
-    plot.title        = element_text(face = "bold", hjust = 0.5),
-    strip.background  = element_rect(fill = "grey90", colour = NA),
-    strip.text        = element_text(face = "bold"),
-    axis.text.x       = element_text(angle = 45, hjust = 1),
-    legend.position   = "bottom",
-    legend.box        = "horizontal",
-    legend.title      = element_text(face = "bold", size = 9),
-    legend.text       = element_text(size = 8),    # ← smaller legend labels
-    panel.grid.minor  = element_blank()
-  )
-
-p_scatter2 <- p_scatter2 +
-  # start from a white‐background theme with borders
-  theme_bw(base_size = 11) +    
-  
-  # now tweak:
-  theme(
-    # draw a thin black border around each facet
-    panel.border      = element_rect(colour = "black", fill = NA, size = 0.5),
-    
-    # kill all the internal grid lines
-    panel.grid.major  = element_blank(),
-    panel.grid.minor  = element_blank(),
-    
-    # if you want a white strip header with black outline:
-    strip.background  = element_rect(fill = "white", colour = "black"),
-    strip.text        = element_text(face = "bold"),
-    
-    # axis titles bold
-    axis.title        = element_text(face = "bold", size = 12),
-    axis.text.x       = element_text(angle = 45, hjust = 1),
-    
-    # any other theme tweaks you like…
-    plot.title        = element_text(face = "bold", hjust = 0.5),
-    legend.position   = "bottom",
-    legend.title      = element_text(face = "bold", size = 9),
-    legend.text       = element_text(size = 8),    # ← smaller legend labels
-    
-  )
-# save
-ggsave("Final Tables and Figures/Fig4K_cfWGS_vs_MFC_clonoSEQ_updated.png",
-       p_scatter2,
-       width  = 8.25,
-       height = 4.5,
-       dpi    = 600)
-
 
 
 #### Clean version 
@@ -2075,59 +1893,77 @@ detect_cols <- c(
   `Neither`         = "#999999"   # "#FDE725FF"
 )
 
+
+## Get correlations
+corr_df <- plot_df2 %>%
+  group_by(landmark_timepoint, Comparator) %>%
+  summarize(
+    rho = cor(x_plot, y_plot, method = "spearman", use = "complete.obs"),
+    p   = cor.test(x_plot, y_plot, method = "spearman")$p.value,
+    .groups = "drop"
+  ) %>%
+  mutate(
+    label = sprintf("ρ = %.2f\np = %.2f", rho, p),
+    x = 0.035,   # choose your x/y annotation positions for your data
+    y = 0.99
+  )
+
+
 # ------------------------------------------------------------
 # 3.  Build the plot (shape fixed to 21: filled circle with outline)
 # ------------------------------------------------------------
 p_scatter_simple <- ggplot(plot_df2,
                            aes(x = x_plot, y = y_plot,
-                               fill   = detect_cat,   # interior colour = detection pattern
-                               stroke = relapse_flag)) +  # outline width = relapse
+                               fill   = relapse_cat)) +  
   # LOD reference lines
-  geom_hline(yintercept = lod_cfWGS,   linetype = "dashed", colour = "grey80") +
+  geom_hline(yintercept = 0.410,   linetype = "dashed", colour = "grey80") +
   geom_vline(xintercept = lod_clonoMF, linetype = "dashed", colour = "grey80") +
   
   # points
-  geom_point(shape = 21, size = 3, alpha = 0.9,
+  geom_point(shape = 21, size = 2, alpha = 0.9,
              colour = "black") +   # outline colour (same for all)
   
   # colour legend for detection pattern
   scale_fill_manual(name = "Detection pattern",
                     values = detect_cols) +
   
-  # fix stroke scale so legend shows outline vs. none
-  scale_discrete_manual(                     # works now
-    aesthetics = "stroke",
-    values = c("Relapse" = 1.3, "No relapse" = 0),
-    guide  = guide_legend(
-      title = "Relapse",
-      override.aes = list(fill   = detect_cols["Both"],
-                          shape  = 21,
-                          size   = 4,
-                          colour = "black")
-    )
-  ) +
-  
-  # log‑log axes
+  # log axes
   scale_x_log10(
     breaks = c(1e-6, 1e-5, 1e-4, 1e-3, 1e-2, 1e-1),
     labels = c("Not detected", "0.001%", "0.01%", "0.1%", "1%", "10%"),
     expand = expansion(mult = c(0.05, 0.05))
   ) +
-  scale_y_log10(
-    breaks = c(1e-5, 1e-4, 1e-3, 1e-2),
-    labels = c("Not detected", "0.01%", "0.1%", "1%"),
-    expand = expansion(mult = c(0.05, 0.05))
+  scale_y_continuous(
+    limits = c(0.18, 1),
+    breaks = seq(0.2, 1, by = 0.2),
+    labels = scales::percent_format(accuracy = 1)
   ) +
-  
   facet_grid(rows = vars(landmark_timepoint),
              cols = vars(Comparator)) +
   
-  labs(title = "cfWGS vs clinical MRD assays (Training cohort)",
+  labs(title = "Comparison of cfWGS MRD Probability\nand Clinical Assays Across Landmark Timepoints",
        x = "Comparator MRD level",
-       y = "cfWGS cVAF") +
+       y = "Combined Model Probability") +
   # start from a white‐background theme with borders
   theme_bw(base_size = 11) +    
   
+  ## add color 
+  scale_fill_manual(
+    name = "Relapse ≤1 year",
+    values = c(
+      "Relapsed ≤365 d"   = "red",
+      "No relapse ≤365 d" = "black",
+      "Unknown"           = "#bbbbbb"
+    )
+  ) +
+  
+  ## add text
+  geom_text(
+    data = corr_df,
+    aes(x = x, y = y, label = label),
+    hjust = 0, vjust = 1, size = 2.5,
+    inherit.aes = FALSE
+  ) +
   # now tweak:
   theme(
     # draw a thin black border around each facet
@@ -2142,33 +1978,21 @@ p_scatter_simple <- ggplot(plot_df2,
     strip.text        = element_text(face = "bold"),
     
     # axis titles bold
-    axis.title        = element_text(size = 12),
+    axis.title        = element_text(size = 11),
     axis.text.x       = element_text(angle = 30, hjust = 1),
     
     # any other theme tweaks you like…
     plot.title        = element_text(face = "bold", hjust = 0.5),
-    legend.position   = "bottom",
+    legend.position   = "right",
     legend.title      = element_text(face = "bold", size = 9),
     legend.text       = element_text(size = 8),    # ← smaller legend labels
     
-  )
+  ) 
 
 # save
-ggsave("Final Tables and Figures/Fig4K_cfWGS_vs_MFC_clonoSEQ_clean_BM_muts.png",
+ggsave("Final Tables and Figures/Fig4K_cfWGS_vs_MFC_clonoSEQ_clean_BM_muts_updated.png",
        p_scatter_simple,
-       width  = 8.25, height = 4.5, dpi = 600)
-
-
-
-
-
-
-
-
-
-
-
-
+       width  = 6.5, height = 5, dpi = 600)
 
 
 #### Now redo for blood-derived muts
@@ -2177,7 +2001,7 @@ plot_df <- dat %>%
   mutate(Flow_pct_cells = Flow_pct_cells/100) %>% # to be consistent
   filter(
     Cohort == "Frontline",
-    !is.na(z_score_detection_rate_blood),
+    !is.na(Blood_zscore_only_sites_call),
     !is.na(landmark_tp),
     !is.na(Adaptive_Frequency) | !is.na(Flow_pct_cells)
   ) %>%
@@ -2206,25 +2030,22 @@ plot_df <- dat %>%
     
     cfwgs_bin = Blood_zscore_only_sites_call,
     concord   = (cfwgs_bin == ref_binary),
-    detected  = if_else(x_val > 0 & detect_rate_BM > 0,
+    detected  = if_else(Blood_zscore_only_sites_call == 1,
                         "detected", "not detected")
   ) %>%
   ungroup() %>%
   mutate(
     x_plot   = if_else(x_val <= 1e-6, 1e-6, x_val),
-    y_plot   = if_else(detect_rate_blood <= 1e-5, 1e-5, detect_rate_blood),
+    y_plot   = if_else(Blood_zscore_only_sites_prob <= 1e-5, 1e-5, Blood_zscore_only_sites_prob),
     category = if_else(concord, "concordant", "discordant")
+  ) %>% 
+  select(
+    Patient, Sample_Code, landmark_tp, Comparator, x_val, x_plot,
+    Blood_zscore_only_sites_call, y_plot,
+    ref_binary, cfwgs_bin, concord, detected, category,
+    Num_days_to_closest_relapse, Flow_Binary, Adaptive_Binary
   )
 
-# ──────────────────────────────────────────────────────────────────────────────
-# 3.  Draw  ───────────────────────────────────────────────────────────────────
-# relapse palette
-col_relapse <- c(
-  `Relapsed ≤365 d`     = "red",
-  `No relapse ≤365 d`   = "black"
-)
-
-# ──────────────────────────────────────────────────────────────────────────────
 # 2) Add shape & relapse flags
 plot_df2 <- plot_df %>%
   mutate(
@@ -2242,125 +2063,12 @@ plot_df2 <- plot_df %>%
     )
   )
 
-## Clean up
-plot_df2 <- plot_df2 %>%
-  mutate(
-    landmark_timepoint = factor(landmark_tp,
-                                levels = c("Post‑ASCT", "Maintenance‑1yr")),
-    shape_cat = factor(shape_cat, 
-                       levels = c("cfWGS only", "Comparator only", "Both", "Neither")),
-    relapse_cat = factor(relapse_cat, levels = c("Relapsed ≤365 d", "No relapse ≤365 d"))
-  )
 
-p_scatter2 <- ggplot(plot_df2,
-                     aes(x      = x_plot,
-                         y      = y_plot,
-                         shape  = shape_cat,
-                         colour = relapse_cat)) +
-  # LOD lines
-  geom_hline(yintercept = lod_cfWGS_blood,   linetype = "dashed", colour = "grey80") +
-  geom_vline(xintercept = lod_clonoMF, linetype = "dashed", colour = "grey80") +
-  
-  # points
-  geom_point(size = 3, alpha = 0.9) +
-  
-  # shape legend
-  scale_shape_manual(
-    name   = "Detection pattern",
-    values = c(
-      "cfWGS only"       = 24,  # ▲
-      "Comparator only"  = 25,  # ▼
-      "Both"    = 16,  # ●
-      "Neither" = 15   # ■
-    ),
-    guide = guide_legend(override.aes = list(size = 4, alpha = 1))
-  ) +
-  
-  # relapse colours
-  scale_colour_manual(
-    name   = "Relapse",
-    values = col_relapse,
-    guide  = guide_legend(order = 2, override.aes = list(shape = 16, size = 4))
-  ) +
-  
-  # log–log axes with a little breathing room
-  scale_x_log10(
-    breaks = c(1e-6, 1e-5, 1e-4, 1e-3, 1e-2),
-    labels = c("Not detected", "0.001%", "0.01%", "0.1%", "1%"),
-    expand = expansion(mult = c(0.05, 0))
-  ) +
-  scale_y_log10(
-    breaks = c(1e-5, 1e-4, 1e-3, 1e-2, 1e-1),
-    labels = c("Not detected", "0.01%", "0.1%", "1%", "10%"),
-    expand = expansion(mult = c(0.05, 0.05))
-  ) +
-  
-  # two-dimensional faceting
-  facet_grid(
-    rows = vars(landmark_timepoint),
-    cols = vars(Comparator),
-    labeller = label_wrap_gen(10)    # wrap long facet labels if needed
-  ) +
-  
-  # titles & theme
-  labs(
-    title = "cfWGS vs clinical MRD assays (Training cohort)",
-    x     = "Comparator MRD level",
-    y     = "cfWGS cVAF"
-  ) +
-  theme_bw(base_size = 10) +
-  theme(
-    plot.title        = element_text(face = "bold", hjust = 0.5),
-    strip.background  = element_rect(fill = "grey90", colour = NA),
-    strip.text        = element_text(face = "bold"),
-    axis.text.x       = element_text(angle = 45, hjust = 1),
-    legend.position   = "bottom",
-    legend.box        = "horizontal",
-    legend.title      = element_text(face = "bold", size = 9),
-    legend.text       = element_text(size = 8),    # ← smaller legend labels
-    panel.grid.minor  = element_blank()
-  )
-
-p_scatter2 <- p_scatter2 +
-  # start from a white‐background theme with borders
-  theme_bw(base_size = 11) +    
-  
-  # now tweak:
-  theme(
-    # draw a thin black border around each facet
-    panel.border      = element_rect(colour = "black", fill = NA, size = 0.5),
-    
-    # kill all the internal grid lines
-    panel.grid.major  = element_blank(),
-    panel.grid.minor  = element_blank(),
-    
-    # if you want a white strip header with black outline:
-    strip.background  = element_rect(fill = "white", colour = "black"),
-    strip.text        = element_text(face = "bold"),
-    
-    # axis titles bold
-    axis.title        = element_text(face = "bold", size = 12),
-    axis.text.x       = element_text(angle = 45, hjust = 1),
-    
-    # any other theme tweaks you like…
-    plot.title        = element_text(face = "bold", hjust = 0.5),
-    legend.position   = "bottom",
-    legend.title      = element_text(face = "bold", size = 9),
-    legend.text       = element_text(size = 8),    # ← smaller legend labels
-    
-  )
-# save
-ggsave("Final Tables and Figures/Fig5K_cfWGS_vs_MFC_clonoSEQ_blood_updated.png",
-       p_scatter2,
-       width  = 8.25,
-       height = 4.5,
-       dpi    = 600)
-
-
-
-
-#### Clean updated version 
-plot_df2 <- plot_df2 %>%                      
+#### Clean version 
+# ------------------------------------------------------------
+# 1.  Tidy / recode (same as you already have)
+# ------------------------------------------------------------
+plot_df2 <- plot_df2 %>%                       # << only this line changes
   mutate(
     landmark_timepoint = factor(landmark_tp,
                                 levels = c("Post‑ASCT", "Maintenance‑1yr")),
@@ -2379,58 +2087,104 @@ plot_df2 <- plot_df2 %>%
 plot_df2 %>% filter(is.na(shape_cat)) %>% select(Patient, Comparator, cfwgs_bin, ref_binary)
 
 # ------------------------------------------------------------
-# 2.  Build the plot (shape fixed to 21: filled circle with outline)
+# 2.  Palette for detection pattern (your choice of colours)
+# ------------------------------------------------------------
+detect_cols <- c(
+  `cfWGS only`      = "#1b9e77",
+  `Comparator only` = "#d95f02",
+  `Both`            = "#7570b3",
+  `Neither`         = "#999999"
+)
+
+# Updated colors
+library(viridisLite)
+
+# grab a 5‑colour Viridis ramp
+pal5 <- viridis(5, option = "D") 
+
+# pick:
+#  • darkest purple    = cfWGS only
+#  • deep blue         = Comparator only
+#  • mid‑green (mix)   = Both
+#  • bright yellow     = Neither or grey 
+detect_cols <- c(
+  `cfWGS only`      = pal5[1],   "#440154FF",
+  `Comparator only` = pal5[2],   "#31688EFF",
+  `Both`            = pal5[4],   "#73D055FF",
+  `Neither`         = "#999999"   # "#FDE725FF"
+)
+
+
+## Get correlations
+corr_df <- plot_df2 %>%
+  group_by(landmark_timepoint, Comparator) %>%
+  summarize(
+    rho = cor(x_plot, y_plot, method = "spearman", use = "complete.obs"),
+    p   = cor.test(x_plot, y_plot, method = "spearman")$p.value,
+    .groups = "drop"
+  ) %>%
+  mutate(
+    label = sprintf("ρ = %.2f\np = %.2f", rho, p),
+    x = 0.0019,   # choose your x/y annotation positions for your data
+    y = 0.99
+  )
+
+
+# ------------------------------------------------------------
+# 3.  Build the plot (shape fixed to 21: filled circle with outline)
 # ------------------------------------------------------------
 p_scatter_simple_blood <- ggplot(plot_df2,
-                           aes(x = x_plot, y = y_plot,
-                               fill   = detect_cat,   # interior colour = detection pattern
-                               stroke = relapse_flag)) +  # outline width = relapse
+                                 aes(x = x_plot, y = y_plot,
+                                     fill   = relapse_cat)) +  
   # LOD reference lines
-#  geom_hline(yintercept = lod_cfWGS_blood,   linetype = "dashed", colour = "grey80") +
+  geom_hline(yintercept = 0.5226406,   linetype = "dashed", colour = "grey80") + # youden threshold
   geom_vline(xintercept = lod_clonoMF, linetype = "dashed", colour = "grey80") +
   
   # points
-  geom_point(shape = 21, size = 3, alpha = 0.9,
+  geom_point(shape = 21, size = 2, alpha = 0.9,
              colour = "black") +   # outline colour (same for all)
   
   # colour legend for detection pattern
   scale_fill_manual(name = "Detection pattern",
                     values = detect_cols) +
   
-  # fix stroke scale so legend shows outline vs. none
-  scale_discrete_manual(                     # works now
-    aesthetics = "stroke",
-    values = c("Relapse" = 1.3, "No relapse" = 0),
-    guide  = guide_legend(
-      title = "Relapse",
-      override.aes = list(fill   = detect_cols["Both"],
-                          shape  = 21,
-                          size   = 4,
-                          colour = "black")
-    )
-  ) +
-  
-  # log‑log axes
+  # log axes
   scale_x_log10(
     breaks = c(1e-6, 1e-5, 1e-4, 1e-3, 1e-2, 1e-1),
     labels = c("Not detected", "0.001%", "0.01%", "0.1%", "1%", "10%"),
     expand = expansion(mult = c(0.05, 0.05))
   ) +
-  scale_y_log10(
-    breaks = c(1e-5, 1e-4, 1e-3, 1e-2, 1e-1),
-    labels = c("Not detected", "0.01%", "0.1%", "1%", "10%"),
-    expand = expansion(mult = c(0.5, 0.1))
+  scale_y_continuous(
+    limits = c(0.38, 1),
+    breaks = seq(0.4, 1, by = 0.2),
+    labels = scales::percent_format(accuracy = 1)
   ) +
-  
   facet_grid(rows = vars(landmark_timepoint),
              cols = vars(Comparator)) +
   
-  labs(title = "cfWGS vs clinical MRD assays (Training cohort)",
+  labs(title = "Comparison of cfWGS MRD Probability\nand Clinical Assays Across Landmark Timepoints",
        x = "Comparator MRD level",
-       y = "cfWGS cVAF") +
+       y = "Combined Model Probability") +
   # start from a white‐background theme with borders
   theme_bw(base_size = 11) +    
   
+  ## add color 
+  scale_fill_manual(
+    name = "Relapse ≤1 year",
+    values = c(
+      "Relapsed ≤365 d"   = "red",
+      "No relapse ≤365 d" = "black",
+      "Unknown"           = "#bbbbbb"
+    )
+  ) +
+  
+  ## add text
+  geom_text(
+    data = corr_df,
+    aes(x = x, y = y, label = label),
+    hjust = 0, vjust = 1, size = 2.5,
+    inherit.aes = FALSE
+  ) +
   # now tweak:
   theme(
     # draw a thin black border around each facet
@@ -2445,462 +2199,20 @@ p_scatter_simple_blood <- ggplot(plot_df2,
     strip.text        = element_text(face = "bold"),
     
     # axis titles bold
-    axis.title        = element_text(size = 12),
+    axis.title        = element_text(size = 11),
     axis.text.x       = element_text(angle = 30, hjust = 1),
     
     # any other theme tweaks you like…
     plot.title        = element_text(face = "bold", hjust = 0.5),
-    legend.position   = "bottom",
+    legend.position   = "right",
     legend.title      = element_text(face = "bold", size = 9),
     legend.text       = element_text(size = 8),    # ← smaller legend labels
     
-  )
+  ) 
+
+p_scatter_simple_blood
 
 # save
-ggsave("Final Tables and Figures/Fig5K_cfWGS_vs_MFC_clonoSEQ_clean_Blood_muts.png",
+ggsave("Final Tables and Figures/Fig5K_cfWGS_vs_MFC_clonoSEQ_clean_Bloof_muts_updated.png",
        p_scatter_simple_blood,
-       width  = 8.25, height = 4.5, dpi = 600)
-
-
-
-
-
-
-
-
-
-### Below here is supplement
-
-# ────────────────────────────────────────────────────────────────────────────
-# 1.  Prep helper ------------------------------------------------------------
-density_panel <- function(df, prob_col, thr, title_txt) {
-  ggplot(df, aes(x = .data[[prob_col]],
-                 fill = MRD_label)) +
-    geom_density(alpha = 0.4, adjust = 0.8) +
-    geom_vline(xintercept = thr, linetype = "dashed") +
-    coord_cartesian(xlim = c(0, 1)) +
-    labs(title = title_txt,
-         x     = "Predicted probability",
-         y     = "Density",
-         fill  = "MRD truth") +
-    theme_classic()
-}
-
-roc_panel <- function(df, prob_col, title_txt, col = "#0072B2") {
-  roc_obj <- roc(df$MRD_label, df[[prob_col]], levels = c("Negative","Positive"))
-  roc_sm  <- smooth(roc_obj, method = "binormal")
-  auc_val <- as.numeric(auc(roc_obj))
-  
-  df_roc <- tibble(
-    fpr = 1 - roc_sm$specificities,
-    tpr = roc_sm$sensitivities
-  )
-  
-  ggplot(df_roc, aes(fpr, tpr)) +
-    geom_line(size = 1, colour = col) +
-    geom_abline(linetype = "dashed") +
-    annotate("text", x = 0.6, y = 0.2,
-             label = paste0("AUC = ", round(auc_val, 3))) +
-    labs(title = title_txt,
-         x = "1 – Specificity", y = "Sensitivity") +
-    theme_classic()
-}
-
-make_gt_cm <- function(tabyl_tbl, title_text){
-  # drop the Totals row/col for clarity in the body
-  df <- tabyl_tbl %>%
-    filter(truth != "Total") %>%
-    select(-Total)
-  
-  df %>%
-    gt(rowname_col = "truth") %>%
-    tab_header(
-      title    = md(glue::glue("**{title_text}**")),
-      subtitle = "Contingency table vs. MRD_truth"
-    ) %>%
-    fmt_number(
-      columns  = c("neg", "pos"),
-      decimals = 0
-    ) %>%
-    cols_label(
-      neg = "Predicted neg",
-      pos = "Predicted pos"
-    ) %>%
-    tab_spanner(
-      label   = "Prediction",
-      columns = c("neg", "pos")
-    ) %>%
-    opt_align_table_header(align = "center")
-}
-
-# ────────────────────────────────────────────────────────────────────────────
-# 2.  Data frames ------------------------------------------------------------
-dat_fig <- dat %>%
-  filter(!is.na(MRD_truth)) %>%
-  mutate(MRD_label = factor(MRD_truth,
-                            levels = c(0,1),
-                            labels = c("Negative","Positive")))
-
-dat_bm    <- dat_fig %>% filter(!is.na(BM_zscore_only_prob))
-dat_bl_s  <- dat_fig %>% filter(!is.na(BloodSensPriority_prob))
-dat_bl_a  <- dat_fig %>% filter(!is.na(BloodAccPriority_prob))
-
-# thresholds (pulled from your earlier objects)
-thr_bm   <- selected_rows %>% filter(combo == "BM_zscore_only") %>% pull(threshold)
-thr_bl_s <- selected_rows %>% filter(combo == "Blood_all_extras",
-                                     trial == "sens>=0.9") %>%
-  slice(1) %>% pull(threshold)   # sens‑priority row
-thr_bl_a <- selected_rows %>% filter(combo == "Blood_all_extras",
-                                     trial == "accuracy") %>%
-  slice(1) %>% pull(threshold)   # acc‑priority row
-
-# ────────────────────────────────────────────────────────────────────────────
-# 3.  Panels -----------------------------------------------------------------
-pA <- density_panel(dat_bm,   "BM_zscore_only_prob",
-                    thr_bm,   "A) BM: sites score probability")
-pB <- density_panel(dat_bl_s, "BloodSensPriority_prob",
-                    thr_bl_s, "B) Blood (sens priority) probability")
-pC <- roc_panel(dat_bm,   "BM_zscore_only_prob",   "C) ROC: BM sites score")
-pD <- roc_panel(dat_bl_s, "BloodSensPriority_prob","D) ROC: Blood sens priority",
-                col = "#D55E00")
-
-fig_panel <- (pA | pB) / (pC | pD) +
-  plot_annotation(
-    title = "cfWGS MRD scoring: probability distributions & ROC",
-    theme = theme(plot.title = element_text(size = 14, face = "bold"))
-  )
-
-print(fig_panel)
-
-ggsave("FigX_cfWGS_MRD_Panel.png", fig_panel,
-       width = 12, height = 8, dpi = 500)
-
-## Show for blood seperately with senseitivity or accuracy 
-# ────────────────────────────────────────────────────────────────────────────
-# 3b.  Blood density + both thresholds ---------------------------------------
-pB2 <- ggplot(
-  dat_fig %>% filter(!is.na(BloodSensPriority_prob)),
-  aes(x = BloodSensPriority_prob, fill = MRD_label)
-) +
-  geom_density(alpha = 0.4, adjust = 0.8) +
-  # sens-priority threshold
-  geom_vline(xintercept = thr_bl_s,
-             linetype = "dashed", color = "#D55E00", size = 0.8) +
-  # acc-priority threshold
-  geom_vline(xintercept = thr_bl_a,
-             linetype = "dashed", color = "#0072B2", size = 0.8) +
-  coord_cartesian(xlim = c(0,1)) +
-  labs(
-    title = "B) Blood: predicted MRD probability",
-    x = "Predicted probability", y = "Density", fill = "MRD truth"
-  ) +
-  theme_classic()
-
-# ────────────────────────────────────────────────────────────────────────────
-# 3d.  Combined ROC for both blood rules --------------------------------------
-# compute raw ROCs
-roc_s <- pROC::roc(dat_fig$MRD_label, dat_fig$BloodSensPriority_prob,
-                   levels = c("Negative","Positive"), direction = "<")
-roc_a <- pROC::roc(dat_fig$MRD_label, dat_fig$BloodAccPriority_prob,
-                   levels = c("Negative","Positive"), direction = "<")
-
-# smooth them
-roc_s_s <- pROC::smooth(roc_s, method = "binormal")
-roc_a_s <- pROC::smooth(roc_a, method = "binormal")
-
-# build a combined data frame
-df_roc <- bind_rows(
-  tibble(fpr = 1 - roc_s_s$specificities,
-         tpr =    roc_s_s$sensitivities,
-         method = "sens>=0.9"),
-  tibble(fpr = 1 - roc_a_s$specificities,
-         tpr =    roc_a_s$sensitivities,
-         method = "accuracy")
-)
-
-# extract AUCs
-auc_s <- as.numeric(pROC::auc(roc_s))
-auc_a <- as.numeric(pROC::auc(roc_a))
-
-pD2 <- ggplot(df_roc, aes(x = fpr, y = tpr, color = method)) +
-  geom_line(size = 1) +
-  geom_abline(linetype = "dashed") +
-  annotate("text", x = 0.6, y = 0.2,
-           label = paste0("sens>=0.9 AUC=", round(auc_s, 3)),
-           color = "#D55E00") +
-  annotate("text", x = 0.6, y = 0.1,
-           label = paste0("accuracy AUC=", round(auc_a, 3)),
-           color = "#0072B2") +
-  scale_color_manual(values = c("sens>=0.9" = "#D55E00",
-                                "accuracy"  = "#0072B2")) +
-  labs(
-    title = "D) ROC: Blood MRD call",
-    x = "1 – Specificity", y = "Sensitivity", color = "Rule"
-  ) +
-  theme_classic()
-
-# ────────────────────────────────────────────────────────────────────────────
-# 4.  Render & save updated panel --------------------------------------------
-fig_panel2 <- (pA | pB2) / (pC | pD2) +
-  plot_annotation(
-    title = "cfWGS MRD scoring — blood & BM combined",
-    theme = theme(plot.title = element_text(size = 14, face = "bold"))
-  )
-
-print(fig_panel2)
-
-ggsave("FigX_cfWGS_MRD_BloodDualThresholds.png",
-       fig_panel2, width = 12, height = 8, dpi = 500)
-
-
-# ────────────────────────────────────────────────────────────────────────────
-# 4.  Contingency tables -----------------------------------------------------
-tbl_bm <- dat %>%
-  filter(!is.na(MRD_truth), !is.na(BM_zscore_only_detection_rate_call)) %>%
-  mutate(truth = factor(MRD_truth, levels = c(0,1), labels = c("neg","pos")),
-         call  = factor(BM_zscore_only_detection_rate_call, levels = c(0,1), labels = c("neg","pos"))) %>%
-  tabyl(truth, call) %>%
-  adorn_totals(where = "both")
-
-# Build the sensitivity-priority blood contingency table --------------------
-tbl_bl <- dat %>%
-  filter(!is.na(MRD_truth), !is.na(BloodSensPriority_call)) %>%
-  mutate(truth = factor(MRD_truth, levels = c(0,1), labels = c("neg","pos")),
-         call  = factor(BloodSensPriority_call, levels = c(0,1), labels = c("neg","pos"))) %>%
-  tabyl(truth, call) %>%
-  adorn_totals(where = "both")
-
-# Build the accuracy-priority blood contingency table --------------------
-tbl_bl_acc <- dat %>%
-  filter(!is.na(MRD_truth), !is.na(BloodAccPriority_call)) %>%
-  mutate(
-    truth   = factor(MRD_truth, levels = c(0,1), labels = c("neg","pos")),
-    call    = factor(BloodAccPriority_call, levels = c(0,1), labels = c("neg","pos"))
-  ) %>%
-  tabyl(truth, call) %>%
-  adorn_totals(where = "both")
-
-
-# 2. Generate GT tables -----------------------------------------------------
-gt_bm    <- make_gt_cm(tbl_bm,    "BM z-score-only call")
-gt_bl_s  <- make_gt_cm(tbl_bl,    "Blood sens-priority call")
-gt_bl_a  <- make_gt_cm(tbl_bl_acc,"Blood acc-priority call")
-
-
-# ────────────────────────────────────────────────────────────────────────────
-# 2.  Save each table on its own ---------------------------------------------
-gtsave(
-  data = gt_bm,
-  filename = file.path(outdir, "tbl_BM_zscore_only_contingency.png"),
-  zoom = 8
-)
-
-gtsave(
-  data = gt_bl_s,
-  filename = file.path(outdir, "tbl_Blood_sens_priority_contingency.png"),
-  zoom = 8
-)
-
-gtsave(
-  data = gt_bl_a,
-  filename = file.path(outdir, "tbl_Blood_acc_priority_contingency.png"),
-  zoom = 8
-)
-
-
-#  A) CALIBRATION CURVE  -----------------------------------------------------
-cal_df <- dat %>%
-  filter(!is.na(MRD_truth), !is.na(BloodSensPriority_prob)) %>%
-  mutate(bin = ntile(BloodSensPriority_prob, 10)) %>%            # deciles
-  group_by(bin) %>%
-  summarise(
-    mean_pred = mean(BloodSensPriority_prob),
-    obs_rate  = mean(MRD_truth)
-  )
-
-p_cal <- ggplot(cal_df, aes(mean_pred, obs_rate)) +
-  geom_line() +
-  geom_point(size = 2) +
-  geom_abline(linetype = "dashed") +
-  coord_equal(xlim = c(0,1), ylim = c(0,1)) +
-  labs(title = "Calibration: BloodSensPriority",
-       x = "Mean predicted probability (per decile)",
-       y = "Observed MRD positivity rate") +
-  theme_classic()
-
-# ---------------------------------------------------------------------------
-#  B) DECISION‑CURVE ANALYSIS  ----------------------------------------------
-dca_obj <- decision_curve(
-  MRD_truth ~ BloodSensPriority_prob,
-  data       = dat,
-  family     = binomial(link = "logit"),
-  thresholds = seq(0.05, 0.95, by = 0.05),
-  confidence.intervals = 0.95 # 95% CI 
-)
-
-p_dca <- plot_decision_curve(
-  list(dca_obj),
-  curve.names = "BloodSensPriority",
-  standardize = TRUE
-) +
-  ggtitle("Decision‑curve analysis (standardised net benefit)")
-
-# ---------------------------------------------------------------------------
-#  C) WATER‑FALL  (baseline samples only) -----------------------------------
-dat_base <- dat %>%
-  filter(timepoint_info %in% c("Baseline","Diagnosis"),
-         !is.na(BloodSensPriority_prob)) %>%
-  arrange(desc(BloodSensPriority_prob)) %>%
-  mutate(sample_id = row_number(),
-         truth_f   = factor(MRD_truth, labels = c("Negative","Positive")))
-
-p_water <- ggplot(dat_base,
-                  aes(sample_id, BloodSensPriority_prob,
-                      fill = truth_f)) +
-  geom_col() +
-  scale_fill_manual(values = c("#999999","#D55E00")) +
-  labs(title = "Baseline blood MRD probabilities (ordered)",
-       x = "Sample (ordered)",
-       y = "Predicted probability",
-       fill = "MRD truth") +
-  theme_classic()
-
-# ---------------------------------------------------------------------------
-#  D) LONGITUDINAL SPAGHETTI  -----------------------------------------------
-dat_long <- dat %>%
-  filter(!is.na(BloodSensPriority_prob),
-         !is.na(MRD_truth)) %>%
-  group_by(Patient) %>%
-  filter(n() >= 2) %>%            # need at least 2 time‑points
-  ungroup() %>%
-  mutate(MRD_label = factor(MRD_truth,
-                            labels = c("Neg","Pos")))
-
-p_long <- ggplot(dat_long,
-                 aes(Date, BloodSensPriority_prob,
-                     colour = MRD_label, group = Patient)) +
-  geom_line(alpha = 0.6) +
-  geom_point(size = 1.5) +
-  scale_colour_manual(values = c("#0072B2","#D55E00")) +
-  labs(title = "Longitudinal blood MRD probability per patient",
-       x = "Collection date",
-       y = "Predicted probability",
-       colour = "MRD truth") +
-  theme_classic()
-
-# ---------------------------------------------------------------------------
-#  SAVE ALL  -----------------------------------------------------------------
-ggsave("FigX_Calibration.png",          p_cal,   width = 5, height = 5, dpi = 500)
-ggsave("FigX_DecisionCurve.png",        p_dca,   width = 6, height = 4, dpi = 500)
-ggsave("FigX_Waterfall.png",            p_water, width = 7, height = 4, dpi = 500)
-ggsave("FigX_LongitudinalSpaghetti.png",p_long,  width = 7, height = 4, dpi = 500)
-
-
-
-### Do same for BM 
-# ---------------------------------------------------------------------------
-# 1.  Pull BM threshold ------------------------------------------------------
-thr_bm <- selected_rows %>%
-  filter(combo == "BM_zscore_only") %>%
-  pull(threshold)
-
-# ---------------------------------------------------------------------------
-# 2.  Prepare BM‐specific data frames ----------------------------------------
-dat_bm_cal  <- dat %>%
-  filter(!is.na(MRD_truth), !is.na(BM_zscore_only_prob)) %>%
-  mutate(bin = ntile(BM_zscore_only_prob, 10),
-         MRD_label = factor(MRD_truth,
-                            levels = c(0,1),
-                            labels = c("Negative","Positive")))
-
-dat_bm_base <- dat %>%
-  filter(timepoint_info %in% c("Baseline","Diagnosis"),
-         !is.na(BM_zscore_only_prob)) %>%
-  arrange(desc(BM_zscore_only_prob)) %>%
-  mutate(sample_id = row_number(),
-         truth_f   = factor(MRD_truth,
-                            levels = c(0,1),
-                            labels = c("Negative","Positive")))
-
-dat_bm_long <- dat %>%
-  filter(!is.na(BM_zscore_only_prob),
-         !is.na(Date), !is.na(MRD_truth)) %>%
-  group_by(Patient) %>%
-  filter(n() >= 2) %>%
-  ungroup() %>%
-  mutate(MRD_label = factor(MRD_truth,
-                            levels = c(0,1),
-                            labels = c("Neg","Pos")))
-
-# ---------------------------------------------------------------------------
-# 3.  Calibration curve for BM_zscore_only ----------------------------------
-cal_bm <- dat_bm_cal %>%
-  group_by(bin) %>%
-  summarise(
-    mean_pred = mean(BM_zscore_only_prob),
-    obs_rate  = mean(MRD_truth)
-  )
-
-p_cal_bm <- ggplot(cal_bm, aes(mean_pred, obs_rate)) +
-  geom_line() +
-  geom_point(size = 2) +
-  geom_abline(linetype = "dashed") +
-  coord_equal(xlim = c(0,1), ylim = c(0,1)) +
-  labs(title = "Calibration: BM_zscore_only",
-       x = "Mean predicted probability (deciles)",
-       y = "Observed MRD rate") +
-  theme_classic()
-
-# ---------------------------------------------------------------------------
-# 4.  Decision-curve analysis for BM_zscore_only ----------------------------
-dca_bm <- decision_curve(
-  MRD_truth ~ BM_zscore_only_prob,
-  data       = dat,
-  family     = binomial(link = "logit"),
-  thresholds = seq(0.05, 0.95, by = 0.05),
-  confidence.intervals = 0L
-)
-
-p_dca_bm <- plot_decision_curve(
-  list(dca_bm),
-  curve.names  = "BM_zscore_only",
-  standardize  = TRUE
-) +
-  ggtitle("Decision-curve: BM_zscore_only")
-
-# ---------------------------------------------------------------------------
-# 5.  Water-fall plot (BM baseline) -----------------------------------------
-p_water_bm <- ggplot(dat_bm_base,
-                     aes(sample_id, BM_zscore_only_prob,
-                         fill = truth_f)) +
-  geom_col() +
-  scale_fill_manual(values = c("#999999","#0072B2")) +
-  labs(title = "Baseline BM probabilities (BM_zscore_only)",
-       x = "Sample (ordered)",
-       y = "Predicted probability",
-       fill = "MRD truth") +
-  theme_classic()
-
-# ---------------------------------------------------------------------------
-# 6.  Longitudinal spaghetti (BM) -------------------------------------------
-p_long_bm <- ggplot(dat_bm_long,
-                    aes(Date, BM_zscore_only_prob,
-                        colour = MRD_label, group = Patient)) +
-  geom_line(alpha = 0.6) +
-  geom_point(size = 1.5) +
-  scale_colour_manual(values = c("#0072B2","#D55E00")) +
-  labs(title = "Longitudinal BM probability per patient",
-       x = "Collection date",
-       y = "Predicted probability",
-       colour = "MRD truth") +
-  theme_classic()
-
-# ---------------------------------------------------------------------------
-# 7.  Save all BM plots ------------------------------------------------------
-ggsave("FigX_Calibration_BM.png",          p_cal_bm,   width = 5, height = 5, dpi = 500)
-ggsave("FigX_DecisionCurve_BM.png",        p_dca_bm,   width = 6, height = 4, dpi = 500)
-ggsave("FigX_Waterfall_BM.png",            p_water_bm, width = 7, height = 4, dpi = 500)
-ggsave("FigX_LongitudinalSpaghetti_BM.png",p_long_bm,  width = 7, height = 4, dpi = 500)
-
-
-
+       width  = 6.5, height = 5, dpi = 600)

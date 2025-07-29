@@ -687,18 +687,20 @@ selected_feats <- c(
   "Mean.Coverage",                        # enhancer coverage
   "Proportion.Short",                     # short-fragment proportion
   "FS",                                   # fragment‐size score
-  "WGS_Tumor_Fraction_Blood_plasma_cfDNA" # ichorCNA tumour fraction
+  "WGS_Tumor_Fraction_Blood_plasma_cfDNA", # ichorCNA tumour fraction
+  "BM_base_zscore_prob" # combined model prob
 )
 
-# your custom labels
+# custom labels
 custom_labels <- c(
   detect_rate_BM                              = "Cumulative VAF (cVAF)",
-  z_score_detection_rate_BM                   = "cVAF Z‑Score",
-  zscore_BM                                   = "Prop. Mutant Sites\nDetected Z-score",
+  z_score_detection_rate_BM                   = "cVAF z‑score",
+  zscore_BM                                   = "Prop. mutant sites\ndetected z-score",
   FS                                          = "Fragment-size score",
   Mean.Coverage                               = "MM regulatory\ncoverage",
   Proportion.Short                            = "Short-fragment\nproportion",
-  WGS_Tumor_Fraction_Blood_plasma_cfDNA       = "CNA tumour fraction\n(ichorCNA)"
+  WGS_Tumor_Fraction_Blood_plasma_cfDNA       = "CNA tumour fraction\n(ichorCNA)",
+  BM_base_zscore_prob                              = "Combined model\nprobability"
 )
 
 # pick & sort
@@ -750,7 +752,7 @@ p_corr_nice <- ggplot(plot_df2, aes(x = r, y = feature)) +
 
 # print or save
 print(p_corr_nice)
-ggsave(filename = file.path(OUTPUT_DIR_FIGURES, "Fig4H_feature_corr_lollipop_nice2.png"), 
+ggsave(filename = file.path(OUTPUT_DIR_FIGURES, "Fig4H_feature_corr_lollipop_nice2_updated.png"), 
        p_corr_nice, 
        width = 3.55, height = 3.75, dpi = 600)
 
@@ -1250,9 +1252,9 @@ ggsave(
 #### Now do the overlap across all the features for 5H
 # 1) Select just the features you care about, in the order you want them
 selected_feats <- c(
-  "detect_rate_blood",                       # BM mutation detection rate
-  "zscore_blood",                            # BM sites z-score
-  "z_score_detection_rate_blood",            # BM cVAF Z-score
+  "detect_rate_blood",   "Blood_base_prob",                    # Blood mutation detection rate
+  "zscore_blood",                            # Blood sites z-score
+  "z_score_detection_rate_blood",            # Blood cVAF Z-score
   "Mean.Coverage",                        # enhancer coverage
   "Proportion.Short",                     # short-fragment proportion
   "FS",                                   # fragment‐size score
@@ -1261,13 +1263,14 @@ selected_feats <- c(
 
 # your custom labels
 custom_labels <- c(
-  detect_rate_blood                              = "Blood cVAF",
-  z_score_detection_rate_blood                   = "Blood cVAF Z-score",
-  zscore_blood                                   = "Blood sites Z-score",
+  detect_rate_blood                              = "Cumulative VAF (cVAF)",
+  z_score_detection_rate_blood                   = "cVAF z‑score",
+  zscore_blood                                   = "Prop. mutant sites\ndetected z-score",
   FS                                          = "Fragment-size score",
   Mean.Coverage                               = "MM regulatory\ncoverage",
   Proportion.Short                            = "Short-fragment\nproportion",
-  WGS_Tumor_Fraction_Blood_plasma_cfDNA       = "CNA tumour fraction\n(ichorCNA)"
+  WGS_Tumor_Fraction_Blood_plasma_cfDNA       = "CNA tumour fraction\n(ichorCNA)",
+  Blood_base_prob                 = "Combined model\nprobability"
 )
 
 # pick & sort
@@ -1304,7 +1307,7 @@ p_corr_nice <- ggplot(plot_df2, aes(x = r, y = feature)) +
   theme_minimal(base_size = 8) +
   theme(
     plot.title.position = "plot",
-    plot.title        = element_text(face = "bold", size = 12, hjust = 0),
+    plot.title        = element_text(face = "bold", size = 12, hjust = 0.5),
     axis.text.y       = element_text(size = 8),
     axis.text.x       = element_text(size = 8),
     axis.title.x      = element_text(size = 8, margin = margin(t = 4)),
@@ -1314,14 +1317,14 @@ p_corr_nice <- ggplot(plot_df2, aes(x = r, y = feature)) +
     legend.key.height  = unit(1, "cm"),
     legend.key.width   = unit(0.3, "cm"),
     legend.title       = element_text(size = 8),
-    legend.text        = element_text(size = 8)
-  ) 
+    legend.text        = element_text(size = 8)  
+    ) 
 
 # print or save
 print(p_corr_nice)
-ggsave(filename = file.path(OUTPUT_DIR_FIGURES, "Fig5H_feature_corr_lollipop_nice.png"), 
+ggsave(filename = file.path(OUTPUT_DIR_FIGURES, "Fig5H_feature_corr_lollipop_nice_updated.png"), 
        p_corr_nice, 
-       width = 3.55, height = 4, dpi = 600)
+       width = 3.55, height = 3.75, dpi = 600)
 
 ## Rescore based on new LOD 
 dilution_df <- dilution_df %>%
