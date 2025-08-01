@@ -1551,6 +1551,10 @@ write_csv(data_scored, file = file.path(outdir, "all_patients_with_BM_and_blood_
 # 1) Filter to frontline cohort and compute prevalence
 frontline <- data_scored %>% 
   filter(Cohort == "Frontline") 
+
+test_cohort <- data_scored %>% 
+  filter(Cohort == "Non-frontline") 
+
 prev <- mean(frontline$MRD_truth == 1, na.rm = TRUE)
 
 # 2) Identify all “_prob” columns (i.e. your different models)
@@ -1657,6 +1661,12 @@ metrics_at_95spec <- map_dfr(prob_cols, function(prob_col) {
 print(metrics_at_95spec)
 
 ## Now for sens
+
+
+### Get more metrics 
+# Prevalence: proportion of positives in data
+prev <- mean(frontline$MRD_truth == 1, na.rm = TRUE)
+
 metrics_at_95sens <- map_dfr(prob_cols, function(prob_col) {
   # 1) Build ROC
   roc_obj <- roc(
@@ -1686,16 +1696,29 @@ metrics_at_95sens <- map_dfr(prob_cols, function(prob_col) {
     best <- cand %>% arrange(desc(specificity)) %>% slice(1)
   }
   
-  # 6) Compute accuracy at that threshold
-  best %>%
+  # 6) Compute precision, F1, and balanced accuracy at that threshold
+  best <- best %>%
     mutate(
-      model     = prob_col,
-      accuracy  = sensitivity * prev + specificity * (1 - prev)
-    ) %>%
-    select(model, threshold, sensitivity, specificity, accuracy)
+      model      = prob_col,
+      accuracy   = sensitivity * prev + specificity * (1 - prev),
+      precision  = ifelse(
+        (sensitivity * prev + (1 - specificity) * (1 - prev)) == 0,
+        NA,
+        (sensitivity * prev) / (sensitivity * prev + (1 - specificity) * (1 - prev))
+      ),
+      f1         = ifelse(
+        (precision + sensitivity) == 0,
+        NA,
+        2 * (precision * sensitivity) / (precision + sensitivity)
+      ),
+      bal_accuracy = (sensitivity + specificity) / 2
+    )
+  
+  best %>% select(model, threshold, sensitivity, specificity, accuracy, precision, f1, bal_accuracy)
 })
 
 print(metrics_at_95sens)
+
 
 ### Save this 
 # Save metrics evaluated at Youden threshold
@@ -1740,8 +1763,12 @@ sens95_tbl <- metrics_at_95sens %>%
     Threshold_95Sens        = threshold,
     Sensitivity_95Sens      = sensitivity,
     Specificity_95Sens      = specificity,
-    Accuracy_95Sens         = accuracy
+    Accuracy_95Sens         = accuracy,
+    Precision_95Sens        = precision,
+    F1_95Sens               = f1,
+    BalancedAccuracy_95Sens = bal_accuracy
   )
+
 
 # 2. Join them all together
 all_perf_metrics <- youden_tbl %>%
@@ -1752,18 +1779,244 @@ all_perf_metrics <- youden_tbl %>%
 library(writexl)    # or use write.csv if you prefer CSV
 write_xlsx(
   list(`All Performance Metrics` = all_perf_metrics),
-  path = "Final Tables and Figures/Supplementary_Table_4_All_Model_Metrics_Refit.xlsx"
+  path = "Final Tables and Figures/Supplementary_Table_4_All_Model_Metrics_Refit2.xlsx"
 )
 
-# — or, if you prefer CSV:
+# — or, if prefer CSV:
 write.csv(all_perf_metrics, 
-          "Final Tables and Figures/Supplementary_Table_4_All_Model_Metrics_Refit.csv", 
+          "Final Tables and Figures/Supplementary_Table_4_All_Model_Metrics_Refit2.csv", 
           row.names = FALSE)
 
 
 
 
-### Now get whole cohort performance on rescored dataframe
+##### Now redo for non-frontline 
+### 3A) First get metrics for entire cohort 
+# 3) Loop over models, build ROC & compute metrics at every threshold
+all_metrics_rescored_testing <- map_dfr(prob_cols, function(prob_col) {
+  # build ROC object
+  roc_obj <- roc(
+    response  = test_cohort$MRD_truth,
+    predictor = test_cohort[[prob_col]],
+    levels    = c(0, 1),
+    direction = "<"
+  )
+  
+  # extract thresholds with sens, spec, ppv, npv
+  roc_df <- coords(
+    roc_obj,
+    x         = "all",
+    ret       = c("threshold", "sensitivity", "specificity", "ppv", "npv"),
+    transpose = FALSE
+  ) %>% 
+    as_tibble()
+  
+  # compute additional metrics
+  roc_df %>% 
+    mutate(
+      model        = prob_col,
+      accuracy     = sensitivity * prev + specificity * (1 - prev),
+      bal_accuracy = (sensitivity + specificity) / 2,
+      f1           = 2 * sensitivity * ppv / (sensitivity + ppv)
+    ) %>%
+    select(model, threshold, sensitivity, specificity, ppv, npv, accuracy, bal_accuracy, f1)
+})
+
+# Filter your all_metrics_rescored_primary to only the Youden‐index row for each model
+metrics_youden_testing <- all_metrics_rescored_testing %>%
+  inner_join(threshold_df, by = "model") %>%
+  group_by(model) %>%
+  # pick the row whose threshold minimizes |threshold - youden|
+  slice_min(order_by = abs(threshold - youden), n = 1) %>%
+  ungroup() %>%
+  select(-youden)
+
+
+### 3B) Now for each model, find the threshold with ≥95% specificity that maximizes sensitivity,
+#    then compute sensitivity, specificity and accuracy at that threshold
+metrics_at_95spec_test <- map_dfr(prob_cols, function(prob_col) {
+  # build ROC
+  roc_obj <- roc(
+    response  = test_cohort$MRD_truth,
+    predictor = test_cohort[[prob_col]],
+    levels    = c(0,1),
+    direction = "<"
+  )
+  
+  # get all sens/spec pairs
+  roc_df <- coords(
+    roc_obj,
+    x        = "all",
+    ret      = c("threshold","sensitivity","specificity"),
+    transpose= FALSE
+  ) %>% as_tibble()
+  
+  # filter to spec ≥ 0.95
+  cand <- roc_df %>%
+    filter(specificity >= 0.95)
+  
+  # if no threshold meets the bar, return NA
+  if (nrow(cand) == 0) {
+    return(tibble(
+      model        = prob_col,
+      threshold    = NA_real_,
+      sensitivity  = NA_real_,
+      specificity  = NA_real_,
+      accuracy     = NA_real_
+    ))
+  }
+  
+  # pick the one with highest sensitivity
+  best <- cand %>%
+    arrange(desc(sensitivity)) %>%
+    slice(1)
+  
+  # compute accuracy = sens*prev + spec*(1-prev)
+  best <- best %>%
+    mutate(
+      accuracy = sensitivity * prev + specificity * (1 - prev),
+      model    = prob_col
+    ) %>%
+    select(model, threshold, sensitivity, specificity, accuracy)
+  
+  return(best)
+})
+
+
+## Now for sens
+
+### Get more metrics 
+# Prevalence: proportion of positives in data
+prev <- mean(test_cohort$MRD_truth == 1, na.rm = TRUE)
+
+metrics_at_95sens_test <- map_dfr(prob_cols, function(prob_col) {
+  # 1) Build ROC
+  roc_obj <- roc(
+    response  = test_cohort$MRD_truth,
+    predictor = test_cohort[[prob_col]],
+    levels    = c(0,1),
+    direction = "<"
+  )
+  
+  # 2) Extract all sens/spec pairs
+  roc_df <- coords(
+    roc_obj,
+    x         = "all",
+    ret       = c("threshold","sensitivity","specificity"),
+    transpose = FALSE
+  ) %>% as_tibble()
+  
+  # 3) Filter to sens ≥ 0.95
+  cand <- roc_df %>%
+    filter(sensitivity >= 0.94)
+  
+  # 4) If none meet the bar, fall back to highest observed sens
+  if (nrow(cand) == 0) {
+    best <- roc_df %>% slice_max(sensitivity, n = 1)
+  } else {
+    # 5) Otherwise pick the one with highest specificity
+    best <- cand %>% arrange(desc(specificity)) %>% slice(1)
+  }
+  
+  # 6) Compute precision, F1, and balanced accuracy at that threshold
+  best <- best %>%
+    mutate(
+      model      = prob_col,
+      accuracy   = sensitivity * prev + specificity * (1 - prev),
+      precision  = ifelse(
+        (sensitivity * prev + (1 - specificity) * (1 - prev)) == 0,
+        NA,
+        (sensitivity * prev) / (sensitivity * prev + (1 - specificity) * (1 - prev))
+      ),
+      f1         = ifelse(
+        (precision + sensitivity) == 0,
+        NA,
+        2 * (precision * sensitivity) / (precision + sensitivity)
+      ),
+      bal_accuracy = (sensitivity + specificity) / 2
+    )
+  
+  best %>% select(model, threshold, sensitivity, specificity, accuracy, precision, f1, bal_accuracy)
+})
+
+print(metrics_at_95sens_test)
+
+
+### Save this 
+# Save metrics evaluated at Youden threshold
+write_rds(metrics_youden_testing, file = file.path(outdir, "cfWGS_model_metrics_youden_threshold_test_cohort.rds"))
+write_csv(metrics_youden_testing, file = file.path(outdir, "cfWGS_model_metrics_youden_threshold_test_cohort.csv"))
+
+# Save metrics evaluated at fixed 95% specificity (if applicable)
+write_rds(metrics_at_95spec_test, file = file.path(outdir, "cfWGS_model_metrics_fixed_95spec_test_cohort.rds"))
+write_csv(metrics_at_95spec_test, file = file.path(outdir, "cfWGS_model_metrics_fixed_95spec_test_cohort.csv"))
+
+write_rds(metrics_at_95sens_test, file = file.path(outdir, "cfWGS_model_metrics_fixed_95sens_test_cohort.rds"))
+write_csv(metrics_at_95sens_test, file = file.path(outdir, "cfWGS_model_metrics_fixed_95sens_updated_test_cohort.csv"))
+
+
+## Tidy into one thing 
+# 1. Tidy up and rename columns on each
+youden_tbl <- metrics_youden_testing %>%
+  rename(
+    Model                 = model,
+    Threshold_Youden      = threshold,
+    Sensitivity_Youden    = sensitivity,
+    Specificity_Youden    = specificity,
+    PPV_Youden            = ppv,
+    NPV_Youden            = npv,
+    Accuracy_Youden       = accuracy,
+    BalancedAcc_Youden    = bal_accuracy,
+    F1_Youden             = f1
+  )
+
+spec95_tbl <- metrics_at_95spec_test %>%
+  rename(
+    Model                   = model,
+    Threshold_95Spec        = threshold,
+    Sensitivity_95Spec      = sensitivity,
+    Specificity_95Spec      = specificity,
+    Accuracy_95Spec         = accuracy
+  )
+
+sens95_tbl <- metrics_at_95sens_test %>%
+  rename(
+    Model                   = model,
+    Threshold_95Sens        = threshold,
+    Sensitivity_95Sens      = sensitivity,
+    Specificity_95Sens      = specificity,
+    Accuracy_95Sens         = accuracy,
+    Precision_95Sens        = precision,
+    F1_95Sens               = f1,
+    BalancedAccuracy_95Sens = bal_accuracy
+  )
+
+
+# 2. Join them all together
+all_perf_metrics <- youden_tbl %>%
+  left_join(spec95_tbl, by = "Model") %>%
+  left_join(sens95_tbl, by = "Model")
+
+# 3. Export as a single supplementary Excel (or CSV)
+library(writexl)    # or use write.csv if you prefer CSV
+write_xlsx(
+  list(`All Performance Metrics` = all_perf_metrics),
+  path = "Final Tables and Figures/Supplementary_Table_5_All_Model_Metrics_Refit_Test_Cohort.xlsx"
+)
+
+# — or, if prefer CSV:
+write.csv(all_perf_metrics, 
+          "Final Tables and Figures/Supplementary_Table_5_All_Model_Metrics_Refit_Test_Cohort.csv", 
+          row.names = FALSE)
+
+
+
+
+
+
+
+
+### Now get whole cohort performance on rescored dataframe - skipped
 # Define the specific model and a second fixed threshold
 model_name <- "BM_zscore_only_sites_prob"
 fixed_thr  <- 0.2211
@@ -1969,21 +2222,24 @@ ggsave(
 ### Now additional stats 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# 1. CV summary: pick just the two BM z-score models, relabel, and rename cols
-cv_tbl <- all_primary %>%
-  filter(combo %in% c("BM_zscore_only_sites", 
-                      "BM_zscore_only_detection_rate")) %>%
+# 1. Whole cohort summary: pick just the two BM z-score models, relabel, and rename cols
+cv_tbl <- metrics_youden %>%
+  filter(model %in% c("BM_zscore_only_sites_prob", 
+                      "BM_zscore_only_detection_rate_prob", 
+                      "BM_base_zscore_prob")) %>%
   mutate(
-    combo = recode(combo,
-                   BM_zscore_only_sites          = "Sites model",
-                   BM_zscore_only_detection_rate = "cVAF model")
+    combo = recode(model,
+                   BM_zscore_only_sites_prob          = "Sites model",
+                   BM_zscore_only_detection_rate_prob = "cVAF model",
+                   BM_base_zscore_prob = "Combined model")
   ) %>%
   # rename so we have *_mean and *_sd
   rename(
-    AUC_mean  = auc_mean,   AUC_sd  = auc_sd,
-    Sens_mean = sens_mean,  Sens_sd = sens_sd,
-    Spec_mean = spec_mean,  Spec_sd = spec_sd,
-    Acc_mean  = acc_mean    # no sd for accuracy? if there is, rename _sd too
+  #  AUC_mean  = auc_mean,   AUC_sd  = auc_sd,
+    Sens_mean = sensitivity, # Sens_sd = sens_sd,
+    Spec_mean = specificity, # Spec_sd = spec_sd,
+    Acc_mean  = bal_accuracy,    # no sd for accuracy? if there is, rename _sd too,
+    F1_mean = f1
   ) %>%
   select(combo, ends_with("_mean"), ends_with("_sd"))
 
@@ -1991,17 +2247,20 @@ cv_tbl <- all_primary %>%
 # 2. Fixed-95% sensitivity metrics: pull only the two models, relabel, and rename
 fix95_tbl <- metrics_at_95sens %>%
   filter(model %in% c("BM_zscore_only_sites_prob",
-                      "BM_zscore_only_detection_rate_prob")) %>%
+                      "BM_zscore_only_detection_rate_prob",
+                      "BM_base_zscore_prob")) %>%
   mutate(
     combo = recode(model,
                    BM_zscore_only_sites_prob           = "Sites model",
-                   BM_zscore_only_detection_rate_prob  = "cVAF model")
+                   BM_zscore_only_detection_rate_prob  = "cVAF model",
+                   BM_base_zscore_prob = "Combined model")
   ) %>%
-  select(combo, sensitivity, specificity, accuracy) %>%
+  select(combo, sensitivity, specificity, accuracy, bal_accuracy, f1) %>%
   rename(
     Sens_95 = sensitivity,
     Spec_95 = specificity,
-    Acc_95  = accuracy
+    Acc_95  = bal_accuracy, 
+    F1_95 = f1
   )
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -2032,6 +2291,7 @@ fix95_long <- fix95_tbl %>%
       Metric95 == "Sens_95" ~ "Sens",
       Metric95 == "Spec_95" ~ "Spec",
       Metric95 == "Acc_95"  ~ "Acc",
+      Metric95 == "F1_95" ~ "F1",
       TRUE                  ~ NA_character_
     )
   ) %>% 
@@ -2043,17 +2303,17 @@ plot_df <- left_join(cv_long, fix95_long, by = c("combo","Metric"))
 
 # ──────────────────────────────────────────────────────────────────────────────
 # 6. Restrict to only the metrics you want to plot:
-#    here: AUC, Sens, Spec, Acc
+#    here: F1, Sens, Spec, Acc
 plot_df <- plot_df %>%
-  filter(Metric %in% c("AUC","Sens","Spec","Acc"))
+  filter(Metric %in% c("F1","Sens","Spec","Acc"))
 
 # ──────────────────────────────────────────────────────────────────────────────
 # 7. Give nicer facet labels
 metric_labs <- c(
-  AUC  = "AUC",
+  AUC  = "F1",
   Sens = "Sensitivity",
   Spec = "Specificity",
-  Acc  = "Accuracy"
+  Acc  = "Bal. Accuracy"
 )
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -2061,10 +2321,7 @@ metric_labs <- c(
 p_perf <- ggplot(plot_df, aes(x = combo, y = mean, fill = combo)) +
   # CV bar + error
   geom_col(width = 0.6) +
-  geom_errorbar(aes(ymin = pmax(0, mean - sd),
-                    ymax = pmin(1, mean + sd)),
-                width = 0.15) +
-  # fixed‐95% dots, now mapped to a shape legend
+   # fixed‐95% dots, now mapped to a shape legend
   geom_point(aes(y = fixed, shape = "95% sensitivity"),
              size = 2, colour = "black") +
   
@@ -2080,47 +2337,72 @@ p_perf <- ggplot(plot_df, aes(x = combo, y = mean, fill = combo)) +
   labs(
     x     = NULL,
     y     = NULL,
-    title = "Cross-validated vs. 95%-sensitivity performance"
+    title = "Train Cohort Performance at Youden and 95%\nSensitivity Thresholds"
   ) +
   theme_classic(base_size = 9) +
   theme(
-    plot.title      = element_text(face = "bold", size = 10),
+    plot.title      = element_text(face = "bold", size = 12, hjust = 0.5),
     strip.text      = element_text(face = "bold", size = 8),
-    axis.text.x     = element_text(angle = 45, hjust = 1, size = 7),
+    axis.text.x     = element_text(angle = 40, hjust = 1, size = 7),
     axis.text.y     = element_text(size = 7),
     panel.spacing   = unit(0.8, "lines"),
-    legend.position = "bottom"
+    legend.position = "bottom",
+    legend.box.margin = margin(t = -10), # not as far down,
+    plot.margin = margin(t = 5, r = 5, b = 5, l = 20)
+
   )
 # ──────────────────────────────────────────────────────────────────────────────
 # 9. Save
 ggsave(
-  file.path("Final Tables and Figures/Fig4D_classifier_performance_bar.png"),
+  file.path("Final Tables and Figures/Fig4D_classifier_performance_bar_updated.png"),
   plot   = p_perf,
-  width  = 4,
-  height = 3,
+  width  = 5,
+  height = 3.5,
   dpi    = 600
 )
 
 
-## do for validation as well 
+ ## do for validation as well 
 # ──────────────────────────────────────────────────────────────────────────────
-# 1. CV summary: pick just the two BM z-score models, relabel, and rename cols
-cv_tbl <- all_val %>%
-  filter(combo %in% c("BM_zscore_only_sites", 
-                      "BM_zscore_only_detection_rate")) %>%
+cv_tbl <- metrics_youden_testing %>%
+  filter(model %in% c("BM_zscore_only_sites_prob", 
+                      "BM_zscore_only_detection_rate_prob", 
+                      "BM_base_zscore_prob")) %>%
   mutate(
-    combo = recode(combo,
-                   BM_zscore_only_sites          = "Sites model",
-                   BM_zscore_only_detection_rate = "cVAF model")
+    combo = recode(model,
+                   BM_zscore_only_sites_prob          = "Sites model",
+                   BM_zscore_only_detection_rate_prob = "cVAF model",
+                   BM_base_zscore_prob = "Combined model")
   ) %>%
   # rename so we have *_mean and *_sd
   rename(
-    AUC_mean  = auc_valid,
-    Sens_mean = sens_valid,
-    Spec_mean = spec_valid, 
-    Acc_mean  = accuracy    # no sd for accuracy? if there is, rename _sd too
+    #  AUC_mean  = auc_mean,   AUC_sd  = auc_sd,
+    Sens_mean = sensitivity, # Sens_sd = sens_sd,
+    Spec_mean = specificity, # Spec_sd = spec_sd,
+    Acc_mean  = bal_accuracy,    # no sd for accuracy? if there is, rename _sd too,
+    F1_mean = f1
   ) %>%
   select(combo, ends_with("_mean"), ends_with("_sd"))
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 2. Fixed-95% sensitivity metrics: pull only the two models, relabel, and rename
+fix95_tbl <- metrics_at_95sens_test %>%
+  filter(model %in% c("BM_zscore_only_sites_prob",
+                      "BM_zscore_only_detection_rate_prob",
+                      "BM_base_zscore_prob")) %>%
+  mutate(
+    combo = recode(model,
+                   BM_zscore_only_sites_prob           = "Sites model",
+                   BM_zscore_only_detection_rate_prob  = "cVAF model",
+                   BM_base_zscore_prob = "Combined model")
+  ) %>%
+  select(combo, sensitivity, specificity, accuracy, bal_accuracy, f1) %>%
+  rename(
+    Sens_95 = sensitivity,
+    Spec_95 = specificity,
+    Acc_95  = bal_accuracy, 
+    F1_95 = f1
+  )
 
 # ──────────────────────────────────────────────────────────────────────────────
 # 3. Pivot CV summary to long form (one row per combo × metric)
@@ -2137,57 +2419,92 @@ cv_long <- cv_tbl %>%
   )
 # cv_long now has columns: combo, Metric, mean, sd
 
-plot_df <- cv_long
+# ──────────────────────────────────────────────────────────────────────────────
+# 4. Pivot fixed-95 table to long form
+fix95_long <- fix95_tbl %>%
+  pivot_longer(
+    cols      = -combo,
+    names_to  = "Metric95",
+    values_to = "fixed"
+  ) %>%
+  mutate(
+    Metric = case_when(
+      Metric95 == "Sens_95" ~ "Sens",
+      Metric95 == "Spec_95" ~ "Spec",
+      Metric95 == "Acc_95"  ~ "Acc",
+      Metric95 == "F1_95" ~ "F1",
+      TRUE                  ~ NA_character_
+    )
+  ) %>% 
+  select(combo, Metric, fixed)
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 5. Join CV + fixed-95
+plot_df <- left_join(cv_long, fix95_long, by = c("combo","Metric"))
 
 # ──────────────────────────────────────────────────────────────────────────────
 # 6. Restrict to only the metrics you want to plot:
-#    here: AUC, Sens, Spec, Acc
+#    here: F1, Sens, Spec, Acc
 plot_df <- plot_df %>%
-  filter(Metric %in% c("AUC","Sens","Spec","Acc"))
+  filter(Metric %in% c("F1","Sens","Spec","Acc"))
 
 # ──────────────────────────────────────────────────────────────────────────────
 # 7. Give nicer facet labels
 metric_labs <- c(
-  AUC  = "AUC",
+  AUC  = "F1",
   Sens = "Sensitivity",
   Spec = "Specificity",
-  Acc  = "Accuracy"
+  Acc  = "Bal. Accuracy"
 )
 
 # ──────────────────────────────────────────────────────────────────────────────
 # 8. Build the plot
 p_perf <- ggplot(plot_df, aes(x = combo, y = mean, fill = combo)) +
-  # CV bar 
+  # CV bar + error
   geom_col(width = 0.6) +
+  # fixed‐95% dots, now mapped to a shape legend
+  geom_point(aes(y = fixed, shape = "95% sensitivity"),
+             size = 2, colour = "black") +
+  
+  # Tell ggplot how to draw that shape
+  scale_shape_manual(
+    name   = NULL,         # no legend title
+    values = c("95% sensitivity" = 17)
+  ) +
+  
   facet_wrap(~ Metric, nrow = 1, labeller = labeller(Metric = metric_labs)) +
   scale_fill_viridis_d(option = "D", begin = 0.15, end = 0.8, guide = "none") +
   scale_y_continuous(limits = c(0,1), labels = scales::percent_format(accuracy = 1)) +
   labs(
     x     = NULL,
     y     = NULL,
-    title = "Test Cohort Performance at Youden Index"
+    title = "Test Cohort Performance at Youden and 95%\nSensitivity Thresholds"
   ) +
   theme_classic(base_size = 9) +
   theme(
-    plot.title      = element_text(face = "bold", size = 10),
+    plot.title      = element_text(face = "bold", size = 12, hjust = 0.5),
     strip.text      = element_text(face = "bold", size = 8),
-    axis.text.x     = element_text(angle = 45, hjust = 1, size = 7),
+    axis.text.x     = element_text(angle = 40, hjust = 1, size = 7),
     axis.text.y     = element_text(size = 7),
     panel.spacing   = unit(0.8, "lines"),
-    legend.position = "bottom"
+    legend.position = "bottom",
+    legend.box.margin = margin(t = -10), # not as far down,
+    plot.margin = margin(t = 5, r = 5, b = 5, l = 20)
+    
   )
+
 # ──────────────────────────────────────────────────────────────────────────────
 # 9. Save
 ggsave(
-  file.path("Final Tables and Figures/Fig4F_classifier_performance_bar_test_cohort_updated.png"),
+  file.path("Final Tables and Figures/Fig4F_classifier_performance_bar_test_cohort_updated2.png"),
   plot   = p_perf,
-  width  = 4,
-  height = 3,
+  width  = 5,
+  height = 3.5,
   dpi    = 600
 )
 
 
-### Add points on ROC where models selected 
+### Add points on ROC where models selected - skipped
 # ────────────────────────────────────────────────────────────────
 # A.  Build a tibble of (model, threshold) pairs to mark
 # ────────────────────────────────────────────────────────────────
@@ -2582,16 +2899,16 @@ perf_plot <- ggplot(perf_df, aes(sens_mean, spec_mean, colour = combo)) +
   labs(
     x     = "Mean sensitivity",
     y     = "Mean specificity",
-    title = "Sensitivity vs. specificity of cfWGS models\nin the test cohort",
+    title = "Sensitivity vs. Specificity of cfWGS\nModels in the Test Cohort",
     colour = NULL
   ) +
   theme_bw(12) +
   theme(
     panel.grid      = element_blank(),
-    legend.position = c(0.05, 0.05),
+    legend.position = c(0.03, 0.03),
     legend.justification = c(0,0),
     legend.background = element_rect(fill = alpha("white",0.7), colour=NA),
-    plot.title      = element_text(hjust=0.5, face = "bold", size = 14)
+    plot.title      = element_text(hjust=0.5, face = "bold", size = 16)
   )
 
 # ── 3) Combine with roc_plot ────────────────────────────────────────────────
@@ -2599,7 +2916,7 @@ combined_plot <- roc_plot + perf_plot + plot_layout(ncol = 2, widths = c(1,1))
 
 # ── 4) Export ───────────────────────────────────────────────────────────────
 ggsave(
-  filename = "Final Tables and Figures/combined_ROC_and_performance_nested_folds_bm_validation_updated.png",
+  filename = "Final Tables and Figures/combined_ROC_and_performance_nested_folds_bm_validation_updated2.png",
   plot     = combined_plot,
   width    = 12,
   height   = 6,
@@ -2607,9 +2924,9 @@ ggsave(
 )
 
 ggsave(
-  filename = "Final Tables and Figures/4E_performance_nested_folds_bm_validation_updated.png",
+  filename = "Final Tables and Figures/4E_performance_nested_folds_bm_validation_updated2.png",
   plot     = perf_plot,
-  width    = 6,
+  width    = 5,
   height   = 4,
   dpi      = 500
 )
@@ -2770,41 +3087,43 @@ ggsave(
 
 
 ### Now do the sensetivity vs specificity barplots for blood muts
-### Now additional stats 
-# ──────────────────────────────────────────────────────────────────────────────
-# 1. CV summary: pick just the two  models, relabel, and rename cols
-cv_tbl <- all_primary %>%
-  filter(combo %in% c("Blood_zscore_only_sites", 
-                      "Blood_rate_only")) %>%
+cv_tbl <- metrics_youden %>%
+  filter(model %in% c("Blood_zscore_only_sites_prob", 
+                      "Blood_rate_only_prob",
+                      "Blood_base_prob")) %>%
   mutate(
-    combo = recode(combo,
-                   Blood_zscore_only_sites          = "Sites model",
-                   Blood_rate_only = "cVAF model")
+    combo = recode(model,
+                   Blood_zscore_only_sites_prob           = "Sites model",
+                   Blood_rate_only_prob  = "cVAF model",
+                   Blood_base_prob = "Combined model")
   ) %>%
   # rename so we have *_mean and *_sd
   rename(
-    AUC_mean  = auc_mean,   AUC_sd  = auc_sd,
-    Sens_mean = sens_mean,  Sens_sd = sens_sd,
-    Spec_mean = spec_mean,  Spec_sd = spec_sd,
-    Acc_mean  = acc_mean    # no sd for accuracy? if there is, rename _sd too
+    #  AUC_mean  = auc_mean,   AUC_sd  = auc_sd,
+    Sens_mean = sensitivity, # Sens_sd = sens_sd,
+    Spec_mean = specificity, # Spec_sd = spec_sd,
+    Acc_mean  = bal_accuracy,    # no sd for accuracy? if there is, rename _sd too,
+    F1_mean = f1
   ) %>%
   select(combo, ends_with("_mean"), ends_with("_sd"))
 
 # ──────────────────────────────────────────────────────────────────────────────
 # 2. Fixed-95% sensitivity metrics: pull only the two models, relabel, and rename
 fix95_tbl <- metrics_at_95sens %>%
-  filter(model %in% c("Blood_rate_only_prob",
-                      "Blood_zscore_only_sites_prob")) %>%
+  filter(model %in% c("Blood_zscore_only_sites_prob", 
+                      "Blood_rate_only_prob",
+                      "Blood_base_prob")) %>%
   mutate(
     combo = recode(model,
                    Blood_zscore_only_sites_prob           = "Sites model",
-                   Blood_rate_only_prob  = "cVAF model")
-  ) %>%
-  select(combo, sensitivity, specificity, accuracy) %>%
+                   Blood_rate_only_prob  = "cVAF model",
+                   Blood_base_prob = "Combined model")  ) %>%
+  select(combo, sensitivity, specificity, accuracy, bal_accuracy, f1) %>%
   rename(
     Sens_95 = sensitivity,
     Spec_95 = specificity,
-    Acc_95  = accuracy
+    Acc_95  = bal_accuracy, 
+    F1_95 = f1
   )
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -2835,6 +3154,7 @@ fix95_long <- fix95_tbl %>%
       Metric95 == "Sens_95" ~ "Sens",
       Metric95 == "Spec_95" ~ "Spec",
       Metric95 == "Acc_95"  ~ "Acc",
+      Metric95 == "F1_95" ~ "F1",
       TRUE                  ~ NA_character_
     )
   ) %>% 
@@ -2846,17 +3166,17 @@ plot_df <- left_join(cv_long, fix95_long, by = c("combo","Metric"))
 
 # ──────────────────────────────────────────────────────────────────────────────
 # 6. Restrict to only the metrics you want to plot:
-#    here: AUC, Sens, Spec, Acc
+#    here: F1, Sens, Spec, Acc
 plot_df <- plot_df %>%
-  filter(Metric %in% c("AUC","Sens","Spec","Acc"))
+  filter(Metric %in% c("F1","Sens","Spec","Acc"))
 
 # ──────────────────────────────────────────────────────────────────────────────
 # 7. Give nicer facet labels
 metric_labs <- c(
-  AUC  = "AUC",
+  AUC  = "F1",
   Sens = "Sensitivity",
   Spec = "Specificity",
-  Acc  = "Accuracy"
+  Acc  = "Bal. Accuracy"
 )
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -2864,9 +3184,6 @@ metric_labs <- c(
 p_perf <- ggplot(plot_df, aes(x = combo, y = mean, fill = combo)) +
   # CV bar + error
   geom_col(width = 0.6) +
-  geom_errorbar(aes(ymin = pmax(0, mean - sd),
-                    ymax = pmin(1, mean + sd)),
-                width = 0.15) +
   # fixed‐95% dots, now mapped to a shape legend
   geom_point(aes(y = fixed, shape = "95% sensitivity"),
              size = 2, colour = "black") +
@@ -2883,47 +3200,72 @@ p_perf <- ggplot(plot_df, aes(x = combo, y = mean, fill = combo)) +
   labs(
     x     = NULL,
     y     = NULL,
-    title = "Cross-validated vs. 95%-sensitivity performance"
+    title = "Train Cohort Performance at Youden and 95%\nSensitivity Thresholds"
   ) +
   theme_classic(base_size = 9) +
   theme(
-    plot.title      = element_text(face = "bold", size = 10),
+    plot.title      = element_text(face = "bold", size = 12, hjust = 0.5),
     strip.text      = element_text(face = "bold", size = 8),
-    axis.text.x     = element_text(angle = 45, hjust = 1, size = 7),
+    axis.text.x     = element_text(angle = 40, hjust = 1, size = 7),
     axis.text.y     = element_text(size = 7),
     panel.spacing   = unit(0.8, "lines"),
-    legend.position = "bottom"
+    legend.position = "bottom",
+    legend.box.margin = margin(t = -10), # not as far down,
+    plot.margin = margin(t = 5, r = 5, b = 5, l = 20)
+    
   )
 # ──────────────────────────────────────────────────────────────────────────────
 # 9. Save
 ggsave(
-  file.path("Final Tables and Figures/Fig5D_classifier_performance_bar.png"),
+  file.path("Final Tables and Figures/Fig5D_classifier_performance_bar_updated_blood_muts.png"),
   plot   = p_perf,
-  width  = 4,
-  height = 3,
+  width  = 5,
+  height = 3.5,
   dpi    = 600
 )
 
 
 ## do for validation as well 
 # ──────────────────────────────────────────────────────────────────────────────
-# 1. CV summary: pick just the two BM z-score models, relabel, and rename cols
-cv_tbl <- all_val %>%
-  filter(combo %in% c("Blood_zscore_only_sites", 
-                      "Blood_rate_only")) %>%
+cv_tbl <- metrics_youden_testing %>%
+  filter(model %in% c("Blood_zscore_only_sites_prob", 
+                      "Blood_rate_only_prob",
+                      "Blood_base_prob")) %>%
   mutate(
-    combo = recode(combo,
-                   Blood_zscore_only_sites          = "Sites model",
-                   Blood_rate_only = "cVAF model")
+    combo = recode(model,
+                   Blood_zscore_only_sites_prob           = "Sites model",
+                   Blood_rate_only_prob  = "cVAF model",
+                   Blood_base_prob = "Combined model")
   ) %>%
   # rename so we have *_mean and *_sd
   rename(
-    AUC_mean  = auc_valid,
-    Sens_mean = sens_valid,
-    Spec_mean = spec_valid, 
-    Acc_mean  = accuracy    # no sd for accuracy? if there is, rename _sd too
+    #  AUC_mean  = auc_mean,   AUC_sd  = auc_sd,
+    Sens_mean = sensitivity, # Sens_sd = sens_sd,
+    Spec_mean = specificity, # Spec_sd = spec_sd,
+    Acc_mean  = bal_accuracy,    # no sd for accuracy? if there is, rename _sd too,
+    F1_mean = f1
   ) %>%
   select(combo, ends_with("_mean"), ends_with("_sd"))
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 2. Fixed-95% sensitivity metrics: pull only the two models, relabel, and rename
+fix95_tbl <- metrics_at_95sens_test %>%
+  filter(model %in% c("Blood_zscore_only_sites_prob", 
+                      "Blood_rate_only_prob",
+                      "Blood_base_prob")) %>%
+  mutate(
+    combo = recode(model,
+                   Blood_zscore_only_sites_prob           = "Sites model",
+                   Blood_rate_only_prob  = "cVAF model",
+                   Blood_base_prob = "Combined model")
+    ) %>%
+  select(combo, sensitivity, specificity, accuracy, bal_accuracy, f1) %>%
+  rename(
+    Sens_95 = sensitivity,
+    Spec_95 = specificity,
+    Acc_95  = bal_accuracy, 
+    F1_95 = f1
+  )
 
 # ──────────────────────────────────────────────────────────────────────────────
 # 3. Pivot CV summary to long form (one row per combo × metric)
@@ -2940,54 +3282,383 @@ cv_long <- cv_tbl %>%
   )
 # cv_long now has columns: combo, Metric, mean, sd
 
-plot_df <- cv_long
+# ──────────────────────────────────────────────────────────────────────────────
+# 4. Pivot fixed-95 table to long form
+fix95_long <- fix95_tbl %>%
+  pivot_longer(
+    cols      = -combo,
+    names_to  = "Metric95",
+    values_to = "fixed"
+  ) %>%
+  mutate(
+    Metric = case_when(
+      Metric95 == "Sens_95" ~ "Sens",
+      Metric95 == "Spec_95" ~ "Spec",
+      Metric95 == "Acc_95"  ~ "Acc",
+      Metric95 == "F1_95" ~ "F1",
+      TRUE                  ~ NA_character_
+    )
+  ) %>% 
+  select(combo, Metric, fixed)
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 5. Join CV + fixed-95
+plot_df <- left_join(cv_long, fix95_long, by = c("combo","Metric"))
 
 # ──────────────────────────────────────────────────────────────────────────────
 # 6. Restrict to only the metrics you want to plot:
-#    here: AUC, Sens, Spec, Acc
+#    here: F1, Sens, Spec, Acc
 plot_df <- plot_df %>%
-  filter(Metric %in% c("AUC","Sens","Spec","Acc"))
+  filter(Metric %in% c("F1","Sens","Spec","Acc"))
+
+plot_df <- plot_df %>%
+  filter(Metric %in% c("F1","Sens","Spec","Acc")) %>%
+  mutate(across(where(is.numeric), ~replace_na(.x, 0)))
 
 # ──────────────────────────────────────────────────────────────────────────────
 # 7. Give nicer facet labels
 metric_labs <- c(
-  AUC  = "AUC",
+  AUC  = "F1",
   Sens = "Sensitivity",
   Spec = "Specificity",
-  Acc  = "Accuracy"
+  Acc  = "Bal. Accuracy"
 )
 
 # ──────────────────────────────────────────────────────────────────────────────
 # 8. Build the plot
 p_perf <- ggplot(plot_df, aes(x = combo, y = mean, fill = combo)) +
-  # CV bar 
+  # CV bar + error
   geom_col(width = 0.6) +
+  # fixed‐95% dots, now mapped to a shape legend
+  geom_point(aes(y = fixed, shape = "95% sensitivity"),
+             size = 2, colour = "black") +
+  
+  # Tell ggplot how to draw that shape
+  scale_shape_manual(
+    name   = NULL,         # no legend title
+    values = c("95% sensitivity" = 17)
+  ) +
+  
   facet_wrap(~ Metric, nrow = 1, labeller = labeller(Metric = metric_labs)) +
   scale_fill_viridis_d(option = "D", begin = 0.15, end = 0.8, guide = "none") +
   scale_y_continuous(limits = c(0,1), labels = scales::percent_format(accuracy = 1)) +
   labs(
     x     = NULL,
     y     = NULL,
-    title = "Test Cohort Performance at Youden Index"
+    title = "Test Cohort Performance at Youden and 95%\nSensitivity Thresholds"
   ) +
   theme_classic(base_size = 9) +
   theme(
-    plot.title      = element_text(face = "bold", size = 10),
+    plot.title      = element_text(face = "bold", size = 12, hjust = 0.5),
     strip.text      = element_text(face = "bold", size = 8),
-    axis.text.x     = element_text(angle = 45, hjust = 1, size = 7),
+    axis.text.x     = element_text(angle = 40, hjust = 1, size = 7),
     axis.text.y     = element_text(size = 7),
     panel.spacing   = unit(0.8, "lines"),
-    legend.position = "bottom"
+    legend.position = "bottom",
+    legend.box.margin = margin(t = -10), # not as far down,
+    plot.margin = margin(t = 5, r = 5, b = 5, l = 20)
+    
+  )
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 9. Save
+ggsave(
+  file.path("Final Tables and Figures/Fig5F_classifier_performance_bar_test_cohort_updated2.png"),
+  plot   = p_perf,
+  width  = 5,
+  height = 3.5,
+  dpi    = 600
+)
+
+
+
+
+### Make barplots for fragmentomic features
+cv_tbl <- metrics_youden %>%
+  filter(model %in% c("Fragmentomics_mean_coverage_only_prob", 
+                      "Fragmentomics_prop_short_only_prob", 
+                      "Fragmentomics_full_prob")) %>%
+  mutate(
+    combo = recode(model,
+                   Fragmentomics_mean_coverage_only_prob          = "Coverage model",
+                   Fragmentomics_prop_short_only_prob = "Prop. short model",
+                   Fragmentomics_full_prob = "Combined model")
+  ) %>%
+  # rename so we have *_mean and *_sd
+  rename(
+    #  AUC_mean  = auc_mean,   AUC_sd  = auc_sd,
+    Sens_mean = sensitivity, # Sens_sd = sens_sd,
+    Spec_mean = specificity, # Spec_sd = spec_sd,
+    Acc_mean  = bal_accuracy,    # no sd for accuracy? if there is, rename _sd too,
+    F1_mean = f1
+  ) %>%
+  select(combo, ends_with("_mean"), ends_with("_sd"))
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 2. Fixed-95% sensitivity metrics: pull only the two models, relabel, and rename
+fix95_tbl <- metrics_at_95sens %>%
+  filter(model %in% c("Fragmentomics_mean_coverage_only_prob", 
+                      "Fragmentomics_prop_short_only_prob", 
+                      "Fragmentomics_full_prob")) %>%
+  mutate(
+    combo = recode(model,
+                   Fragmentomics_mean_coverage_only_prob          = "Coverage model",
+                   Fragmentomics_prop_short_only_prob = "Prop. short model",
+                   Fragmentomics_full_prob = "Combined model")
+  ) %>%
+  select(combo, sensitivity, specificity, accuracy, bal_accuracy, f1) %>%
+  rename(
+    Sens_95 = sensitivity,
+    Spec_95 = specificity,
+    Acc_95  = bal_accuracy, 
+    F1_95 = f1
+  )
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 3. Pivot CV summary to long form (one row per combo × metric)
+cv_long <- cv_tbl %>%
+  pivot_longer(
+    cols      = -combo,
+    names_to  = c("Metric","Stat"),
+    names_sep = "_",        # splits e.g. "Sens_mean" → Metric="Sens", Stat="mean"
+    values_to = "value"
+  ) %>%
+  pivot_wider(
+    names_from  = Stat,
+    values_from = value
+  )
+# cv_long now has columns: combo, Metric, mean, sd
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 4. Pivot fixed-95 table to long form
+fix95_long <- fix95_tbl %>%
+  pivot_longer(
+    cols      = -combo,
+    names_to  = "Metric95",
+    values_to = "fixed"
+  ) %>%
+  mutate(
+    Metric = case_when(
+      Metric95 == "Sens_95" ~ "Sens",
+      Metric95 == "Spec_95" ~ "Spec",
+      Metric95 == "Acc_95"  ~ "Acc",
+      Metric95 == "F1_95" ~ "F1",
+      TRUE                  ~ NA_character_
+    )
+  ) %>% 
+  select(combo, Metric, fixed)
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 5. Join CV + fixed-95
+plot_df <- left_join(cv_long, fix95_long, by = c("combo","Metric"))
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 6. Restrict to only the metrics you want to plot:
+#    here: F1, Sens, Spec, Acc
+plot_df <- plot_df %>%
+  filter(Metric %in% c("F1","Sens","Spec","Acc"))
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 7. Give nicer facet labels
+metric_labs <- c(
+  AUC  = "F1",
+  Sens = "Sensitivity",
+  Spec = "Specificity",
+  Acc  = "Bal. Accuracy"
+)
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 8. Build the plot
+p_perf <- ggplot(plot_df, aes(x = combo, y = mean, fill = combo)) +
+  # CV bar + error
+  geom_col(width = 0.6) +
+  # fixed‐95% dots, now mapped to a shape legend
+  geom_point(aes(y = fixed, shape = "95% sensitivity"),
+             size = 2, colour = "black") +
+  
+  # Tell ggplot how to draw that shape
+  scale_shape_manual(
+    name   = NULL,         # no legend title
+    values = c("95% sensitivity" = 17)
+  ) +
+  
+  facet_wrap(~ Metric, nrow = 1, labeller = labeller(Metric = metric_labs)) +
+  scale_fill_viridis_d(option = "D", begin = 0.15, end = 0.8, guide = "none") +
+  scale_y_continuous(limits = c(0,1), labels = scales::percent_format(accuracy = 1)) +
+  labs(
+    x     = NULL,
+    y     = NULL,
+    title = "Train Cohort Performance at Youden and 95%\nSensitivity Thresholds"
+  ) +
+  theme_classic(base_size = 9) +
+  theme(
+    plot.title      = element_text(face = "bold", size = 12, hjust = 0.5),
+    strip.text      = element_text(face = "bold", size = 8),
+    axis.text.x     = element_text(angle = 40, hjust = 1, size = 7),
+    axis.text.y     = element_text(size = 7),
+    panel.spacing   = unit(0.8, "lines"),
+    legend.position = "bottom",
+    legend.box.margin = margin(t = -10), # not as far down,
+    plot.margin = margin(t = 5, r = 5, b = 5, l = 20)
+    
   )
 # ──────────────────────────────────────────────────────────────────────────────
 # 9. Save
 ggsave(
-  file.path("Final Tables and Figures/Fig5F_classifier_performance_bar_test_cohort_updated.png"),
+  file.path("Final Tables and Figures/Fig9D_classifier_performance_bar_updated_frag.png"),
   plot   = p_perf,
-  width  = 4,
-  height = 3,
+  width  = 5,
+  height = 3.5,
   dpi    = 600
 )
+
+
+## do for validation as well 
+# ──────────────────────────────────────────────────────────────────────────────
+cv_tbl <- metrics_youden_testing %>%
+  filter(model %in% c("Fragmentomics_mean_coverage_only_prob", 
+                      "Fragmentomics_prop_short_only_prob", 
+                      "Fragmentomics_full_prob")) %>%
+  mutate(
+    combo = recode(model,
+                   Fragmentomics_mean_coverage_only_prob          = "Coverage model",
+                   Fragmentomics_prop_short_only_prob = "Prop. short model",
+                   Fragmentomics_full_prob = "Combined model")
+    ) %>%
+  # rename so we have *_mean and *_sd
+  rename(
+    #  AUC_mean  = auc_mean,   AUC_sd  = auc_sd,
+    Sens_mean = sensitivity, # Sens_sd = sens_sd,
+    Spec_mean = specificity, # Spec_sd = spec_sd,
+    Acc_mean  = bal_accuracy,    # no sd for accuracy? if there is, rename _sd too,
+    F1_mean = f1
+  ) %>%
+  select(combo, ends_with("_mean"), ends_with("_sd"))
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 2. Fixed-95% sensitivity metrics: pull only the two models, relabel, and rename
+fix95_tbl <- metrics_at_95sens_test %>%
+  filter(model %in% c("Fragmentomics_mean_coverage_only_prob", 
+                      "Fragmentomics_prop_short_only_prob", 
+                      "Fragmentomics_full_prob")) %>%
+  mutate(
+    combo = recode(model,
+                   Fragmentomics_mean_coverage_only_prob          = "Coverage model",
+                   Fragmentomics_prop_short_only_prob = "Prop. short model",
+                   Fragmentomics_full_prob = "Combined model")
+    ) %>%
+  select(combo, sensitivity, specificity, accuracy, bal_accuracy, f1) %>%
+  rename(
+    Sens_95 = sensitivity,
+    Spec_95 = specificity,
+    Acc_95  = bal_accuracy, 
+    F1_95 = f1
+  )
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 3. Pivot CV summary to long form (one row per combo × metric)
+cv_long <- cv_tbl %>%
+  pivot_longer(
+    cols      = -combo,
+    names_to  = c("Metric","Stat"),
+    names_sep = "_",        # splits e.g. "Sens_mean" → Metric="Sens", Stat="mean"
+    values_to = "value"
+  ) %>%
+  pivot_wider(
+    names_from  = Stat,
+    values_from = value
+  )
+# cv_long now has columns: combo, Metric, mean, sd
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 4. Pivot fixed-95 table to long form
+fix95_long <- fix95_tbl %>%
+  pivot_longer(
+    cols      = -combo,
+    names_to  = "Metric95",
+    values_to = "fixed"
+  ) %>%
+  mutate(
+    Metric = case_when(
+      Metric95 == "Sens_95" ~ "Sens",
+      Metric95 == "Spec_95" ~ "Spec",
+      Metric95 == "Acc_95"  ~ "Acc",
+      Metric95 == "F1_95" ~ "F1",
+      TRUE                  ~ NA_character_
+    )
+  ) %>% 
+  select(combo, Metric, fixed)
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 5. Join CV + fixed-95
+plot_df <- left_join(cv_long, fix95_long, by = c("combo","Metric"))
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 6. Restrict to only the metrics you want to plot:
+#    here: F1, Sens, Spec, Acc
+plot_df <- plot_df %>%
+  filter(Metric %in% c("F1","Sens","Spec","Acc"))
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 7. Give nicer facet labels
+metric_labs <- c(
+  AUC  = "F1",
+  Sens = "Sensitivity",
+  Spec = "Specificity",
+  Acc  = "Bal. Accuracy"
+)
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 8. Build the plot
+p_perf <- ggplot(plot_df, aes(x = combo, y = mean, fill = combo)) +
+  # CV bar + error
+  geom_col(width = 0.6) +
+  # fixed‐95% dots, now mapped to a shape legend
+  geom_point(aes(y = fixed, shape = "95% sensitivity"),
+             size = 2, colour = "black") +
+  
+  # Tell ggplot how to draw that shape
+  scale_shape_manual(
+    name   = NULL,         # no legend title
+    values = c("95% sensitivity" = 17)
+  ) +
+  
+  facet_wrap(~ Metric, nrow = 1, labeller = labeller(Metric = metric_labs)) +
+  scale_fill_viridis_d(option = "D", begin = 0.15, end = 0.8, guide = "none") +
+  scale_y_continuous(limits = c(0,1), labels = scales::percent_format(accuracy = 1)) +
+  labs(
+    x     = NULL,
+    y     = NULL,
+    title = "Test Cohort Performance at Youden and 95%\nSensitivity Thresholds"
+  ) +
+  theme_classic(base_size = 9) +
+  theme(
+    plot.title      = element_text(face = "bold", size = 12, hjust = 0.5),
+    strip.text      = element_text(face = "bold", size = 8),
+    axis.text.x     = element_text(angle = 40, hjust = 1, size = 7),
+    axis.text.y     = element_text(size = 7),
+    panel.spacing   = unit(0.8, "lines"),
+    legend.position = "bottom",
+    legend.box.margin = margin(t = -10), # not as far down,
+    plot.margin = margin(t = 5, r = 5, b = 5, l = 20)
+    
+  )
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 9. Save
+ggsave(
+  file.path("Final Tables and Figures/Fig9F_classifier_performance_bar_test_cohort_updated2_frag.png"),
+  plot   = p_perf,
+  width  = 5,
+  height = 3.5,
+  dpi    = 600
+)
+
+
+
+
+
+
 
 
 ## DO ROC curve on primary blood muts
@@ -3162,7 +3833,7 @@ ggsave(
 
 
 
-### Add the metrics from dilution series 
+### Add the metrics from dilution series
 ### Add points on ROC where models selected 
 # ────────────────────────────────────────────────────────────────
 # A.  Build a tibble of (model, threshold) pairs to mark
@@ -3178,18 +3849,12 @@ mark_tbl <- tribble(
 # B.  For each row in mark_tbl, compute FPR & TPR
 # ────────────────────────────────────────────────────────────────
 marker_pts <- pmap_dfr(mark_tbl, function(combo, threshold) {
+  df <- blood_preds %>%          # <- same data as ROC curves
+    filter(combo == !!combo)
   
-  # retrieve fitted caret model & its predicted probs
-  prob <- predict(models_list[[combo]], newdata = valid_df, type = "prob")[ , positive_class]
+  truth_pos <- df$truth == positive_class
+  pred_pos  <- df$prob  >= threshold
   
-  # truth vector (pos/neg as in earlier code)
-  truth <- valid_df$MRD_truth
-  
-  # binary calls at this threshold
-  pred_pos <- prob >= threshold
-  truth_pos <- truth == "pos"
-  
-  # confusion parts
   tp <- sum(pred_pos & truth_pos)
   fn <- sum(!pred_pos & truth_pos)
   fp <- sum(pred_pos & !truth_pos)
@@ -3198,12 +3863,11 @@ marker_pts <- pmap_dfr(mark_tbl, function(combo, threshold) {
   tibble(
     combo      = combo,
     threshold  = threshold,
-    fpr        = fp / (fp + tn),
-    tpr        = tp / (tp + fn)
+    fpr        = fp / (fp + tn),           # = 1 – specificity
+    tpr        = tp / (tp + fn)            # = sensitivity
   )
 })
 
-# ensure same factor order as curves
 marker_pts$combo <- factor(marker_pts$combo, levels = levels(roc_df$combo))
 
 # ────────────────────────────────────────────────────────────────
@@ -3220,7 +3884,7 @@ roc_plot_tmp <- roc_df %>%
     x      = "False-positive rate (1 − specificity)",
     y      = "True-positive rate (sensitivity)",
     colour = NULL,
-    title  = "Cross-validated ROC curves (nested 5×5 folds)"
+    title  = "Pooled Outer-Fold ROC Curve\n(nested 5×5 CV)"
   ) +
   theme_bw(12) +
   theme(
@@ -3233,28 +3897,20 @@ roc_plot_tmp <- roc_df %>%
   scale_colour_manual(
     # pick the same palette entries but only for your two models
     values = okabe_ito8[ match(selected_models, levels(roc_df$combo)) ],
-    labels = legend_labels[selected_models]
-  )
-roc_plot_final <- roc_plot_tmp +
-  geom_point(
-    data    = marker_pts,
-    aes(x = fpr, y = tpr, shape = combo),
-    fill    = "white",
-    colour  = "black",
-    stroke  = 0.9,
-    size    = 3,
-    inherit.aes = FALSE
-  ) +
-  scale_shape_manual(
-    name   = "Marked thresholds",
-    values = c(
-      Blood_zscore_only_sites           = 21,  # circle
-      Blood_rate_only  = 24   # triangle
-    ),
     labels = c(
       Blood_zscore_only_sites          = "Sites model",
       Blood_rate_only = "cVAF model"
     )
+  )
+roc_plot_final <- roc_plot_tmp +
+  geom_point(
+    data    = marker_pts,
+    aes(x = fpr, y = tpr),
+    fill    = "white",
+    colour  = "darkgrey",
+    stroke  = 0.9,
+    size    = 2,
+    inherit.aes = FALSE
   ) +
   guides(
     # a) the shape legend for marked thresholds
@@ -3274,7 +3930,7 @@ roc_plot_final <- roc_plot_tmp +
     ),
     # b) the colour legend for ROC curves
     colour = guide_legend(
-      title       = "Model (AUC)",
+      title       = "Model",
       order       = 2,       # draw this second
       ncol        = 1,
       byrow       = FALSE,
@@ -3288,23 +3944,24 @@ roc_plot_final <- roc_plot_tmp +
   theme(
     # remove legend background box
     legend.background = element_blank(),
-    legend.position       = c(0.72, 0.24),   # x=0.85 (near right), y=0.25 (higher)
+  #  legend.position       = c(0.72, 0.24),   # x=0.85 (near right), y=0.25 (higher)
+   legend.position       = "right",
     # shrink the space between items
-    legend.spacing.y  = unit(0.2, "cm"),
+#    legend.spacing.y  = unit(0.2, "cm"),
     legend.key        = element_blank(),
     # style legend titles & text
     legend.title      = element_text(face = "bold", size = 10),
     legend.text       = element_text(size = 9), 
     # title bold 
-    plot.title   = element_text(face = "bold", size = 13)
+    plot.title   = element_text(face = "bold", size = 14, hjust = 0.5)
   )
 
 
 ggsave(
-  file.path("Final Tables and Figures/Supp7D_ROC_performance_blood.png"),
+  file.path("Final Tables and Figures/Supp7D_ROC_performance_blood_updated.png"),
   plot   = roc_plot_final,
-  width  = 5,
-  height = 4.25,
+  width  = 5.5,
+  height = 4,
   dpi    = 600
 )
 
@@ -3396,7 +4053,7 @@ labels_perf <- perf_df %>%
   { setNames(.$lbl, .$combo) }
 
 # 1) Build performance plot
-perf_plot <- ggplot(perf_df %>% filter(!str_starts(combo, "Fragment")), aes(sens_mean, spec_mean, colour = combo)) +
+perf_plot <- ggplot(perf_df, aes(sens_mean, spec_mean, colour = combo)) +
   geom_point(size=3) +
   geom_errorbarh(aes(
     xmin = pmax(0, sens_mean - sens_sd),
@@ -3417,20 +4074,21 @@ perf_plot <- ggplot(perf_df %>% filter(!str_starts(combo, "Fragment")), aes(sens
   labs(
     x     = "Mean sensitivity",
     y     = "Mean specificity",
-    title = "Sensitivity vs. specificity of cfWGS models\nin the test cohort",
+    title = "Sensitivity vs. Specificity of cfWGS\nModels in the Test Cohort",
     colour = NULL
   ) +
   theme_bw(12) +
   theme(
     panel.grid      = element_blank(),
-    legend.position = c(0.05, 0.05),
+    legend.position = c(0.03, 0.03),
     legend.justification = c(0,0),
     legend.background = element_rect(fill = alpha("white",0.7), colour=NA),
-    plot.title      = element_text(hjust=0.5, face = "bold", size = 14)
+    plot.title      = element_text(hjust=0.5, face = "bold", size = 16)
   )
 
 # ── 3) Combine with roc_plot ────────────────────────────────────────────────
 combined_plot <- roc_plot + perf_plot + plot_layout(ncol = 2, widths = c(1,1))
+
 
 # ── 4) Export ───────────────────────────────────────────────────────────────
 ggsave(
@@ -3444,7 +4102,7 @@ ggsave(
 ggsave(
   filename = "Final Tables and Figures/5E_performance_nested_folds_blood_validation_updated.png",
   plot     = perf_plot,
-  width    = 6,
+  width    = 5,
   height   = 4,
   dpi      = 500
 )

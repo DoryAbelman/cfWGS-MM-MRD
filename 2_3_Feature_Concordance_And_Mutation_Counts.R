@@ -566,6 +566,88 @@ write.csv(
 ### This above does not include double negatives 
 
 
+### Export the samples with mutations for checking 
+# Merge to get Patient info
+# 1. Create join_id by removing ".bam" from Bam in clinical data
+combined_clinical_data_updated <- combined_clinical_data_updated %>%
+  mutate(join_id = str_remove(Bam, "\\.bam$"))
+
+# 2. Left join on Sample and join_id
+merged1 <- mutation_data_total %>%
+  left_join(combined_clinical_data_updated, by = c("Sample" = "join_id"))
+
+# Merge to get cohort info
+merged1 <- merged1 %>%
+  left_join(cohort_df)
+
+# Filter for Baseline or Diagnosis and patients in cohort
+merged1 <- merged1 %>% 
+  filter(timepoint_info %in% c("Baseline", "Diagnosis")) %>%
+  filter(!is.na(Cohort))
+
+merged1 <- merged1 %>% 
+  select(Tumor_Sample_Barcode, Sample, Patient, Bam, Cohort) %>% 
+  unique()
+
+all_bam_storage <- read_excel("All_bam_storage_locations.xlsx")
+
+merged1 <- merged1 %>%
+  mutate(Bam = paste0(Sample, ".bam"))
+
+merged1 <- merged1 %>% 
+  left_join(all_bam_storage, by = c("Bam"))
+
+missing_path <- merged1 %>%
+  filter(is.na(Path) & is.na(Location))
+
+# This gives you which alternate name from merged1 joined to which real BAM in storage
+all_bam_storage <- all_bam_storage %>% mutate(Bam_noWG = str_remove(Bam, "_WG"))
+missing_path <- missing_path %>% mutate(Bam_noWG = str_remove(Bam, "_WG"))
+  
+joined <- missing_path %>%
+  left_join(
+    all_bam_storage %>% select(Bam_storage = Bam, Path, Location, Bam_noWG),
+    by = "Bam_noWG"
+  )
+
+## Now get most similar for still unmatched
+unmatched <- joined %>% filter(is.na(Bam_storage))
+
+# Expand unmatched against all storage BAMs, calculate distance, and get closest
+library(stringdist)
+similar_matches <- unmatched %>%
+  rowwise() %>%
+  mutate(
+    best_match = {
+      dists <- stringdist(Bam, all_bam_storage$Bam_noWG)
+      i <- which.min(dists)
+      all_bam_storage$Bam[i]
+    },
+    min_dist = {
+      dists <- stringdist(Bam, all_bam_storage$Bam_noWG)
+      min(dists)
+    },
+    best_path = {
+      dists <- stringdist(Bam, all_bam_storage$Bam_noWG)
+      i <- which.min(dists)
+      all_bam_storage$Path[i]
+    },
+    best_location = {
+      dists <- stringdist(Bam, all_bam_storage$Bam_noWG)
+      i <- which.min(dists)
+      all_bam_storage$Location[i]
+    }
+  ) %>%
+  ungroup()
+
+
+
+
+## Now add the location 
+# Export Sample and Tumor_Sample_Barcode as CSV
+export_df <- filtered[, .(Sample, Tumor_Sample_Barcode)]
+fwrite(export_df, "bam_list_and_barcodes.csv")
+
 
 
 

@@ -2756,8 +2756,8 @@ advance_df <- survival_df %>%
   filter(
     Relapsed_Binary == 1,
     !is.na(.data[[assay_prob]]),
-    # include samples up to and including the progression date
-    sample_date <= censor_date
+    # include samples up to and including the progression date, with some leeway for discrepancies in dates up to 30 days
+    sample_date <= (censor_date + 30)
   ) %>%
   group_by(Patient) %>%
   arrange(sample_date) %>%
@@ -2785,7 +2785,7 @@ advance_df <- survival_df %>%
       first_inc_date         = first_inc_date,
       first_inc_prob         = first_inc_prob,
       days_to_first_increase = as.numeric(first_inc_date - nadir_date),
-      days_before_progression= as.numeric(prog_date - first_inc_date),
+      days_before_progression = pmax(0, as.numeric(prog_date - first_inc_date)),
       prog_date              = prog_date
     )
   }) %>%
@@ -2796,11 +2796,11 @@ df_prog <- survival_df %>%
   filter(
     Relapsed_Binary == 1,
     !is.na(.data[[assay_prob]]),
-    sample_date <= censor_date    # ← restrict to pre-progression here
+    sample_date <= (censor_date + 30)
   ) %>%
   arrange(Patient, sample_date) %>%
   # compute days before progression for each sample
-  mutate(days_before_prog = as.numeric(censor_date - sample_date))
+  mutate(days_before_prog = pmax(0, as.numeric(censor_date - sample_date)))
 
 # B) total samples & timing relative to progression
 n_patients <- df_prog %>% pull(Patient) %>% unique() %>% length()
@@ -2932,8 +2932,8 @@ advance_df <- survival_df %>%
   filter(
     Relapsed_Binary == 1,
     !is.na(.data[[assay_prob]]),
-    # include samples up to and including the progression date
-    sample_date <= censor_date
+    # include samples up to and including the progression date, with some leeway for discrepancies in dates up to 30 days
+    sample_date <= (censor_date + 30)
   ) %>%
   group_by(Patient) %>%
   arrange(sample_date) %>%
@@ -2961,7 +2961,7 @@ advance_df <- survival_df %>%
       first_inc_date         = first_inc_date,
       first_inc_prob         = first_inc_prob,
       days_to_first_increase = as.numeric(first_inc_date - nadir_date),
-      days_before_progression= as.numeric(prog_date - first_inc_date),
+      days_before_progression = pmax(0, as.numeric(prog_date - first_inc_date)),
       prog_date              = prog_date
     )
   }) %>%
@@ -2972,11 +2972,11 @@ df_prog <- survival_df %>%
   filter(
     Relapsed_Binary == 1,
     !is.na(.data[[assay_prob]]),
-    sample_date <= censor_date    # ← restrict to pre-progression here
+    sample_date <= (censor_date + 30)
   ) %>%
   arrange(Patient, sample_date) %>%
   # compute days before progression for each sample
-  mutate(days_before_prog = as.numeric(censor_date - sample_date))
+  mutate(days_before_prog = pmax(0, as.numeric(censor_date - sample_date)))
 
 # B) total samples & timing relative to progression
 n_patients <- df_prog %>% pull(Patient) %>% unique() %>% length()

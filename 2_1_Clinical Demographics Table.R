@@ -53,7 +53,7 @@ library(flextable)
 # 1.  DATA  
 # -----------------------------------------------------------
 # Load data 
-dat <- readRDS("Final_aggregate_table_cfWGS_features_with_clinical_and_demographics_updated3.rds")
+dat <- readRDS("Final_aggregate_table_cfWGS_features_with_clinical_and_demographics_updated5.rds")
 
 
 ### Get the list of qualifying samples 
