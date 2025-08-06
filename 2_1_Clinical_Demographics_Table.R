@@ -1,7 +1,3 @@
-source("setup_packages.R")
-source("config.R")
-source("helpers.R")
-
 # =============================================================================
 # Script: 2_1_Clinical_Demographics_Table.R
 #
@@ -47,13 +43,17 @@ source("helpers.R")
 # 0.  PACKAGES  (install once, then keep only library() lines)
 # -----------------------------------------------------------
 # install.packages(c("tidyverse", "gtsummary", "gt", "officer"))   # ← run once
+library(tidyverse)
+library(gtsummary)
+library(officer)
+library(flextable)
 
 
 # -----------------------------------------------------------
 # 1.  DATA  
 # -----------------------------------------------------------
 # Load data 
-dat <- readRDS("Final_aggregate_table_cfWGS_features_with_clinical_and_demographics_updated3.rds")
+dat <- readRDS("Final_aggregate_table_cfWGS_features_with_clinical_and_demographics_updated5.rds")
 
 
 ### Get the list of qualifying samples 
@@ -62,6 +62,8 @@ export_dir <- "Output_tables_2025"
 
 # Load from CSV (if you want to view/edit easily)
 patient_cohort_tbl_csv <- read.csv(file.path(export_dir, "patient_cohort_assignment.csv"))
+
+cohort_df <- readRDS("cohort_assignment_table_updated.rds")
 
 
 # 1. Subset to only Diagnosis or Baseline timepoints
