@@ -881,3 +881,20 @@ saveRDS(translocation_data_cytoband, file = file.path(export_dir, "translocation
 # Exporting dataframes as text files
 write.table(translocation_data, file = file.path(export_dir, "translocation_data.txt"), sep = "\t", row.names = FALSE, quote = FALSE)
 write.table(translocation_data_cytoband, file = file.path(export_dir, "translocation_data_cytoband.txt"), sep = "\t", row.names = FALSE, quote = FALSE)
+
+
+## Export for manual checking
+filtered_df <- Ig_caller_df_cfWGS_filtered_aggressive2 %>%
+  dplyr::filter(
+    timepoint_info %in% c("Baseline", "Diagnosis"),
+    Patient %in% cohort_df$Patient,
+    Common_MM_translocation == 1
+  )
+
+write.table(
+  filtered_df,
+  file = file.path(export_dir, "Ig_caller_df_cfWGS_filtered_aggressive2_iGV_check.txt"),
+  sep = "\t",
+  row.names = FALSE,
+  quote = FALSE
+)

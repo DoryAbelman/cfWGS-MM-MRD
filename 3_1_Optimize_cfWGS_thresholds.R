@@ -1178,6 +1178,11 @@ saveRDS(nested_bm_validation_updated3, file = "nested_bm_validation_updated3.rds
 saveRDS(nested_blood_validation_updated3, file = "nested_blood_validation_updated3.rds")
 saveRDS(nested_fragmentomics_validation_updated3, file = "nested_fragmentomics_validation_updated3.rds")
 
+## Load back in (optional)
+# nested_bm_validation_updated3 <- readRDS("nested_bm_validation_updated3.rds")
+# nested_blood_validation_updated3 <- readRDS("nested_blood_validation_updated3.rds")
+# nested_fragmentomics_validation_updated3 <- readRDS("nested_fragmentomics_validation_updated3.rds")
+
 
 ## For consistency 
 nested_bm_validation_updated2 <- nested_bm_validation_updated3
@@ -1243,6 +1248,45 @@ all_models <- c(
   nested_fragmentomics_validation_updated2$models
 )
 
+## Add additional metrics
+
+# ---- 1. gather all outer-fold predictions -----------------------------------
+# 1) pool everything *except* fragmentomics combos from the BM / blood sets
+outer_preds <- bind_rows(
+  # keep all fragmentomics
+  nested_fragmentomics_validation_updated2$outer_predictions,
+  # drop any frag_names from BM before binding
+  nested_bm_validation_updated2$outer_predictions %>%
+    filter(! combo %in% frag_names),
+  # drop any frag_names from blood before binding
+  nested_blood_validation_updated2$outer_predictions %>%
+    filter(! combo %in% frag_names)
+) %>%
+  mutate(truth = factor(truth, levels = c("neg","pos"))) # make sure the response is a factor with neg first, pos second
+
+# ---- 2. pooled ROC, AUC and 95 % CI per combo ------------------------------
+pooled_auc_tbl <- outer_preds %>%
+  group_by(combo) %>%
+  summarise(
+    roc_obj     = list(roc(truth, prob,
+                           levels    = c("neg","pos"),
+                           direction = "<",
+                           quiet     = TRUE)),
+    auc_pooled  = as.numeric(auc(roc_obj[[1]])),
+    ci_low      = ci.auc(roc_obj[[1]], method = "delong")[1],
+    ci_high     = ci.auc(roc_obj[[1]], method = "delong")[3],
+    .groups     = "drop"
+  ) %>%
+  mutate(
+    auc_pooled_ci = sprintf("%.2f (%.2f–%.2f)", auc_pooled, ci_low, ci_high)
+  ) %>%
+  select(-roc_obj)   # drop the heavy objects
+
+# ---- 3. add to your primary metrics table ----------------------------------
+all_primary <- all_primary %>%
+  left_join(pooled_auc_tbl, by = "combo")
+
+
 ## Pick winners after reviewin the tables
 wanted <- c(
   # BM-only models
@@ -1264,8 +1308,8 @@ wanted <- c(
 )
 
 # Then pull just those rows
-selected_primary <- all_primary %>%
-  filter(combo %in% wanted)
+selected_primary <- all_primary # %>%
+#  filter(combo %in% wanted)
 
 ## Save
 selected_combos   <- selected_primary$combo
@@ -1277,6 +1321,10 @@ saveRDS(selected_models,
 saveRDS(selected_thr,
         file = file.path(outdir, "selected_combo_thresholds_2025-07-25.rds"))
 
+saveRDS(selected_models,
+        file = file.path(outdir, "selected_combo_models_2025-07-31.rds"))
+saveRDS(selected_thr,
+        file = file.path(outdir, "selected_combo_thresholds_2025-07-31.rds"))
 
 # -----------------------------------------------------------------------------
 # 8b. Export Combined Metrics & Models
@@ -1380,18 +1428,18 @@ frag_tbl <- combined_metrics %>%
 
 write_csv(
   frag_tbl,
-  "Output_tables_2025/Supplementary_Table_4_Fragmentomics_Performance.csv"
+  "Output_tables_2025/Supplementary_Table_4_Fragmentomics_Performance2.csv"
 )
 
 # 2) Export all models
 write_csv(
   primary_clean,
-  "Final Tables and Figures/Supplementary_Table_3_All_Model_performance_nested_CV_updated.csv"
+  "Final Tables and Figures/Supplementary_Table_3_All_Model_performance_nested_CV_updated2.csv"
 )
 
 write_csv(
   val_clean,
-  "Final Tables and Figures/Supplementary_Table_5_All_Model_performance_nested_CV_updated_on_testing_cohort.csv"
+  "Final Tables and Figures/Supplementary_Table_5_All_Model_performance_nested_CV_updated_on_testing_cohort2.csv"
 )
 
 
@@ -1535,6 +1583,10 @@ data_scored <- apply_selected(
 ### Save this 
 saveRDS(data_scored, file = file.path(outdir, "all_patients_with_BM_and_blood_calls_updated3.rds"))
 write_csv(data_scored, file = file.path(outdir, "all_patients_with_BM_and_blood_calls_updated3.csv"))
+
+## Another export
+saveRDS(data_scored, file = file.path(outdir, "all_patients_with_BM_and_blood_calls_updated4.rds"))
+write_csv(data_scored, file = file.path(outdir, "all_patients_with_BM_and_blood_calls_updated4.csv"))
 
 
 
@@ -1779,12 +1831,12 @@ all_perf_metrics <- youden_tbl %>%
 library(writexl)    # or use write.csv if you prefer CSV
 write_xlsx(
   list(`All Performance Metrics` = all_perf_metrics),
-  path = "Final Tables and Figures/Supplementary_Table_4_All_Model_Metrics_Refit2.xlsx"
+  path = "Final Tables and Figures/Supplementary_Table_4_All_Model_Metrics_Refit3.xlsx"
 )
 
 # — or, if prefer CSV:
 write.csv(all_perf_metrics, 
-          "Final Tables and Figures/Supplementary_Table_4_All_Model_Metrics_Refit2.csv", 
+          "Final Tables and Figures/Supplementary_Table_4_All_Model_Metrics_Refit3.csv", 
           row.names = FALSE)
 
 
@@ -2001,12 +2053,12 @@ all_perf_metrics <- youden_tbl %>%
 library(writexl)    # or use write.csv if you prefer CSV
 write_xlsx(
   list(`All Performance Metrics` = all_perf_metrics),
-  path = "Final Tables and Figures/Supplementary_Table_5_All_Model_Metrics_Refit_Test_Cohort.xlsx"
+  path = "Final Tables and Figures/Supplementary_Table_5_All_Model_Metrics_Refit_Test_Cohort2.xlsx"
 )
 
 # — or, if prefer CSV:
 write.csv(all_perf_metrics, 
-          "Final Tables and Figures/Supplementary_Table_5_All_Model_Metrics_Refit_Test_Cohort.csv", 
+          "Final Tables and Figures/Supplementary_Table_5_All_Model_Metrics_Refit_Test_Cohort2.csv", 
           row.names = FALSE)
 
 
@@ -3657,6 +3709,159 @@ ggsave(
 
 
 
+##### Now make the contingency tables
+## add contingency table 
+# ──────────────────────────────────────────────────────────────────────────────
+# 2) pull thresholds and models
+fragmentomics_obj      <- nested_fragmentomics_validation_updated3
+models_list <- fragmentomics_obj$models            # named list of caret models
+valid_df    <- train_fragmentomics                  # must contain MRD_truth + all predictors
+fragmentomics_preds <- nested_fragmentomics_validation_updated3$outer_predictions
+
+mods   <- fragmentomics_obj$models[c("Fragmentomics_mean_coverage_only",                             "Fragmentomics_min")]
+
+# nice labels
+model_labs <- c(
+  "MM-sites coverage" = "Fragmentomics_mean_coverage_only",
+  "Fragment score + MM-sites"  = "Fragmentomics_min"
+)
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 3) predict + build confusion‐table tibbles
+cm_list <- imap(mods, function(mod, nm){
+  # get threshold
+  th <- thresh[[nm]]
+  # predict probabilities
+  probs <- predict(mod, newdata = train_fragmentomics, type = "prob")[[ positive_class ]]
+  # call class by threshold
+  preds <- factor(if_else(probs >= th, "pos","neg"), levels = c("neg","pos"))
+  # confusionMatrix
+  cm <- confusionMatrix(preds, train_fragmentomics$MRD_truth, positive = "pos")
+  # turn table to tibble
+  as_tibble(cm$table) %>%
+    rename(Obs = Reference, Pred = Prediction, Count = n) %>%
+    mutate(
+      model = nm,
+      PPV   = cm$byClass["Pos Pred Value"],
+      NPV   = cm$byClass["Neg Pred Value"]
+    )
+})
+
+cm_df <- bind_rows(cm_list) %>%
+  mutate(model = fct_recode(model, !!!model_labs))
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 4) plot 2×2 tiles + add PPV/NPV text
+p_tables <- ggplot(cm_df, aes(x = Pred, y = Obs, fill = Count)) +
+  geom_tile(color = "white") +
+  geom_text(aes(label = Count), size = 5) +
+  facet_wrap(~ model) +
+  scale_fill_viridis_c(
+    option = "D",
+    name   = "Count",
+    begin  = 0.3,      # shift palette toward its lighter end
+    end    = 0.9       # avoid the very darkest purples
+  ) +  
+  scale_x_discrete(position = "top") +
+  labs(
+    x = "Predicted MRD status",
+    y = "Observed MRD status",
+    title = "Confusion Matrix at Youden Index in Training Cohort"
+  ) +
+  theme_minimal(base_size = 10) +
+  # reverse the Obs axis so neg is at the top
+  scale_y_discrete(limits = c("pos", "neg")) +
+  theme(
+    strip.text        = element_text(face = "bold", size = 10),
+    axis.text.y       = element_text(size = 9),
+    axis.text.x       = element_text(size = 9, vjust = 0),
+    axis.title        = element_text(size = 10),
+    panel.grid        = element_blank(),
+    legend.position   = "none",
+    plot.title        = element_text(face = "bold", hjust = 0.5)
+  )
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 5) save
+ggsave(
+  "Final Tables and Figures/Supp_Fig9E_confusion_tables_primary_fragmentomics.png",
+  plot   = p_tables,
+  width  = 5,
+  height = 2.75,
+  dpi    = 600
+)
+
+
+## Now validation
+# ──────────────────────────────────────────────────────────────────────────────
+# 3) predict + build confusion‐table tibbles
+cm_list <- imap(mods, function(mod, nm){
+  # get threshold
+  th <- thresh[[nm]]
+  # predict probabilities
+  probs <- predict(mod, newdata = hold_fragmentomics, type = "prob")[[ positive_class ]]
+  # call class by threshold
+  preds <- factor(if_else(probs >= th, "pos","neg"), levels = c("neg","pos"))
+  # confusionMatrix
+  cm <- confusionMatrix(preds, hold_fragmentomics$MRD_truth, positive = "pos")
+  # turn table to tibble
+  as_tibble(cm$table) %>%
+    rename(Obs = Reference, Pred = Prediction, Count = n) %>%
+    mutate(
+      model = nm,
+      PPV   = cm$byClass["Pos Pred Value"],
+      NPV   = cm$byClass["Neg Pred Value"]
+    )
+})
+
+cm_df <- bind_rows(cm_list) %>%
+  mutate(model = fct_recode(model, !!!model_labs))
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 4) plot 2×2 tiles + add PPV/NPV text
+p_tables <- ggplot(cm_df, aes(x = Pred, y = Obs, fill = Count)) +
+  geom_tile(color = "white") +
+  geom_text(aes(label = Count), size = 5) +
+  facet_wrap(~ model) +
+  scale_fill_viridis_c(
+    option = "D",
+    name   = "Count",
+    begin  = 0.3,      # shift palette toward its lighter end
+    end    = 0.9       # avoid the very darkest purples
+  ) +
+  scale_x_discrete(position = "top") +
+  labs(
+    x = "Predicted MRD status",
+    y = "Observed MRD status",
+    title = "Confusion Matrix at Youden Index in Test Cohort"
+  ) +
+  theme_minimal(base_size = 10) +
+  # reverse the Obs axis so neg is at the top
+  scale_y_discrete(limits = c("pos", "neg")) +
+  theme(
+    strip.text        = element_text(face = "bold", size = 10),
+    axis.text.y       = element_text(size = 9),
+    axis.text.x       = element_text(size = 9, vjust = 0),
+    axis.title        = element_text(size = 10),
+    panel.grid        = element_blank(),
+    legend.position   = "none",
+    plot.title        = element_text(face = "bold", hjust = 0.5)
+  )
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 5) save
+ggsave(
+  "Final Tables and Figures/Supp_Fig9F_confusion_tables_val_fragmentomics.png",
+  plot   = p_tables,
+  width  = 5,
+  height = 2.75,
+  dpi    = 600
+)
+
+
+
+
+
 
 
 
@@ -3964,6 +4169,8 @@ ggsave(
   height = 4,
   dpi    = 600
 )
+
+
 
 
 
@@ -4386,10 +4593,10 @@ ggsave(
 # -----------------------------------------------------------------------------
 #### Plot to see what the model looks like
 # For convenience
-fragmentomics_obj      <- nested_fragmentomics_validation_updated2
+fragmentomics_obj      <- nested_fragmentomics_validation_updated3
 models_list <- fragmentomics_obj$models            # named list of caret models
 valid_df    <- train_fragmentomics                  # must contain MRD_truth + all predictors
-fragmentomics_preds <- nested_fragmentomics_validation_updated2$outer_predictions
+fragmentomics_preds <- nested_fragmentomics_validation_updated3$outer_predictions
 
 # ── 1. ROC curves on the hold-out cohort ─────────────────────────────────
 # roc_dfs <- imap(models_list,
@@ -4413,6 +4620,7 @@ fragmentomics_preds <- nested_fragmentomics_validation_updated2$outer_prediction
 
 ## On the pooled outer fold predictions 
 # 1) Compute one ROC curve per combo from your outer‑fold preds
+# 1) Compute one ROC curve per combo from your outer‑fold preds to get the nested CV version 
 roc_dfs <- fragmentomics_preds %>% 
   group_by(combo) %>% 
   group_map(~{
@@ -4428,6 +4636,7 @@ roc_dfs <- fragmentomics_preds %>%
     )
   }) %>% 
   bind_rows()
+
 
 roc_df  <- bind_rows(roc_dfs)
 auc_tbl <- roc_df %>% distinct(combo, auc)
@@ -4445,7 +4654,6 @@ pretty_combo_names <- c(
   Fragmentomics_prop_short_only       = "Prop. Short Fragments Only",
   Fragmentomics_tumor_fraction_only   = "Tumor Fraction Only"
 )
-
 
 ## Get colors 
 okabe_ito8 <- c(
@@ -4485,8 +4693,8 @@ roc_plot <- ggplot(roc_df, aes(x = fpr, y = tpr, colour = combo)) +
     legend.background  = element_rect(fill = alpha("white", 0.7), colour = NA),
     legend.key.size    = unit(0.8, "lines"),
     legend.text        = element_text(size = 10),
-    plot.title      = element_text(hjust = 0.5, face = "bold"),
-    panel.grid = element_blank()
+    panel.grid = element_blank(),
+    plot.title      = element_text(hjust = 0.5, face = "bold")
   ) +
   scale_colour_manual(
     values = okabe_ito8[1:length(levels(roc_df$combo))],
@@ -4519,7 +4727,7 @@ perf_plot <- ggplot(perf_df, aes(x = sens_mean, y = spec_mean, colour = combo)) 
     x     = "Mean sensitivity (CV)",
     y     = "Mean specificity (CV)",
     title = "Fold‑Wise Sensitivity & Specificity\n(mean ± SD)"
-    ) +
+  ) +
   # reuse the Okabe-Ito palette
   scale_colour_manual(
     values = okabe_ito8[ seq_along(levels(perf_df$combo)) ]
@@ -4538,12 +4746,168 @@ combined_plot <- roc_plot + perf_plot + plot_layout(ncol = 2, widths = c(1,1))
 
 # ── 4) Export ───────────────────────────────────────────────────────────────
 ggsave(
-  filename = "Final Tables and Figures/combined_ROC_and_performance_nested_folds_fragmentomics_updated2.png",
+  filename = "Final Tables and Figures/combined_ROC_and_performance_nested_folds_fragmentomics_updated3.png",
   plot     = combined_plot,
   width    = 12,
   height   = 6,
   dpi      = 500
 )
+
+
+
+### Now confusion matrices 
+
+## add contingency table 
+# ──────────────────────────────────────────────────────────────────────────────
+# 2) pull thresholds and models
+thresh <- fragmentomics_obj$thresholds
+mods   <- fragmentomics_obj$models[c("BM_zscore_only_sites",
+                          "BM_base_zscore")]
+
+fragmentomics_obj      <- nested_fragmentomics_validation_updated2
+models_list <- fragmentomics_obj$models            # named list of caret models
+valid_df    <- train_fragmentomics                  # must contain MRD_truth + all predictors
+fragmentomics_preds <- nested_fragmentomics_validation_updated2$outer_predictions
+
+
+# nice labels
+model_labs <- c(
+  "Sites model" = "BM_zscore_only_sites",
+  "Combined model"  = "BM_base_zscore"
+)
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 3) predict + build confusion‐table tibbles
+cm_list <- imap(mods, function(mod, nm){
+  # get threshold
+  th <- thresh[[nm]]
+  # predict probabilities
+  probs <- predict(mod, newdata = train_bm, type = "prob")[[ positive_class ]]
+  # call class by threshold
+  preds <- factor(if_else(probs >= th, "pos","neg"), levels = c("neg","pos"))
+  # confusionMatrix
+  cm <- confusionMatrix(preds, train_bm$MRD_truth, positive = "pos")
+  # turn table to tibble
+  as_tibble(cm$table) %>%
+    rename(Obs = Reference, Pred = Prediction, Count = n) %>%
+    mutate(
+      model = nm,
+      PPV   = cm$byClass["Pos Pred Value"],
+      NPV   = cm$byClass["Neg Pred Value"]
+    )
+})
+
+cm_df <- bind_rows(cm_list) %>%
+  mutate(model = fct_recode(model, !!!model_labs))
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 4) plot 2×2 tiles + add PPV/NPV text
+p_tables <- ggplot(cm_df, aes(x = Pred, y = Obs, fill = Count)) +
+  geom_tile(color = "white") +
+  geom_text(aes(label = Count), size = 5) +
+  facet_wrap(~ model) +
+  scale_fill_viridis_c(
+    option = "D",
+    name   = "Count",
+    begin  = 0.3,      # shift palette toward its lighter end
+    end    = 0.9       # avoid the very darkest purples
+  ) +  
+  scale_x_discrete(position = "top") +
+  scale_y_discrete(limits = c("pos", "neg")) +
+  labs(
+    x = "Predicted MRD status",
+    y = "Observed MRD status",
+    title = "Confusion Matrix at Youden Index in Training Cohort"
+  ) +
+  theme_minimal(base_size = 10) +
+  theme(
+    strip.text        = element_text(face = "bold", size = 10),
+    axis.text.y       = element_text(size = 9),
+    axis.text.x       = element_text(size = 9, vjust = 0),
+    axis.title        = element_text(size = 10),
+    panel.grid        = element_blank(),
+    legend.position   = "none",
+    plot.title        = element_text(face = "bold", hjust = 0.5)
+  )
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 5) save
+ggsave(
+  "Final Tables and Figures/Fig4C_confusion_tables_primary_updated3.png",
+  plot   = p_tables,
+  width  = 5,
+  height = 2.75,
+  dpi    = 600
+)
+
+
+## Now validation
+# ──────────────────────────────────────────────────────────────────────────────
+# 3) predict + build confusion‐table tibbles
+cm_list <- imap(mods, function(mod, nm){
+  # get threshold
+  th <- thresh[[nm]]
+  # predict probabilities
+  probs <- predict(mod, newdata = hold_bm, type = "prob")[[ positive_class ]]
+  # call class by threshold
+  preds <- factor(if_else(probs >= th, "pos","neg"), levels = c("neg","pos"))
+  # confusionMatrix
+  cm <- confusionMatrix(preds, hold_bm$MRD_truth, positive = "pos")
+  # turn table to tibble
+  as_tibble(cm$table) %>%
+    rename(Obs = Reference, Pred = Prediction, Count = n) %>%
+    mutate(
+      model = nm,
+      PPV   = cm$byClass["Pos Pred Value"],
+      NPV   = cm$byClass["Neg Pred Value"]
+    )
+})
+
+cm_df <- bind_rows(cm_list) %>%
+  mutate(model = fct_recode(model, !!!model_labs))
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 4) plot 2×2 tiles + add PPV/NPV text
+p_tables <- ggplot(cm_df, aes(x = Pred, y = Obs, fill = Count)) +
+  geom_tile(color = "white") +
+  geom_text(aes(label = Count), size = 5) +
+  facet_wrap(~ model) +
+  scale_fill_viridis_c(
+    option = "D",
+    name   = "Count",
+    begin  = 0.3,      # shift palette toward its lighter end
+    end    = 0.9       # avoid the very darkest purples
+  ) +
+  scale_x_discrete(position = "top") +
+  labs(
+    x = "Predicted MRD status",
+    y = "Observed MRD status",
+    title = "Confusion Matrix at Youden Index in Test Cohort"
+  ) +
+  scale_y_discrete(limits = c("pos", "neg")) +
+  theme_minimal(base_size = 10) +
+  theme(
+    strip.text        = element_text(face = "bold", size = 10),
+    axis.text.y       = element_text(size = 9),
+    axis.text.x       = element_text(size = 9, vjust = 0),
+    axis.title        = element_text(size = 10),
+    panel.grid        = element_blank(),
+    legend.position   = "none",
+    plot.title        = element_text(face = "bold", hjust = 0.5)
+  )
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 5) save
+ggsave(
+  "Final Tables and Figures/Fig4C_confusion_tables_test3.png",
+  plot   = p_tables,
+  width  = 5,
+  height = 2.75,
+  dpi    = 600
+)
+
+
+
 
 
 ### Now do on validation cohort
