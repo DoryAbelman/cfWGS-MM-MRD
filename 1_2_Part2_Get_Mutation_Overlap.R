@@ -1,3 +1,6 @@
+# =============================================================================
+# Script: 1_2_Part2_Get_Mutation_Overlap.R
+# =============================================================================
 # ──────────────────────────────────────────────────────────────────────────────
 # Title       : Mutation Overlap Analysis (BM vs. PB cfDNA)  
 # Author      : Dory Abelman  
@@ -12,9 +15,9 @@
 #        • computes % overlap and plots barplot  
 #  
 # Usage       :  
-#   Rscript mutation_overlap_analysis.R  
+#   Rscript 1_2_Part2_Get_Mutation_Overlap.R  
 #   — or —  
-#   source("mutation_overlap_analysis.R")  
+#   source("1_2_Part2_Get_Mutation_Overlap.R")  
 #  
 # Dependencies:  
 #   library(maftools)    # read.maf()  

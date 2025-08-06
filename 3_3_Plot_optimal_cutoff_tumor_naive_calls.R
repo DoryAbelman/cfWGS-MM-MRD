@@ -3,7 +3,7 @@ source("config.R")
 source("helpers.R")
 
 # =============================================================================
-# Script:   cfWGS_MRD_make_figures_cfDNA_calls.R
+# Script: 3_3_Plot_optimal_cutoff_tumor_naive_calls.R
 # Project:  cfWGS MRD detection (M4 / SPORE / IMMAGINE)
 # Author:   Dory Abelman
 # Date:     May 28, 2025

@@ -1,5 +1,5 @@
 # ──────────────────────────────────────────────────────────────────────────────
-# process_fragmentomics_dilution_series.R
+# 1_7C_Process_fragmentomics_data_dilution_series_updated.R
 #
 # Purpose  ────────────────────────────────────────────────────────────────────
 #   1. Load *dilution-series* nucleosome-accessibility distance files (cfWGS) 

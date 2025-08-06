@@ -1,5 +1,5 @@
 # =============================================================================
-# Script: process_cna_seg_files.R
+# Script: 1_4_Process_CNA_Data.R
 #
 # Description:
 #   This script imports, harmonizes, and summarizes copy-number segment (SEG)
@@ -40,7 +40,7 @@
 #   library(GenomicRanges)
 #
 # Usage:
-#   source("process_cna_seg_files.R")
+#   source("1_4_Process_CNA_Data.R")
 #   # creates combined_seg_data and myeloma_CNA_matrix_with_HRD in working dir
 #
 # Author: Dory Abelman

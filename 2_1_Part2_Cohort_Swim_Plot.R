@@ -1,3 +1,7 @@
+# =============================================================================
+# Script: 2_1_Part2_Cohort_Swim_Plot.R
+# Purpose: Build cohort swim plot of treatment timelines
+# =============================================================================
 #### Now make swim plot 
 
 library(tidyverse)

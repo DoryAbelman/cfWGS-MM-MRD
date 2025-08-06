@@ -1,5 +1,5 @@
 # =============================================================================
-# sample_availability_summary.R
+# 1_6_Identify_High_Quality_Patient_Pairs.R
 # Project:  cfWGS MRD Detection (M4 / IMMAGINE / SPORE)
 # Author:   Dory Abelman
 # Date:     January 2025
@@ -37,11 +37,11 @@
 #   • patient_cohort_assignment.rds
 #
 # Usage:
-#   Rscript sample_availability_summary.R
+#   Rscript 1_6_Identify_High_Quality_Patient_Pairs.R
 # =============================================================================
 
 # =============================================================================
-# sample_availability_summary.R
+# 1_6_Identify_High_Quality_Patient_Pairs.R
 # Project: cfWGS MRD detection (M4 / IMMAGINE / SPORE)
 # Author:  Dory Abelman
 # Date:    January 2025 (last update May 2025)

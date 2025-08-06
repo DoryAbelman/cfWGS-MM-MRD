@@ -1,5 +1,5 @@
 # =============================================================================
-# MRDetect_processing.R
+# 1_8_Process_Cumulative_VAFs_MRDetect.R
 # Project:  cfWGS MRDetect (Winter 2025)
 # Author:   Dory Abelman
 # Date:     January 2025
@@ -31,7 +31,7 @@
 #       - cfWGS MRDetect Blood data updated May.csv
 #
 # Usage:
-#   Rscript MRDetect_processing.R
+#   Rscript 1_8_Process_Cumulative_VAFs_MRDetect.R
 # =============================================================================
 
 # ──────────────────────────────────────────────────────────────────────────────

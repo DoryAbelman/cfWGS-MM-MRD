@@ -1,5 +1,5 @@
 # =============================================================================
-# Script: integrate_features.R
+# Script: 1_5_Integrate_WGS_Feature_Data.R
 #
 # Description:
 #   Integrates copy-number (CNA), translocation, tumor-fraction, and mutation
@@ -36,7 +36,7 @@
 #   library(maftools)
 #
 # Usage:
-#   source("integrate_features.R")
+#   source("1_5_Integrate_WGS_Feature_Data.R")
 #
 # Author: Dory Abelman
 # Date:   2025-05-26
