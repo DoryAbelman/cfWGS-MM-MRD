@@ -30,10 +30,8 @@ The code is organised as a series of numbered R scripts that process raw clinica
 | 2.4 | `2_4_Longitudinal_features_analysis.R` | Summarise longitudinal MRD features and paired changes. | Final aggregated table and cohort assignments. |
 | 3.1 | `3_1_Optimize_cfWGS_thresholds.R` | Determine optimal cfWGS tumour‑fraction thresholds. | Feature matrix with clonoSEQ/MFC labels. |
 | 3.1B | `3_1_part2_Apply_cfWGS_thresholds_to_dilution_series.R` | Score dilution‑series samples with trained models. | Saved models, thresholds and dilution‑series fragmentomics. |
-| 3.2 | `3_2_Plot_optimal_cutoff.R` | Plot the ROC curves for threshold selection. | Output from step 3.1. |
-| 3.2B | `3_2_Plot_optimal_cutoff_and_clinical_concordance.R` | Plot thresholds and clinical concordance panels. | `all_patients_with_BM_and_blood_calls.rds` from step 3.1. |
-| 3.3 | `3_3_Plot_optimal_cutoff_tumor_naive_calls.R` | ROC analysis using tumour‑naïve mutation calls. | Tumour‑naïve call dataset. |
-| 3.3B | `3_3_Plot_optimal_cutoff_tumor_naive_calls_and_clinical_concordance.R` | Tumour‑naïve ROC and concordance figures. | Tumour‑naïve call dataset with clinical labels. |
+| 3.2 | `3_2_Plot_optimal_cutoff_and_clinical_concordance.R` | Plot thresholds and clinical concordance panels. | `all_patients_with_BM_and_blood_calls.rds` from step 3.1. |
+| 3.3 | `3_3_Plot_optimal_cutoff_tumor_naive_calls_and_clinical_concordance.R` | Tumour‑naïve ROC and concordance figures. | Tumour‑naïve call dataset with clinical labels. |
 | 4.1 | `4_1_Survival_Analysis.R` | Perform survival analyses. | `Censor_dates_per_patient_for_PFS_updated.rds` and call table. |
 | 4.2 | `4_2_Compare_subclonal_evolution.R` | Assess emergent subclones in longitudinal samples. | `All_feature_data_*.rds` and cohort assignments. |
 
