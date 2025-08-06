@@ -3,7 +3,7 @@ source("config.R")
 source("helpers.R")
 
 # =============================================================================
-# Script: generate_baseline_characteristics_table.R
+# Script: 2_1_Clinical_Demographics_Table.R
 #
 # Description:
 #   This script processes the final aggregated cfWGS feature table (with clinical
@@ -37,7 +37,7 @@ source("helpers.R")
 #   library(flextable)
 #
 # Usage:
-#   source("generate_baseline_characteristics_table.R")
+#   source("2_1_Clinical_Demographics_Table.R")
 #
 # Author: Dory Abelman
 # Date:   2025-05-26

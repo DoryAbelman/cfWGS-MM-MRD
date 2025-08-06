@@ -1,5 +1,5 @@
 # =============================================================================
-# Script:   cfWGS_MRD_make_figures.R
+# Script: 3_2_Plot_optimal_cutoff_and_clinical_concordance.R
 # Project:  cfWGS MRD detection (M4 / SPORE / IMMAGINE)
 # Author:   Dory Abelman
 # Date:     May 28, 2025

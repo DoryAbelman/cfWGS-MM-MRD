@@ -1,5 +1,5 @@
 # =============================================================================
-# Script: process_mutation_mafs.R
+# Script: 1_2_Process_Mutation_Data.R
 #
 # Description:
 #   This script ingests and harmonizes mutation calls from MAF files for both
@@ -48,7 +48,7 @@
 #   library(circlize)        # if downstream heatmaps are created
 #
 # Usage:
-#   source("process_mutation_mafs.R")
+#   source("1_2_Process_Mutation_Data.R")
 #
 # Author: Dory Abelman
 # Date:   2025-05-26

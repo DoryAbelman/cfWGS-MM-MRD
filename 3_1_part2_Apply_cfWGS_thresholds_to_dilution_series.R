@@ -1,5 +1,5 @@
 # ---------------------------------------------------------------------------
-# Script:   score_dilution_series_cfWGS.R
+# Script: 3_1_part2_Apply_cfWGS_thresholds_to_dilution_series.R
 # Purpose:  Apply the previously optimised cfWGS MRD classifier to the dilution series
 # ---------------------------------------------------------------------------
 

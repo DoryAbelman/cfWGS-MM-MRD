@@ -1,5 +1,5 @@
 # =============================================================================
-# MRDetect_processing_for_dilution_series.R
+# 1_8A_Process_Cumulative_VAFs_for_dilution_series.R
 # Project:  cfWGS MRDetect (Winter 2025)
 # Author:   Dory Abelman
 # Date:     January 2025
