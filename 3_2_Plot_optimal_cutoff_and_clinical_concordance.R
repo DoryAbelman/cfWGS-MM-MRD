@@ -45,9 +45,9 @@ library(scales)   # for percent_format()
 # -------- 1.  Read processed data & thresholds ------------------------------
 outdir   <- "Output_tables_2025"
 OUTPUT_DIR_FIGURES    <- "Output_figures_2025"
-dat      <- readRDS(file.path(outdir, "all_patients_with_BM_and_blood_calls_updated3.rds"))
-PATH_MODEL_LIST       <- "~/Documents/Thesis_work/R/M4/Projects/High_risk_MM_baselinbe_relapse_marrow/Output_tables_2025/selected_combo_models_2025-07-25.rds"
-PATH_THRESHOLD_LIST   <- "~/Documents/Thesis_work/R/M4/Projects/High_risk_MM_baselinbe_relapse_marrow/Output_tables_2025/selected_combo_thresholds_2025-07-25.rds"
+dat      <- readRDS(file.path(outdir, "all_patients_with_BM_and_blood_calls_updated4.rds"))
+PATH_MODEL_LIST       <- "~/Documents/Thesis_work/R/M4/Projects/High_risk_MM_baselinbe_relapse_marrow/Output_tables_2025/selected_combo_models_2025-08-15.rds"
+PATH_THRESHOLD_LIST   <- "~/Documents/Thesis_work/R/M4/Projects/High_risk_MM_baselinbe_relapse_marrow/Output_tables_2025/selected_combo_thresholds_2025-08-15.rds"
 
 selected_models <- readRDS(PATH_MODEL_LIST)
 selected_thr    <- readRDS(PATH_THRESHOLD_LIST)
@@ -149,12 +149,12 @@ non_tbl <- dat %>%
 ## Export
 readr::write_csv(
   front_tbl,
-  file.path(outdir, "Positivity_by_Landmark_TimePoint_BoneMarrow_Frontline_updated2.csv")
+  file.path(outdir, "Positivity_by_Landmark_TimePoint_BoneMarrow_Frontline_updated3.csv")
 )
 
 readr::write_csv(
   non_tbl,
-  file.path(outdir, "Positivity_All_TimePoints_BoneMarrow_NonFrontline_updated2.csv")
+  file.path(outdir, "Positivity_All_TimePoints_BoneMarrow_NonFrontline_updated3.csv")
 )
 
 

@@ -1,5 +1,5 @@
 # ---------------------------------------------------------------------------
-# Script: 3_1_part2_Apply_cfWGS_thresholds_to_dilution_series.R
+# Script:   score_dilution_series_cfWGS.R
 # Purpose:  Apply the previously optimised cfWGS MRD classifier to the dilution series
 # ---------------------------------------------------------------------------
 
@@ -12,11 +12,11 @@ library(pROC)
 library(stringr)
 library(broom)       # tidying model outputs
 library(patchwork)   # optional – for combining plots, if needed
-library(virdis)
+library(viridis)
 
 # ── 1. FILE PATHS ───────────────────────────────────────────────────────────
-PATH_MODEL_LIST       <- "~/Documents/Thesis_work/R/M4/Projects/High_risk_MM_baselinbe_relapse_marrow/Output_tables_2025/selected_combo_models_2025-07-25.rds"
-PATH_THRESHOLD_LIST   <- "~/Documents/Thesis_work/R/M4/Projects/High_risk_MM_baselinbe_relapse_marrow/Output_tables_2025/selected_combo_thresholds_2025-07-25.rds"
+PATH_MODEL_LIST       <- "~/Documents/Thesis_work/R/M4/Projects/High_risk_MM_baselinbe_relapse_marrow/Output_tables_2025/selected_combo_models_2025-08-15.rds"
+PATH_THRESHOLD_LIST   <- "~/Documents/Thesis_work/R/M4/Projects/High_risk_MM_baselinbe_relapse_marrow/Output_tables_2025/selected_combo_thresholds_2025-08-15.rds"
 PATH_DILUTION_FRAGMENTOMICS         <- "~/Documents/Thesis_work/R/M4/Projects/High_risk_MM_baselinbe_relapse_marrow/Results_Fragmentomics/Dilution_series/key_fragmentomics_info_dilution_series.rds"
 PATH_DILUTION_PROCESSED_MRDetect    <- "~/Documents/Thesis_work/R/M4/Projects/High_risk_MM_baselinbe_relapse_marrow/MRDetect_output_winter_2025/Processed_R_outputs/cfWGS_Winter2025Dilution_series_May2025_with_zscore.rds"
 PATH_DILUTION_CLINICAL  <- "~/Documents/Thesis_work/R/M4/Projects/High_risk_MM_baselinbe_relapse_marrow/Fragmentomics_data/Dilution_series/Metadata_dilution_series.csv"
@@ -177,9 +177,9 @@ dilution_df$LOD_original <- dilution_df$LOD
 dilution_df$LOD <- dilution_df$LOD_updated
 
 # ── 7. SAVE SCORED DILUTION SERIES ──────────────────────────────────────────
-write_rds(dilution_df, file.path(OUTPUT_DIR, "dilution_series_scored_updated2.rds"))
-write_csv(dilution_df, file.path(OUTPUT_DIR, "dilution_series_scored_updated2.csv"))
-write_csv(dilution_df, file.path(OUTPUT_DIR_TABLES, "dilution_series_scored_updated2.csv"))
+write_rds(dilution_df, file.path(OUTPUT_DIR, "dilution_series_scored_updated3.rds"))
+write_csv(dilution_df, file.path(OUTPUT_DIR, "Supp_Table_7_dilution_series_scored_updated3.csv"))
+write_csv(dilution_df, file.path(OUTPUT_DIR_TABLES, "Supp_Table_7_dilution_series_scored_updated2.csv"))
 
 message("Finished: results written to ", OUTPUT_DIR)
 
@@ -229,7 +229,7 @@ corr_tbl <- plot_df %>%
   arrange(desc(r2))
 
 ## save the full table for the supplement
-write_csv(corr_tbl, file.path(OUTPUT_DIR_TABLES, "Supplementary_Table_6_LOD_feature_correlations_with_dilution_series.csv"))
+write_csv(corr_tbl, file.path(OUTPUT_DIR_TABLES, "Supplementary_Table_8_LOD_feature_correlations_with_dilution_series.csv"))
 
 ## ----------------------------------------------------------------------
 ## 3.  Pick “interesting” features  -------------------------------------
@@ -772,7 +772,7 @@ blood_features <- c(
   "detect_rate_blood",                          
   "zscore_blood",                               
   "z_score_detection_rate_blood",     
-  "Blood_base_prob",
+  "Blood_plus_fragment_min_prob",
   "Blood_zscore_only_detection_rate_prob",   
   "Blood_zscore_only_sites_prob",
  "Blood_rate_only_prob",                      
@@ -800,7 +800,7 @@ annot_df <- corr_blood %>%
 
 # 4) nicer facet labels
 facet_labels <- c(
-  Blood_base_prob                 = "Combined Model Probability",
+  Blood_plus_fragment_min_prob                 = "Combined Model Probability",
   Blood_zscore_only_sites_prob                 = "Blood sites model prob.",
   Blood_zscore_only_detection_rate_prob             = "Blood cVAF model prob.",
   detect_rate_blood                     = "Cumulative VAF (cVAF)",
@@ -935,7 +935,7 @@ ggsave(
 # )
 
 prob_features <- c(
-  "Blood_base_prob",  # Blood cVAF Z-score model prob.
+  "Blood_plus_fragment_min_prob",  # Blood cVAF Z-score model prob.
   "Blood_zscore_only_sites_prob"
 )
 
@@ -950,9 +950,9 @@ prob_features <- c(
 # )
 
 thresholds <- tibble(
-  feature = c("Blood_base_prob", "Blood_zscore_only_sites_prob"),
+  feature = c("Blood_plus_fragment_min_prob", "Blood_zscore_only_sites_prob"),
   thr     = c(
-    blood_obj$thresholds["Blood_base"],
+    blood_obj$thresholds["Blood_plus_fragment_min"],
     blood_obj$thresholds["Blood_zscore_only_sites"]
   )
 )
@@ -1043,7 +1043,7 @@ plot_df_prob <- plot_df_blood %>%
     call = case_when(
       ## SITES pane: 3 categories
       feature == "Blood_zscore_only_sites_prob" & value >= thr                ~ "Positive",
-      feature == "Blood_zscore_only_sites_prob" & value >= 0.457 & value < thr ~ "Confirmatory",
+      feature == "Blood_zscore_only_sites_prob" & value >= 0.380 & value < thr ~ "Confirmatory",
       feature == "Blood_zscore_only_sites_prob"                                   ~ "Negative",
       
       ## Other features: just Positive vs Negative
@@ -1061,10 +1061,10 @@ p_blood_prob <- ggplot(plot_df_prob, aes(x = LOD, y = value, color = call)) +
     linetype = "dashed",
     color    = "gray40"
   ) +
-  # confirmatory cutoff (0.457) only in the sites facet
+  # confirmatory cutoff (0.380) only in the sites facet
   geom_hline(
     data = data.frame(feature = "Blood_zscore_only_sites_prob",
-                      thr     = 0.457),
+                      thr     = 0.380),
     aes(yintercept = thr),
     linetype = "dashed",
     color    = "steelblue"
@@ -1112,7 +1112,7 @@ combined_plot <- p_blood_spearman_actual + p_blood_prob +
 
 
 ggsave(
-  filename = file.path(OUTPUT_DIR_FIGURES, "Fig5G_LOD_combined_updated2.png"),
+  filename = file.path(OUTPUT_DIR_FIGURES, "Fig5G_LOD_combined_updated3.png"),
   plot     = combined_plot,
   width    = 12,        # adjust as needed
   height   = 4,         # one‐line panel
@@ -1161,7 +1161,7 @@ p_blood_spearman_actual <- ggplot(plot_df_blood %>% filter(feature %in% c("detec
 
 # 4) Save to output directory
 ggsave(
-  filename = file.path(OUTPUT_DIR_FIGURES, "Fig_LOD_blood_metrics_spearman_actual_updated2_log_flipped_ticks2.png"),
+  filename = file.path(OUTPUT_DIR_FIGURES, "Fig_LOD_blood_metrics_spearman_actual_updated2_log_flipped_ticks3.png"),
   plot     = p_blood_spearman_actual,
   width    = 8,
   height   = 4, 
@@ -1177,10 +1177,10 @@ p_blood_prob <- ggplot(plot_df_prob, aes(x = LOD, y = value, color = call)) +
     linetype = "dashed",
     color    = "gray40"
   ) +
-  # confirmatory cutoff (0.457) only in the sites facet
+  # confirmatory cutoff (0.380) only in the sites facet
   geom_hline(
     data = data.frame(feature = "Blood_zscore_only_sites_prob",
-                      thr     = 0.457),
+                      thr     = 0.380),
     aes(yintercept = thr),
     linetype = "dashed",
     color    = "steelblue"
@@ -1237,7 +1237,7 @@ combined_plot <- p_blood_spearman_actual + p_blood_prob +
 
 
 ggsave(
-  filename = file.path(OUTPUT_DIR_FIGURES, "Fig5G_LOD_combined_updated_reverse_log3.png"),
+  filename = file.path(OUTPUT_DIR_FIGURES, "Fig5G_LOD_combined_updated_reverse_log4.png"),
   plot     = combined_plot,
   width    = 12,        # adjust as needed
   height   = 4,         # one‐line panel
@@ -1252,7 +1252,7 @@ ggsave(
 #### Now do the overlap across all the features for 5H
 # 1) Select just the features you care about, in the order you want them
 selected_feats <- c(
-  "detect_rate_blood",   "Blood_base_prob",                    # Blood mutation detection rate
+  "detect_rate_blood",   "Blood_plus_fragment_min_prob",                    # Blood mutation detection rate
   "zscore_blood",                            # Blood sites z-score
   "z_score_detection_rate_blood",            # Blood cVAF Z-score
   "Mean.Coverage",                        # enhancer coverage
@@ -1270,7 +1270,7 @@ custom_labels <- c(
   Mean.Coverage                               = "MM regulatory\ncoverage",
   Proportion.Short                            = "Short-fragment\nproportion",
   WGS_Tumor_Fraction_Blood_plasma_cfDNA       = "CNA tumour fraction\n(ichorCNA)",
-  Blood_base_prob                 = "Combined model\nprobability"
+  Blood_plus_fragment_min_prob                 = "Combined model\nprobability"
 )
 
 # pick & sort
@@ -1322,7 +1322,7 @@ p_corr_nice <- ggplot(plot_df2, aes(x = r, y = feature)) +
 
 # print or save
 print(p_corr_nice)
-ggsave(filename = file.path(OUTPUT_DIR_FIGURES, "Fig5H_feature_corr_lollipop_nice_updated.png"), 
+ggsave(filename = file.path(OUTPUT_DIR_FIGURES, "Fig5H_feature_corr_lollipop_nice_updated2.png"), 
        p_corr_nice, 
        width = 3.55, height = 3.75, dpi = 600)
 
@@ -1330,11 +1330,12 @@ ggsave(filename = file.path(OUTPUT_DIR_FIGURES, "Fig5H_feature_corr_lollipop_nic
 dilution_df <- dilution_df %>%
   mutate(
     Blood_zscore_only_sites_call_rescored = if_else(
-      Blood_zscore_only_sites_prob >= 0.457,
+      Blood_zscore_only_sites_prob >= 0.380,
       1L,    # “positive” call
       0L     # “negative” call
     )
   )
+
 
 # ───────────────────────────────────────────
 # 3. Fragmentomics Features
@@ -1448,3 +1449,8 @@ ggsave(
   height   = 5,
   dpi      = 500
 )
+
+
+## Export dilution df as supplementary table 
+write_csv(dilution_df, file.path(OUTPUT_DIR, "Supp_Table_7_dilution_series_scored_updated3.csv"))
+write_csv(dilution_df, file.path(OUTPUT_DIR_TABLES, "Supp_Table_7_dilution_series_scored_updated2.csv"))
