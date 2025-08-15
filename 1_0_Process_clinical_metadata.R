@@ -1615,6 +1615,33 @@ final_tbl_updated <- final_tbl %>%
 ## Now export 
 saveRDS(final_tbl_updated, "Exported_data_tables_clinical/Censor_dates_per_patient_for_PFS_updated.rds")
 
+## Add this to the previous relapse dates 
+# Keep original for comparison
+Relapse_dates_full_old <- Relapse_dates_full
+
+# Extract relapse rows from final_tbl_updated
+new_relapses <- final_tbl_updated %>%
+  filter(relapsed == 1) %>%
+  select(Patient, Progression_date = censor_date)
+
+# Add or update relapse dates
+Relapse_dates_full <- Relapse_dates_full %>%
+  bind_rows(new_relapses) %>%
+  distinct(Patient, Progression_date, .keep_all = TRUE)
+
+# Check if any changes occurred
+changes <- anti_join(Relapse_dates_full, Relapse_dates_full_old) %>%
+  bind_rows(anti_join(Relapse_dates_full_old, Relapse_dates_full))
+
+if (nrow(changes) > 0) {
+  message("Changes detected:")
+  print(changes)
+} else {
+  message("No changes detected.")
+}
+
+saveRDS(Relapse_dates_full, "Exported_data_tables_clinical/Relapse_dates_full_updated.rds")
+write.csv(Relapse_dates_full, "Exported_data_tables_clinical/Relapse dates cfWGS updated2.csv",   row.names = FALSE)
 
 # ─── 23.  Get the patient info, number of patients with each feature ───────────────────────
 

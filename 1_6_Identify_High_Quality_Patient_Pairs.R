@@ -40,13 +40,6 @@
 #   Rscript 1_6_Identify_High_Quality_Patient_Pairs.R
 # =============================================================================
 
-# =============================================================================
-# 1_6_Identify_High_Quality_Patient_Pairs.R
-# Project: cfWGS MRD detection (M4 / IMMAGINE / SPORE)
-# Author:  Dory Abelman
-# Date:    January 2025 (last update May 2025)
-# =============================================================================
-
 library(readxl)
 library(dplyr)
 library(readr)
@@ -59,7 +52,7 @@ library(glue)
 bm_list_path        <- "Clinical data/M4/M4 V1 BM processed at baseline.xlsx"
 processing_log_path <- "TFRIM4_Processing Log_Nov2024.xlsx"
 clinical_csv_path   <- "combined_clinical_data_updated_April2025.csv"
-features_rds_path   <- "All_feature_data_May2025.rds"
+features_rds_path   <- "Jan2025_exported_data/All_feature_data_August2025.rds"
 failed_info_path    <- "summary_table_of_samples_and_patient_availability_cfWGS - for making the flow chart of samples.xlsx"
 export_dir          <- "Output_tables_2025"
 
@@ -174,7 +167,7 @@ qual_cfDNA    <- get_patient_list(All_feature_data,   "Blood_plasma_cfDNA", c("D
 cfDNA_counts  <- combined_clinical %>%
   filter(Sample_type == "Blood_plasma_cfDNA") %>%
   group_by(Patient) %>%
-  summarise(total_cfDNA_samples = n(), .groups = "drop")
+  summarise(total_cfDNA_samples = dplyr::n(), .groups = "drop")
 
 # Build base summary table
 summary_table <- tibble(Patient = all_patients) %>%
@@ -271,8 +264,8 @@ high_quality_patients <- summary_table %>%
   filter(High_quality_baseline == 1) %>%
   pull(Patient)
 
-write_csv(high_quality_patients, "high_quality_patients_list_for_baseline_mut_calling.csv")
-saveRDS(high_quality_patients,   "high_quality_patients_list_for_baseline_mut_calling.rds")
+write_csv(high_quality_patients, "high_quality_patients_list_for_baseline_mut_calling2.csv")
+saveRDS(high_quality_patients,   "high_quality_patients_list_for_baseline_mut_calling2.rds")
 message("Saved → high_quality_patients_list_for_baseline_mut_calling.{csv,rds}")
 
 
@@ -303,10 +296,10 @@ summary_filtered <- summary_table %>%
   filter(
     BM_diagnosis_baseline == 1 |
       BM_progression_available == 1 |
-      BM_failed == 1 |
+#      BM_failed == 1 |
       cfDNA_diagnosis_baseline == 1 |
-      cfDNA_progression_available == 1 |
-      cfDNA_failed == 1
+      cfDNA_progression_available == 1 
+ #     cfDNA_failed == 1
   ) %>%
   drop_na(total_cfDNA_samples)
 
@@ -335,7 +328,7 @@ patient_totals <- final_summary %>%
       sum(cfDNA_progression_available == 1, na.rm = TRUE),
     High_Quality_Progression_BM   = sum(HQ_BM_prog, na.rm = TRUE),
     High_Quality_Progression_cfDNA= sum(HQ_cfDNA_prog, na.rm = TRUE),
-    Num_Failed_BM                 = sum(BM_failed == 1, na.rm = TRUE),
+ #   Num_Failed_BM                 = sum(BM_failed == 1, na.rm = TRUE),
     Num_Failed_cfDNA              = sum(cfDNA_failed == 1, na.rm = TRUE)
   )
 
@@ -386,7 +379,8 @@ stats <- failed_info %>%
   )
 
 cat(
-  glue(
+  glue::glue_data(
+    stats,
     "Of {bm_attempts} BM specimens attempted:\n",
     "- {bm_seq_pass} ({bm_pass_rate}%) passed QC; {bm_failures} ({bm_failure_rate}%) failed.\n\n",
     "Of {cf_attempts} cfDNA libraries attempted:\n",
@@ -420,7 +414,6 @@ cohort_df <- readRDS("cohort_assignment_table_updated.rds") ## after manual conf
 failed_info <- failed_info %>% 
   left_join(cohort_df)
 
-successfuly_sequenced <- read_excel()
 # 1) Identify the cohort patients
 cohort_patients <- cohort_df %>% distinct(Patient)
 
@@ -457,7 +450,7 @@ failed_info <- failed_info %>%
     )
   )
 
-write.csv(failed_info, file = "Table for creating sample flowchart updated.csv")
+write.csv(failed_info, file = "Table for creating sample flowchart updated3.csv")
 
 # 4) Calculate proportions
 prop_bm <- cohort_patients %>%
@@ -480,6 +473,53 @@ prop_cfDNA <- cohort_patients %>%
 prop_bm
 prop_cfDNA
 
+## Get by cohort 
+
+# BM proportion by Cohort + Overall
+prop_bm_by_cohort <- failed_info %>%
+  filter(BM_status == "Sequenced_pass") %>%
+  group_by(Cohort) %>%
+  summarise(
+    n_total = dplyr::n(),
+    n_good  = sum(high_quality_BM, na.rm = TRUE),
+    prop_good_BM = n_good / n_total,
+    .groups = "drop"
+  ) %>%
+  bind_rows(
+    failed_info %>%
+      filter(BM_status == "Sequenced_pass") %>%
+      summarise(
+        Cohort = "All",
+        n_total = dplyr::n(),
+        n_good  = sum(high_quality_BM, na.rm = TRUE),
+        prop_good_BM = n_good / n_total
+      )
+  )
+
+# cfDNA proportion by Cohort + Overall
+prop_cfDNA_by_cohort <- failed_info %>%
+  filter(cfDNA_status == "Sequenced_pass") %>%
+  group_by(Cohort) %>%
+  summarise(
+    n_total = dplyr::n(),
+    n_good  = sum(high_quality_cfDNA, na.rm = TRUE),
+    prop_good_cfDNA = n_good / n_total,
+    .groups = "drop"
+  ) %>%
+  bind_rows(
+    failed_info %>%
+      filter(cfDNA_status == "Sequenced_pass") %>%
+      summarise(
+        Cohort = "All",
+        n_total = dplyr::n(),
+        n_good  = sum(high_quality_cfDNA, na.rm = TRUE),
+        prop_good_cfDNA = n_good / n_total
+      )
+  )
+
+# View results
+prop_bm_by_cohort
+prop_cfDNA_by_cohort
 
 
 # ──────────────────────────────────────────────────────────────────────────────

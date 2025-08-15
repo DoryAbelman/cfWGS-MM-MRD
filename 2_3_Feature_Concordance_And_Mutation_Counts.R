@@ -39,7 +39,7 @@ library(broom)    # for tidy()
 library(purrr)    # for map_df()
 library(tibble)   # for tibble()
 
-file <- readRDS("Final_aggregate_table_cfWGS_features_with_clinical_and_demographics_updated5.rds")
+file <- readRDS("Final_aggregate_table_cfWGS_features_with_clinical_and_demographics_updated6.rds")
 
 
 
@@ -321,7 +321,7 @@ cna_cf <- long %>%
 ## ------------------------------------------------------------------
 ## 8. SAVE RESULTS  -----------------------------------------
 ## ------------------------------------------------------------------
-writexl::write_xlsx(concordance_tbl, "Output_tables_2025/FISH_WGS_concordance_with_cohort_updated3.xlsx")
+writexl::write_xlsx(concordance_tbl, "Output_tables_2025/FISH_WGS_concordance_with_cohort_updated4.xlsx")
 
 
 
@@ -386,9 +386,10 @@ if(!dir.exists("Output_tables_2025")) {
   dir.create("Output_tables_2025")
 }
 
+### This is the overall concordance to FISH
 write.csv(
   results2,
-  "Output_tables_2025/concordance_by_cohort_and_source_and_tf_to_FISH_updated3.csv",
+  "Output_tables_2025/concordance_by_cohort_and_source_and_tf_to_FISH_updated4.csv",
   row.names = FALSE
 )
 
@@ -417,7 +418,7 @@ evidence_summary <- dat_base %>%
 
 
 ###### PART 2: See mutation overlap based on the specific base change 
-mutation_data_total <- readRDS("Jan2025_exported_data/mutation_export_updated.rds")
+mutation_data_total <- readRDS("Jan2025_exported_data/mutation_export_updated_more_info.rds")
 All_feature_data <- readRDS("Jan2025_exported_data/All_feature_data_June2025.rds")
 combined_clinical_data_updated <- read.csv("combined_clinical_data_updated_April2025.csv")
 
@@ -573,8 +574,7 @@ combined_clinical_data_updated <- combined_clinical_data_updated %>%
   mutate(join_id = str_remove(Bam, "\\.bam$"))
 
 # 2. Left join on Sample and join_id
-merged1 <- mutation_data_total %>%
-  left_join(combined_clinical_data_updated, by = c("Sample" = "join_id"))
+merged1 <- mutation_data_total 
 
 # Merge to get cohort info
 merged1 <- merged1 %>%
@@ -585,9 +585,7 @@ merged1 <- merged1 %>%
   filter(timepoint_info %in% c("Baseline", "Diagnosis")) %>%
   filter(!is.na(Cohort))
 
-merged1 <- merged1 %>% 
-  select(Tumor_Sample_Barcode, Sample, Patient, Bam, Cohort) %>% 
-  unique()
+write_csv(merged1, "Mutation_iGV_verification.csv")
 
 all_bam_storage <- read_excel("All_bam_storage_locations.xlsx")
 
@@ -601,14 +599,22 @@ missing_path <- merged1 %>%
   filter(is.na(Path) & is.na(Location))
 
 # This gives you which alternate name from merged1 joined to which real BAM in storage
-all_bam_storage <- all_bam_storage %>% mutate(Bam_noWG = str_remove(Bam, "_WG"))
-missing_path <- missing_path %>% mutate(Bam_noWG = str_remove(Bam, "_WG"))
-  
+all_bam_storage <- all_bam_storage %>%
+  mutate(Bam_nosuffix = str_remove_all(Bam, "_WG|_PG"))
+
+# Same for missing_path
+missing_path <- missing_path %>%
+  mutate(Bam_nosuffix = str_remove_all(Bam, "_WG|_PG"))
+
 joined <- missing_path %>%
   left_join(
-    all_bam_storage %>% select(Bam_storage = Bam, Path, Location, Bam_noWG),
-    by = "Bam_noWG"
+    all_bam_storage %>% select(Bam_storage = Bam, Path, Location, Bam_nosuffix, Cohort),
+    by = "Bam_nosuffix"
   )
+
+write_csv(joined, "Bam_to_unarchive1.csv")
+write_csv(merged1, "Bam_to_unarchive2.csv")
+
 
 ## Now get most similar for still unmatched
 unmatched <- joined %>% filter(is.na(Bam_storage))
@@ -1336,7 +1342,7 @@ p_tf <- ggplot(event_tf_conc,
 
 
 # 5) save
-ggsave("Final Tables and Figures/Baseline_concordance/Fig2B_event_concordance_by_TF_updated.png", p_tf,
+ggsave("Final Tables and Figures/Baseline_concordance/Fig2B_event_concordance_by_TF_updated2.png", p_tf,
        width = 5, height = 4, dpi = 600)
 
 
@@ -1433,10 +1439,79 @@ p_tf_sens2 <- ggplot(tf_plot_df, aes(x = value, y = event, group = event)) +
 
 # 3) save
 ggsave(
-  "Final Tables and Figures/Baseline_concordance/Fig2B_event_concordance_with_sensitivity_updated.png",
+  "Final Tables and Figures/Baseline_concordance/Fig2B_event_concordance_with_sensitivity_updated2.png",
   p_tf_sens2, width = 5.5, height = 4, dpi = 600
 )
 
+
+# Calculate sensitivity for CNAs and translocations separately, by WGS source
+# Add type_group column and filter for events we care about
+long_metrics <- long %>%
+  mutate(type_group = case_when(
+    grepl("^IGH_", event) ~ "Translocation",
+    type == "CNA" ~ "CNA",
+    TRUE ~ type
+  )) %>%
+  filter(!is.na(fish_call) & !is.na(wgs_call)) %>%
+  filter(type_group %in% c("CNA", "Translocation"))
+
+# Function to compute metrics for any grouping
+compute_metrics <- function(df, group_vars) {
+  df %>%
+    group_by(across(all_of(group_vars)), .add = FALSE) %>%
+    summarise(
+      tp = sum(wgs_call == 1 & fish_call == 1),
+      tn = sum(wgs_call == 0 & fish_call == 0),
+      fp = sum(wgs_call == 1 & fish_call == 0),
+      fn = sum(wgs_call == 0 & fish_call == 1),
+      sensitivity  = tp / (tp + fn),
+      specificity  = tn / (tn + fp),
+      concordance  = (tp + tn) / (tp + tn + fp + fn),
+      ppv          = tp / (tp + fp),
+      npv          = tn / (tn + fn),
+      .groups = "drop"
+    )
+}
+
+# Metrics per variant category (CNA vs Translocation)
+metrics_by_category <- compute_metrics(long_metrics, c("type_group", "wgs_source"))
+
+# Metrics per feature (event)
+metrics_by_feature <- compute_metrics(long_metrics, c("type_group", "event", "wgs_source"))
+
+
+# Export to CSVs
+write_csv(metrics_by_category, "Exported_data_tables_clinical/Supp_table_wgs_fish_metrics_by_category.csv")
+write_csv(metrics_by_feature, "Exported_data_tables_clinical/Supp_table_wgs_fish_metrics_by_feature.csv")
+
+
+## Put together 
+metrics_by_category <- metrics_by_category %>%
+  mutate(
+    event = dplyr::case_when(
+      type_group == "CNA" ~ "All_CNAs",
+      type_group == "Translocation" ~ "All_Translocations",
+      TRUE ~ "All_Other"
+    )
+  ) %>%
+  relocate(event, .after = type_group)
+
+metrics_combined <- bind_rows(
+  metrics_by_category,
+  metrics_by_feature
+) %>%
+  arrange(type_group, factor(event, levels = c("All_CNAs","All_Translocations")), wgs_source)
+
+## Round 
+metrics_combined <- metrics_combined %>%
+  mutate(
+    dplyr::across(
+      c(sensitivity, specificity, concordance, ppv, npv),
+      ~ round(.x, 3)
+    )
+  )
+
+write_csv(metrics_combined, "Exported_data_tables_clinical/Supp_table_2_WGS_vs_FISH_metrics_combined.csv")
 
 
 
@@ -1753,7 +1828,7 @@ p_tf_sens <- ggplot(tf_plot_df_BM, aes(x = value, y = event, group = event)) +
 
 # 3) save
 ggsave(
-  "Final Tables and Figures/Baseline_concordance/Fig2C_event_concordance_between_BM_and_cfDNA_with_sensitivity_updated.png",
+  "Final Tables and Figures/Baseline_concordance/Fig2C_event_concordance_between_BM_and_cfDNA_with_sensitivity2_updated.png",
   p_tf_sens, width = 5, height = 4, dpi = 600
 )
 
@@ -1833,9 +1908,117 @@ p_3panel <- ggplot(perf_long,
   )
 
 ggsave(
-  "Final Tables and Figures/Baseline_concordance/Fig2C_BM_cfDNA_conc_sens_spec_byTF_updated.png",
+  "Final Tables and Figures/Baseline_concordance/Fig2C_BM_cfDNA_conc_sens_spec_byTF_updated2.png",
   p_3panel, width = 5.5, height = 4, dpi = 600
 )
+
+
+# Get overall summary
+# --- 0) Define event groups (adjust if your names differ) ---------------------
+cna_events           <- c("amp1q","del13q","del17p","del1p","hyperdiploid")
+translocation_events <- c("IGH_CCND1","IGH_FGFR3","IGH_MAF","IGH_MYC")
+mutation_events      <- c("Mutations")
+
+# --- 1) Per-event metrics  -----------------------------------
+perf_event_metrics <- perf_tf_complete %>%
+  mutate(
+    # ensure counts are integers and define total_n robustly
+    total_n = tp + tn + fp + fn,
+    prevalence = ifelse(total_n > 0, (tp + fn) / total_n, NA_real_),
+    ppv       = ifelse((tp + fp) > 0, tp / (tp + fp), NA_real_),  # precision
+    npv       = ifelse((tn + fn) > 0, tn / (tn + fn), NA_real_),
+    accuracy  = ifelse(total_n > 0, (tp + tn) / total_n, NA_real_),
+    f1_score  = ifelse((ppv + sensitivity) > 0, 2 * (ppv * sensitivity) / (ppv + sensitivity), NA_real_),
+    fdr       = ifelse((tp + fp) > 0, fp / (tp + fp), NA_real_),
+    forate    = ifelse((tn + fn) > 0, fn / (tn + fn), NA_real_),  # false omission rate
+    mcc = ifelse(
+      (tp+fp)*(tp+fn)*(tn+fp)*(tn+fn) > 0,
+      (tp*tn - fp*fn) / sqrt((tp+fp)*(tp+fn)*(tn+fp)*(tn+fn)),
+      NA_real_
+    ),
+    # Jaccard on the confusion matrix
+    jaccard = ifelse((tp + fp + fn) > 0, tp / (tp + fp + fn), NA_real_)
+  ) %>%
+  transmute(
+    category = case_when(
+      event %in% cna_events ~ "CNA",
+      event %in% translocation_events ~ "Translocation",
+      event %in% mutation_events ~ "Mutation",
+      TRUE ~ "Other"
+    ),
+    event,
+    tf_group,
+    n  = total_n,
+    tp, tn, fp, fn,
+    sensitivity, specificity, accuracy, ppv, npv, f1_score,
+    fdr, forate, mcc, jaccard
+  )
+
+# --- 2) Category-level metrics (label as All_*) -------------------------------
+perf_summary <- perf_tf_complete %>%
+  mutate(
+    category = case_when(
+      event %in% cna_events ~ "CNA",
+      event %in% translocation_events ~ "Translocation",
+      event %in% mutation_events ~ "Mutation",
+      TRUE ~ NA_character_
+    )
+  ) %>%
+  filter(!is.na(category)) %>%
+  group_by(category, tf_group) %>%
+  summarise(
+    tp = sum(tp, na.rm = TRUE),
+    tn = sum(tn, na.rm = TRUE),
+    fp = sum(fp, na.rm = TRUE),
+    fn = sum(fn, na.rm = TRUE),
+    .groups = "drop_last"
+  ) %>%
+  mutate(
+    n           = tp + tn + fp + fn,
+    sensitivity = ifelse((tp + fn) > 0, tp / (tp + fn), NA_real_),
+    specificity = ifelse((tn + fp) > 0, tn / (tn + fp), NA_real_),
+    ppv         = ifelse((tp + fp) > 0, tp / (tp + fp), NA_real_),
+    npv         = ifelse((tn + fn) > 0, tn / (tn + fn), NA_real_),
+    accuracy    = ifelse(n > 0, (tp + tn) / n, NA_real_),
+    f1_score    = ifelse((ppv + sensitivity) > 0, 2 * (ppv * sensitivity) / (ppv + sensitivity), NA_real_),
+    fdr         = ifelse((tp + fp) > 0, fp / (tp + fp), NA_real_),
+    forate      = ifelse((tn + fn) > 0, fn / (tn + fn), NA_real_),
+    mcc = ifelse(
+      (tp+fp)*(tp+fn)*(tn+fp)*(tn+fn) > 0,
+      (tp*tn - fp*fn) / sqrt((tp+fp)*(tp+fn)*(tn+fp)*(tn+fn)),
+      NA_real_
+    ),
+    jaccard     = ifelse((tp + fp + fn) > 0, tp / (tp + fp + fn), NA_real_),
+    event = dplyr::case_when(
+      category == "CNA" ~ "All_CNAs",
+      category == "Translocation" ~ "All_Translocations",
+      category == "Mutation" ~ "All_Mutations",
+      TRUE ~ "All_Other"
+    )
+  ) %>%
+  ungroup() %>%
+  select(category, event, tf_group, n, tp, tn, fp, fn,
+         sensitivity, specificity, accuracy, ppv, npv, f1_score,
+         fdr, forate, mcc, jaccard)
+
+# --- 3) Bind category-level + per-event into one table ------------------------
+perf_combined <- bind_rows(perf_summary, perf_event_metrics) %>%
+  arrange(match(category, c("Translocation","CNA","Mutation","Other")),
+          match(tf_group, c("High TF","Low TF","high_tf","low_tf","BM","Blood","All","NA","NA ")),
+          event)
+
+# Round
+perf_combined <- perf_combined %>%
+  mutate(across(c(sensitivity, specificity, accuracy, ppv, npv, f1_score,
+                  fdr, forate, mcc, jaccard),
+                ~ round(.x, 3)))
+# --- 4) Export ----------------------------------------------------------------
+write_csv(perf_combined,
+          "Final Tables and Figures/Supplentary_table_BM_vs_cfDNA_performance_by_event_and_category.csv") ## this makes second part of supp table 2
+saveRDS(perf_combined,
+        "Final Tables and Figures/Supplentary_table_BM_vs_cfDNA_performance_by_event_and_category.rds")
+
+
 
 
 ### Export additional important things 
@@ -1848,6 +2031,7 @@ outdir <- "Final Tables and Figures/Baseline_concordance/"
 saveRDS(long,                 file.path(outdir, "FISH_WGS_long_call_table.rds"))
 saveRDS(perf_tf_complete,     file.path(outdir, "BM_cfDNA_performance_byTF.rds"))
 saveRDS(perf_long,            file.path(outdir, "BM_cfDNA_performance_long_forPlot.rds"))
+saveRDS(perf_summary,            file.path(outdir, "BM_cfDNA_performance_summary.rds"))
 saveRDS(tf_plot_df,            file.path(outdir, "FISH_BM_cfDNA_performance.rds"))
 
 ## 2. Simple CSV / XLSX tables ----------------------------------------

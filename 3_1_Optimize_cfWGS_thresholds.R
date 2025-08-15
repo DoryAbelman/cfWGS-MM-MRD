@@ -54,7 +54,7 @@ outdir   <- "Output_tables_2025"
 if (!dir.exists(outdir)) dir.create(outdir, recursive = TRUE)
 
 ### Load data 
-file <- readRDS("Final_aggregate_table_cfWGS_features_with_clinical_and_demographics_updated5.rds")
+file <- readRDS("Final_aggregate_table_cfWGS_features_with_clinical_and_demographics_updated6.rds")
 cohort_df <- readRDS("cohort_assignment_table_updated.rds")
 
 dat <- file 
@@ -716,11 +716,33 @@ combos_fragmentomics <- combos_small[fragmentomics_names]
 bm_preds    <- unique(unlist(combos_bm))
 blood_preds <- unique(unlist(combos_blood))
 
-train_bm    <- train_df %>% drop_na(all_of(c("MRD_truth", bm_preds)))
-train_blood <- train_df %>% drop_na(all_of(c("MRD_truth", blood_preds)))
+## Add filter that evidence of disease at baseline 
+# 2) Which cohort patients have a “good” baseline BM sample?
+features_rds_path   <- "Output_tables_2025/All_feature_data_August2025.rds"
+All_feature_data <- readRDS("Output_tables_2025/All_feature_data_August2025.rds")
+bm_good_patients <- All_feature_data %>%
+  filter(
+    Sample_type == "BM_cells",
+    timepoint_info %in% c("Diagnosis","Baseline"),
+    Evidence_of_Disease == 1
+  ) %>%
+  distinct(Patient)
 
-hold_bm    <- hold_df %>% drop_na(all_of(c("MRD_truth", bm_preds)))
-hold_blood <- hold_df %>% drop_na(all_of(c("MRD_truth", blood_preds)))
+# 3) Which cohort patients have a “good” baseline cfDNA sample?
+cfDNA_good_patients <- All_feature_data %>%
+  filter(
+    Sample_type == "Blood_plasma_cfDNA",
+    timepoint_info %in% c("Diagnosis","Baseline"),
+    Evidence_of_Disease == 1
+  ) %>%
+  distinct(Patient)
+
+
+train_bm    <- train_df %>% drop_na(all_of(c("MRD_truth", bm_preds))) %>% filter(Patient %in% bm_good_patients$Patient)
+train_blood <- train_df %>% drop_na(all_of(c("MRD_truth", blood_preds))) %>% filter(Patient %in% cfDNA_good_patients$Patient)
+
+hold_bm    <- hold_df %>% drop_na(all_of(c("MRD_truth", bm_preds)))  %>% filter(Patient %in% bm_good_patients$Patient)
+hold_blood <- hold_df %>% drop_na(all_of(c("MRD_truth", blood_preds))) %>% filter(Patient %in% cfDNA_good_patients$Patient)
 
 
 ### see what has blood but not BM 

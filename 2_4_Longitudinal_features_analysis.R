@@ -26,6 +26,7 @@ suppressPackageStartupMessages({
   library(ggpubr)
   library(glue)
   library(GGally)
+  library(scales)
   library(viridis)
 })
 
@@ -263,7 +264,7 @@ dat_clean <- dat_clean %>%
     R_ISS_STAGE_num = as.numeric(factor(R_ISS_STAGE, ordered = TRUE))
   )
 
-# ── 2. Define core and extra variable names -----------------------------------
+
 extras <- c("AGE", "ISS_STAGE_num", "R_ISS_STAGE_num", "ECOG_SCORE", "KPS_SCORE",
             "Albumin", "B2_micro", "Calcium", "Creatinine", "Hemoglobin",
             "LDH", "dFLC", "M_Protein", "Kappa_Lambda_Ratio",
@@ -910,6 +911,10 @@ ggsave(
 
 
 
+## Add new patient ID 
+# Load id_map first
+id_map <- readRDS("id_map.rds")  
+
 
 ### As function
 ## From this 2A and B is used
@@ -1017,6 +1022,9 @@ make_cVAF_hc_plot <- function(pid,
   }
   
   # ------------------ Plot ------------------
+  new_pid <- id_map$New_ID[match(pid, id_map$Patient)]
+  if (is.na(new_pid)) new_pid <- pid  # fallback if not found
+  
   p <- ggplot(pat_df, aes(x = timepoint_info, y = cVAF, group = 1)) +
     geom_line(color = pat_col, linewidth = 0.6) +
     geom_point(color = pat_col, size = 2) +
@@ -1040,7 +1048,7 @@ make_cVAF_hc_plot <- function(pid,
     ) +
     labs(
       x     = NULL,
-      title = paste0("Tumour‑informed longitudinal tracking: ", pid, " (", title_suffix, ")")
+      title = paste0("Tumour‑informed longitudinal tracking: ", new_pid, " (", title_suffix, ")")
     ) +
     theme_classic(base_size = 9) +
     theme(
@@ -1083,7 +1091,7 @@ for(pid in all_pids){
   # If the plot was successfully created, save it
   if(!is.null(p)){
     ggsave(
-      filename = file.path(outdir, paste0(pid, "_cVAF_vsHealthy.png")),
+      filename = file.path(outdir, paste0(pid, "_cVAF_vsHealthy_updated.png")),
       plot     = p,
       width    = 5,
       height   = 3,

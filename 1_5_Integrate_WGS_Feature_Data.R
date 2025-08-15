@@ -63,7 +63,7 @@ metada_df_mutation_comparison <- read_csv("combined_clinical_data_updated_April2
 
 # Load CNA, translocation, and tumor fraction data
 cna_data           <- readRDS(file.path(export_dir, "cna_data.rds"))
-translocation_data <- readRDS(file.path(export_dir, "translocation_data_cytoband.rds"))
+translocation_data <- readRDS(file.path(export_dir, "translocation_data_cytoband_updated.rds"))
 tumor_fraction     <- read_tsv("Oct 2024 data/tumor_fraction_cfWGS.txt")
 
 # Load mutation MAF objects
@@ -207,6 +207,114 @@ mutation_export <- bind_rows(temp_bm, temp_blood)
 saveRDS(mutation_export, file = file.path(export_dir, "mutation_export_updated.rds"))
 write.table(mutation_export, file = file.path(export_dir, "mutation_export_updated.txt"), sep = "\t", row.names = FALSE, quote = FALSE)
 
+## Get more metrics 
+temp_qc_blood <- maf_subset_blood@data %>%
+  # 1) only well‐supported tumour calls
+  filter(t_depth > 10) %>%
+  
+  # 2) your extra annotation columns
+  mutate(
+    Sample           = sub("\\.bam$", "", BAM_File),
+    Mutation_cDNA    = paste0(Hugo_Symbol, ":", HGVSc),
+    Mutation_Genomic = paste(
+      Chromosome, Start_Position,
+      Reference_Allele, Tumor_Seq_Allele2,
+      sep = "_"
+    ),
+    Mutation_Type = case_when(
+      Variant_Classification %in% c("Nonsense_Mutation",
+                                    "Frame_Shift_Del",
+                                    "Frame_Shift_Ins")   ~ "Truncating",
+      Variant_Classification %in% c("Missense_Mutation",
+                                    "In_Frame_Del",
+                                    "In_Frame_Ins")     ~ "Missense",
+      Variant_Classification == "Splice_Site"             ~ "Splice_Site",
+      TRUE                                                ~ "Other"
+    )
+  ) %>%
+  
+  # 3) pick your key QC columns first, then grab everything else
+  select(
+    # core sample & variant IDs
+    Tumor_Sample_Barcode, Sample, Patient, Timepoint, Sample_type,
+    # gene / transcript annotation
+    Hugo_Symbol, Entrez_Gene_Id, HGVSc, HGVSp, Transcript_ID, Exon_Number,
+    # location & reference info
+    Chromosome, Start_Position, End_Position, Strand,
+    Reference_Allele, Tumor_Seq_Allele1, Tumor_Seq_Allele2,
+    dbSNP_RS, Existing_variation, 
+    # caller annotations
+    Variant_Classification, Variant_Type,
+    # depths & counts
+    t_depth, t_ref_count, t_alt_count,
+    n_depth, n_ref_count, n_alt_count,
+    # allele frequencies & quality
+    VAF, Score, FILTER, vcf_qual,
+    # your new fields
+    Mutation_cDNA, Mutation_Genomic, Mutation_Type,
+    
+    #—and now everything else for downstream QC
+    everything()
+  ) %>%
+  distinct()
+
+## Get more metrics 
+temp_qc_bm <- maf_subset@data %>%
+  # 1) only well‐supported tumour calls
+  filter(t_depth >= 10) %>%
+  
+  # 2) your extra annotation columns
+  mutate(
+    Sample           = sub("\\.bam$", "", BAM_File),
+    Mutation_cDNA    = paste0(Hugo_Symbol, ":", HGVSc),
+    Mutation_Genomic = paste(
+      Chromosome, Start_Position,
+      Reference_Allele, Tumor_Seq_Allele2,
+      sep = "_"
+    ),
+    Mutation_Type = case_when(
+      Variant_Classification %in% c("Nonsense_Mutation",
+                                    "Frame_Shift_Del",
+                                    "Frame_Shift_Ins")   ~ "Truncating",
+      Variant_Classification %in% c("Missense_Mutation",
+                                    "In_Frame_Del",
+                                    "In_Frame_Ins")     ~ "Missense",
+      Variant_Classification == "Splice_Site"             ~ "Splice_Site",
+      TRUE                                                ~ "Other"
+    )
+  ) %>%
+  
+  # 3) pick your key QC columns first, then grab everything else
+  select(
+    # core sample & variant IDs
+    Tumor_Sample_Barcode, Sample, Patient, Timepoint, Sample_type,
+    # gene / transcript annotation
+    Hugo_Symbol, Entrez_Gene_Id, HGVSc, HGVSp, Transcript_ID, Exon_Number,
+    # location & reference info
+    Chromosome, Start_Position, End_Position, Strand,
+    Reference_Allele, Tumor_Seq_Allele1, Tumor_Seq_Allele2,
+    dbSNP_RS, Existing_variation, 
+    # caller annotations
+    Variant_Classification, Variant_Type,
+    # depths & counts
+    t_depth, t_ref_count, t_alt_count,
+    n_depth, n_ref_count, n_alt_count,
+    # allele frequencies & quality
+    VAF, Score, FILTER, vcf_qual,
+    # your new fields
+    Mutation_cDNA, Mutation_Genomic, Mutation_Type,
+    
+    #—and now everything else for downstream QC
+    everything()
+  ) %>%
+  distinct()
+
+mutation_export2 <- bind_rows(temp_qc_bm, temp_qc_blood)
+
+saveRDS(mutation_export2, file = file.path(export_dir, "mutation_export_updated_more_info.rds"))
+write.table(mutation_export2, file = file.path(export_dir, "mutation_export_updated_more_info.txt"), sep = "\t", row.names = FALSE, quote = FALSE)
+
+
 # Step 1: Create a helper table with required mutation information
 # Filter mutations with t_depth > 10 (all meet this criteria anyway)
 filtered_mutations <- mutation_export  %>%
@@ -261,33 +369,92 @@ All_feature_data <- All_feature_data %>%
 All_feature_data <- All_feature_data %>%
   mutate(
     Evidence_of_Disease = case_when(
-      # Condition 0: any of the key translocations OR very high‐VAF (10%) OR cfDNA VAF > 5%
-      IGH_MAF == 1 |
-        IGH_CCND1 == 1 |
-        IGH_MYC == 1 |
-        IGH_FGFR3 == 1 |
-        Mut_highest_VAF > 0.10 |
-        (Sample_type != "BM_cells" & Mut_highest_VAF > 0.05)    ~ 1,
+      # Tier 1 – any clear genomic hit
+      IGH_MAF == 1 | IGH_CCND1 == 1 | IGH_MYC == 1 | IGH_FGFR3 == 1 |
+        Mut_highest_VAF >= 0.10 ~ 1L,
       
-      # Primary Condition 1: high Tumor_Fraction in bone‐marrow
-      Tumor_Fraction > 0.10 & Sample_type == "BM_cells"     ~ 1,
+      # Tier 2 – cfDNA SNV evidence even if TF low
+      Sample_type != "BM_cells" & Mut_highest_VAF >= 0.05 ~ 1L,
       
-      # Primary Condition 2: tumor fraction > 5% in non‐BM samples
-      Tumor_Fraction > 0.05 & Sample_type != "BM_cells"     ~ 1,
+      # Tier 3 – TF-based
+      (Sample_type == "BM_cells" & Tumor_Fraction >= 0.10) |
+        (Sample_type != "BM_cells" & Tumor_Fraction >= 0.045) ~ 1L,
       
-      # Additional Condition 3: moderate tumor fraction + supportive cytogenetics
-      Tumor_Fraction > 0.03 & Tumor_Fraction <= 0.05 & Sample_type != "BM_cells" & (
-        hyperdiploid == "TRUE" |
-          del1p     == "1" |
-          amp1q     == "1" |
-          del17p    == "1"
-      )                                                     ~ 1,
+      # Tier 4 – moderate TF + cytogenetics
+      Tumor_Fraction >= 0.03 & Sample_type != "BM_cells" &
+        (hyperdiploid == TRUE | del1p == 1 | amp1q == 1 | del17p == 1) ~ 1L,
       
-      # else
-      TRUE                                                  ~ 0
+      TRUE ~ 0L
     )
   )
 
+to_logical_bin <- function(x) {
+  if (is.logical(x)) return(replace_na(x, FALSE))
+  if (is.numeric(x)) return(replace_na(x > 0, FALSE))
+  if (is.character(x)) return(replace_na(x %in% c("1","TRUE","T","Yes","Y"), FALSE))
+  replace_na(as.logical(x), FALSE)
+}
+
+All_feature_data_logical <- All_feature_data %>%
+  mutate(
+    # 1) Normalize flags used in rules
+    del1p        = to_logical_bin(del1p),
+    amp1q        = to_logical_bin(amp1q),
+    del13q       = to_logical_bin(del13q),
+    del17p       = to_logical_bin(del17p),
+    hyperdiploid = to_logical_bin(hyperdiploid),
+    IGH_CCND1    = to_logical_bin(IGH_CCND1),
+    IGH_FGFR3    = to_logical_bin(IGH_FGFR3),
+    IGH_MAF      = to_logical_bin(IGH_MAF),
+    IGH_MYC      = to_logical_bin(IGH_MYC),
+    
+    # 2) NA-safe numerics
+    Tumor_Fraction  = coalesce(Tumor_Fraction, 0),
+    Mut_highest_VAF = coalesce(Mut_highest_VAF, 0),
+    
+    # 3) Normalize sample type labels (restrict cfDNA tiers to plasma)
+    Sample_type = case_when(
+      Sample_type %in% c("Blood_plasma_cfDNA","cfDNA","Plasma_cfDNA") ~ "Blood_plasma_cfDNA",
+      Sample_type %in% c("BM_cells","Bone_marrow_cells","BM") ~ "BM_cells",
+      Sample_type %in% c("Blood_Buffy_coat","Buffy","Buffy_coat") ~ "Blood_Buffy_coat",
+      TRUE ~ Sample_type
+    ),
+    
+    Evidence_of_Disease = case_when(
+      # Tier 1 – canonical drivers
+      IGH_MAF | IGH_CCND1 | IGH_MYC | IGH_FGFR3 | (Mut_highest_VAF >= 0.10) ~ 1L,
+      
+      # Tier 2 – cfDNA SNV evidence
+      Sample_type == "Blood_plasma_cfDNA" & Mut_highest_VAF >= 0.05 ~ 1L,
+      
+      # Tier 3 – TF-based (matrix-specific)
+      (Sample_type == "BM_cells"           & Tumor_Fraction >= 0.10) |
+        (Sample_type == "Blood_plasma_cfDNA" & Tumor_Fraction >= 0.05) ~ 1L,
+      
+      # Tier 4 – moderate cfDNA TF + cytogenetics
+      Sample_type == "Blood_plasma_cfDNA" & Tumor_Fraction >= 0.03 &
+        (hyperdiploid | del1p | amp1q | del17p | del13q) ~ 1L,
+      
+      TRUE ~ 0L
+    )
+  )
+
+## Set evidence of disease to cases that did show translocations we were just not certain of them
+iGV_verified <- read_excel("Jan2025_exported_data/Ig_caller_df_cfWGS_filtered_aggressive2_iGV_check.xlsm")
+tmp <- iGV_verified %>% 
+  filter(Looks_real > 0.7) %>% 
+  select(Bam_clean_tmp) %>% 
+  unique()
+
+## If we saw a good transloation just with low read support, set evidence of disease to 1
+All_feature_data_logical <- All_feature_data_logical %>%
+  mutate(
+    Evidence_of_Disease = if_else(
+      Sample %in% tmp$Bam_clean_tmp,
+      1L,                      # set to integer 1
+      Evidence_of_Disease      # otherwise keep original
+    )
+  )
 
 ### See difference to old version (Feb2025 version)
 # 1) Define a helper that computes the old Evidence_of_Disease
@@ -326,14 +493,34 @@ compute_new_evidence <- function(df) {
   )
 }
 
+# 2) Define a helper that computes the new Evidence_of_Disease
+compute_new_evidence_test <- function(df) {
+  df %>% mutate(
+    Evidence_new_test = case_when(
+      IGH_MAF    == 1 | IGH_CCND1 == 1 | IGH_MYC  == 1 | IGH_FGFR3 == 1 |
+        Mut_highest_VAF > 0.10 |
+        (Sample_type != "BM_cells" & Mut_highest_VAF > 0.05)                         ~ 1,
+      Tumor_Fraction > 0.10 & Sample_type == "BM_cells"                            ~ 1,
+      Tumor_Fraction > 0.05 & Sample_type != "BM_cells"                            ~ 1,
+      Tumor_Fraction > 0.03 & Tumor_Fraction <= 0.05 & Sample_type != "BM_cells" &
+        (hyperdiploid == "TRUE" |
+           del1p       == "1"    |
+           amp1q       == "1"    |
+           del13q == "1"   |
+           del17p      == "1")                                                 ~ 1,
+      TRUE                                                                        ~ 0
+    )
+  )
+}
+
 # 3) Chain them together and filter for differences
 comparison <- All_feature_data %>%
-  compute_old_evidence() %>%
   compute_new_evidence() %>%
-  filter(Evidence_old != Evidence_new) %>%
+  compute_new_evidence_test() %>%
+  filter(Evidence_new != Evidence_new_test) %>%
   select(
     Sample_ID, Sample_type, Tumor_Fraction, Mut_highest_VAF,
-    Evidence_old, Evidence_new
+    Evidence_new, Evidence_new_test
   )
 
 # 4) View
@@ -343,18 +530,18 @@ print(comparison)
 
 ## Export this 
 # Save All_feature_data as an RDS file
-saveRDS(All_feature_data, file = file.path(export_dir, "All_feature_data_June2025.rds"))
+saveRDS(All_feature_data_logical, file = file.path(export_dir, "All_feature_data_August2025.rds"))
 
 # Save All_feature_data as a text file with tab-separated values
-write.table(All_feature_data, file = file.path(export_dir, "All_feature_data_June2025.txt"), sep = "\t", row.names = TRUE, quote = FALSE)
+write.table(All_feature_data_logical, file = file.path(export_dir, "All_feature_data_August2025.txt"), sep = "\t", row.names = TRUE, quote = FALSE)
 
 
 ### Save the CNA_Translocation file 
 # Save All_feature_data as an RDS file
-saveRDS(CNA_translocation, file = file.path(export_dir, "CNA_translocation_Feb2025.rds"))
+saveRDS(CNA_translocation, file = file.path(export_dir, "CNA_translocation_July2025.rds"))
 #saveRDS(CNA_translocation, file = file.path(export_dir, "CNA_translocation_June2025.rds"))
 
 
 # Save All_feature_data as a text file with tab-separated values
-write.table(CNA_translocation, file = file.path(export_dir, "CNA_translocation_Feb2025.txt"), sep = "\t", row.names = TRUE, quote = FALSE)
+write.table(CNA_translocation, file = file.path(export_dir, "CNA_translocation_July2025.txt"), sep = "\t", row.names = TRUE, quote = FALSE)
 #write.table(CNA_translocation, file = file.path(export_dir, "CNA_translocation_June2025.txt"), sep = "\t", row.names = TRUE, quote = FALSE)

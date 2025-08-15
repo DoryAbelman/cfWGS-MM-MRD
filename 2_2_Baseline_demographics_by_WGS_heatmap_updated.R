@@ -54,19 +54,12 @@ tumor_fraction <- read_tsv("Oct 2024 data/tumor_fraction_cfWGS.txt")
 export_dir <- "Jan2025_exported_data"  
 cna_data <- readRDS(file.path(export_dir, "cna_data.rds"))
 
-CNA_translocation <- readRDS("Jan2025_exported_data/CNA_translocation_June2025.rds") ## From 1_5 script
+CNA_translocation <- readRDS("Jan2025_exported_data/CNA_translocation_July2025.rds") ## From 1_5 script
 mutation_data_total <- readRDS("Jan2025_exported_data/mutation_export_updated.rds")
 
-## Edit values after check 
-CNA_translocation <- CNA_translocation %>%
-  mutate(across(
-    starts_with("IGH_"),
-    ~ if_else(grepl("ZC-02", Sample), 0L, .)
-  ))
-
-# 3. cfDNA translocation tab (the 4‐call binary table you exported)
+# 3. cfDNA translocation tab (the 4‐call binary table)
 translocation_data <- readRDS(
-  file.path(export_dir, "translocation_data.rds")
+  file.path(export_dir, "translocation_data_cytoband_updated.rds")
 )
 
 # 4. MAF objects for BM and blood
@@ -484,7 +477,7 @@ heatmap_BM <- Heatmap(
 )
 
 draw(heatmap_BM)
-png("heatmap_output_BM_baseline_updated_11.png", width = 11.12, height = 8, units = "in", res = 500)
+png("heatmap_output_BM_baseline_updated_12.png", width = 11.12, height = 8, units = "in", res = 500)
 draw(heatmap_BM)
 dev.off()
 
@@ -658,7 +651,7 @@ heatmap_blood <- Heatmap(
 )
 
 draw(heatmap_blood)
-png("heatmap_output_Blood_baseline_updated_11.png", width = 13.5, height = 8, units = "in", res = 500)
+png("heatmap_output_Blood_baseline_updated_12.png", width = 13.5, height = 8, units = "in", res = 500)
 draw(heatmap_blood)
 dev.off()
 
@@ -673,13 +666,13 @@ setdiff(rownames(heatmap_matrix_BM), rownames(heatmap_matrix_blood))
 
 ## Export 
 # save the filtered matrices for use elsewhere
-saveRDS(heatmap_matrix_BM,    file = "heatmap_matrix_BM_June2025.rds")
-saveRDS(heatmap_matrix_blood, file = "heatmap_matrix_blood_June2025.rds")
+saveRDS(heatmap_matrix_BM,    file = "heatmap_matrix_BM_July2025.rds")
+saveRDS(heatmap_matrix_blood, file = "heatmap_matrix_blood_July2025.rds")
 
 # Save bone marrow combined data
-saveRDS(combined_data_heatmap_BM, file = "combined_data_heatmap_BM_June2025.rds")
+saveRDS(combined_data_heatmap_BM, file = "combined_data_heatmap_BM_July2025.rds")
 # Save cfDNA (blood) combined data
-saveRDS(combined_data_heatmap_blood, file = "combined_data_heatmap_blood_June2025.rds")
+saveRDS(combined_data_heatmap_blood, file = "combined_data_heatmap_blood_July2025.rds")
 
 
 
@@ -1079,7 +1072,7 @@ draw(
 )
 
 # save
-png("overlay_heatmap_BM_vs_cfDNA_updated7.png", width = 14, height = 8, units = "in", res = 450)
+png("overlay_heatmap_BM_vs_cfDNA_updated8.png", width = 14, height = 8, units = "in", res = 450)
 draw(
   overlay_ht,
   annotation_legend_side = "right",  # where cohort legend goes
@@ -1092,8 +1085,6 @@ dev.off()
 
 #### Now add a star if also found by FISH 
 #### Since so many FISH unknown, not sure if good idea or concentration of effort for now
-
-# (you already have this loaded as `dat`; if not, the CSV path:)
 dat_baseline <- dat_base %>%
   # only keep diagnosis / baseline rows
   filter(timepoint_info %in% c("Diagnosis","Baseline")) %>%
@@ -1138,6 +1129,7 @@ dat_baseline <- dat_base %>%
   )
 
 # make a matrix of flags, rows = patient, cols = fish assay
+library(tibble)
 fish_flags <- dat_baseline %>%
   column_to_rownames("Patient") %>%
   as.matrix()   
@@ -1147,6 +1139,21 @@ fish_flags <- fish_flags[rownames(fish_flags) %in% patient_ids, , drop = FALSE]
 
 fish_flags <- fish_flags %>% as.matrix()
 
+id_map <- readRDS("id_map.rds") # from 2_1 pt 2 script
+
+# 1) make a simple lookup: Patient -> New_ID
+lab_map <- setNames(id_map$New_ID, id_map$Patient)
+
+# 2) remap the labels you already computed (character vector)
+anon_labels <- unname(lab_map[patient_labels])
+
+# 3) fallback: if any didn’t map (should be none), keep the original
+miss <- is.na(anon_labels)
+if (any(miss)) {
+  message("Unmapped IDs: ", paste(unique(patient_labels[miss]), collapse = ", "))
+  anon_labels[miss] <- patient_labels[miss]
+}
+
 ### Redraw heatmap
 overlay_ht_2 <- Heatmap(
   matrix("", nrow = length(all_rows), ncol = length(all_cols),
@@ -1155,7 +1162,7 @@ overlay_ht_2 <- Heatmap(
   cluster_columns     = FALSE,
   show_row_names      = TRUE,
   show_column_names   = TRUE,
-  column_labels       = patient_labels,
+  column_labels       = anon_labels,
   column_split        = col_cohort_ord,
   show_heatmap_legend = FALSE,
   
@@ -1224,7 +1231,7 @@ lgd_sampletype2 <- Legend(
 )
 
 # save
-png("Final Tables and Figures/Figure_1B_overlay_heatmap_BM_vs_cfDNA_updated_with_FISH_8.png", width = 14, height = 8, units = "in", res = 450)
+png("Final Tables and Figures/Figure_1B_overlay_heatmap_BM_vs_cfDNA_updated_with_FISH_10.png", width = 14, height = 8, units = "in", res = 450)
 draw(
   overlay_ht_2,
   column_title        = "Oncoprint of Genomic Alterations in Bone Marrow versus cfDNA Samples",
@@ -1354,7 +1361,7 @@ BM_long_all <- combined_data_heatmap_BM_subset %>%
     values_to = "Mutation_Type_BM"
   ) %>%
   group_by(Patient_Timepoint, Tumor_Fraction_BM, timepoint_info_BM, cohort) %>%
-  summarize(
+  dplyr::summarize(
     MutatedGenes_BM = list(unique(Gene[Mutation_Type_BM != "No Mutation"])),
     .groups = "drop"
   )
@@ -1369,7 +1376,7 @@ blood_long_all <- combined_data_heatmap_blood_subset %>%
     values_to = "Mutation_Type_blood"
   ) %>%
   group_by(Patient_Timepoint, Tumor_Fraction_blood, timepoint_info_blood, cohort) %>%
-  summarize(
+  dplyr::summarize(
     MutatedGenes_blood = list(unique(Gene[Mutation_Type_blood != "No Mutation"])),
     .groups = "drop"
   )
@@ -1427,12 +1434,13 @@ merged_mut <- merged_mut %>%
 ## Add average Jaccard
 avg_jaccard_mut <- merged_mut %>%
   group_by(cohort) %>%
-  summarize(
+  dplyr::summarize(
     mean_jaccard = mean(overlap_ratio, na.rm = TRUE),
     sd_jaccard   = sd(overlap_ratio, na.rm = TRUE)
   )
 print(avg_jaccard_mut)
 
+summarize <- dplyr::summarise # for consistency
 # --- Step 5. Summarize Mutation Concordance by Timepoint and TF Category --------
 mutation_summary <- merged_mut %>%
   group_by(timepoint, TF_category, cohort) %>%
@@ -1479,6 +1487,7 @@ mut_conc_tf <- merged_mut %>%
 # Print mutation summary table
 cat("### Mutation Summary by Timepoint and Tumor Fraction Category ###\n")
 print(mutation_summary)
+
 
 # --- Step 6. Translocation Concordance ----------------------------------------
 # For translocations, we use the columns in each dataset. First, extract translocation calls.
@@ -1556,6 +1565,8 @@ avg_jaccard_trans <- merged_trans %>%
     sd_jaccard   = sd(trans_overlap, na.rm = TRUE)
   )
 print(avg_jaccard_trans)
+
+### This above is reported in manuscript for translocation concordance, with CNA below 
 
 # --- Step 7. CNA Concordance --------------------------------------------------
 BM_CNA <- combined_data_heatmap_BM_subset %>%
@@ -1939,7 +1950,100 @@ message("All tables exported to ", outdir)
 
 
 
+#### Put important things together into one supplementary table for organizayion
+# ---- 1) Jaccard (mean ± SD) per variant & cohort ----------------------------
+jaccard_tbl <- bind_rows(
+  avg_jaccard_mut  %>% mutate(variant = "Mutation"),
+  avg_jaccard_trans %>% mutate(variant = "Translocation"),
+  avg_jaccard_cna   %>% mutate(variant = "CNA")
+) %>%
+  rename(jaccard_mean = mean_jaccard, jaccard_sd = sd_jaccard) %>%
+  select(variant, cohort, jaccard_mean, jaccard_sd)
 
+# ---- 2) Exact-match concordance (overall) per variant & cohort --------------
+cohort_tbl <- bind_rows(
+  mut_conc_cohort  %>% mutate(variant = "Mutation"),
+  trans_conc_cohort %>% mutate(variant = "Translocation"),
+  cna_conc_cohort   %>% mutate(variant = "CNA")
+) %>%
+  rename(
+    n_pairs_overall          = n_pairs,
+    exact_conc_overall_pct   = pct_conc
+  ) %>%
+  select(variant, cohort, n_pairs_overall, exact_conc_overall_pct)
+
+# ---- 3) Exact-match concordance stratified by TF (>5% vs ≤5%) ---------------
+tf_tbl_long <- bind_rows(
+  mut_conc_tf  %>% mutate(variant = "Mutation"),
+  trans_conc_tf %>% mutate(variant = "Translocation"),
+  cna_conc_tf   %>% mutate(variant = "CNA")
+) %>%
+  filter(!is.na(cf_high)) %>%
+  mutate(tf_cat = if_else(cf_high, "high_tf", "low_tf")) %>%
+  select(variant, cohort, tf_cat, n_pairs, pct_conc)
+
+tf_tbl <- tf_tbl_long %>%
+  pivot_wider(
+    names_from  = tf_cat,
+    values_from = c(n_pairs, pct_conc),
+    names_glue  = "{.value}_{tf_cat}"
+  ) %>%
+  rename(
+    n_pairs_high_tf        = n_pairs_high_tf,
+    n_pairs_low_tf         = n_pairs_low_tf,
+    exact_conc_high_tf_pct = pct_conc_high_tf,
+    exact_conc_low_tf_pct  = pct_conc_low_tf
+  )
+
+# ---- 4) Fisher p-values (cohort comparison) per variant ----------------------
+pvals_tbl <- tibble(
+  variant = c("Mutation","Translocation","CNA"),
+  fisher_p_overall_cohort = c(
+    tryCatch(mut_fish_test$p.value,  error = function(e) NA_real_),
+    tryCatch(trans_fish_test$p.value, error = function(e) NA_real_),
+    tryCatch(cna_fish_test$p.value,   error = function(e) NA_real_)
+  )
+)
+
+# ---- 5) Combine all pieces ---------------------------------------------------
+supp_concordance_summary <- jaccard_tbl %>%
+  left_join(cohort_tbl, by = c("variant","cohort")) %>%
+  left_join(tf_tbl,     by = c("variant","cohort")) %>%
+  left_join(pvals_tbl,  by = "variant") %>%
+  # tidy ordering & rounding
+  mutate(
+    jaccard_mean = round(jaccard_mean, 3),
+    jaccard_sd   = round(jaccard_sd,   3),
+    exact_conc_overall_pct   = round(exact_conc_overall_pct,   1),
+    exact_conc_high_tf_pct   = round(exact_conc_high_tf_pct,   1),
+    exact_conc_low_tf_pct    = round(exact_conc_low_tf_pct,    1),
+    fisher_p_overall_cohort  = signif(fisher_p_overall_cohort, 3)
+  )
+
+# Optional: sort by variant and cohort
+variant_order <- c("Translocation","CNA","Mutation")
+cohort_order  <- c("Frontline induction-transplant","Non-frontline")
+
+supp_concordance_summary <- supp_concordance_summary %>%
+  mutate(
+    variant = factor(variant, levels = variant_order),
+    cohort  = factor(as.character(cohort), levels = cohort_order)
+  ) %>%
+  arrange(variant, cohort) %>%
+  # back to plain character for export
+  mutate(
+    variant = as.character(variant),
+    cohort  = as.character(cohort)
+  )
+
+# ---- 6) Export ---------------------------------------------------------------
+out_csv <- "Final Tables and Figures/Supp_table_concordance_summary_BM_cfDNA.csv" ## other part of supp table 2
+out_rds <- "Final Tables and Figures/Supp_table_concordance_summary_BM_cfDNA.rds"
+
+write_csv(supp_concordance_summary, out_csv)
+saveRDS(supp_concordance_summary,   out_rds)
+
+### Supplementary table
 
 
 

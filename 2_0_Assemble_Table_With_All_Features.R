@@ -1,6 +1,3 @@
-# =============================================================================
-# Script: 2_0_Assemble_Table_With_All_Features.R
-# =============================================================================
 # ==============================================================================
 # 2_Assemble_Table_With_All_Features
 #
@@ -28,7 +25,7 @@ library(gridExtra)
 
 
 ### Load in all data:
-All_feature_data <- readRDS("Jan2025_exported_data/All_feature_data_June2025.rds") # MRD sample purity
+All_feature_data <- readRDS("Output_tables_2025/All_feature_data_August2025.rds") # MRD sample purity
 M4_MRD_filtered <- read_tsv("M4_MRD_filtered.txt") # The MRD data from labs
 
 path <- file.path("MRDetect_output_winter_2025", "Processed_R_outputs", "BM_muts_data")
@@ -907,7 +904,7 @@ write.csv(
 
 ## Export relapse dates 
 
-Relapse_dates_full <- read_csv("Exported_data_tables_clinical/Relapse dates cfWGS updated.csv") 
+Relapse_dates_full <- read_csv("Exported_data_tables_clinical/Relapse dates cfWGS updated2.csv") 
 
 # Step 2: Calculate Num_days_to_closest_relapse
 # Join on Patient and calculate the days difference
@@ -960,7 +957,7 @@ cfWGS_Clinical_MRD_filled <- cfWGS_Clinical_MRD_filled %>%
 
 
 ### Export 
-write.csv(cfWGS_Clinical_MRD_filled, file = "cfWGS clinical MRD values with timepoint and dates updated May 2025.csv", row.names = F)
+write.csv(cfWGS_Clinical_MRD_filled, file = "cfWGS clinical MRD values with timepoint and dates updated August 2025.csv", row.names = F)
 
 
 
@@ -1261,6 +1258,8 @@ wgs_wide <- wgs_wide %>%
 
 # fuzzy‐join on Patient, Sample_type, Timepoint (exact) 
 # and Date within ±14 days
+library(fuzzyjoin)
+
 joined <- cfWGS_Clinical_MRD_filled_final %>%
   fuzzy_full_join(
     wgs_wide,
@@ -1814,10 +1813,10 @@ filled_df <- filled_df %>%
 ## Now have everything need to make plots
 
 # Write to CSV (for Excel/sharing)
-write.csv(filled_df, file = "Final_aggregate_table_cfWGS_features_with_clinical_and_demographics_updated5.csv", row.names = FALSE)
+write.csv(filled_df, file = "Final_aggregate_table_cfWGS_features_with_clinical_and_demographics_updated6.csv", row.names = FALSE)
 
 # Write to RDS (for loading back into R with full structure)
-saveRDS(filled_df, file = "Final_aggregate_table_cfWGS_features_with_clinical_and_demographics_updated5.rds")
+saveRDS(filled_df, file = "Final_aggregate_table_cfWGS_features_with_clinical_and_demographics_updated6.rds")
 
 
 ## Quick check 

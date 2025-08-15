@@ -7,6 +7,7 @@
 library(tidyverse)
 library(readxl)
 library(lubridate)
+library(patchwork)
 
 ## --------------------------
 ## 1. Load all three sources
@@ -1451,7 +1452,7 @@ events_combined2 <- events_combined2 %>%
 
 ## Reorder 
 # 1) Compute total follow‑up per patient
-patient_order_tbl <- events_combined2 %>% filter(!(patient == "VA-02" & event == "Last follow-up")) # remove this since not plotted
+patient_order_tbl <- events_combined2 %>% filter(!(patient == "VA-02" & event == "Last follow-up")) %>% # remove this since not plotted
   group_by(Cohort, patient) %>%
   summarise(
     # use end_day if available, otherwise start_day
@@ -1469,6 +1470,74 @@ events_combined2 <- events_combined2 %>%
   mutate(
     patient = factor(patient, levels = patient_order)
   )  
+
+
+
+### Edit the patient labels for de-identification in figure
+df <- cohort_df
+make_patient_id_map <- function(df, patient_col = "Patient") {
+  p <- sym(patient_col)
+  
+  df %>%
+    distinct(!!p, .keep_all = FALSE) %>%         # keep first occurrence, preserve row order
+    mutate(
+      .prefix = case_when(
+        str_starts(!!p, "IMG")   ~ "IMG",
+        str_starts(!!p, "SPORE") ~ "SPORE",
+        TRUE                     ~ "M4"
+      )
+    ) %>%
+    group_by(.prefix) %>%
+    mutate(
+      .idx   = row_number(),
+      # width: 2 digits unless group size >= 100, then compute digits of n()
+      .width = if_else(dplyr::n() >= 100L,
+                       as.integer(floor(log10(dplyr::n())) + 1L),
+                       2L)
+    ) %>%
+    ungroup() %>%
+    mutate(New_ID = paste0(.prefix, "-", str_pad(.idx, width = .width, pad = "0"))) %>%
+    select(!!p, New_ID) %>%
+    rename(Patient = !!p)
+}
+
+
+id_map <- make_patient_id_map(df)
+
+# sanity checks
+stopifnot(anyDuplicated(id_map$Patient) == 0)
+stopifnot(anyDuplicated(id_map$New_ID)  == 0)
+
+cohort_df_anon <- cohort_df %>% left_join(id_map, by = "Patient")
+
+## Re-export supp table with new IDs 
+all_events_tmp <- all_events %>%
+  left_join(id_map, by = c("patient" = "Patient")) %>%
+  mutate(patient = New_ID) %>%
+  select(names(all_events))  # keep original column order
+
+write_csv(all_events_tmp %>% select(-details_2), "Final Tables and Figures/Supp_Table_1_all_events_for_swim_plot_combined_updated_with_new_IDs.csv")
+
+# Save as CSV
+write.csv(id_map,
+          file = "id_map.csv",
+          row.names = FALSE)
+
+# Save as RDS
+saveRDS(id_map,
+        file = "id_map.rds")
+
+## Get labels vector
+# build label lookup (id_map: Patient, New_ID)
+lab_vec <- id_map$New_ID; names(lab_vec) <- id_map$Patient
+
+lab_fun <- function(y) {
+  yy  <- as.character(y)
+  out <- unname(lab_vec[yy])             # remove names → pure character
+  nas <- is.na(out); out[nas] <- yy[nas] # fallback to original
+  out
+}
+
 
 # 3) Plot
 p_swim <- ggplot() +
@@ -1592,23 +1661,50 @@ cohort_cols <- c(
   "Test"  = "#e6550d"
 )
 
-
 ann_cohort <- ggplot(patient_order_combined,
                      aes(x = 1, y = patient, fill = cohort)) +
   geom_tile(width = 0.9, height = 0.9) +
   scale_fill_manual(values = cohort_cols, name = "Cohort") +
-  scale_x_continuous(name   = "Cohort", limits = c(0.5, 1.5), expand = c(0, 0), breaks = NULL) +
-  scale_y_discrete(expand = c(0, 0),   limits = rev(patient_order)) +
+  scale_x_continuous(name = "Cohort", limits = c(0.5, 1.5), expand = c(0,0), breaks = NULL) +
+  scale_y_discrete(
+    limits = rev(patient_order),  # character levels, not numeric
+    labels = lab_fun,
+    expand = c(0,0)
+  ) +
   theme_minimal(base_size = 8) +
   theme(
-    panel.grid      = element_blank(),
-    axis.title.y    = element_blank(),
-    axis.title.x    = element_text(size = 10, hjust = 0.5, lineheight = 0.8),
-    axis.ticks.x    = element_blank(),
-    axis.ticks.y    = element_blank(),
-    axis.text.y     = element_text(size = 10, hjust = 1, lineheight = 0.8), # For patients
-    plot.margin     = margin(0, 0, 0, 0)
+    panel.grid   = element_blank(),
+    axis.title.y = element_blank(),
+    axis.ticks.y = element_blank(),
+    axis.text.y  = element_text(size = 10, hjust = 1, lineheight = 0.8),
+    plot.margin  = margin(0,0,0,0)
   )
+
+# ann_cohort <- ggplot(patient_order_combined,
+#                      aes(x = 1, y = patient, fill = cohort)) +
+#   geom_tile(width = 0.9, height = 0.9) +
+#   scale_fill_manual(values = cohort_cols, name = "Cohort") +
+#   scale_x_continuous(name   = "Cohort", limits = c(0.5, 1.5), expand = c(0, 0), breaks = NULL) +
+#  # scale_y_discrete(expand = c(0, 0),   limits = rev(patient_order)) +
+#   scale_y_discrete(
+#     limits = rev(patient_order),
+#     labels = function(y) {  # anonymized labels
+#       out <- lab_vec[y]
+#       out[is.na(out)] <- y[is.na(out)]   # fallback: original if any ID missing
+#       out
+#     },
+#     expand = c(0, 0)
+#   ) +
+#   theme_minimal(base_size = 8) +
+#   theme(
+#     panel.grid      = element_blank(),
+#     axis.title.y    = element_blank(),
+#     axis.title.x    = element_text(size = 10, hjust = 0.5, lineheight = 0.8),
+#     axis.ticks.x    = element_blank(),
+#     axis.ticks.y    = element_blank(),
+#     axis.text.y     = element_text(size = 10, hjust = 1, lineheight = 0.8), # For patients
+#     plot.margin     = margin(0, 0, 0, 0)
+#   )
 
 paired_cols <- c(
   "Paired"     = "#9467bd",  # purple
@@ -1677,13 +1773,13 @@ final_plot <- ann_cohort + p_swim +
     )
   )
 
-ggsave("Final Tables and Figures/Figure1A_swimplot_with_3_annotations_updated2.png",
+ggsave("Final Tables and Figures/Figure1A_swimplot_with_3_annotations_updated3.png",
        final_plot,
        width  = 15,
        height = 10,
        dpi    = 500)
 
-ggsave("Final Tables and Figures/Figure1A_swimplot_with_3_annotations_wide_updated2.png",
+ggsave("Final Tables and Figures/Figure1A_swimplot_with_3_annotations_wide_updated3.png",
        final_plot,
        width  = 16.5,
        height = 10,
@@ -1744,6 +1840,13 @@ p_symbols <- ggplot(legend_df, aes(y = y)) +
 
 # 3) (Optional) view it
 print(p_symbols)
+
+
+
+
+
+
+
 
 
 
