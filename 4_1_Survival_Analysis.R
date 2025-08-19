@@ -1,7 +1,3 @@
-# =============================================================================
-# Script: 4_1_Survival_Analysis.R
-# Purpose: Detection-rate and progression analysis in cfWGS MRD cohort
-# =============================================================================
 ################################################################################
 ##  Detection-Rate & Progression Analysis
 ##  cfWGS MRD manuscript – Dory A.
@@ -19,10 +15,10 @@ library(timeROC)       # optional – AUC vs time
 
 ## INPUT (already saved from your pipeline) ------------------------------
 final_tbl_rds <- "Exported_data_tables_clinical/Censor_dates_per_patient_for_PFS_updated.rds"
-dat_rds       <- "Output_tables_2025/all_patients_with_BM_and_blood_calls_updated3.rds"
+dat_rds       <- "Output_tables_2025/all_patients_with_BM_and_blood_calls_updated4.rds"
 
 ## OUTPUT ----------------------------------------------------------------------
-outdir <- "Output_tables_2025/detection_progression_updated"
+outdir <- "Output_tables_2025/detection_progression_updated2"
 dir.create(outdir, showWarnings = FALSE, recursive = TRUE)
 
 ## ── 1.  LOAD & TIDY CORE TABLES ──────────────────────────────────────────────
@@ -80,7 +76,8 @@ survival_df <- dat %>%
     Flow_pct_cells, Adaptive_Frequency,
     PET_Binary,
     BM_base_zscore_call, BM_base_zscore_prob, BM_base_zscore_screen_call,
-    Blood_zscore_only_sites_call, Blood_zscore_only_sites_prob, Blood_base_prob, Blood_base_call
+    Blood_zscore_only_sites_call, Blood_zscore_only_sites_prob, Blood_base_prob, Blood_base_call,
+    Blood_plus_fragment_min_prob, Blood_plus_fragment_min_call, Fragmentomics_mean_coverage_only_prob, Fragmentomics_mean_coverage_only_call
   )
 
 # sanity checks
@@ -96,7 +93,9 @@ techs <- c(
   Adaptive_Binary    = "clonoSEQ",
   BM_base_zscore_call    = "cfWGS of BM-derived mutations", 
   BM_base_zscore_screen_call    = "cfWGS of BM-derived mutations (high sensetivity)", 
-  Blood_zscore_only_sites_call = "cfWGS of PB‑cfDNA‑derived mutations"
+  Blood_zscore_only_sites_call = "cfWGS of PB‑cfDNA‑derived mutations",
+  Blood_plus_fragment_min_call = "cfWGS of PB‑cfDNA‑derived mutations + fragmentomics",
+  Fragmentomics_mean_coverage_only_call = "Fragmentomics model"
 )
 
 # techs <- c(
@@ -460,7 +459,9 @@ sens_df <- bind_rows(
     Assay      = recode(Assay,
                         clonoSEQ       = "clonoSEQ",
                         Flow           = "MFC",
-                        cfWGS_BM       = "cfWGS")
+                        cfWGS_BM       = "cfWGS"),
+    # enforce desired order
+    Timepoint = factor(Timepoint, levels = c("Post-ASCT", "Maintenance-1yr"))
   )
 
 # ─────────────────────────────────────────────────────────────
@@ -496,8 +497,8 @@ p_sens <- ggplot(sens_df,
             size     = 3.5) +
   scale_fill_manual(
     name   = "Timepoint",
-    values = custom_cols,
-    breaks = names(custom_cols)
+    values = custom_cols[c("Post-ASCT", "Maintenance-1yr")],  # enforce mapping
+    limits = c("Post-ASCT", "Maintenance-1yr")                # enforce order
   ) +
   scale_y_continuous(
     limits = c(0, 100),
@@ -505,7 +506,7 @@ p_sens <- ggplot(sens_df,
     labels = percent_format(scale = 1)
   ) +
   labs(
-    title = "Sensitivity of MRD assays among relapsing patients",
+    title = "Sensitivity of cfDNA and Clinical MRD Assays in Relapsing Patients",
     x     = "Technology",
     y     = "Sensitivity"
   ) +
@@ -520,7 +521,7 @@ print(p_sens)
 # 3.  Save
 # ─────────────────────────────────────────────────────────────
 ggsave(
-  filename = "Final Tables and Figures/Supp_6A_Fig_sensitivity_by_tech_training.png",
+  filename = "Final Tables and Figures/Supp_6A_Fig_sensitivity_by_tech_training2.png",
   plot     = p_sens,
   width    = 6,
   height   = 4,
@@ -534,6 +535,7 @@ sens_df <- bind_rows(
   year_stats_blood  %>% mutate(Timepoint = "Maintenance-1yr")
 ) %>%
   filter(Assay != "cfWGS_BM") %>%
+  filter(Assay != "cfWGS_BM_screen") %>%
   mutate(
     # percentages for labelling
     Sens_pct   = Sensitivity * 100,
@@ -541,7 +543,9 @@ sens_df <- bind_rows(
     Assay      = recode(Assay,
                         clonoSEQ       = "clonoSEQ",
                         Flow           = "MFC",
-                        cfWGS_Blood       = "cfWGS")
+                        cfWGS_Blood       = "cfWGS"),
+    # enforce desired order
+    Timepoint = factor(Timepoint, levels = c("Post-ASCT", "Maintenance-1yr"))
   )
 
 p_sens_blood <- ggplot(sens_df,
@@ -556,8 +560,8 @@ p_sens_blood <- ggplot(sens_df,
             size     = 3.5) +
   scale_fill_manual(
     name   = "Timepoint",
-    values = custom_cols,
-    breaks = names(custom_cols)
+    values = custom_cols[c("Post-ASCT", "Maintenance-1yr")],  # enforce mapping
+    limits = c("Post-ASCT", "Maintenance-1yr")                # enforce order
   ) +
   scale_y_continuous(
     limits = c(0, 100),
@@ -565,7 +569,7 @@ p_sens_blood <- ggplot(sens_df,
     labels = percent_format(scale = 1)
   ) +
   labs(
-    title = "Sensitivity of MRD assays among relapsing patients",
+    title = "Sensitivity of cfDNA and Clinical MRD Assays in Relapsing Patients",
     x     = "Technology",
     y     = "Sensitivity"
   ) +
@@ -579,7 +583,7 @@ p_sens_blood <- ggplot(sens_df,
 # ─────────────────────────────────────────────────────────────
 ggsave(
   filename = "Final Tables and Figures/Supp_8A_Fig_sensitivity_by_tech_training_blood.png",
-  plot     = p_sens,
+  plot     = p_sens_blood,
   width    = 6,
   height   = 4,
   dpi      = 500
@@ -1375,7 +1379,7 @@ hr_plot_df <- progression_metrics_blood %>%
                       labels = c("Post‑ASCT", "Maintenance-1yr"))
   )
 
-p_hr <- ggplot(hr_plot_df,
+p_hr <- ggplot(hr_plot_df %>% filter(Assay != "clonoSEQ"),
                aes(x = HR, y = fct_rev(Landmark), colour = Assay)) +
   # reference line
   geom_vline(xintercept = 1, linetype = "dashed") +
@@ -1397,8 +1401,8 @@ p_hr <- ggplot(hr_plot_df,
   scale_x_continuous(
     "Hazard ratio (log scale)",
     trans        = "log10",
-    limits       = c(0.05, 16),           # start at 0.05
-    breaks       = c(0.05, 0.1, 0.25, 0.5, 1, 2, 4, 8, 16),
+    limits       = c(0.05, 34),   # extend upper limit
+    breaks       = c(0.05, 0.1, 0.25, 0.5, 1, 2, 4, 8, 16, 32),
     minor_breaks = c(
       0.06, 0.08,      # between 0.05 & 0.1
       0.15, 0.2,       # between 0.1 & 0.25
@@ -1406,10 +1410,10 @@ p_hr <- ggplot(hr_plot_df,
       0.6, 0.8,        # between 0.5 & 1
       1.5,             # between 1 & 2
       3, 6,            # between 2 & 4 & 8
-      12               # between 8 & 16
+      12, 24           # new minor breaks between 8–16 and 16–32
     ),
     labels = label_number(accuracy = .01)
-  ) +
+  )+
   annotation_logticks(
     sides  = "b",
     short  = unit(2, "pt"),
@@ -1444,7 +1448,7 @@ p_hr <- ggplot(hr_plot_df,
     legend.text        = element_text(size = 8)
   )
 
-ggsave("Final Tables and Figures/F5X_cfWGS_blood_HR_updated.png",
+ggsave("Final Tables and Figures/F5X_cfWGS_blood_HR_updated2.png",
        p_hr, width = 6, height = 4, dpi = 600)
 
 
@@ -1966,7 +1970,8 @@ df_slim <- df %>%
 # ────────────────────────────────────────────────────────────────
 # 2.  Plot  ──────────────────────────────────────────────────────
 # ────────────────────────────────────────────────────────────────
-youden_thresh <- 0.5226406
+youden_thresh <- 0.432
+youden_thr <- youden_thresh # for consistency
 max_mo <- max(df_slim$months_before_event, na.rm = TRUE)  
 
 p_prob <- ggplot(df, aes(months_before_event, Blood_zscore_only_sites_prob, group = Patient)) +
@@ -2053,7 +2058,7 @@ print(p_prob)
 # ────────────────────────────────────────────────────────────────
 # 3.  Export  ────────────────────────────────────────────────────
 # ────────────────────────────────────────────────────────────────
-ggsave("Final Tables and Figures/F5I_cfWGS_prob_vs_time_updated3_blood.png",
+ggsave("Final Tables and Figures/F5I_cfWGS_prob_vs_time_updated3_blood2.png",
        p_prob, width = 6, height = 4.5, dpi = 600)
 
 
@@ -2207,6 +2212,18 @@ spearman_res <- with(
 rho  <- spearman_res$estimate
 pval <- spearman_res$p.value
 
+# format p-value: <0.01 if small, else 2 decimals
+pval_fmt <- ifelse(pval < 0.01, "<0.01", sprintf("%.2f", pval))
+
+## See range
+plot_df2 %>%
+  summarise(
+    min   = min(Blood_zscore_only_sites_prob, na.rm = TRUE),
+    max   = max(Blood_zscore_only_sites_prob, na.rm = TRUE),
+    range = max(Blood_zscore_only_sites_prob, na.rm = TRUE) -
+      min(Blood_zscore_only_sites_prob, na.rm = TRUE)
+  )
+
 # 3) make the scatter
 p_time_inf <- ggplot(plot_df2,
                      aes(x = Blood_zscore_only_sites_prob,
@@ -2231,7 +2248,7 @@ p_time_inf <- ggplot(plot_df2,
   # x‐axis as percent
   scale_x_continuous(
     "cfWGS MRD probability (%)",
-    limits = c(0.4,0.9),
+    limits = c(0.35,0.9),
     breaks = seq(0,1,by=0.1),
     labels = scales::percent_format(accuracy=1)
   ) +
@@ -2250,7 +2267,7 @@ p_time_inf <- ggplot(plot_df2,
   annotate("text",
            x = 0.80,      # left margin
            y = 1650,
-           label = sprintf("ρ = %.2f\np = %.2f", rho, pval),
+           label = sprintf("ρ = %.2f\np = %s", rho, pval_fmt),
            hjust = 0,
            size = 3.5) +
   
@@ -2269,13 +2286,14 @@ p_time_inf <- ggplot(plot_df2,
 print(p_time_inf)
 
 # 4) render / save
-ggsave(file.path(outdir, "Fig_5_I_time_to_relapse_infinity_no_reverse2_blood_muts.png"),
+ggsave(file.path(outdir, "Fig_5_I_time_to_relapse_infinity_no_reverse2_blood_muts3.png"),
        p_time_inf, width = 6, height = 5, dpi = 600)
 
-tmp <- plot_df2 %>%
+## Check what is not included
+plot_df2 %>%
   filter(
     is.na(Blood_zscore_only_sites_prob) | is.na(days_plot) |
-      Blood_zscore_only_sites_prob < 0.4 | Blood_zscore_only_sites_prob > 0.9 |
+      Blood_zscore_only_sites_prob < 0.35 | Blood_zscore_only_sites_prob > 0.9 |
       days_plot < 0 | days_plot > overflow
   )
 
@@ -2302,6 +2320,14 @@ dat <- readRDS(dat_rds) %>%
     timepoint_info = tolower(timepoint_info)
   )
 
+
+## Do rescored 
+dat <- dat %>%
+  ## Add the screen column 
+  mutate(
+    BM_base_zscore_screen_call  = as.integer(BM_base_zscore_prob >= 0.350),
+  )
+
 ################################################################################
 ##  Time-window prediction performance in Non-frontline cohort
 ################################################################################
@@ -2315,7 +2341,7 @@ assays <- c(
 
 ## Get additional dates
 Relapse_dates_full <- read_csv(
-  "Relapse dates cfWGS updated.csv",
+  "Exported_data_tables_clinical/Relapse dates cfWGS updated2.csv",
   col_types = cols(
     Patient          = col_character(),
     Progression_date = col_date(format = "%Y-%m-%d")
@@ -2649,7 +2675,7 @@ p_sens_blood <- ggplot(sens_blood_df,
 # ────────────────────────────────────────────────────────────────────────────
 # 4) (Optional) Save
 # ────────────────────────────────────────────────────────────────────────────
-ggsave("Final Tables and Figures/Supp_Fig_8_Fig_sensitivity_windows_blood_test_cohort.png",
+ggsave("Final Tables and Figures/Supp_Fig_8_Fig_sensitivity_windows_blood_test_cohort2.png",
        plot = p_sens_blood,
        width = 5, height = 5, dpi = 500)
 

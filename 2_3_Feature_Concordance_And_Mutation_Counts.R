@@ -2019,7 +2019,7 @@ saveRDS(perf_combined,
         "Final Tables and Figures/Supplentary_table_BM_vs_cfDNA_performance_by_event_and_category.rds")
 
 
-
+## above combined to supplementary table 2
 
 ### Export additional important things 
 # =====================================================================
@@ -2051,7 +2051,7 @@ writexl::write_xlsx(
     BMcfDNA_perf_byTF        = perf_tf_complete,
     FISH_perf = tf_plot_df
   ),
-  path = file.path(outdir, "SV_CNA_performance_summary.xlsx")
+  path = file.path(outdir, "SV_CNA_performance_summary.xlsx") 
 )
 
 message("✓ Additional outputs written to ", outdir)

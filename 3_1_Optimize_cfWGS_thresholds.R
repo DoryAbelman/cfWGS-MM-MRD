@@ -1601,13 +1601,13 @@ data_scored <- apply_selected(
 good_blood_patients <- cfDNA_good_patients$Patient
 good_bm_patients    <- bm_good_patients$Patient
 
-## All probability columns produced by apply_selected
-prob_cols <- grep("_prob$", names(data_scored), value = TRUE)
+## All probability and score columns produced by apply_selected
+score_cols <- grep("_(prob|call)$", names(data_scored), value = TRUE, ignore.case = TRUE)
 
 ## Map prob column -> model base name (strip the trailing "_prob")
 model_base <- tibble(
-  model_prob = prob_cols,
-  model_base = str_remove(prob_cols, "_prob$")
+  model_col  = score_cols,
+  model_base = str_remove(score_cols, "_(?i:prob|call)$")   # strip _prob or _call
 )
 
 ## Heuristic family mapping based on the names you provided
@@ -1619,35 +1619,48 @@ model_map <- model_base %>%
     TRUE                                                                 ~ "OTHER"
   ))
 
-
+# --- 4) Mask disallowed patients for BOTH prob+call columns --------
 data_scored_masked <- data_scored
 
-walk2(model_map$model_prob, model_map$family, function(col, fam) {
+typed_na <- function(x) {
+  if (is.factor(x))         return(NA)                 # factor NA
+  if (is.logical(x))        return(NA)                 # logical NA
+  if (is.integer(x))        return(NA_integer_)        # integer NA
+  if (is.double(x))         return(NA_real_)           # numeric NA
+  if (is.numeric(x))        return(NA_real_)
+  if (is.character(x))      return(NA_character_)      # character NA
+  if (inherits(x, "Date"))  return(as.Date(NA))        # Date NA
+  if (inherits(x, "POSIXt"))return(as.POSIXct(NA))     # POSIXct NA
+  NA
+}
+
+walk2(model_map$model_col, model_map$family, function(col, fam) {
   allowed <- switch(
     fam,
     "BM"    = good_bm_patients,
     "BLOOD" = good_blood_patients,
-    "FRAG"  = unique(data_scored$Patient),  # all allowed
-    "OTHER" = unique(data_scored$Patient)   # default: allow all
+    "FRAG"  = unique(data_scored$Patient),
+    "OTHER" = unique(data_scored$Patient)
   )
-  data_scored_masked[[col]] <<- ifelse(
-    data_scored$Patient %in% allowed,
-    data_scored[[col]],
-    NA_real_
-  )
+  
+  x <- data_scored[[col]]
+  mask <- data_scored$Patient %in% allowed
+  x[!mask] <- typed_na(x)        # preserve the column's original type
+  data_scored_masked[[col]] <<- x
 })
 
-## Check to see what was masked - only elidgible patients kept
-for (m in prob_cols) {
-  n_eff <- data_scored %>% drop_na(all_of(m)) %>% nrow()
-  message(sprintf("Model %-30s effective N = %d", m, n_eff))
+# --- 5) Simple diagnostics: effective N before/after --------------
+message("=== Effective N BEFORE masking ===")
+for (m in score_cols) {
+  n_eff <- data_scored %>% tidyr::drop_na(all_of(m)) %>% nrow()
+  message(sprintf("%-40s N = %d", m, n_eff))
 }
 
-for (m in prob_cols) {
-  n_eff <- data_scored_masked %>% drop_na(all_of(m)) %>% nrow()
-  message(sprintf("Model %-30s effective N = %d", m, n_eff))
+message("=== Effective N AFTER masking ===")
+for (m in score_cols) {
+  n_eff <- data_scored_masked %>% tidyr::drop_na(all_of(m)) %>% nrow()
+  message(sprintf("%-40s N = %d", m, n_eff))
 }
-
 
 
 ### Save this 

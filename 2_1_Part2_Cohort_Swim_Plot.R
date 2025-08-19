@@ -536,6 +536,30 @@ write_csv(all_events %>% select(-details_2), "Final Tables and Figures/Supp_Tabl
 saveRDS(all_events, "Final Tables and Figures/all_events_for_swim_plot_combined_updated2.rds")
 
 
+### Export clean version with correct id 
+
+### this is a supplementary table used in manuscript 
+
+# 1. Load the ID map (must have columns Patient, New_ID)
+id_map <- readRDS("id_map.rds") %>% distinct(Patient, New_ID)
+
+# 2. Merge all_events with id_map and replace Patient with New_ID
+all_events_updated <- all_events %>%
+  rename(Patient = patient) %>%
+  left_join(id_map, by = "Patient") %>%
+  mutate(Patient = coalesce(New_ID, Patient),  # use New_ID when available
+  details = if_else(
+    event %in% c("BM sample collection", "cfDNA sample collection"),
+    NA_character_,
+    details
+  )) %>%
+  select(-New_ID, -details_2)                      # drop temp + details_2 col
+
+# 3. Write to CSV
+write_csv(all_events_updated,
+          "Final Tables and Figures/Supp_Table_1_all_events_for_swim_plot_combined_updated_with_new_patient_ID.csv")
+
+
 ## Export for Esteban to get more info 
 spore_chemo_events <- all_events %>%
   filter(event == "Chemotherapy", grepl("^SPORE", patient)) %>% 

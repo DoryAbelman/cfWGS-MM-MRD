@@ -1,6 +1,4 @@
-# =============================================================================
 # Script: 1_2_Part2_Get_Mutation_Overlap.R
-# =============================================================================
 # ──────────────────────────────────────────────────────────────────────────────
 # Title       : Mutation Overlap Analysis (BM vs. PB cfDNA)  
 # Author      : Dory Abelman  
@@ -54,7 +52,7 @@ library(VennDiagram)
 library(viridis)
 
 
-
+outdir <- "Final Tables and Figures/"
 
 # Read the MAF file using read.maf
 df_bm <- readRDS("combined_maf_bm_dx.rds")
@@ -326,6 +324,23 @@ plot_df <- overlap_with_cohort %>%
     pos     = row_number()                            # y-position
   )
 
+## edit IDs 
+# load ID map (Patient -> New_ID)
+id_map <- readRDS("id_map.rds") %>% distinct(Patient, New_ID)
+
+# 1) Apply ID map, keep order for plotting
+plot_df <- overlap_with_cohort %>%
+  filter(Cohort == "Frontline") %>%
+  left_join(id_map, by = "Patient") %>%
+  mutate(Patient = coalesce(New_ID, Patient)) %>%   # swap to New_ID when available
+  select(-New_ID) %>%
+  arrange(Percent_Overlap) %>%
+  mutate(
+    Patient = factor(Patient, levels = Patient),    # lock order for y-axis
+    pos     = row_number()
+  )
+
+
 # 2. Calculate overall statistics
 med  <- median(plot_df$Percent_Overlap, na.rm = TRUE)
 iqrL <- quantile(plot_df$Percent_Overlap, 0.25, na.rm = TRUE)
@@ -374,7 +389,7 @@ p_overlap <- ggplot(plot_df, aes(x = Percent_Overlap, y = Patient)) +
 
 # 4. Save for Figure 3C
 ggsave(
-  filename = file.path(outdir, "Fig3C_mutation_overlap_lollipop.png"),
+  filename = file.path(outdir, "Fig3C_mutation_overlap_lollipop2.png"),
   plot     = p_overlap,
   width    = 4,   # a bit narrower
   height   = 5,

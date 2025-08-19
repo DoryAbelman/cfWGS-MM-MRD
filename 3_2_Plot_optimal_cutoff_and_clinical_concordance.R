@@ -70,10 +70,12 @@ summarise_pos <- function(df) {
 # you can drop this mutate() block.
 dat <- dat %>%
   mutate(
-    landmark_tp = recode(timepoint_info,
-                         "Post_transplant"  = "Post‑ASCT",
-                         "1yr maintenance"  = "Maintenance‑1yr",
-                         .default           = NA_character_)
+    landmark_tp = case_when(
+      timepoint_info == "Post_transplant"  ~ "Post-ASCT",
+      timepoint_info == "1yr maintenance"  ~ "Maintenance-1yr",
+      Timepoint == "07"                    ~ "Maintenance-1yr",
+      TRUE                                 ~ NA_character_
+    )
   )
 
 # ---------------------------------------------------------------------------
@@ -487,6 +489,34 @@ ggsave(
 
 
 ### Now redo using blood derived muts
+## See number available 
+# 1) Counts per landmark timepoint
+front_counts <- dat %>%
+  filter(Cohort == "Frontline", !is.na(landmark_tp)) %>%
+  mutate(
+    has_screen   = !is.na(Blood_zscore_only_sites_call),
+    has_clinical = !is.na(Flow_Binary) | !is.na(Adaptive_Binary)
+  ) %>%
+  group_by(landmark_tp) %>%
+  summarise(
+    n_total_cfWGS_screen = sum(has_screen, na.rm = TRUE),
+    n_with_clinical      = sum(has_screen & has_clinical, na.rm = TRUE),
+    frac_string          = paste0(n_with_clinical, "/", n_total_cfWGS_screen),
+    .groups = "drop"
+  )
+
+concord_sentence <- front_counts %>%
+  mutate(tp_label = recode(landmark_tp, !!!tp_labels)) %>%
+  arrange(match(tp_label, c("post-ASCT", "1-year maintenance"))) %>%
+  summarise(
+    sentence = glue(
+      "We assessed concordance between cfDNA-based MRD and clinical assays at {glue_collapse(glue('{tp_label} in samples with at least one clinical MRD result (n = {n_with_clinical}/{n_total_cfWGS_screen})'), sep = ' and ')}."
+    )
+  ) %>%
+  pull(sentence)
+
+concord_sentence
+
 front_tbl <- dat %>%
   filter(
     Cohort == "Frontline",
@@ -495,7 +525,7 @@ front_tbl <- dat %>%
   ) %>%
   ## Add the screen column 
   mutate(
-    Blood_zscore_screen_call  = as.integer(Blood_zscore_only_sites_prob >= 0.457),
+    Blood_zscore_screen_call  = as.integer(Blood_zscore_only_sites_prob >= 0.380),
   ) %>%
   
   pivot_longer(
@@ -533,7 +563,7 @@ non_tbl <- dat %>%
   ) %>%
   ## Add the screen column 
   mutate(
-    Blood_zscore_screen_call  = as.integer(Blood_zscore_only_sites_prob >= 0.457),
+    Blood_zscore_screen_call  = as.integer(Blood_zscore_only_sites_prob >= 0.380),
   ) %>%
   pivot_longer(
     cols      = c(Flow_Binary, Adaptive_Binary, Blood_zscore_only_sites_call, Blood_zscore_screen_call),
@@ -654,7 +684,7 @@ p_pos_by_tech <- ggplot(combo_tbl,
 
 # 4) Save
 ggsave(
-  filename = file.path(OUTPUT_DIR_FIGURES, "Fig_5I_Blood_positivity_by_tech_facet_updated3.png"),
+  filename = file.path(OUTPUT_DIR_FIGURES, "Fig_5I_Blood_positivity_by_tech_facet_updated4.png"),
   plot     = p_pos_by_tech,
   width    = 6.5,    # wider to accommodate two facets
   height   = 4,
@@ -1269,12 +1299,16 @@ make_ct <- function(df,
   fn <- out %>% filter(row=="Pred_Neg",  col=="Truth_Pos")  %>% pull(n)
   tn <- out %>% filter(row=="Pred_Neg",  col=="Truth_Neg")  %>% pull(n)
   
+  N      <- tp + fp + fn + tn
+  Agree  <- tp + tn
   tibble(
     TP = tp, FP = fp, FN = fn, TN = tn,
-    Sensitivity = TP/(TP+FN),
-    Specificity = TN/(TN+FP),
-    PPV = TP/(TP+FP),
-    NPV = TN/(TN+FN)
+    N = N, Agree = Agree,
+    Concordance = Agree / N,
+    Sensitivity = tp/(tp+fn),
+    Specificity = tn/(tn+fp),
+    PPV = tp/(tp+fp),
+    NPV = tn/(tn+fn)
   )
 }
 
@@ -1323,9 +1357,34 @@ writexl::write_xlsx(
     "Maintenance_vs_clonoSEQ"  = ct_maint_Clono,
     "NonFront_vs_Flow"         = ct_non_Flow
   ),
-  path = file.path(outdir, "cfWGS_contingency_vs_Flow_clonoSEQ_blood_calls_2.xlsx")
+  path = file.path(outdir, "cfWGS_contingency_vs_Flow_clonoSEQ_blood_calls_2.xlsx") ### these are the metrics
 )
 
+
+# format the sentence you quoted (rounded like your example)
+fmt_pct <- function(x) sprintf("%.0f%%", 100*x)
+
+post_sentence <- glue(
+  "At post-ASCT, confirmatory cfDNA-based MRD demonstrated strong concordance with clonoSEQ ",
+  "({ct_post_Clono$Agree}/{ct_post_Clono$N}, {fmt_pct(ct_post_Clono$Concordance)}; ",
+  "PPV {fmt_pct(ct_post_Clono$PPV)}, NPV {fmt_pct(ct_post_Clono$NPV)}) ",
+  "and moderate concordance with MFC ",
+  "({ct_post_Flow$Agree}/{ct_post_Flow$N}, {fmt_pct(ct_post_Flow$Concordance)}; ",
+  "PPV {fmt_pct(ct_post_Flow$PPV)}, NPV {fmt_pct(ct_post_Flow$NPV)})."
+)
+
+post_sentence
+
+maint_sentence <- glue(
+  "At maintenance, confirmatory cfDNA-based MRD demonstrated strong concordance with clonoSEQ ",
+  "({ct_maint_Clono$Agree}/{ct_maint_Clono$N}, {fmt_pct(ct_maint_Clono$Concordance)}; ",
+  "PPV {fmt_pct(ct_maint_Clono$PPV)}, NPV {fmt_pct(ct_maint_Clono$NPV)}) ",
+  "and moderate concordance with MFC ",
+  "({ct_maint_Flow$Agree}/{ct_maint_Flow$N}, {fmt_pct(ct_maint_Flow$Concordance)}; ",
+  "PPV {fmt_pct(ct_maint_Flow$PPV)}, NPV {fmt_pct(ct_maint_Flow$NPV)})."
+)
+
+maint_sentence
 
 ## Now plot the contingency tables 
 ## A.  Helper: turn a 1-row TP/FP/FN/TN tibble into a long tibble
@@ -1401,11 +1460,11 @@ p_post   <- plot_cm(cm_post ,  "Confusion Matrix at Post-ASCT (Training Cohort)"
 p_maint  <- plot_cm(cm_maint,  "Confusion Matrix at 1‑Year Maintenance (Training Cohort)")
 p_non    <- plot_cm(cm_non ,   "Confusion Matrix of Test Cohort")
 
-ggsave("Final Tables and Figures/Fig5_confmat_post_ASCT_blood_updated2.png",
+ggsave("Final Tables and Figures/Fig5_confmat_post_ASCT_blood_updated3.png",
        p_post,  width = 5, height = 2.75, dpi = 600)
-ggsave("Final Tables and Figures/Fig5_confmat_maintenance_blood_updated2.png",
+ggsave("Final Tables and Figures/Fig5_confmat_maintenance_blood_updated3.png",
        p_maint, width = 5, height = 2.75, dpi = 600)
-ggsave("Final Tables and Figures/Fig5_confmat_nonfront_blood_updated2.png",
+ggsave("Final Tables and Figures/Fig5_confmat_nonfront_blood_updated3.png",
        p_non,   width = 3, height = 2.75, dpi = 600)   # single facet – narrower
 
 ## As one 
@@ -1564,8 +1623,7 @@ id_cols   <- c("Patient", "Sample_Code", "Timepoint", "timepoint_info")
 
 # Columns that explain why calls differ
 aux_cols  <- c("Adaptive_Frequency",              # clonoSEQ cumulative VAF (rename to your actual column name)
-               "Flow_pct_cells",                     # MFC % cells; rename if needed
-               "BM_base_zscore_call",  "BM_zscore_only_sites_call",  "BM_base_zscore_call", "BM_base_zscore_prob",           # cfWGS probability (before threshold)
+               "Flow_pct_cells", grep("^BM.*(_prop|_call)$", names(dat), value = TRUE),
                "FS", "Mean.Coverage", "detect_rate_BM", "zscore_BM", 
                "WGS_Tumor_Fraction_Blood_plasma_cfDNA",
                "BM_MutCount_Baseline", "Blood_MutCount_Baseline", "FS_outlier", "Mean.Coverage_outlier")
@@ -1756,6 +1814,183 @@ by_comp <- tbl %>%
   unnest(c(missed_tidy, captured_tidy), names_sep = "_")
 
 print(by_comp)
+
+
+
+
+### Show discordance of blood-derived muts 
+### Now do one big table with everything discordant
+
+aux_cols  <- c("Adaptive_Frequency",              # clonoSEQ cumulative VAF (rename to your actual column name)
+               "Flow_pct_cells",                     # MFC % cells; rename if needed
+               "FS", "Mean.Coverage",  grep("^Blood.*(_prop|_call)$", names(dat), value = TRUE),
+               "WGS_Tumor_Fraction_Blood_plasma_cfDNA",
+               "BM_MutCount_Baseline", "Blood_MutCount_Baseline", "FS_outlier", "Mean.Coverage_outlier")
+
+# 2.  Build one combined table ---------------------------------------------
+combined_discord_tbl2 <- dat %>%
+  filter(
+    !is.na(Blood_zscore_only_sites_call),
+    !is.na(landmark),                             # only landmark timepoints
+    (!is.na(Adaptive_Binary) | !is.na(Flow_Binary))
+  ) %>%
+  pivot_longer(
+    cols      = c(Adaptive_Binary, Flow_Binary),
+    names_to  = "Comparator",
+    values_to = "Reference"
+  ) %>%
+  filter(!is.na(Reference)) %>%
+  mutate(
+    # Label the comparator
+    Comparator = recode(
+      Comparator,
+      Adaptive_Binary = "clonoSEQ",
+      Flow_Binary     = "MFC"
+    ),
+    # Define discordance/concordance category
+    category = case_when(
+      Blood_zscore_only_sites_call == 1L & Reference == 0L ~
+        paste0("cfWGS_pos / ", Comparator, "_neg"),
+      Blood_zscore_only_sites_call == 0L & Reference == 1L ~
+        paste0("cfWGS_neg / ", Comparator, "_pos"),
+      TRUE ~ "concordant"
+    )
+  ) %>%
+  select(
+    all_of(id_cols),     # Patient, Sample_Code, Timepoint, timepoint_info
+    Cohort,              # frontline vs non-frontline
+    landmark,            # e.g. "Post_ASCT" or "Maintenance"
+    Comparator,          # "clonoSEQ" or "MFC"
+    category,            # your discordance/concordance label
+    Relapsed,
+    Num_days_to_closest_relapse,
+    all_of(aux_cols)     # all the cfWGS, clonoSEQ & MFC metrics you specified
+  ) %>%
+  arrange(landmark, Patient, Comparator)
+
+combined_discord_tbl_slim <- combined_discord_tbl2 %>% filter(category != "concordant")
+
+# 3.  (Optional) write out to CSV ------------------------------------------
+write.csv(
+  combined_discord_tbl2,
+  file.path(outdir, "Supplementary_Table_combined_discordance_table_Blood.csv"),
+  row.names = FALSE
+)
+
+
+
+### Do for non-frontline now at all timepoints
+combined_discord_tbl_non_frontline2 <- dat %>%
+  filter(
+    !is.na(Blood_zscore_only_sites_call),
+    (!is.na(Adaptive_Binary) | !is.na(Flow_Binary))
+  ) %>%
+  filter(Cohort == "Non-frontline") %>%
+  pivot_longer(
+    cols      = c(Adaptive_Binary, Flow_Binary),
+    names_to  = "Comparator",
+    values_to = "Reference"
+  ) %>%
+  filter(!is.na(Reference)) %>%
+  mutate(
+    # Label the comparator
+    Comparator = recode(
+      Comparator,
+      Adaptive_Binary = "clonoSEQ",
+      Flow_Binary     = "MFC"
+    ),
+    # Define discordance/concordance category
+    category = case_when(
+      BM_base_zscore_call == 1L & Reference == 0L ~
+        paste0("cfWGS_pos / ", Comparator, "_neg"),
+      BM_base_zscore_call == 0L & Reference == 1L ~
+        paste0("cfWGS_neg / ", Comparator, "_pos"),
+      TRUE ~ "concordant"
+    )
+  ) %>%
+  select(
+    all_of(id_cols),     # Patient, Sample_Code, Timepoint, timepoint_info
+    Cohort,              # frontline vs non-frontline
+    Comparator,          # "clonoSEQ" or "MFC"
+    category,            # your discordance/concordance label
+    Relapsed,
+    Num_days_to_closest_relapse,
+    all_of(aux_cols)     # all the cfWGS, clonoSEQ & MFC metrics you specified
+  ) %>%
+  arrange(Patient, Comparator)
+
+
+## Export 
+write.csv(
+  combined_discord_tbl_non_frontline2,
+  file.path(outdir, "Supplementary_Table_combined_discordance_table_blood_non_frontline.csv"),
+  row.names = FALSE
+)
+
+
+
+
+### Create full supplementary table 
+library(openxlsx)
+
+# --- 0) Load ID map
+id_map <- readRDS("id_map.rds") %>% distinct(Patient, New_ID)
+
+# --- 1) Prep: rename columns + replace Patient with New_ID (if present)
+prepare_tbl <- function(df, id_map){
+  if (is.null(df)) stop("Input table is NULL.")
+  df %>%
+    # ensure it's a tibble first
+    tibble::as_tibble() %>%
+    ungroup() %>%
+    rename(
+      clonoSEQ_Tumor_Ig_Frequency = any_of("Adaptive_Frequency"),
+      MFC_Pct_Tumor_Cells         = any_of("Flow_pct_cells")
+    ) %>%
+    { if ("Patient" %in% names(.)) {
+      left_join(., id_map, by = "Patient") %>%
+        mutate(Patient = coalesce(New_ID, Patient)) %>%
+        select(-any_of("New_ID"))
+    } else . } %>%
+    # flatten any list-columns to strings for Excel safety
+    mutate(across(where(is.list), ~ map_chr(., ~ paste0(as.character(.x), collapse = "; ")))) %>%
+    select(-Sample_Code) %>% # remove this column to get rid of sample code with patient iD
+    # finally, convert to plain data.frame for openxlsx
+    as.data.frame(check.names = FALSE)
+}
+
+BM_Train    <- prepare_tbl(combined_discord_tbl,               id_map)
+BM_Test     <- prepare_tbl(combined_discord_tbl_non_frontline, id_map)
+Blood_Train <- prepare_tbl(combined_discord_tbl2,              id_map)
+Blood_Test  <- prepare_tbl(combined_discord_tbl_non_frontline2,id_map)
+
+# --- 2) Writer helper: robust to empty/odd tables
+add_sheet_with_style <- function(wb, sheet_name, data) {
+  addWorksheet(wb, sheet_name)
+  
+  # If data has zero columns, write a placeholder to avoid openxlsx errors
+  if (is.null(ncol(data)) || is.na(ncol(data)) || ncol(data) == 0) {
+    writeData(wb, sheet_name, data.frame(`(empty)` = character(0)))
+    return(invisible(NULL))
+  }
+  
+  writeData(wb, sheet_name, data, headerStyle = createStyle(textDecoration = "bold"))
+  
+  # Excel niceties only if there are columns
+  addFilter(wb, sheet = sheet_name, rows = 1, cols = 1:ncol(data))
+  setColWidths(wb, sheet = sheet_name, cols = 1:ncol(data), widths = "auto")
+}
+
+# --- 3) Build workbook with short sheet names
+wb <- createWorkbook()
+add_sheet_with_style(wb, "BM_Train",    BM_Train)
+add_sheet_with_style(wb, "BM_Test",     BM_Test)
+add_sheet_with_style(wb, "Blood_Train", Blood_Train)
+add_sheet_with_style(wb, "Blood_Test",  Blood_Test)
+
+# Save workbook
+saveWorkbook(wb, "Final Tables and Figures/Supplementary_Table_8_model_comparisons_to_clinical_metrics.xlsx", overwrite = TRUE)
+
 
 
 
@@ -2066,20 +2301,26 @@ plot_df2 <- plot_df %>%
 
 #### Clean version 
 # ------------------------------------------------------------
-# 1.  Tidy / recode (same as you already have)
+# 1.  Tidy / recode 
 # ------------------------------------------------------------
-plot_df2 <- plot_df2 %>%                       # << only this line changes
+hyphen_rx <- "[\u2010\u2011\u2012\u2013\u2014\u2212]"  # all the usual dash culprits
+
+plot_df2 <- plot_df2 %>%
   mutate(
-    landmark_timepoint = factor(landmark_tp,
-                                levels = c("Post‑ASCT", "Maintenance‑1yr")),
+    # normalize dashes and whitespace
+    landmark_tp = str_replace_all(landmark_tp, hyphen_rx, "-") |> trimws(),
+    
+    # now factor with ASCII hyphens
+    landmark_timepoint = factor(
+      landmark_tp,
+      levels = c("Post-ASCT", "Maintenance-1yr")
+    ),
+    
     detect_cat = factor(shape_cat,
-                        levels = c("cfWGS only", "Comparator only",
-                                   "Both", "Neither")),
+                        levels = c("cfWGS only", "Comparator only", "Both", "Neither")),
     relapse_cat = factor(relapse_cat,
-                         levels = c("Relapsed ≤365 d",
-                                    "No relapse ≤365 d")),
-    relapse_flag = if_else(relapse_cat == "Relapsed ≤365 d",
-                           "Relapse", "No relapse")   
+                         levels = c("Relapsed ≤365 d", "No relapse ≤365 d")),
+    relapse_flag = if_else(relapse_cat == "Relapsed ≤365 d", "Relapse", "No relapse")
   )
 
 
@@ -2125,7 +2366,7 @@ corr_df <- plot_df2 %>%
   ) %>%
   mutate(
     label = sprintf("ρ = %.2f\np = %.2f", rho, p),
-    x = 0.0019,   # choose your x/y annotation positions for your data
+    x = 0.001,   # choose your x/y annotation positions for your data
     y = 0.99
   )
 
@@ -2137,7 +2378,7 @@ p_scatter_simple_blood <- ggplot(plot_df2,
                                  aes(x = x_plot, y = y_plot,
                                      fill   = relapse_cat)) +  
   # LOD reference lines
-  geom_hline(yintercept = 0.5226406,   linetype = "dashed", colour = "grey80") + # youden threshold
+  geom_hline(yintercept = 0.432,   linetype = "dashed", colour = "grey80") + # youden threshold of the used model
   geom_vline(xintercept = lod_clonoMF, linetype = "dashed", colour = "grey80") +
   
   # points
@@ -2155,7 +2396,7 @@ p_scatter_simple_blood <- ggplot(plot_df2,
     expand = expansion(mult = c(0.05, 0.05))
   ) +
   scale_y_continuous(
-    limits = c(0.38, 1),
+    limits = c(0.36, 1),
     breaks = seq(0.4, 1, by = 0.2),
     labels = scales::percent_format(accuracy = 1)
   ) +
@@ -2182,7 +2423,7 @@ p_scatter_simple_blood <- ggplot(plot_df2,
   geom_text(
     data = corr_df,
     aes(x = x, y = y, label = label),
-    hjust = 0, vjust = 1, size = 2.5,
+    hjust = 0.5, vjust = 1, size = 2.5,
     inherit.aes = FALSE
   ) +
   # now tweak:
@@ -2213,6 +2454,6 @@ p_scatter_simple_blood <- ggplot(plot_df2,
 p_scatter_simple_blood
 
 # save
-ggsave("Final Tables and Figures/Fig5K_cfWGS_vs_MFC_clonoSEQ_clean_Bloof_muts_updated.png",
+ggsave("Final Tables and Figures/Fig5K_cfWGS_vs_MFC_clonoSEQ_clean_Bloof_muts_updated2.png",
        p_scatter_simple_blood,
        width  = 6.5, height = 5, dpi = 600)
