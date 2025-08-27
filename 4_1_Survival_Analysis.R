@@ -1681,12 +1681,64 @@ p_prob <- ggplot(df, aes(months_before_event, BM_base_zscore_prob, group = Patie
 
 print(p_prob)
 
+## Add the samples 
+# Make sure the outcome labels match your scales
+df <- df %>% mutate(progress_status = factor(progress_status,
+                                             levels = c("No relapse","Relapse")))
+
+n_patients_by <- df %>%
+  distinct(Patient, progress_status) %>%
+  count(progress_status, name = "n_patients")
+
+n_timepoints_by <- df %>%
+  count(progress_status, name = "n_timepoints")
+
+# pull counts (0 if a group is absent)
+get_n <- function(tbl, lvl, col) {
+  val <- tbl %>% filter(progress_status == lvl) %>% pull({{col}})
+  if (length(val) == 0) 0 else val
+}
+
+n_pat_nr  <- get_n(n_patients_by,  "No relapse", n_patients)
+n_time_nr <- get_n(n_timepoints_by, "No relapse", n_timepoints)
+n_pat_rl  <- get_n(n_patients_by,  "Relapse",    n_patients)
+n_time_rl <- get_n(n_timepoints_by, "Relapse",   n_timepoints)
+
+# text to print
+lab_nr <- paste0("No relapse: n=", n_pat_nr, " patients; ", n_time_nr, " samples")
+lab_rl <- paste0("Relapse: n=", n_pat_rl, " patients; ", n_time_rl, " samples")
+
+# place labels at bottom-left (remember: x is reversed, so 'left' == large x)
+x_left <- max_mo - 0.02 * max_mo  # a small inset from the left border
+
+p_prob2 <- p_prob +
+  scale_colour_manual(
+    name = "Patient outcome",
+    values = c("No relapse" = "#35608DFF", "Relapse" = "#43BF71FF"),
+    labels = c(
+      paste0("No relapse\n(n=", n_pat_nr, " patients; ", n_time_nr, " samples)"),
+      paste0("Relapse\n(n=", n_pat_rl, " patients; ", n_time_rl, " samples)")
+    )
+  ) +
+  scale_fill_manual(
+    name = "Patient outcome",
+    values = c("No relapse" = "#35608DFF", "Relapse" = "#43BF71FF"),
+    labels = c(
+      paste0("No relapse\n(n=", n_pat_nr, " patients; ", n_time_nr, " samples)"),
+      paste0("Relapse\n(n=", n_pat_rl, " patients; ", n_time_rl, " samples)")
+    )
+  )
+
+print(p_prob2)
 
 # ────────────────────────────────────────────────────────────────
 # 3.  Export  ────────────────────────────────────────────────────
 # ────────────────────────────────────────────────────────────────
 ggsave("Final Tables and Figures/F4I_cfWGS_prob_vs_time_updated3.png",
        p_prob, width = 6, height = 4.5, dpi = 600)
+
+ggsave("Final Tables and Figures/F4I_cfWGS_prob_vs_time_updated3_label.png",
+       p_prob2, width = 6, height = 4.5, dpi = 600)
 
 
 
@@ -2054,13 +2106,65 @@ p_prob <- ggplot(df, aes(months_before_event, Blood_zscore_only_sites_prob, grou
 
 print(p_prob)
 
+### Add label 
+# Make sure the outcome labels match your scales
+df <- df %>% mutate(progress_status = factor(progress_status,
+                                             levels = c("No relapse","Relapse")))
 
+n_patients_by <- df %>%
+  distinct(Patient, progress_status) %>%
+  count(progress_status, name = "n_patients")
+
+n_timepoints_by <- df %>%
+  count(progress_status, name = "n_timepoints")
+
+# pull counts (0 if a group is absent)
+get_n <- function(tbl, lvl, col) {
+  val <- tbl %>% filter(progress_status == lvl) %>% pull({{col}})
+  if (length(val) == 0) 0 else val
+}
+
+n_pat_nr  <- get_n(n_patients_by,  "No relapse", n_patients)
+n_time_nr <- get_n(n_timepoints_by, "No relapse", n_timepoints)
+n_pat_rl  <- get_n(n_patients_by,  "Relapse",    n_patients)
+n_time_rl <- get_n(n_timepoints_by, "Relapse",   n_timepoints)
+
+# text to print
+lab_nr <- paste0("No relapse: n=", n_pat_nr, " patients; ", n_time_nr, " samples")
+lab_rl <- paste0("Relapse: n=", n_pat_rl, " patients; ", n_time_rl, " samples")
+
+# place labels at bottom-left (remember: x is reversed, so 'left' == large x)
+x_left <- max_mo - 0.02 * max_mo  # a small inset from the left border
+
+p_prob2 <- p_prob +
+  scale_colour_manual(
+    name = "Patient outcome",
+    values = c("No relapse" = "#35608DFF", "Relapse" = "#43BF71FF"),
+    labels = c(
+      paste0("No relapse\n(n=", n_pat_nr, " patients; ", n_time_nr, " samples)"),
+      paste0("Relapse\n(n=", n_pat_rl, " patients; ", n_time_rl, " samples)")
+    )
+  ) +
+  scale_fill_manual(
+    name = "Patient outcome",
+    values = c("No relapse" = "#35608DFF", "Relapse" = "#43BF71FF"),
+    labels = c(
+      paste0("No relapse\n(n=", n_pat_nr, " patients; ", n_time_nr, " samples)"),
+      paste0("Relapse\n(n=", n_pat_rl, " patients; ", n_time_rl, " samples)")
+    )
+  )
+
+
+
+print(p_prob2)
 # ────────────────────────────────────────────────────────────────
 # 3.  Export  ────────────────────────────────────────────────────
 # ────────────────────────────────────────────────────────────────
 ggsave("Final Tables and Figures/F5I_cfWGS_prob_vs_time_updated3_blood2.png",
        p_prob, width = 6, height = 4.5, dpi = 600)
 
+ggsave("Final Tables and Figures/F5I_cfWGS_prob_vs_time_updated3_blood2_labelled.png",
+       p_prob2, width = 6, height = 4.5, dpi = 600)
 
 
 ## Way Trevor was thinking 
