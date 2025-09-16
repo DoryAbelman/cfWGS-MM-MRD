@@ -56,7 +56,7 @@ outdir <- "Final Tables and Figures/"
 
 # Read the MAF file using read.maf
 df_bm <- readRDS("combined_maf_bm_dx.rds")
-df_blood <- readRDS("combined_maf_blood_all_muts.rds")
+df_blood <- readRDS("combined_maf_blood_all_muts_updated.rds")
 
 ## Remove rsids to match new filtering 
 # filter out all rows with an RSID
@@ -184,7 +184,7 @@ for (i in 1:length(patients)) {
   both_mutations <- df_patient %>% filter(Presence_BM_cells == 1 & Presence_Blood_plasma_cfDNA == 1) %>% pull(Unique_ID_patient)
   
   # Create a new plot with a white background
-  png(filename = paste0("VennDiagram_", patients[i], "_June2025_updatedcolors.png"), width = 2400, height = 2400, res = 300)
+  png(filename = paste0("VennDiagram_", patients[i], "_Sep2025_updatedcolors.png"), width = 2400, height = 2400, res = 300)
   
   # Clear the plot and set background to white
   grid.newpage()
@@ -259,7 +259,7 @@ overlap_plot <- ggplot(overlap_data, aes(x = Patient, y = Percent_Overlap)) +
 print(overlap_plot)
 
 # Save the plot
-ggsave("percent_overlap_barplot_June2025.png", plot = overlap_plot, width = 6, height = 5, dpi = 500)
+ggsave("percent_overlap_barplot_Sep2025.png", plot = overlap_plot, width = 6, height = 5, dpi = 500)
 
 
 ### Now get the overlap table and summarise stats 
@@ -340,6 +340,16 @@ plot_df <- overlap_with_cohort %>%
     pos     = row_number()
   )
 
+## Get stats 
+plot_df %>%
+  summarise(
+    mean_overlap   = mean(Percent_Overlap, na.rm = TRUE),
+    median_overlap = median(Percent_Overlap, na.rm = TRUE),
+    IQR_overlap    = IQR(Percent_Overlap, na.rm = TRUE),
+    min    = min(Percent_Overlap, na.rm = TRUE),
+    max    = max(Percent_Overlap, na.rm = TRUE)
+  )
+
 
 # 2. Calculate overall statistics
 med  <- median(plot_df$Percent_Overlap, na.rm = TRUE)
@@ -389,7 +399,7 @@ p_overlap <- ggplot(plot_df, aes(x = Percent_Overlap, y = Patient)) +
 
 # 4. Save for Figure 3C
 ggsave(
-  filename = file.path(outdir, "Fig3C_mutation_overlap_lollipop2.png"),
+  filename = file.path(outdir, "Fig3C_mutation_overlap_lollipop2_updated.png"),
   plot     = p_overlap,
   width    = 4,   # a bit narrower
   height   = 5,

@@ -48,7 +48,7 @@
 #   library(circlize)        # if downstream heatmaps are created
 #
 # Usage:
-#   source("1_2_Process_Mutation_Data.R")
+#   source("process_mutation_mafs.R")
 #
 # Author: Dory Abelman
 # Date:   2025-05-26
@@ -291,6 +291,13 @@ rm(combined_maf)
 
 
 #### Next load in PB cfDNA Data
+
+# Define the directory containing the MAF files
+maf_directory <- "~/OneDrive - University of Toronto/Project data/cfWGS project data/MAF files/Blood/"
+
+# List all MAF files in the directory
+maf_files <- list.files(maf_directory, pattern = "\\.maf$", full.names = TRUE)
+
 # Read each MAF file into a dataframe and correct column types
 dfs <- lapply(maf_files, function(file) {
   df <- read_tsv(file, comment = "#", col_types = cols(
@@ -454,7 +461,7 @@ unique_barcodes_na_timepoint <- combined_maf_blood %>%
 unique_barcodes_na_timepoint
 
 # Save combined_maf_blood as an RDS file
-saveRDS(combined_maf_blood, file = "combined_maf_blood_all_muts.rds")
+saveRDS(combined_maf_blood, file = "combined_maf_blood_all_muts_updated.rds")
 
 # Save combined_maf_bm_dx as an RDS file
 saveRDS(combined_maf_bm_dx, file = "combined_maf_bm_dx.rds")

@@ -321,7 +321,7 @@ cna_cf <- long %>%
 ## ------------------------------------------------------------------
 ## 8. SAVE RESULTS  -----------------------------------------
 ## ------------------------------------------------------------------
-writexl::write_xlsx(concordance_tbl, "Output_tables_2025/FISH_WGS_concordance_with_cohort_updated4.xlsx")
+writexl::write_xlsx(concordance_tbl, "Output_tables_2025_updated/FISH_WGS_concordance_with_cohort_updated4.xlsx")
 
 
 
@@ -389,7 +389,7 @@ if(!dir.exists("Output_tables_2025")) {
 ### This is the overall concordance to FISH
 write.csv(
   results2,
-  "Output_tables_2025/concordance_by_cohort_and_source_and_tf_to_FISH_updated4.csv",
+  "Output_tables_2025_updated/concordance_by_cohort_and_source_and_tf_to_FISH_updated4.csv",
   row.names = FALSE
 )
 
@@ -418,8 +418,8 @@ evidence_summary <- dat_base %>%
 
 
 ###### PART 2: See mutation overlap based on the specific base change 
-mutation_data_total <- readRDS("Jan2025_exported_data/mutation_export_updated_more_info.rds")
-All_feature_data <- readRDS("Jan2025_exported_data/All_feature_data_June2025.rds")
+mutation_data_total <- readRDS("Jan2025_exported_data/mutation_export_updated_more_info2.rds")
+All_feature_data <- readRDS("Jan2025_exported_data/All_feature_data_August2025.rds")
 combined_clinical_data_updated <- read.csv("combined_clinical_data_updated_April2025.csv")
 
 
@@ -429,6 +429,16 @@ mut_feat <- mutation_data_total %>%
     All_feature_data %>%
       select(Sample, Patient, Sample_type, Tumor_Fraction, Timepoint),
     by = "Sample"
+  ) %>%
+  mutate(
+    Patient      = coalesce(Patient.x, Patient.y),
+    Timepoint    = coalesce(Timepoint.x, Timepoint.y),
+    Sample_type  = coalesce(Sample_type.x, Sample_type.y)
+  ) %>%
+  select(
+    -Patient.x, -Patient.y,
+    -Timepoint.x, -Timepoint.y,
+    -Sample_type.x, -Sample_type.y
   ) %>%
   # restrict to only the two sample types of interest
   filter(Sample_type %in% c("BM_cells","Blood_plasma_cfDNA")) 
@@ -448,6 +458,11 @@ mut_matched <- mut_feat %>%
   semi_join(matched_pts, by = c("Patient","Timepoint")) %>%
   inner_join(matched_pts,  by = c("Patient","Timepoint"))
 
+mut_matched$Date_of_sample_collection <-
+  as.Date(mut_matched$Date_of_sample_collection)
+
+combined_clinical_data_updated$Date_of_sample_collection <-
+  as.Date(combined_clinical_data_updated$Date_of_sample_collection)
 
 # filter to in cohort 
 mut_matched <- mut_matched %>% left_join(cohort_df)
@@ -1516,7 +1531,7 @@ write_csv(metrics_combined, "Exported_data_tables_clinical/Supp_table_2_WGS_vs_F
 
 
 ### Now go more into depth for the cfDNA-BM concordance and plot
-dir <- "Output_tables_2025"
+dir <- "Output_tables_2025_updated/"
 merged_mut   <- read_rds(file.path(dir, "merged_mut.rds"))
 merged_trans <- read_rds(file.path(dir, "merged_trans.rds"))
 merged_CNA   <- read_rds(file.path(dir, "merged_CNA.rds"))
@@ -1828,7 +1843,7 @@ p_tf_sens <- ggplot(tf_plot_df_BM, aes(x = value, y = event, group = event)) +
 
 # 3) save
 ggsave(
-  "Final Tables and Figures/Baseline_concordance/Fig2C_event_concordance_between_BM_and_cfDNA_with_sensitivity2_updated.png",
+  "Final Tables and Figures/Baseline_concordance/Fig2C_event_concordance_between_BM_and_cfDNA_with_sensitivity3_updated.png",
   p_tf_sens, width = 5, height = 4, dpi = 600
 )
 
@@ -1908,7 +1923,7 @@ p_3panel <- ggplot(perf_long,
   )
 
 ggsave(
-  "Final Tables and Figures/Baseline_concordance/Fig2C_BM_cfDNA_conc_sens_spec_byTF_updated2.png",
+  "Final Tables and Figures/Baseline_concordance/Fig2C_BM_cfDNA_conc_sens_spec_byTF_updated3.png",
   p_3panel, width = 5.5, height = 4, dpi = 600
 )
 
@@ -2014,12 +2029,58 @@ perf_combined <- perf_combined %>%
                 ~ round(.x, 3)))
 # --- 4) Export ----------------------------------------------------------------
 write_csv(perf_combined,
-          "Final Tables and Figures/Supplentary_table_BM_vs_cfDNA_performance_by_event_and_category.csv") ## this makes second part of supp table 2
+          "Final Tables and Figures/Supplentary_table_BM_vs_cfDNA_performance_by_event_and_category2.csv") ## this makes second part of supp table 2
 saveRDS(perf_combined,
-        "Final Tables and Figures/Supplentary_table_BM_vs_cfDNA_performance_by_event_and_category.rds")
+        "Final Tables and Figures/Supplentary_table_BM_vs_cfDNA_performance_by_event_and_category2.rds")
 
 
 ## above combined to supplementary table 2
+
+## Reassemble here 
+# Packages
+library(openxlsx)
+
+# Helper to turn literal "#NUM!" into NA for every column
+fix_num <- function(df) {
+  df %>%
+    mutate(across(everything(),
+                  ~ na_if(as.character(.x), "#NUM!")))
+}
+
+# ---- Panel A ----
+panel_a <- read_csv(
+  "Final Tables and Figures/Supp_table_concordance_summary_BM_cfDNA_updated.csv",
+  na = c("", "NA", "#NUM!"),        # catch #NUM! while reading
+  show_col_types = FALSE
+) %>% fix_num()
+
+# ---- Panels B & C ----
+panel_b <- fix_num(as.data.frame(perf_combined))
+panel_c <- fix_num(as.data.frame(metrics_combined))
+
+# ---- Build workbook ----
+wb <- createWorkbook()
+addWorksheet(wb, "BM_vs_cfDNA_by_cohort")
+addWorksheet(wb, "BM_vs_cfDNA_performance_detaile")
+addWorksheet(wb, "FISH_vs_BM_and_cfDNA")
+
+writeData(wb, "BM_vs_cfDNA_by_cohort",           panel_a)
+writeData(wb, "BM_vs_cfDNA_performance_detaile", panel_b)
+writeData(wb, "FISH_vs_BM_and_cfDNA",            panel_c)
+
+# Nice-to-haves: auto column widths + freeze header rows
+for (s in sheets <- c("BM_vs_cfDNA_by_cohort",
+                      "BM_vs_cfDNA_performance_detaile",
+                      "FISH_vs_BM_and_cfDNA")) {
+  setColWidths(wb, sheet = s, cols = 1:200, widths = "auto")
+  freezePane(wb, sheet = s, firstRow = TRUE)
+}
+
+# ---- Save workbook ----
+out_xlsx <- "Final Tables and Figures/Supplementary_Table_2_BM_cfDNA_Concordance.xlsx"
+saveWorkbook(wb, out_xlsx, overwrite = TRUE)
+
+message("Wrote: ", normalizePath(out_xlsx))
 
 ### Export additional important things 
 # =====================================================================

@@ -651,7 +651,7 @@ heatmap_blood <- Heatmap(
 )
 
 draw(heatmap_blood)
-png("heatmap_output_Blood_baseline_updated_12.png", width = 13.5, height = 8, units = "in", res = 500)
+png("heatmap_output_Blood_baseline_updated_13.png", width = 13.5, height = 8, units = "in", res = 500)
 draw(heatmap_blood)
 dev.off()
 
@@ -667,12 +667,12 @@ setdiff(rownames(heatmap_matrix_BM), rownames(heatmap_matrix_blood))
 ## Export 
 # save the filtered matrices for use elsewhere
 saveRDS(heatmap_matrix_BM,    file = "heatmap_matrix_BM_July2025.rds")
-saveRDS(heatmap_matrix_blood, file = "heatmap_matrix_blood_July2025.rds")
+saveRDS(heatmap_matrix_blood, file = "heatmap_matrix_blood_Sep2025.rds")
 
 # Save bone marrow combined data
 saveRDS(combined_data_heatmap_BM, file = "combined_data_heatmap_BM_July2025.rds")
 # Save cfDNA (blood) combined data
-saveRDS(combined_data_heatmap_blood, file = "combined_data_heatmap_blood_July2025.rds")
+saveRDS(combined_data_heatmap_blood, file = "combined_data_heatmap_blood_Sep2025.rds")
 
 
 
@@ -1072,7 +1072,7 @@ draw(
 )
 
 # save
-png("overlay_heatmap_BM_vs_cfDNA_updated8.png", width = 14, height = 8, units = "in", res = 450)
+png("overlay_heatmap_BM_vs_cfDNA_updated9.png", width = 14, height = 8, units = "in", res = 450)
 draw(
   overlay_ht,
   annotation_legend_side = "right",  # where cohort legend goes
@@ -1231,7 +1231,7 @@ lgd_sampletype2 <- Legend(
 )
 
 # save
-png("Final Tables and Figures/Figure_1B_overlay_heatmap_BM_vs_cfDNA_updated_with_FISH_10.png", width = 14, height = 8, units = "in", res = 450)
+png("Final Tables and Figures/Figure_1B_overlay_heatmap_BM_vs_cfDNA_updated_with_FISH_11.png", width = 14, height = 8, units = "in", res = 450)
 draw(
   overlay_ht_2,
   column_title        = "Oncoprint of Genomic Alterations in Bone Marrow versus cfDNA Samples",
@@ -1891,7 +1891,7 @@ combined_data_heatmap_blood_subset %>%
 
 #### Export important things 
 # create output directory (if it doesn't already exist)
-outdir <- "Output_tables_2025"
+outdir <- "Output_tables_2025_updated"
 if (!dir.exists(outdir)) dir.create(outdir, recursive = TRUE)
 
 # — 1) Long-form tables
@@ -2037,8 +2037,8 @@ supp_concordance_summary <- supp_concordance_summary %>%
   )
 
 # ---- 6) Export ---------------------------------------------------------------
-out_csv <- "Final Tables and Figures/Supp_table_concordance_summary_BM_cfDNA.csv" ## other part of supp table 2
-out_rds <- "Final Tables and Figures/Supp_table_concordance_summary_BM_cfDNA.rds"
+out_csv <- "Final Tables and Figures/Supp_table_concordance_summary_BM_cfDNA_updated.csv" ## other part of supp table 2
+out_rds <- "Final Tables and Figures/Supp_table_concordance_summary_BM_cfDNA_updated.rds"
 
 write_csv(supp_concordance_summary, out_csv)
 saveRDS(supp_concordance_summary,   out_rds)

@@ -67,7 +67,7 @@ translocation_data <- readRDS(file.path(export_dir, "translocation_data_cytoband
 tumor_fraction     <- read_tsv("Oct 2024 data/tumor_fraction_cfWGS.txt")
 
 # Load mutation MAF objects
-maf_object_blood <- read.maf("combined_maf_temp_blood_Jan2025.maf")
+maf_object_blood <- read.maf("~/OneDrive - University of Toronto/Project data/cfWGS project data/R outputs/combined_maf_temp_blood_Jan2025.maf")
 maf_object_bm    <- read.maf("combined_maf_temp_bm_May2025.maf")
 
 
@@ -204,7 +204,7 @@ temp_blood <- maf_subset_blood@data %>%
 
 mutation_export <- bind_rows(temp_bm, temp_blood)
 
-saveRDS(mutation_export, file = file.path(export_dir, "mutation_export_updated.rds"))
+saveRDS(mutation_export, file = file.path(export_dir, "mutation_export_updated2.rds"))
 write.table(mutation_export, file = file.path(export_dir, "mutation_export_updated.txt"), sep = "\t", row.names = FALSE, quote = FALSE)
 
 ## Get more metrics 
@@ -311,7 +311,7 @@ temp_qc_bm <- maf_subset@data %>%
 
 mutation_export2 <- bind_rows(temp_qc_bm, temp_qc_blood)
 
-saveRDS(mutation_export2, file = file.path(export_dir, "mutation_export_updated_more_info.rds"))
+saveRDS(mutation_export2, file = file.path(export_dir, "mutation_export_updated_more_info2.rds"))
 write.table(mutation_export2, file = file.path(export_dir, "mutation_export_updated_more_info.txt"), sep = "\t", row.names = FALSE, quote = FALSE)
 
 
@@ -530,10 +530,10 @@ print(comparison)
 
 ## Export this 
 # Save All_feature_data as an RDS file
-saveRDS(All_feature_data_logical, file = file.path(export_dir, "All_feature_data_August2025.rds"))
+saveRDS(All_feature_data_logical, file = file.path(export_dir, "All_feature_data_Sep2025.rds"))
 
 # Save All_feature_data as a text file with tab-separated values
-write.table(All_feature_data_logical, file = file.path(export_dir, "All_feature_data_August2025.txt"), sep = "\t", row.names = TRUE, quote = FALSE)
+write.table(All_feature_data_logical, file = file.path(export_dir, "All_feature_data_Sep2025.txt"), sep = "\t", row.names = TRUE, quote = FALSE)
 
 
 ### Save the CNA_Translocation file 
