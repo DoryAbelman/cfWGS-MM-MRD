@@ -1,5 +1,5 @@
 # =============================================================================
-# 1_8_Process_Cumulative_VAFs_MRDetect.R
+# MRDetect_processing.R
 # Project:  cfWGS MRDetect (Winter 2025)
 # Author:   Dory Abelman
 # Date:     January 2025
@@ -31,7 +31,7 @@
 #       - cfWGS MRDetect Blood data updated May.csv
 #
 # Usage:
-#   Rscript 1_8_Process_Cumulative_VAFs_MRDetect.R
+#   Rscript MRDetect_processing.R
 # =============================================================================
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -200,18 +200,57 @@ tmp_meta <- cfWGS_metadata %>%
 Merged_MRDetect <- all_files %>%
   left_join(tmp_meta, by = c("VCF_clean" = "VCF_clean_merge"))
 
+## Fix issue with ones that don't copy over
 
 # ──────────────────────────────────────────────────────────────────────────────
 # 9) Add BAM‐level sample info (Sample_ID, Patient, Sample_type, timepoint_info)
 # ──────────────────────────────────────────────────────────────────────────────
+# Make a helper to normalise BAM strings
+normalize_bam <- function(x) {
+  x %>%
+    # remove internal _PG_ or _WG_ tokens
+    str_replace_all("_[PW]G_", "_") %>%
+    str_replace("^([PW]G)_", "") %>%
+    str_replace("_([PW]G)$", "") %>%
+    # remove the .filter. segment if present
+    str_replace("\\.filter\\.", ".")
+}
+
+# Build bam_info with normalised key
 bam_info <- cfWGS_metadata %>%
-  select(Bam, Sample_ID, Patient, Sample_type, timepoint_info) %>%
-  rename_with(~ paste0(.x, "_Bam"), .cols = -Bam)
+  mutate(Bam_norm = normalize_bam(Bam)) %>%
+  select(Bam, Bam_norm, Sample_ID, Patient, Sample_type, timepoint_info) %>%
+  rename_with(~ paste0(.x, "_Bam"),
+              .cols = c(Sample_ID, Patient, Sample_type, timepoint_info))
 
+# Add the same normalized key to Merged_MRDetect
 Merged_MRDetect <- Merged_MRDetect %>%
-  left_join(bam_info, by = c("BAM" = "Bam"))
+  mutate(BAM_norm = str_replace_all(BAM, "_[PW]G_", "_") |> 
+           str_replace("_([PW]G)$", "") |> 
+           str_replace("\\.filter\\.", ".") |> 
+           str_replace("^([PW]G)_", ""))
 
+# Join using the normalized key
+Merged_MRDetect <- Merged_MRDetect %>%
+  left_join(bam_info, by = c("BAM_norm" = "Bam_norm"))
 
+# optional: drop the helper columns if you don’t need them in the final table
+Merged_MRDetect <- Merged_MRDetect %>% select(-BAM_norm)
+
+## Old way
+# bam_info <- cfWGS_metadata %>%
+#   select(Bam, Sample_ID, Patient, Sample_type, timepoint_info) %>%
+#   rename_with(~ paste0(.x, "_Bam"), .cols = -Bam)
+# 
+# Merged_MRDetect <- Merged_MRDetect %>%
+#   left_join(bam_info, by = c("BAM" = "Bam"))
+# 
+
+Merged_MRDetect %>%
+  filter(is.na(Patient_Bam)) %>%
+  pull(BAM) %>% 
+  unique() # seems good
+  
 # ──────────────────────────────────────────────────────────────────────────────
 # 10) Classify matched vs. unmatched plasma; force CHARM_healthy→cfDNA
 # ──────────────────────────────────────────────────────────────────────────────
@@ -279,8 +318,8 @@ Merged_MRDetect_zscore <- Merged_MRDetect_zscore %>%
 # ──────────────────────────────────────────────────────────────────────────────
 # 14) Save both “raw” and “z-scored” MRDetect tables
 # ──────────────────────────────────────────────────────────────────────────────
-base_name_raw    <- paste0(project, "All_MRDetect_May2025")
-base_name_zscore <- paste0(project, "All_MRDetect_with_Zscore_May2025")
+base_name_raw    <- paste0(project, "All_MRDetect_Sep2025")
+base_name_zscore <- paste0(project, "All_MRDetect_with_Zscore_Sep2025")
 
 write.table(Merged_MRDetect,
             file = file.path(outdir, paste0(base_name_raw, ".txt")),
@@ -299,6 +338,11 @@ saveRDS(Merged_MRDetect_zscore,
 message("→ MRDetect tables (raw & z-scored) written to: ", outdir)
 
 
+## See what is NA
+# show BAM file paths where Patient_Bam is NA
+Merged_MRDetect_zscore %>%
+  filter(is.na(Patient_Bam)) %>%
+  pull(BAM) %>% unique()
 
 # ──────────────────────────────────────────────────────────────────────────────
 # 15) Additional Processing - BM muts
@@ -311,6 +355,20 @@ df <- Merged_MRDetect_zscore %>%
   filter(plotting_type == "Matched_plasma",
          Mut_source      == "BM_cells",
          Filter_source   == "STR_encode")
+
+# Rename df's columns to the names num_cols vector expects
+rename_map <- c(
+  mean_detection_rate_charm                       = "mean_det_charm",
+  sd_detection_rate_charm                         = "sd_det_charm",
+  mean_detection_rate_reads_checked_charm         = "mean_det_checked_charm",
+  sd_detection_rate_reads_checked_charm           = "sd_det_checked_charm",
+  mean_detection_rate_total_reads_charm           = "mean_det_total_charm",
+  sd_detection_rate_total_reads_charm             = "sd_det_total_charm",
+  mean_sites_rate_charm                           = "mean_sites_charm",
+  sd_sites_rate_charm                             = "sd_sites_charm"
+)
+
+df <- df %>% rename(!!!rename_map)
 
 # 2) Collapse duplicate BAM runs by averaging all numeric QC/MRD metrics
 num_cols <- c(
@@ -345,38 +403,66 @@ df <- df %>%
                              0)
   )
 
-# 4) Pull in clinical dates & timepoints for both Sample_ID and Sample_ID_Bam
+## Check for dups 
+# Diagnostics: where are the dupes?
+cfWGS_metadata %>%
+  count(Sample_ID) %>% filter(n > 1) %>% arrange(desc(n)) -> meta_dupes
+
+df %>%
+  count(Sample_ID, Sample_ID_Bam) %>% filter(n > 1) %>% arrange(desc(n)) -> df_pair_dupes
+
+message("# meta dupes (by Sample_ID): ", nrow(meta_dupes))
+message("# df pair dupes (by Sample_ID, Sample_ID_Bam): ", nrow(df_pair_dupes))
+
+# Make metadata unique per Sample_ID (break ties deterministically)
 cc <- cfWGS_metadata %>%
+  mutate(Date_of_sample_collection = as.Date(Date_of_sample_collection)) %>%
+  arrange(Sample_ID, desc(Date_of_sample_collection)) %>%
   group_by(Sample_ID) %>%
-  slice_max(Date_of_sample_collection, n = 1) %>%
+  # keep only ONE row per Sample_ID (latest date; if ties, take the first after arrange)
+  slice_head(n = 1) %>%
   ungroup() %>%
   select(Sample_ID, Date_of_sample_collection, Timepoint)
 
-# Build start_dates _including_ Patient
-start_dates <- df %>%
-  select(Sample_ID, Sample_ID_Bam, Patient) %>% 
-  left_join(cc,                    by = "Sample_ID")           %>% 
-  rename(Date_of_sample_collection_Sample_ID = Date_of_sample_collection,
-         Timepoint_Sample_ID            = Timepoint)           %>% 
-  left_join(cc, by = c("Sample_ID_Bam" = "Sample_ID"))         %>% 
-  rename(Date_of_sample_collection_Sample_ID_Bam = Date_of_sample_collection,
-         Timepoint_Sample_ID_Bam            = Timepoint)       %>% 
-  mutate(
-    num_days  = as.numeric(difftime(
-      Date_of_sample_collection_Sample_ID_Bam,
-      Date_of_sample_collection_Sample_ID,
-      units = "days")),
-    num_weeks = num_days / 7
-  ) %>% 
+# sanity check
+stopifnot(nrow(cc) == dplyr::n_distinct(cc$Sample_ID))
+
+# Also ensure df has unique pairs before joining dates
+df_pairs <- df %>%
+  select(Sample_ID, Sample_ID_Bam, Patient) %>%
   distinct()
 
+# 4) Join dates for both IDs
+start_dates <- df_pairs %>%
+  left_join(cc, by = "Sample_ID") %>%
+  rename(Date_of_sample_collection_Sample_ID = Date_of_sample_collection,
+         Timepoint_Sample_ID                  = Timepoint) %>%
+  left_join(cc, by = c("Sample_ID_Bam" = "Sample_ID")) %>%
+  rename(Date_of_sample_collection_Sample_ID_Bam = Date_of_sample_collection,
+         Timepoint_Sample_ID_Bam                  = Timepoint) %>%
+  mutate(
+    num_days  = as.numeric(
+      difftime(Date_of_sample_collection_Sample_ID_Bam,
+               Date_of_sample_collection_Sample_ID,
+               units = "days")
+    ),
+    num_weeks = num_days / 7
+  )
+
+# Final guard: confirm uniqueness after joins
+stopifnot(nrow(start_dates) == dplyr::n_distinct(start_dates[c("Sample_ID","Sample_ID_Bam")]))
+
+# Optional: show any residual dupes (should be none)
+start_dates %>%
+  count(Sample_ID, Sample_ID_Bam) %>%
+  filter(n > 1)
 
 # 5) Attach start_dates back onto df
 combined_data_plot <- df %>%
   left_join(start_dates, by = c("Sample_ID", "Sample_ID_Bam", "Patient"))
 
 # 6) Flag “Good_baseline_marrow” from your All_feature_data
-All_feature_data <- readRDS("Jan2025_exported_data/All_feature_data_May2025.rds")
+All_feature_data <- readRDS("Jan2025_exported_data/All_feature_data_August2025.rds")
 good_pts <- All_feature_data %>%
   filter(Sample_type == "BM_cells",
          Evidence_of_Disease == 1,
@@ -442,7 +528,7 @@ dir.create(export_dir, recursive = TRUE, showWarnings = FALSE)
 
 readr::write_csv(
   combined_data_plot,
-  file = file.path(export_dir, "cfWGS_MRDetect_BM_data_updated_May.csv")
+  file = file.path(export_dir, "cfWGS_MRDetect_BM_data_updated_Sep.csv")
 )
 
 
@@ -457,6 +543,20 @@ df <- Merged_MRDetect_zscore %>%
   filter(plotting_type == "Matched_plasma",
          Mut_source      == "Blood",
          Filter_source   == "STR_encode")
+
+# Rename df's columns to the names num_cols vector expects
+rename_map <- c(
+  mean_detection_rate_charm                       = "mean_det_charm",
+  sd_detection_rate_charm                         = "sd_det_charm",
+  mean_detection_rate_reads_checked_charm         = "mean_det_checked_charm",
+  sd_detection_rate_reads_checked_charm           = "sd_det_checked_charm",
+  mean_detection_rate_total_reads_charm           = "mean_det_total_charm",
+  sd_detection_rate_total_reads_charm             = "sd_det_total_charm",
+  mean_sites_rate_charm                           = "mean_sites_charm",
+  sd_sites_rate_charm                             = "sd_sites_charm"
+)
+
+df <- df %>% rename(!!!rename_map)
 
 # 2) Collapse duplicate BAM runs by averaging all numeric QC/MRD metrics
 num_cols <- c(
@@ -533,6 +633,12 @@ combined_data_plot <- combined_data_plot %>%
     Good_baseline_sample = if_else(Patient %in% good_pts, "Yes", "No")
   )
 
+filtered_good_pts <- tibble(Patient = good_pts) %>%
+  inner_join(cohort_df, by = "Patient")
+
+filtered_good_pts %>%
+  pull(Patient) %>% unique()
+
 # 7) Calculate START_DATE and percent_change from baseline
 combined_data_plot <- combined_data_plot %>%
   rename(START_DATE = num_days) %>%
@@ -595,7 +701,90 @@ combined_data_plot <- combined_data_plot %>%
 export_dir <- "MRDetect_output_winter_2025/Processed_R_outputs/Blood_muts_plots_baseline/"
 readr::write_csv(
   combined_data_plot,
-  file = file.path(export_dir, "cfWGS MRDetect Blood data updated June.csv")
+  file = file.path(export_dir, "cfWGS MRDetect Blood data updated Sep.csv")
+)
+
+
+## Redo for all bloods available
+# 5) Attach start_dates back onto df
+combined_data_plot <- df %>%
+  left_join(start_dates, by = c("Sample_ID", "Sample_ID_Bam", "Patient"))
+
+# 6) Flag “Good_baseline_sample” from your All_feature_data
+good_pts <- All_feature_data %>%
+  filter(Sample_type == "Blood_plasma_cfDNA",
+         Evidence_of_Disease == 1,
+         timepoint_info %in% c("Diagnosis","Baseline")) %>%
+  pull(Patient) %>% unique()
+
+combined_data_plot <- combined_data_plot %>%
+  mutate(
+    Good_baseline_sample = if_else(Patient %in% good_pts, "Yes", "No")
+  )
+
+# 7) Calculate START_DATE and percent_change from baseline
+combined_data_plot <- combined_data_plot %>%
+  rename(START_DATE = num_days) %>%
+  filter(#Good_baseline_sample == "Yes",
+         Sample_type_Bam == "Blood_plasma_cfDNA") %>%
+  group_by(Patient) %>%
+  mutate(
+    baseline_date = min(START_DATE[timepoint_info %in% c("Baseline","Diagnosis")], na.rm = TRUE),
+    baseline_rate = detection_rate_as_reads_detected_over_reads_checked[START_DATE == baseline_date][1],
+    absolute_change = detection_rate_as_reads_detected_over_reads_checked - baseline_rate,
+    percent_change  = if_else(!is.na(baseline_rate),
+                              (absolute_change / baseline_rate) * 100,
+                              NA_real_),
+    Weeks_since_baseline = pmax(0, START_DATE) / 7
+  ) %>%
+  ungroup() 
+
+
+## Now edit this to show the time difference since the second timepoint 
+## First calculate the percent change in detection rate and put dates
+
+## Get the change since the first treatment timepoint 
+# Define the treatment sample categories
+treatment_samples <- c("Post_induction", "Post_transplant", "Maintenance", "1.5yr maintenance")
+
+combined_data_plot <- combined_data_plot %>%
+  dplyr::group_by(Patient) %>%
+  dplyr::arrange(START_DATE) %>%  # Ensure entries are sorted by days since baseline within each patient
+  dplyr::mutate(
+    # Find the first treatment sample date if available
+    first_treatment_date = ifelse(any(timepoint_info_Bam %in% treatment_samples),
+                                  START_DATE[timepoint_info_Bam %in% treatment_samples][1],
+                                  NA_real_),
+    # Calculate the detection rate for the first treatment timepoint
+    treatment_detection_rate = ifelse(!is.na(first_treatment_date),
+                                      detection_rate_as_reads_detected_over_reads_checked[START_DATE == first_treatment_date],
+                                      NA_real_)
+  ) %>%
+  ungroup() %>%
+  dplyr::mutate(
+    # Calculate the absolute and percent change in detection rate since the first treatment timepoint
+    absolute_change_detection_rate_treatment = detection_rate_as_reads_detected_over_reads_checked - treatment_detection_rate,
+    percent_change_detection_rate_treatment = (absolute_change_detection_rate_treatment / treatment_detection_rate) * 100,
+    # Calculate weeks since the first treatment date
+    Weeks_since_first_treatment = (START_DATE - first_treatment_date) / 7
+  )
+
+# For consistency 
+combined_data_plot$Weeks_since_second_start <- combined_data_plot$Weeks_since_first_treatment
+combined_data_plot$percent_change_detection_rate_second_timepoint <- combined_data_plot$percent_change_detection_rate_treatment
+
+## Get rid of marrows that are not at baseline 
+combined_data_plot <- combined_data_plot %>%
+  filter(Timepoint %in% c("01", "T0", "1"))
+combined_data_plot <- combined_data_plot %>% 
+  filter(Sample_type == "Blood_plasma_cfDNA")
+
+
+# 8) Write out 
+export_dir <- "MRDetect_output_winter_2025/Processed_R_outputs/Blood_muts_plots_baseline/"
+readr::write_csv(
+  combined_data_plot,
+  file = file.path(export_dir, "cfWGS MRDetect Blood data updated Sep with all patients.csv")
 )
 
 

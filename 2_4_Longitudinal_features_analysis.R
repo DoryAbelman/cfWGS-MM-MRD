@@ -36,10 +36,14 @@ outdir   <- "Output_tables_2025"
 if (!dir.exists(outdir)) dir.create(outdir, recursive = TRUE)
 
 ### Load data 
-file <- readRDS("Final_aggregate_table_cfWGS_features_with_clinical_and_demographics_updated5.rds")
+file <- readRDS("Final_aggregate_table_cfWGS_features_with_clinical_and_demographics_updated7.rds")
 cohort_df <- readRDS("cohort_assignment_table_updated.rds")
 
 dat <- file 
+
+## Load good patients 
+Good_pts <- read.csv("baseline_high_quality_patients_updated.csv",
+                    stringsAsFactors = FALSE) ## From 2_0 script
 
 # 1.  Join cohort_df and keep frontline only -------------------------------------
 dat <- dat %>%                # <‑‑ your master data
@@ -53,8 +57,46 @@ dat <- dat %>% filter(Cohort == "Frontline")
 dat <- dat %>%
   filter(!is.na(zscore_BM) | !is.na(zscore_blood) | !is.na(FS))
 
+## Set na the ones without evidence of disease? 
+# Load the RDS file and compute the good-patient sets
+All_feature_data <- readRDS("Jan2025_exported_data/All_feature_data_Sep2025.rds")
+
+BM_good_pts <- Good_pts %>%
+  filter(WGS_Evidence_of_Disease_BM_cells == 1) %>%
+  pull(Patient) %>%
+  unique()
+
+cfDNA_good_pts <- Good_pts %>%
+  filter(WGS_Evidence_of_Disease_Blood_plasma_cfDNA_Relaxed == 1) %>%
+  pull(Patient) %>%
+  unique()
+
+
+# Filter dat to rows with evidence of disease
+bm_feats    <- c("zscore_BM", "z_score_detection_rate_BM", "detect_rate_BM", "sites_rate_BM")
+blood_feats <- c("zscore_blood", "z_score_detection_rate_blood", "detect_rate_blood", "sites_rate_blood")
+
+dat <- dat %>%
+  # keep rows with at least one key measurement
+  filter(!is.na(zscore_BM) | !is.na(zscore_blood) | !is.na(FS)) %>%
+  mutate(
+    across(all_of(bm_feats),
+           ~ if_else(Patient %in% BM_good_pts,    .x, NA_real_)),
+    across(all_of(blood_feats),
+           ~ if_else(Patient %in% cfDNA_good_pts, .x, NA_real_))
+  )
+
+# Remove IMG-127-T15 ichorCNA since not a complete case? But have BM for it so keep in count? 
+dat2 <- dat %>%
+  mutate(
+    WGS_Tumor_Fraction_Blood_plasma_cfDNA =
+      if_else(Patient == "IMG-127" & Date == as.Date("2022-08-15"),
+              NA_real_,
+              WGS_Tumor_Fraction_Blood_plasma_cfDNA)
+  )
+
 ## ───── 2. Identify BASELINE and FIRST-FOLLOW rows (start-date logic) ────────
-baseline_tbl <- dat %>%
+baseline_tbl <- dat2 %>%
   group_by(Patient) %>%
   filter(
     timepoint_info %in% c("Diagnosis", "Baseline") |
@@ -65,7 +107,7 @@ baseline_tbl <- dat %>%
   select(Patient, Date,
          everything())                  # keep all cols - easier later
 
-follow1_tbl <- dat %>%
+follow1_tbl <- dat2 %>%
   anti_join(baseline_tbl, by = c("Patient", "Date")) %>%
   filter(timepoint_info != "Relapse") %>% # omit these 
   group_by(Patient) %>%
@@ -85,7 +127,7 @@ paired_master <- rename_pref(baseline_tbl, "baseline") %>%
 
 ## ───── 3. Cohort-level summary counts  ────────────────
 n_patients     <- n_distinct(paired_master$Patient)
-n_cfDNA_draws  <- dat %>% filter(!is.na(detect_rate_blood)) %>% nrow()
+n_cfDNA_draws  <- dat %>% filter(!is.na(WGS_Tumor_Fraction_Blood_plasma_cfDNA)) %>% nrow()
 n_cfDNA_draws_matched_baseline <- dat %>% filter(!is.na(zscore_BM) | !is.na(zscore_blood)) %>% nrow()
 
 median_follow <- dat %>%
@@ -105,6 +147,86 @@ sentence <- glue(
 )
 
 cat(sentence, "\n")
+
+### Do seperately by feature 
+# ----- define the feature set you consider "cfDNA features"
+features_any <- c(
+  "zscore_BM", "z_score_detection_rate_BM", "detect_rate_BM",
+  "zscore_blood", "z_score_detection_rate_blood", "detect_rate_blood",
+  "FS", "Mean.Coverage", "Proportion.Short",
+  "WGS_Tumor_Fraction_Blood_plasma_cfDNA"
+)
+features_any <- intersect(features_any, names(dat))  # only keep columns that exist
+
+# =============  A) ANY FEATURE (>=1 present on a draw)  =============
+dat_any <- dat %>%
+  filter(if_any(all_of(features_any), ~ !is.na(.x)))
+
+n_patients_any <- n_distinct(dat_any$Patient)
+n_draws_any    <- nrow(dat_any)
+
+median_follow_any <- dat_any %>%
+  group_by(Patient) %>%
+  summarise(months = lubridate::interval(min(Date, na.rm = TRUE),
+                                         max(Date, na.rm = TRUE)) %/% months(1),
+            .groups = "drop") %>%
+  summarise(med = median(months, na.rm = TRUE),
+            lo  = min(months,   na.rm = TRUE),
+            hi  = max(months,   na.rm = TRUE))
+
+sentence_any <- glue::glue(
+  "Across the longitudinal series ({n_draws_any} cfDNA draws with ≥1 feature ",
+  "from {n_patients_any} patients, median follow-up = {median_follow_any$med} months, ",
+  "range {median_follow_any$lo}–{median_follow_any$hi})."
+)
+
+# =============  B) zscore_BM universe  =============
+dat_bm <- dat %>% filter(!is.na(zscore_BM))
+
+n_patients_bm <- n_distinct(dat_bm$Patient)
+n_draws_bm    <- nrow(dat_bm)
+
+median_follow_bm <- dat_bm %>%
+  group_by(Patient) %>%
+  summarise(months = lubridate::interval(min(Date, na.rm = TRUE),
+                                         max(Date, na.rm = TRUE)) %/% months(1),
+            .groups = "drop") %>%
+  summarise(med = median(months, na.rm = TRUE),
+            lo  = min(months,   na.rm = TRUE),
+            hi  = max(months,   na.rm = TRUE))
+
+sentence_bm <- glue::glue(
+  "z-score (BM lists): {n_draws_bm} draws from {n_patients_bm} patients; ",
+  "follow-up median {median_follow_bm$med} months (range {median_follow_bm$lo}–{median_follow_bm$hi})."
+)
+
+# =============  C) zscore_blood universe  =============
+dat_blood <- dat %>% filter(!is.na(zscore_blood))
+
+n_patients_blood <- n_distinct(dat_blood$Patient)
+n_draws_blood    <- nrow(dat_blood)
+
+median_follow_blood <- dat_blood %>%
+  group_by(Patient) %>%
+  summarise(months = lubridate::interval(min(Date, na.rm = TRUE),
+                                         max(Date, na.rm = TRUE)) %/% months(1),
+            .groups = "drop") %>%
+  summarise(med = median(months, na.rm = TRUE),
+            lo  = min(months,   na.rm = TRUE),
+            hi  = max(months,   na.rm = TRUE))
+
+sentence_blood <- glue::glue(
+  "z-score (blood lists): {n_draws_blood} draws from {n_patients_blood} patients; ",
+  "follow-up median {median_follow_blood$med} months (range {median_follow_blood$lo}–{median_follow_blood$hi})."
+)
+
+# Print the three sentences for quick copy/paste into the manuscript
+cat(sentence_any, "\n")
+cat(sentence_bm,  "\n")
+cat(sentence_blood, "\n")
+
+
+
 
 ## ───── 4. Feature list  ────────────────────────────────────────
 features <- c("zscore_BM", "z_score_detection_rate_BM", "detect_rate_BM",
@@ -177,8 +299,64 @@ pairwise_stats <- map_dfr(features, function(f) {
   mutate(q_BH = p.adjust(p_Wilcoxon, method = "BH"))
 
 ## Write updated stats to outdir
-write_csv(pairwise_stats, file.path(outdir, "placeholder_stats_v3.csv"))
+write_csv(pairwise_stats, file.path(outdir, "placeholder_stats_v4.csv"))
 
+### See which patients are included 
+# Return the patients contributing baseline→first-post pairs for a given column
+pairwise_included <- purrr::map(features, function(f) {
+  df <- dat %>%
+    select(Patient, Date, value = !!sym(f)) %>%
+    filter(!is.na(value)) %>%
+    group_by(Patient) %>%
+    mutate(cnt = dplyr::n()) %>%
+    filter(cnt >= 2) %>%          # need at least 2 draws
+    arrange(Date) %>%
+    slice_head(n = 2) %>%         # first two timepoints (as in your stats)
+    ungroup()
+  
+  if (nrow(df) == 0) {
+    return(tibble(Feature = f, N_pairs = 0L, Included_Patients = list(character(0))))
+  }
+  
+  # Spread to baseline/follow1 as in your stats, then keep only complete pairs
+  df2 <- df %>%
+    group_by(Patient) %>%
+    arrange(Date) %>%
+    mutate(Time = c("baseline","follow1")) %>%
+    ungroup() %>%
+    select(Patient, Time, value) %>%
+    pivot_wider(
+      id_cols     = Patient,
+      names_from  = Time,
+      values_from = value,
+      names_glue  = "{.value}_{Time}"
+    ) %>%
+    drop_na()
+  
+  tibble(
+    Feature          = f,
+    N_pairs          = nrow(df2),
+    Included_Patients = list(sort(unique(df2$Patient)))
+  )
+}) %>%
+  bind_rows()
+
+## (Optional) join onto your pairwise_stats to see N agree side-by-side
+pairwise_stats_with_ids <- pairwise_stats %>%
+  left_join(pairwise_included %>% select(Feature, Included_Patients),
+            by = "Feature")
+
+for (i in seq_len(nrow(pairwise_included))) {
+  f   <- pairwise_included$Feature[i]
+  n   <- pairwise_included$N_pairs[i]
+  ids <- pairwise_included$Included_Patients[[i]]
+  cat("\n=== Feature:", f, "===\nN_pairs =", n, "\nPatients:\n")
+  if (length(ids)) {
+    cat(paste(ids, collapse = ", "), "\n")
+  } else {
+    cat("(none)\n")
+  }
+}
 
 ## Check labs 
 ### Assemble paragraph 
@@ -359,9 +537,9 @@ print(sig_corrs, n = Inf)
 
 
 ### Export what have so far
-write_csv(pairwise_stats, file.path(outdir, "paired_stats_summary.csv"))
-write_csv(corr_table, file.path(outdir, "mrd_metric_lab_all_correlations.csv"))
-write_csv(sig_corrs, file.path(outdir, "mrd_metric_lab_sig_correlations.csv"))
+write_csv(pairwise_stats, file.path(outdir, "paired_stats_summary2.csv"))
+write_csv(corr_table, file.path(outdir, "mrd_metric_lab_all_correlations2.csv"))
+write_csv(sig_corrs, file.path(outdir, "mrd_metric_lab_sig_correlations2.csv"))
 
 
 
@@ -391,9 +569,9 @@ plot_df <- dat %>%
     Patient,
     Weeks_Since_Baseline,
     Num_days_to_closest_relapse,
-    cVAF       = Cumulative_VAF_BM,
+    cVAF       = detect_rate_BM,
     cVAF_z     = z_score_detection_rate_BM,
-    sites      = detect_rate_BM,
+    sites      = sites_rate_BM,
     sites_z    = zscore_BM
   ) %>%
   mutate(
@@ -595,7 +773,7 @@ p_cvaf <- ggplot(df_cvaf, aes(Weeks_Since_Baseline, Value, group = Patient)) +
   labs(
     title = custom_labels["cVAF"],
     x     = "Weeks Since Baseline",
-    y     = "Value"
+    y     = "Cumulative VAF"
   ) +
   theme_classic(base_size = 11) +
   theme(strip.background = element_rect(fill = "grey95", colour = NA))
@@ -641,7 +819,7 @@ p_sites <- ggplot(df_sites, aes(Weeks_Since_Baseline, Value, group = Patient)) +
   labs(
     title = custom_labels["sites"],
     x     = "Weeks Since Baseline",
-    y     = "Value"
+    y     = "Prop. Mutant Sites Detected"
   ) +
   theme_classic(base_size = 11) +
   theme(strip.background = element_rect(fill = "grey95", colour = NA))
@@ -658,7 +836,7 @@ p_combined <- p_cvaf + p_sites +
 
 # 4) Save
 ggsave(
-  filename = file.path(outdir, "Fig3A_sideBySide_lockedY_segmented.png"),
+  filename = file.path(outdir, "Fig3A_sideBySide_lockedY_segmented2.png"),
   plot     = p_combined,
   width    = 12,   # 4 panels across
   height   = 4,
@@ -709,7 +887,7 @@ p_cvaf <- ggplot(df_cvaf, aes(Weeks_Since_Baseline, Value, group = Patient)) +
   labs(
     title = custom_labels["cVAF_z"],
     x     = "Weeks Since Baseline",
-    y     = "Value"
+    y     = "Cumulative VAF (Z)"
   ) +
   theme_classic(base_size = 11) +
   theme(strip.background = element_rect(fill = "grey95", colour = NA))
@@ -754,7 +932,7 @@ p_sites <- ggplot(df_sites, aes(Weeks_Since_Baseline, Value, group = Patient)) +
   labs(
     title = custom_labels["sites_z"],
     x     = "Weeks Since Baseline",
-    y     = "Value"
+    y     = "Prop. Mutant Sites Detected (Z)"
   ) +
   theme_classic(base_size = 11) +
   theme(strip.background = element_rect(fill = "grey95", colour = NA))
@@ -772,7 +950,7 @@ p_combined <- p_cvaf + p_sites +
     
 # 4) Save
 ggsave(
-  filename = file.path(outdir, "Fig3A_sideBySide_lockedY_zscore_segmented.png"),
+  filename = file.path(outdir, "Fig3A_sideBySide_lockedY_zscore_segmented2.png"),
   plot     = p_combined,
   width    = 12,   # 4 panels across
   height   = 4,
@@ -1113,9 +1291,9 @@ plot_df_blood <- dat %>%
     Patient,
     Weeks_Since_Baseline,
     Num_days_to_closest_relapse,
-    cVAF       = Cumulative_VAF_blood,
+    cVAF       = detect_rate_blood,
     cVAF_z     = z_score_detection_rate_blood,
-    sites      = detect_rate_blood,
+    sites      = sites_rate_blood,
     sites_z    = zscore_blood
   ) %>%
   mutate(
@@ -1308,7 +1486,7 @@ p_cvaf <- ggplot(df_cvaf, aes(Weeks_Since_Baseline, Value, group = Patient)) +
   labs(
     title = custom_labels["cVAF"],
     x     = "Weeks Since Baseline",
-    y     = "Value"
+    y     = "Cumulative VAF"
   ) +
   theme_classic(base_size = 11) +
   theme(strip.background = element_rect(fill = "grey95", colour = NA))
@@ -1354,7 +1532,7 @@ p_sites <- ggplot(df_sites, aes(Weeks_Since_Baseline, Value, group = Patient)) +
   labs(
     title = custom_labels["sites"],
     x     = "Weeks Since Baseline",
-    y     = "Value"
+    y     = "Prop. Mutant Sites Detected"
   ) +
   theme_classic(base_size = 11) +
   theme(strip.background = element_rect(fill = "grey95", colour = NA))
@@ -1371,7 +1549,7 @@ p_combined <- p_cvaf + p_sites +
 
 # 4) Save
 ggsave(
-  filename = file.path(outdir, "Fig3B_sideBySide_lockedY_blood_segmented.png"),
+  filename = file.path(outdir, "Fig3B_sideBySide_lockedY_blood_segmented2.png"),
   plot     = p_combined,
   width    = 12,   # 4 panels across
   height   = 4,
@@ -1421,7 +1599,7 @@ p_cvaf <- ggplot(df_cvaf, aes(Weeks_Since_Baseline, Value, group = Patient)) +
   labs(
     title = custom_labels["cVAF_z"],
     x     = "Weeks Since Baseline",
-    y     = "Value"
+    y     = "Cumulative VAF (Z)"
   ) +
   theme_classic(base_size = 11) +
   theme(strip.background = element_rect(fill = "grey95", colour = NA))
@@ -1467,7 +1645,7 @@ p_sites <- ggplot(df_sites, aes(Weeks_Since_Baseline, Value, group = Patient)) +
   labs(
     title = custom_labels["sites_z"],
     x     = "Weeks Since Baseline",
-    y     = "Value"
+    y     = "Prop. Mutant Sites Detected (Z)"
   ) +
   theme_classic(base_size = 11) +
   theme(strip.background = element_rect(fill = "grey95", colour = NA))
@@ -1485,7 +1663,7 @@ p_combined <- p_cvaf + p_sites +
 
 # 4) Save
 ggsave(
-  filename = file.path(outdir, "Fig3B_sideBySide_lockedY_zscore_blood_segmented.png"),
+  filename = file.path(outdir, "Fig3B_sideBySide_lockedY_zscore_blood_segmented2.png"),
   plot     = p_combined,
   width    = 12,   # 4 panels across
   height   = 4,
@@ -1756,7 +1934,7 @@ p_cvaf <- ggplot(df_cvaf, aes(Weeks_Since_Baseline, Value, group = Patient)) +
   labs(
     title = custom_labels["FS"],
     x     = "Weeks Since Baseline",
-    y     = "Value"
+    y     = "Fragment-size score"
   ) +
   theme_classic(base_size = 11) +
   theme(strip.background = element_rect(fill = "grey95", colour = NA))
@@ -1804,7 +1982,7 @@ p_sites <- ggplot(df_sites, aes(Weeks_Since_Baseline, -Value, group = Patient)) 
   labs(
     title = custom_labels["Mean.Coverage"],
     x     = "Weeks Since Baseline",
-    y     = "Value"
+    y     = "Mean cfDNA coverage (MM regs)"
   ) +
   theme_classic(base_size = 11) +
   theme(strip.background = element_rect(fill = "grey95", colour = NA))
@@ -1821,7 +1999,7 @@ p_combined <- p_cvaf + p_sites +
 
 # 4) Save
 ggsave(
-  filename = file.path(outdir, "Fig3C_sideBySide_lockedY_fragmentomics_segmented.png"),
+  filename = file.path(outdir, "Fig3C_sideBySide_lockedY_fragmentomics_segmented2.png"),
   plot     = p_combined,
   width    = 12,   # 4 panels across
   height   = 4,
@@ -1871,7 +2049,7 @@ p_cvaf <- ggplot(df_cvaf, aes(Weeks_Since_Baseline, Value, group = Patient)) +
   labs(
     title = custom_labels["Proportion.Short"],
     x     = "Weeks Since Baseline",
-    y     = "Value"
+    y     = "Short cfDNA Fragments (%)"
   ) +
   theme_classic(base_size = 11) +
   theme(strip.background = element_rect(fill = "grey95", colour = NA))
@@ -1917,7 +2095,7 @@ p_sites <- ggplot(df_sites, aes(Weeks_Since_Baseline, Value, group = Patient)) +
   labs(
     title = custom_labels["WGS_Tumor_Fraction_Blood_plasma_cfDNA"],
     x     = "Weeks Since Baseline",
-    y     = "Value"
+    y     = "cfDNA Tumor Fraction"
   ) +
   theme_classic(base_size = 11) +
   theme(strip.background = element_rect(fill = "grey95", colour = NA))
@@ -1935,7 +2113,7 @@ p_combined <- p_cvaf + p_sites +
 
 # 4) Save
 ggsave(
-  filename = file.path(outdir, "Fig3B_sideBySide_lockedY_2_fragmentomics_segmented.png"),
+  filename = file.path(outdir, "Fig3B_sideBySide_lockedY_2_fragmentomics_segmented2.png"),
   plot     = p_combined,
   width    = 12,   # 4 panels across
   height   = 4,
@@ -1997,7 +2175,6 @@ pair_df <- pair_df %>%
   )
 
 # 3. Generate the GGally pairs plot
-
 wrap_labels <- function(labels, width = 20) {
   sapply(labels, function(x) paste(strwrap(x, width = width), collapse = "\n"))
 }
@@ -2022,7 +2199,7 @@ p_pairs <- ggpairs(
 
 # 4. Save as high-res PNG
 ggsave(
-  filename = file.path(outdir, "Supplementary_Figure_pairs_metrics_clinical_3B.png"),
+  filename = file.path(outdir, "Supplementary_Figure_pairs_metrics_clinical_3B_2.png"),
   plot     = p_pairs,
   width    = 18,    # inches
   height   = 18,    # inches
@@ -2075,7 +2252,7 @@ p_heatmap <- ggplot(corr_df_updated, aes(x = Metric1, y = Metric2, fill = rho)) 
 
 # 5. Save it
 ggsave(
-  file.path(outdir, "Fig_heatmap_spearman.png"),
+  file.path(outdir, "Fig_heatmap_spearman_updated.png"),
   plot   = p_heatmap,
   width  = 6,
   height = 5,
@@ -2168,7 +2345,7 @@ p_heatmap_tri <- ggplot(corr_df_tri, aes(x = Metric1, y = Metric2, fill = rho)) 
 # 8. Save the triangular heatmap
 ### Figure 3B
 ggsave(
-  filename = file.path(outdir, "Fig_heatmap_spearman_upper_triangle.png"),
+  filename = file.path(outdir, "Fig_heatmap_spearman_upper_triangle2.png"),
   plot     = p_heatmap_tri,
   width    = 6,
   height   = 5,

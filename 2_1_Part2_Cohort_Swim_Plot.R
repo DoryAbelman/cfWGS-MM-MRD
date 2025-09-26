@@ -535,7 +535,7 @@ write_csv(all_events %>% select(-details_2), "Final Tables and Figures/Supp_Tabl
 # Export all_events to RDS
 saveRDS(all_events, "Final Tables and Figures/all_events_for_swim_plot_combined_updated2.rds")
 
-
+#all_events <- readRDS("Final Tables and Figures/all_events_for_swim_plot_combined_updated2.rds")
 ### Export clean version with correct id 
 
 ### this is a supplementary table used in manuscript 
@@ -803,13 +803,251 @@ events <- events %>%
 # ─────────────────────────────────────────────────────────────────────────────
 # 7. PATIENT ORDER (earliest baseline → top)
 # ─────────────────────────────────────────────────────────────────────────────
-patient_order <- events %>%
-  group_by(cohort, patient) %>%
-  summarize(first_day = min(start_day), .groups = "drop") %>%
-  arrange(cohort, first_day) %>%
-  mutate(y = rev(row_number()))
+## Change to based on tumor fraction change from ichorCNA
+dat_tf <- dat %>%
+  mutate(Date = as_date(Date)) %>%
+  transmute(
+    Patient,
+    Date,
+    timepoint_info,
+    TF = suppressWarnings(as.numeric(WGS_Tumor_Fraction_Blood_plasma_cfDNA))
+  )
 
-events <- events %>% left_join(patient_order, by = c("cohort", "patient"))
+# 1) First non-NA baseline TF where timepoint_info is Baseline/Diagnosis
+baseline_df <- dat_tf %>%
+  filter(timepoint_info %in% c("Baseline", "Diagnosis"),
+         !is.na(TF)) %>%
+  arrange(Patient, Date) %>%
+  group_by(Patient) %>%
+  slice_head(n = 1) %>%
+  ungroup() %>%
+  transmute(Patient,
+            baseline_TF   = TF,
+            baseline_date = Date)
+
+# 2) First non-NA TF strictly AFTER that baseline date
+followup_df <- dat_tf %>%
+  inner_join(baseline_df, by = "Patient") %>%
+  filter(!is.na(TF),
+         Date > baseline_date) %>%
+  arrange(Patient, Date) %>%
+  group_by(Patient) %>%
+  slice_head(n = 1) %>%
+  ungroup() %>%
+  transmute(Patient,
+            first_post_TF   = TF,
+            first_post_date = Date)
+
+# 3) Combine + percent change (baseline → first post)
+tf_change <- baseline_df %>%
+  left_join(followup_df, by = "Patient") %>%
+  mutate(
+    pct_change = if_else(!is.na(baseline_TF) & !is.na(first_post_TF) & baseline_TF > 0,
+                         100 * (first_post_TF - baseline_TF) / baseline_TF,
+                         NA_real_)
+  )
+
+## Add cohort 
+tf_change <- tf_change %>%
+  left_join(events %>% distinct(patient, cohort) %>% rename(Patient = patient),
+            by = "Patient")
+
+## Adjust for NAs 
+tf_change <- tf_change %>%
+  mutate(
+    pct_for_plot = case_when(
+      !is.na(pct_change) ~ pct_change,
+      is.na(pct_change) & baseline_TF == 0 & first_post_TF > 0 ~ 200,  # big value for sorting
+      TRUE ~ NA_real_
+    ),
+    pct_label = case_when(
+      !is.na(pct_change) ~ sprintf("%.0f%%", pct_change),
+      is.na(pct_change) & baseline_TF == 0 & first_post_TF > 0 ~ ">100%",
+      TRUE ~ NA_character_
+    )
+  )
+
+
+### Now try with sites zscore 
+## Add more info to patients 
+Additional_info <- read_csv("MRDetect_output_winter_2025/Processed_R_outputs/Blood_muts_plots_baseline/cfWGS MRDetect Blood data updated Sep with all patients.csv")
+
+add_lookup <- Additional_info %>%
+  filter(Sample_type == "Blood_plasma_cfDNA",
+         !is.na(sites_rate_zscore_charm)) %>%
+  transmute(
+    Patient,
+    add_Date  = as_date(Date_of_sample_collection_Sample_ID_Bam),
+    zscore_blood_from_additional = as.numeric(sites_rate_zscore_charm)
+  )
+
+# keep a row id so no row is ever lost
+dat_clean <- dat %>%
+  mutate(Date = as_date(Date),
+         .row_id = row_number())
+
+dat2 <- dat_clean %>%
+  # many-to-many join on Patient
+  left_join(add_lookup, by = "Patient", relationship = "many-to-many") %>%
+  mutate(
+    add_Date = as_date(add_Date),
+    # if there's no candidate date, set diff = Inf so the original row survives
+    day_diff = ifelse(is.na(add_Date), Inf, abs(as.integer(add_Date - Date)))
+  ) %>%
+  # pick the closest Additional_info date per ORIGINAL ROW (not per Patient+Date)
+  group_by(.row_id) %>%
+  slice_min(order_by = day_diff, n = 1, with_ties = FALSE) %>%
+  ungroup() %>%
+  # fill only if original was NA and the nearest candidate is within 7 days
+  mutate(
+    zscore_blood = if_else(
+      is.na(zscore_blood) &
+        is.finite(day_diff) & day_diff <= 7 &
+        !is.na(zscore_blood_from_additional),
+      zscore_blood_from_additional,
+      zscore_blood
+    )
+  ) %>%
+  select(-add_Date, -day_diff, -zscore_blood_from_additional, -.row_id)
+
+# 3) Quick report of how many were filled
+filled_n <- sum(is.na(dat$zscore_blood) & !is.na(dat2$zscore_blood))
+total_na_before <- sum(is.na(dat$zscore_blood))
+total_na_after  <- sum(is.na(dat2$zscore_blood))
+
+message("zscore_blood backfilled: ", filled_n,
+        " (NA before: ", total_na_before, ", NA after: ", total_na_after, ")")
+
+# 1) First non-NA baseline TF where timepoint_info is Baseline/Diagnosis
+baseline_df <- dat2 %>%
+  filter(timepoint_info %in% c("Baseline", "Diagnosis"),
+         !is.na(zscore_BM)) %>%
+  arrange(Patient, Date) %>%
+  group_by(Patient) %>%
+  slice_head(n = 1) %>%
+  ungroup() %>%
+  transmute(Patient,
+            baseline_TF   = zscore_BM,
+            baseline_date = Date)
+
+# 2) First non-NA TF strictly AFTER that baseline date
+followup_df <- dat2 %>%
+  inner_join(baseline_df, by = "Patient") %>%
+  filter(!is.na(zscore_BM),
+         Date > baseline_date) %>%
+  arrange(Patient, Date) %>%
+  group_by(Patient) %>%
+  slice_head(n = 1) %>%
+  ungroup() %>%
+  transmute(Patient,
+            first_post_TF   = zscore_BM,
+            first_post_date = Date)
+
+# 3) Combine + percent change (baseline → first post)
+BM_change <- baseline_df %>%
+  left_join(followup_df, by = "Patient") %>%
+  mutate(
+    pct_change = if_else(!is.na(baseline_TF) & !is.na(first_post_TF) & baseline_TF > 0,
+                         100 * (first_post_TF - baseline_TF) / baseline_TF,
+                         NA_real_)
+  )
+
+## Add cohort 
+BM_change <- BM_change %>%
+  left_join(events %>% distinct(patient, cohort) %>% rename(Patient = patient),
+            by = "Patient")
+
+### Now for blood
+# 1) First non-NA baseline TF where timepoint_info is Baseline/Diagnosis
+baseline_df <- dat2 %>%
+  filter(timepoint_info %in% c("Baseline", "Diagnosis"),
+         !is.na(zscore_blood)) %>%
+  arrange(Patient, Date) %>%
+  group_by(Patient) %>%
+  slice_head(n = 1) %>%
+  ungroup() %>%
+  transmute(Patient,
+            baseline_TF   = zscore_blood,
+            baseline_date = Date)
+
+# 2) First non-NA TF strictly AFTER that baseline date
+followup_df <- dat2 %>%
+  inner_join(baseline_df, by = "Patient") %>%
+  filter(!is.na(zscore_blood),
+         Date > baseline_date) %>%
+  arrange(Patient, Date) %>%
+  group_by(Patient) %>%
+  slice_head(n = 1) %>%
+  ungroup() %>%
+  transmute(Patient,
+            first_post_TF   = zscore_blood,
+            first_post_date = Date)
+
+# 3) Combine + percent change (baseline → first post)
+Blood_change <- baseline_df %>%
+  left_join(followup_df, by = "Patient") %>%
+  mutate(
+    pct_change = if_else(!is.na(baseline_TF) & !is.na(first_post_TF) & baseline_TF > 0,
+                         100 * (first_post_TF - baseline_TF) / baseline_TF,
+                         NA_real_)
+  )
+
+## Add cohort 
+Blood_change <- Blood_change %>%
+  left_join(events %>% distinct(patient, cohort) %>% rename(Patient = patient),
+            by = "Patient")
+
+#  Add suffixes to every column EXCEPT Patient and cohort
+blood_renamed <- Blood_change %>%
+  rename_with(~ paste0(.x, "_blood"),
+              .cols = -c(Patient, cohort))
+
+bm_renamed <- BM_change %>%
+  rename_with(~ paste0(.x, "_bm"),
+              .cols = -c(Patient, cohort))
+
+# Join side-by-side on Patient + cohort
+change_combined <- full_join(
+  blood_renamed,
+  bm_renamed,
+  by = c("Patient", "cohort")
+)
+
+### Use the tumor fraction instead since too many with NAs for the zscore due to poor quality lists
+
+## Original method, by length of tracking 
+# patient_order <- events %>%
+#   group_by(cohort, patient) %>%
+#   summarize(first_day = min(start_day), .groups = "drop") %>%
+#   arrange(cohort, first_day) %>%
+#   mutate(y = rev(row_number()))
+# 
+# events <- events %>% left_join(patient_order, by = c("cohort", "patient"))
+
+
+## Updated, by tumor fraciton 
+patient_order <- tf_change %>%
+  mutate(
+    cohort = factor(cohort, levels = c("Front-line cohort", "Non-front-line cohort"))
+  ) %>%
+  arrange(cohort, is.na(pct_for_plot), pct_for_plot) %>%     # NAs last, then ascending %Δ
+  group_by(cohort) %>%
+  mutate(y = row_number()) %>%                               # 1,2,3... within cohort
+  ungroup() %>%
+  transmute(
+    cohort,
+    patient = Patient,                                       # match events$patient
+    y,
+    pct_for_plot,
+    pct_label
+  )
+
+patient_order_tf <- patient_order
+
+# 2) Join onto eventpatient_order# 2) Join onto events for plotting
+events <- events %>%
+  left_join(patient_order, by = c("cohort", "patient"))
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 8. FRONT-LINE COHORT PLOT
@@ -964,14 +1202,17 @@ ggsave(
 # ─────────────────────────────────────────────────────────────────────────────
 # A) Build a combined patient ordering: front-line patients first, then non-front-line,
 #    each ordered by their first start_day.
-patient_order_combined <- events %>%
-  group_by(patient, cohort) %>%
-  summarize(first_day = min(start_day), .groups = "drop") %>%
-  mutate(
-    cohort = factor(cohort, levels = c("Front-line cohort", "Non-front-line cohort"))
-  ) %>%
-  arrange(cohort, first_day) %>%
-  mutate(y = row_number())
+# patient_order_combined <- events %>%
+#   group_by(patient, cohort) %>%
+#   summarize(first_day = min(start_day), .groups = "drop") %>%
+#   mutate(
+#     cohort = factor(cohort, levels = c("Front-line cohort", "Non-front-line cohort"))
+#   ) %>%
+#   arrange(cohort, first_day) %>%
+#   mutate(y = row_number())
+
+## To use tumor fraction 
+patient_order_combined <- patient_order
 
 # B) Join the new y positions back into `events`
 events_combined <- events %>%
@@ -1489,6 +1730,9 @@ patient_order_tbl <- events_combined2 %>% filter(!(patient == "VA-02" & event ==
 # 2) Pull out the ordered patient vector
 patient_order <- patient_order_tbl %>% pull(patient)
 
+## Change back to tumor fraction 
+patient_order <- patient_order_tf
+
 # 3) Re‑factor your patient column
 events_combined2 <- events_combined2 %>%
   mutate(
@@ -1672,7 +1916,7 @@ p_swim <- p_swim +
     breaks = NULL    # no ticks or labels
   )
 
-ggsave("Final Tables and Figures/Test_swim.png",
+ggsave("Final Tables and Figures/Test_swim2.png",
        p_swim,
        width  = 15,
        height = 10,

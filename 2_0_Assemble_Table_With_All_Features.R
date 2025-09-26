@@ -25,13 +25,13 @@ library(gridExtra)
 
 
 ### Load in all data:
-All_feature_data <- readRDS("Output_tables_2025/All_feature_data_August2025.rds") # MRD sample purity
+All_feature_data <- readRDS("Jan2025_exported_data/All_feature_data_Sep2025.rds") 
 M4_MRD_filtered <- read_tsv("M4_MRD_filtered.txt") # The MRD data from labs
 
 path <- file.path("MRDetect_output_winter_2025", "Processed_R_outputs", "BM_muts_data")
 #MRD_cfWGS_backup <- MRD_cfWGS
-MRD_cfWGS_BM <- read.csv(file.path("MRDetect_output_winter_2025/Processed_R_outputs/BM_muts_plots_baseline/cfWGS MRDetect BM data updated May.csv")) # MRD data from MRDetect
-MRD_cfWGS_blood <- read.csv(file.path("MRDetect_output_winter_2025/Processed_R_outputs/Blood_muts_plots_baseline/cfWGS MRDetect Blood data updated June.csv")) # MRD data from MRDetect
+MRD_cfWGS_BM <- read.csv(file.path("MRDetect_output_winter_2025/Processed_R_outputs/BM_muts_plots_baseline/cfWGS_MRDetect_BM_data_updated_Sep.csv")) # MRD data from MRDetect
+MRD_cfWGS_blood <- read.csv(file.path("MRDetect_output_winter_2025/Processed_R_outputs/Blood_muts_plots_baseline/cfWGS MRDetect Blood data updated Sep with all patients.csv")) # MRD data from MRDetect
 
 
 Relapse_dates_M4_clean <- read_csv("Relapse_dates_M4_clean.csv") # Relapse dates
@@ -501,9 +501,7 @@ cfWGS_Clinical_MRD_filled <- cfWGS_Clinical_MRD_filled %>%
 
 ### Add cfWGS
 # --- 1. Make a “BM” lookup table -----------------------------
-
-tmp_bm <- MRD_cfWGS_BM %>%
-  # (you already filtered to baseline timepoints and selected only
+tmp_bm <- MRD_cfWGS_BM %>% filter(timepoint_info %in% c("Baseline", "Diagnosis")) %>% filter(Sample_ID != "SPORE_0009_T3_BM_cells") %>% #have better baseline
   # the columns you care about)
   select(
     Patient,
@@ -512,16 +510,16 @@ tmp_bm <- MRD_cfWGS_BM %>%
     Mrd_by_WGS_BM    = Mrd_by_WGS,
     Cumulative_VAF_BM        = Cumulative_VAF,
     detect_rate_BM   = detection_rate_as_reads_detected_over_reads_checked,
+    sites_rate_BM = sites_detection_rate,
     zscore_BM        = sites_rate_zscore_charm,
     z_score_detection_rate_BM = detection_rate_zscore_reads_checked_charm, 
-    PercentChangeFromBaseline_BM       = percent_change_detection_rate, #percent_change
+    PercentChangeFromBaseline_BM       = percent_change, 
     PercentChangeAtSecondTimepoint_BM       = percent_change_detection_rate_second_timepoint
   ) %>%
   distinct()                # just in case you have duplicates
 
 # --- 2. Make a “Blood” lookup table -------------------------
-
-tmp_blood <- MRD_cfWGS_blood %>%
+tmp_blood <- MRD_cfWGS_blood %>% filter(timepoint_info %in% c("Baseline", "Diagnosis")) %>%
   # keep only the same columns you want, but rename for clarity
   select(
     Patient,
@@ -530,6 +528,7 @@ tmp_blood <- MRD_cfWGS_blood %>%
     Mrd_by_WGS_blood = Mrd_by_WGS,
     Cumulative_VAF_blood     = Cumulative_VAF,
     detect_rate_blood= detection_rate_as_reads_detected_over_reads_checked,
+    sites_rate_blood = sites_detection_rate,
     zscore_blood     = sites_rate_zscore_charm,
     z_score_detection_rate_blood = detection_rate_zscore_reads_checked_charm, 
     PercentChangeFromBaseline_blood    = percent_change,
@@ -1316,10 +1315,10 @@ clinical_mrd_cols <- c(
 
 wgs_mrd_cols <- c(
   "Mrd_by_WGS_BM","cfWGS_BM_Binary","Cumulative_VAF_BM",
-  "detect_rate_BM","zscore_BM", "z_score_detection_rate_BM",
+  "detect_rate_BM", "sites_rate_BM", "zscore_BM", "z_score_detection_rate_BM",
   "PercentChangeFromBaseline_BM","PercentChangeAtSecondTimepoint_BM",
   "Mrd_by_WGS_blood","cfWGS_blood_Binary","Cumulative_VAF_blood",
-  "detect_rate_blood","zscore_blood", "z_score_detection_rate_blood",
+  "detect_rate_blood", "sites_rate_blood", "zscore_blood", "z_score_detection_rate_blood",
   "PercentChangeFromBaseline_blood","PercentChangeAtSecondTimepoint_blood",
   "Mrd1E5","Mrd1E6"
 )
@@ -1793,14 +1792,12 @@ filled_df <- filled_df %>%
   select(-new_timepoint_info)
 
 ## Coalesce IMMAGINE-098 
-# 1) Extract and coalesce the two IMG-098 rows
-img98_coalesced <- filled_df %>%
-  filter(Patient == "IMG-098", Timepoint %in% c("T0", "T1")) %>%
-  summarise(across(
-    everything(),
-    ~ first(na.omit(.x)),
-    .names = "{.col}"
-  ))
+first_non_na <- function(x) { y <- x[!is.na(x)]; if (length(y)) y[1] else NA }
+
+img98_rows <- filled_df %>% filter(Patient == "IMG-098", Timepoint %in% c("T0", "T1"))
+
+img98_coalesced <- img98_rows %>%
+  summarise(across(everything(), first_non_na))
 
 # 2) Drop the old IMG-098 T0/T1 rows and bind back the coalesced one
 filled_df <- filled_df %>%
@@ -1812,11 +1809,115 @@ filled_df <- filled_df %>%
 
 ## Now have everything need to make plots
 
+## Make new rule - rescue patients with high mutation lists even though low ctDNA fraction at dx to bring in more patients 
+# Summaries by group
+summ_by_group <- function(df, count_col, evid_col) {
+  df %>%
+    transmute(
+      Count = !!sym(count_col),
+      Evidence = !!sym(evid_col)
+    ) %>%
+    mutate(group = case_when(
+      Evidence == 1 ~ "Evidence=1",
+      Evidence == 0 ~ "Evidence=0",
+      TRUE ~ "Evidence=NA"
+    )) %>%
+    group_by(group) %>%
+    summarise(
+      n = n(),
+      n_nonNA = sum(!is.na(Count)),
+      mean = mean(Count, na.rm = TRUE),
+      median = median(Count, na.rm = TRUE),
+      p75 = quantile(Count, 0.75, na.rm = TRUE),
+      p90 = quantile(Count, 0.90, na.rm = TRUE),
+      max = max(Count, na.rm = TRUE),
+      .groups = "drop"
+    )
+}
+
+# ---- 2) Blood: compute cutoff, build relaxed evidence -------------------------
+
+# Column names in your table:
+COUNT_BLOOD <- "Blood_Mutation_Count"
+EVID_BLOOD  <- "WGS_Evidence_of_Disease_Blood_plasma_cfDNA"  # 0/1
+
+# Inspect distributions
+blood_summ <- summ_by_group(filled_df %>% filter(timepoint_info %in% c("Diagnosis", "Baseline")), COUNT_BLOOD, EVID_BLOOD)
+print(blood_summ)
+
+pos_cut <- filled_df %>% filter(timepoint_info %in% c("Diagnosis", "Baseline")) %>%
+  filter(WGS_Evidence_of_Disease_Blood_plasma_cfDNA == 1) %>%
+  summarise(cutoff = quantile(Blood_Mutation_Count, 0.25, na.rm = TRUE)) %>%
+  pull(cutoff)
+
+pos_cut
+# roughly  ~3000 × 0.25 quantile → about 2,000 
+
+filled_df <- filled_df %>%
+  mutate(
+    WGS_Evidence_of_Disease_Blood_plasma_cfDNA_Relaxed = case_when(
+      WGS_Evidence_of_Disease_Blood_plasma_cfDNA == 1 ~ 1L,
+      WGS_Evidence_of_Disease_Blood_plasma_cfDNA == 0 &
+        Blood_Mutation_Count >= pos_cut             ~ 1L,
+      WGS_Evidence_of_Disease_Blood_plasma_cfDNA == 0 ~ 0L,
+      TRUE ~ NA_integer_
+    )
+  )
+
 # Write to CSV (for Excel/sharing)
-write.csv(filled_df, file = "Final_aggregate_table_cfWGS_features_with_clinical_and_demographics_updated6.csv", row.names = FALSE)
+write.csv(filled_df, file = "Final_aggregate_table_cfWGS_features_with_clinical_and_demographics_updated7.csv", row.names = FALSE)
 
 # Write to RDS (for loading back into R with full structure)
-saveRDS(filled_df, file = "Final_aggregate_table_cfWGS_features_with_clinical_and_demographics_updated6.rds")
+saveRDS(filled_df, file = "Final_aggregate_table_cfWGS_features_with_clinical_and_demographics_updated7.rds")
+
+
+## See how many rescued 
+cohort_df <- readRDS("cohort_assignment_table_updated.rds")
+
+tmp <- left_join(filled_df, cohort_df) %>% 
+  filter(!is.na(Cohort)) %>% 
+  filter(timepoint_info %in% c("Diagnosis", "Baseline")) %>% 
+  filter(
+    !is.na(WGS_Evidence_of_Disease_Blood_plasma_cfDNA) |
+      !is.na(WGS_Evidence_of_Disease_BM_cells)
+  ) %>%  unique() 
+
+tmp <- tmp %>%
+  dplyr::select(all_of(c(
+    "Patient",
+    "Date",
+    "Timepoint",
+    "Sample_Code",
+    "timepoint_info",
+    "WGS_Evidence_of_Disease_BM_cells",
+    "WGS_Evidence_of_Disease_Blood_plasma_cfDNA",
+    "Num_days_to_closest_relapse",
+    "Relapsed",
+    "BM_Mutation_Count",
+    "Blood_Mutation_Count",
+    "WGS_Evidence_of_Disease_Blood_plasma_cfDNA_Relaxed",
+    "Cohort"
+  )))
+
+tmp <- tmp %>%
+  filter(!(Patient == "SPORE_0009" & Date == as.Date("2020-03-11")))
+
+## What is missing? 
+setdiff(cohort_df$Patient, tmp$Patient)
+
+## See amount rescued 
+tmp %>%
+  filter(WGS_Evidence_of_Disease_Blood_plasma_cfDNA == 0,
+         WGS_Evidence_of_Disease_Blood_plasma_cfDNA_Relaxed == 1)
+
+# Write to CSV
+write.csv(tmp,
+          file = "baseline_high_quality_patients_updated.csv",
+          row.names = FALSE)
+
+# Optional: also save as RDS for lossless re-loading in R
+saveRDS(tmp,
+        file = "baseline_high_quality_patients_updated.rds")
 
 
 ## Quick check 

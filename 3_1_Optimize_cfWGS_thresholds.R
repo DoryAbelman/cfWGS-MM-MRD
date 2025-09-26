@@ -54,7 +54,7 @@ outdir   <- "Output_tables_2025"
 if (!dir.exists(outdir)) dir.create(outdir, recursive = TRUE)
 
 ### Load data 
-file <- readRDS("Final_aggregate_table_cfWGS_features_with_clinical_and_demographics_updated6.rds")
+file <- readRDS("Final_aggregate_table_cfWGS_features_with_clinical_and_demographics_updated7.rds")
 cohort_df <- readRDS("cohort_assignment_table_updated.rds")
 
 dat <- file 
@@ -718,25 +718,35 @@ blood_preds <- unique(unlist(combos_blood))
 
 ## Add filter that evidence of disease at baseline 
 # 2) Which cohort patients have a “good” baseline BM sample?
-All_feature_data <- readRDS("Jan2025_exported_data/All_feature_data_August2025.rds")
-bm_good_patients <- All_feature_data %>%
-  filter(
-    Sample_type == "BM_cells",
-    timepoint_info %in% c("Diagnosis","Baseline"),
-    Evidence_of_Disease == 1
-  ) %>%
-  distinct(Patient)
+Good_pts <- read.csv("baseline_high_quality_patients_updated.csv",
+                     stringsAsFactors = FALSE) ## From 2_0 script
 
-# 3) Which cohort patients have a “good” baseline cfDNA sample?
-cfDNA_good_patients <- All_feature_data %>%
-  filter(
-    Sample_type == "Blood_plasma_cfDNA",
-    timepoint_info %in% c("Diagnosis","Baseline"),
-    Evidence_of_Disease == 1
-  ) %>%
-  distinct(Patient)
+bm_good_patients <- Good_pts %>%
+  filter(WGS_Evidence_of_Disease_BM_cells == 1) %>%
+  select(Patient) %>%         # keep as a tibble with a Patient column
+  distinct()                  # remove duplicates
 
+cfDNA_good_patients <- Good_pts %>%
+  filter(WGS_Evidence_of_Disease_Blood_plasma_cfDNA_Relaxed == 1) %>%
+  select(Patient) %>%         # keep as a tibble with a Patient column
+  distinct()                  # remove duplicates
 
+# train_bm_original <- train_bm
+# train_blood_original <- train_blood
+# hold_bm_original <- hold_bm
+# hold_blood_original <- hold_blood
+# your data splits
+train_df <- dat_mrd %>% filter(Cohort == "Frontline") 
+hold_df  <- dat_mrd %>% filter(Cohort == "Non-frontline")
+
+train_df <- train_df %>% filter(!is.na(MRD_truth))
+hold_df <- hold_df %>% filter(!is.na(MRD_truth))
+
+# convert binary to factor with levels "neg"/"pos"
+train_df <- train_df %>% mutate(MRD_truth = factor(MRD_truth, levels = c(0,1), labels=c("neg","pos")))
+hold_df  <- hold_df  %>% mutate(MRD_truth = factor(MRD_truth, levels = c(0,1), labels=c("neg","pos")))
+
+positive_class <- "pos"
 train_bm    <- train_df %>% drop_na(all_of(c("MRD_truth", bm_preds))) %>% filter(Patient %in% bm_good_patients$Patient)
 train_blood <- train_df %>% drop_na(all_of(c("MRD_truth", blood_preds))) %>% filter(Patient %in% cfDNA_good_patients$Patient)
 
@@ -765,6 +775,19 @@ tibble(
   samples_without_bm   = n_samples_no_bm,
   patients_without_bm  = n_patients_no_bm
 )
+
+## Get reason 
+failures <- read_csv("Table for creating sample flowchart updated3.csv")
+no_bm <- left_join(no_bm)
+
+patients_no_bm <- no_bm %>%
+  select(Patient) %>%
+  distinct()
+
+failures_joined <- patients_no_bm %>%
+  left_join(failures, by = "Patient")
+
+failures_joined
 
 ## Get total number of samples
 dat_mrd %>%

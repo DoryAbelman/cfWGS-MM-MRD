@@ -350,6 +350,63 @@ plot_df %>%
     max    = max(Percent_Overlap, na.rm = TRUE)
   )
 
+### see the high quality ones 
+All_feature_data <- readRDS("Jan2025_exported_data/All_feature_data_August2025.rds") ## generated in later script
+
+BM_good_pts <- All_feature_data %>%
+  filter(Sample_type == "BM_cells",
+         Evidence_of_Disease == 1,
+         timepoint_info %in% c("Diagnosis","Baseline")) %>%
+  pull(Patient) %>%
+  unique()
+
+cfDNA_good_pts <- All_feature_data %>%
+  filter(Sample_type == "Blood_plasma_cfDNA",
+         Evidence_of_Disease == 1,
+         timepoint_info %in% c("Diagnosis","Baseline")) %>%
+  pull(Patient) %>%
+  unique()
+
+# convert BM/cfDNA patient IDs to New_ID first
+BM_good_pts_mapped <- BM_good_pts %>%
+  tibble(Patient = .) %>%
+  left_join(id_map, by = "Patient") %>%
+  mutate(Patient = coalesce(New_ID, Patient)) %>%
+  pull(Patient) %>%
+  unique()
+
+cfDNA_good_pts_mapped <- cfDNA_good_pts %>%
+  tibble(Patient = .) %>%
+  left_join(id_map, by = "Patient") %>%
+  mutate(Patient = coalesce(New_ID, Patient)) %>%
+  pull(Patient) %>%
+  unique()
+
+# intersect after mapping
+common_pts <- intersect(BM_good_pts_mapped, cfDNA_good_pts_mapped)
+
+# 1) Apply ID map, keep order for plotting, restrict to common patients
+plot_df %>% filter(Patient %in% common_pts) %>%
+  summarise(
+    mean_overlap   = mean(Percent_Overlap, na.rm = TRUE),
+    median_overlap = median(Percent_Overlap, na.rm = TRUE),
+    IQR_overlap    = IQR(Percent_Overlap, na.rm = TRUE),
+    min    = min(Percent_Overlap, na.rm = TRUE),
+    max    = max(Percent_Overlap, na.rm = TRUE)
+  )
+
+# 2) Summary stats on the restricted set
+plot_df %>%
+  summarise(
+    n              = n(),
+    mean_overlap   = mean(Percent_Overlap, na.rm = TRUE),
+    median_overlap = median(Percent_Overlap, na.rm = TRUE),
+    IQR_overlap    = IQR(Percent_Overlap, na.rm = TRUE),
+    IQR_lower      = quantile(Percent_Overlap, 0.25, na.rm = TRUE),
+    IQR_upper      = quantile(Percent_Overlap, 0.75, na.rm = TRUE),
+    min_overlap    = min(Percent_Overlap, na.rm = TRUE),
+    max_overlap    = max(Percent_Overlap, na.rm = TRUE)
+  )
 
 # 2. Calculate overall statistics
 med  <- median(plot_df$Percent_Overlap, na.rm = TRUE)

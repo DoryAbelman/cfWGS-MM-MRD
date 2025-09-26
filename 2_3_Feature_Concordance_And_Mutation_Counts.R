@@ -39,7 +39,7 @@ library(broom)    # for tidy()
 library(purrr)    # for map_df()
 library(tibble)   # for tibble()
 
-file <- readRDS("Final_aggregate_table_cfWGS_features_with_clinical_and_demographics_updated6.rds")
+file <- readRDS("Final_aggregate_table_cfWGS_features_with_clinical_and_demographics_updated7.rds")
 
 
 
@@ -747,8 +747,50 @@ pvals
 #–––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––  
 # 1) Correlation matrix (Spearman) + p‐values across all numeric vars  
 #–––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––  
+## For the mutation-list related features, remove the cases without evidence of disease 
+# Define qualifying patients (BM / cfDNA) at Dx/Baseline with evidence of disease
+## Load good patients 
+Good_pts <- read.csv("baseline_high_quality_patients_updated.csv",
+                     stringsAsFactors = FALSE) ## From 2_0 script
+
+BM_good_pts <- Good_pts %>%
+  filter(WGS_Evidence_of_Disease_BM_cells == 1) %>%
+  pull(Patient) %>%
+  unique()
+
+cfDNA_good_pts <- Good_pts %>%
+  filter(WGS_Evidence_of_Disease_Blood_plasma_cfDNA_Relaxed == 1) %>%
+  pull(Patient) %>%
+  unique()
+
+# BM_good_pts <- All_feature_data %>%
+#   filter(Sample_type == "BM_cells",
+#          Evidence_of_Disease == 1,
+#          timepoint_info %in% c("Diagnosis","Baseline")) %>%
+#   pull(Patient) %>%
+#   unique()
+# 
+# cfDNA_good_pts <- All_feature_data %>%
+#   filter(Sample_type == "Blood_plasma_cfDNA",
+#          Evidence_of_Disease == 1,
+#          timepoint_info %in% c("Diagnosis","Baseline")) %>%
+#   pull(Patient) %>%
+#   unique()
+
+# present in second list but NOT in first
+
+# 2) Mask BM/blood metrics to NA for patients that don't qualify
+bm_feats    <- c("zscore_BM", "z_score_detection_rate_BM", "detect_rate_BM")
+blood_feats <- c("zscore_blood", "z_score_detection_rate_blood", "detect_rate_blood")
+
+dat_base2 <- dat_base %>%
+  mutate(
+    across(all_of(bm_feats),    ~ if_else(Patient %in% BM_good_pts,    .x, NA_real_)),
+    across(all_of(blood_feats), ~ if_else(Patient %in% cfDNA_good_pts, .x, NA_real_))
+  )
+
 # Select only numeric columns
-num_df <- dat_base %>% select(where(is.numeric))
+num_df <- dat_base2 %>% select(where(is.numeric))
 
 # rcorr returns:
 #  • r : correlation matrix
@@ -774,9 +816,8 @@ flatten_corr <- function(r_mat, p_mat, n_mat) {
 }
 
 all_corrs <- flatten_corr(r_mat, p_mat, n_mat)
+all_corrs <- all_corrs %>% filter(!is.na(rho))
 
-## Export this 
-write.csv(all_corrs %>% filter(!is.na(p_adj)), file = "Final Tables and Figures/Suplementary_Table_2_All_Feature_Correlations.csv")
 # Adjust p-value for multiple hypothesis test - although not needed since exploratory 
 all_corrs <- all_corrs %>%
   mutate(
@@ -793,6 +834,8 @@ sig_fdr <- all_corrs %>% filter(p_adj < 0.05)
 print(sig_raw)   # exploratory list
 print(sig_fdr)   # more stringent list
 
+## Export this 
+write.csv(all_corrs %>% filter(!is.na(p_adj)), file = "Final Tables and Figures/Suplementary_Table_2_All_Feature_Correlations_updated2.csv")
 
 
 
