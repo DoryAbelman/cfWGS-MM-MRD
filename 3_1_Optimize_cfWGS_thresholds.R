@@ -754,6 +754,37 @@ hold_bm    <- hold_df %>% drop_na(all_of(c("MRD_truth", bm_preds)))  %>% filter(
 hold_blood <- hold_df %>% drop_na(all_of(c("MRD_truth", blood_preds))) %>% filter(Patient %in% cfDNA_good_patients$Patient)
 
 
+## Get more info on dates for manuscript 
+Baseline_dates <- read_csv(file = "Final Tables and Figures/Baseline dates for samples.csv")
+
+make_sentence <- function(df, cohort_label) {
+  df %>%
+    left_join(Baseline_dates, by = c("Patient" = "patient")) %>%
+    mutate(months_from_dx = interval(start, Date) / months(1)) %>%
+    summarise(
+      n_samples  = n(),
+      n_patients = n_distinct(Patient),
+      min_m      = round(min(months_from_dx), 1),
+      max_m      = round(max(months_from_dx), 1),
+      median_m   = round(median(months_from_dx), 1)
+    ) %>%
+    mutate(
+      text = paste0(
+        n_samples, " samples from ", n_patients,
+        " patients were available with matched clinical MRD in the ",
+        cohort_label, " cohort, collected over ",
+        min_m, "-", max_m, " months following diagnosis (median ",
+        median_m, ")."
+      )
+    ) %>%
+    pull(text)
+}
+
+cat(make_sentence(train_bm,  "training (bone marrow)"), "\n")
+cat(make_sentence(hold_bm,   "test (bone marrow)"),    "\n")
+cat(make_sentence(train_blood,"training (blood)"),     "\n")
+cat(make_sentence(hold_blood, "test (blood)"),         "\n")
+
 ### see what has blood but not BM 
 # Restrict to frontline samples in each training set
 fb <- train_blood %>% filter(Cohort == "Frontline")
@@ -1204,8 +1235,8 @@ test_out <- run_nested_with_validation(
 # saveRDS(nested_fragmentomics_validation_updated2, file = "nested_fragmentomics_validation_updated2.rds")
 
 ## Export the models that are updated
-saveRDS(nested_bm_validation_updated3, file = "nested_bm_validation_updated3.rds")
-saveRDS(nested_blood_validation_updated3, file = "nested_blood_validation_updated3_run2.rds")
+saveRDS(nested_bm_validation_updated3, file = "nested_bm_validation_updated4A.rds")
+saveRDS(nested_blood_validation_updated3, file = "nested_blood_validation_updated4_run2.rds")
 saveRDS(nested_fragmentomics_validation_updated3, file = "nested_fragmentomics_validation_updated3.rds")
 
 ## Load back in (optional)
@@ -1358,9 +1389,9 @@ selected_thr      <- all_thresholds[selected_combos]
 
 
 saveRDS(selected_models,
-        file = file.path(outdir, "selected_combo_models_2025-08-15.rds"))
+        file = file.path(outdir, "selected_combo_models_2025-09-17.rds"))
 saveRDS(selected_thr,
-        file = file.path(outdir, "selected_combo_thresholds_2025-08-15.rds"))
+        file = file.path(outdir, "selected_combo_thresholds_2025-09-17.rds"))
 
 
 # -----------------------------------------------------------------------------
@@ -1368,31 +1399,31 @@ saveRDS(selected_thr,
 # -----------------------------------------------------------------------------
 # 1) Validation‐set metrics (hold‐out cohort)
 saveRDS(all_val,
-        file = file.path(outdir, "all_validation_metrics.rds"))
+        file = file.path(outdir, "all_validation_metrics2.rds"))
 write.csv(all_val,
-          file = file.path(outdir, "all_validation_metrics.csv"),
+          file = file.path(outdir, "all_validation_metrics2.csv"),
           row.names = FALSE)
 
 # 2) Nested‐CV metrics (primary/frontline cohort)
 saveRDS(all_primary,
-        file = file.path(outdir, "all_nested_cv_metrics.rds"))
+        file = file.path(outdir, "all_nested_cv_metrics2.rds"))
 write.csv(all_primary,
-          file = file.path(outdir, "all_nested_cv_metrics.csv"),
+          file = file.path(outdir, "all_nested_cv_metrics2.csv"),
           row.names = FALSE)
 
 # 3) Full list of fitted models
 saveRDS(all_models,
-        file = file.path(outdir, "all_cfWGS_models_list.rds"))
+        file = file.path(outdir, "all_cfWGS_models_list2.rds"))
 
 # (Optional) If you also want to export the thresholds vector:
 saveRDS(all_thresholds,
-        file = file.path(outdir, "all_model_thresholds.rds"))
+        file = file.path(outdir, "all_model_thresholds2.rds"))
 write.csv(
   tibble(
     combo     = names(all_thresholds),
     threshold = unname(all_thresholds)
   ),
-  file = file.path(outdir, "all_model_thresholds.csv"),
+  file = file.path(outdir, "all_model_thresholds2.csv"),
   row.names = FALSE
 )
 
@@ -1465,20 +1496,20 @@ frag_tbl <- combined_metrics %>%
 
 write_csv(
   frag_tbl,
-  "Output_tables_2025/Supplementary_Table_4_Fragmentomics_Performance3.csv"
+  "Output_tables_2025/Supplementary_Table_4_Fragmentomics_Performance4.csv"
 )
 
 # 2) Export all models
 write_csv(
   primary_clean %>%
     mutate(across(where(is.numeric), ~ round(.x, 3))),
-  "Final Tables and Figures/Supplementary_Table_3_All_Model_performance_nested_CV_updated3.csv"
+  "Final Tables and Figures/Supplementary_Table_3_All_Model_performance_nested_CV_updated4.csv"
 )
 
 write_csv(
   val_clean %>%
     mutate(across(where(is.numeric), ~ round(.x, 3))),
-  "Final Tables and Figures/Supplementary_Table_5_All_Model_performance_nested_CV_updated_on_testing_cohort3_used_inMS.csv"
+  "Final Tables and Figures/Supplementary_Table_5_All_Model_performance_nested_CV_updated_on_testing_cohort4_used_inMS.csv"
 )
 
 
@@ -1691,11 +1722,11 @@ for (m in score_cols) {
 # write_csv(data_scored, file = file.path(outdir, "all_patients_with_BM_and_blood_calls_updated3.csv"))
 
 ## Another export
-saveRDS(data_scored, file = file.path(outdir, "all_patients_with_BM_and_blood_calls_updated4_full.rds"))
-write_csv(data_scored, file = file.path(outdir, "all_patients_with_BM_and_blood_calls_updated4_full.csv"))
+saveRDS(data_scored, file = file.path(outdir, "all_patients_with_BM_and_blood_calls_updated5_full.rds"))
+write_csv(data_scored, file = file.path(outdir, "all_patients_with_BM_and_blood_calls_updated5_full.csv"))
 
-saveRDS(data_scored_masked, file = file.path(outdir, "all_patients_with_BM_and_blood_calls_updated4.rds"))
-write_csv(data_scored_masked, file = file.path(outdir, "all_patients_with_BM_and_blood_calls_updated4.csv"))
+saveRDS(data_scored_masked, file = file.path(outdir, "all_patients_with_BM_and_blood_calls_updated5.rds"))
+write_csv(data_scored_masked, file = file.path(outdir, "all_patients_with_BM_and_blood_calls_updated5.csv"))
 
 
 
@@ -1704,7 +1735,223 @@ write_csv(data_scored_masked, file = file.path(outdir, "all_patients_with_BM_and
 # -----------------------------------------------------------------------------
 # 9B. Now re-get model metrics on the whole cohort 
 # -----------------------------------------------------------------------------
+### See if can optimize 
+# --- Build a "whole cohort" evaluation set (exclude Dx/Baseline like you did) ---
+whole <- data_scored_masked %>%
+  filter(!timepoint_info %in% c("Baseline","Diagnosis")) %>%
+  # keep rows that have either label or any model prob; we will drop NAs per-model anyway
+  mutate(MRD_truth = as.integer(MRD_truth)) %>% filter(Cohort == "Frontline")
 
+prev_whole <- mean(whole$MRD_truth == 1, na.rm = TRUE)  # prevalence matters for accuracy/PPV/NPV
+
+# Identify model probability columns (you already have prob_cols; re-use or rebuild)
+prob_cols <- grep("_prob$", names(whole), value = TRUE)
+
+# Utility to compute derived metrics from sens/spec plus prevalence
+.add_metrics <- function(df, prev) {
+  df %>%
+    mutate(
+      accuracy      = sensitivity * prev + specificity * (1 - prev),
+      bal_accuracy  = (sensitivity + specificity) / 2,
+      precision     = ifelse((sensitivity*prev + (1 - specificity)*(1 - prev)) == 0,
+                             NA_real_,
+                             (sensitivity*prev) / (sensitivity*prev + (1 - specificity)*(1 - prev))),
+      f1            = ifelse((precision + sensitivity) == 0,
+                             NA_real_,
+                             2 * precision * sensitivity / (precision + sensitivity))
+    )
+}
+
+# Core function: sweep thresholds and choose by several objectives
+tune_thresholds_one <- function(prob_col,
+                                dat,
+                                y_col = "MRD_truth",
+                                prev  = prev_whole,
+                                min_spec      = 0.95,   # for "sens↑ @ spec≥min_spec"
+                                target_sens   = 0.95,   # for "acc↑ @ sens≥target_sens"
+                                sens_weight   = 0.7,    # α in weighted score α*sens + (1-α)*spec
+                                direction     = "<") {
+  
+  # Drop rows where either label or predictor is NA for this model
+  dd <- dat %>%
+    select(all_of(c(y_col, prob_col))) %>%
+    rename(y = !!y_col, p = !!prob_col) %>%
+    filter(!is.na(y) & !is.na(p))
+  
+  if (nrow(dd) == 0) {
+    return(tibble(
+      Model     = prob_col, Objective = c("max_accuracy","max_balacc","sens_weighted",
+                                          paste0("sens_at_spec≥", min_spec),
+                                          paste0("acc_at_sens≥", target_sens)),
+      Threshold = NA_real_, Sensitivity = NA_real_, Specificity = NA_real_,
+      Accuracy  = NA_real_, BalancedAccuracy = NA_real_, Precision = NA_real_, F1 = NA_real_
+    ))
+  }
+  
+  roc_obj <- roc(response = dd$y, predictor = dd$p, levels = c(0,1), direction = direction)
+  
+  roc_df <- coords(roc_obj, x = "all",
+                   ret = c("threshold","sensitivity","specificity"),
+                   transpose = FALSE) %>%
+    as_tibble() %>%
+    .add_metrics(prev) %>%
+    # convenience columns for ranking
+    mutate(weighted_score = sens_weight * sensitivity + (1 - sens_weight) * specificity)
+  
+  # 1) Global maximizers
+  best_acc     <- roc_df %>% slice_max(order_by = accuracy, n = 1, with_ties = FALSE)
+  best_balacc  <- roc_df %>% slice_max(order_by = bal_accuracy, n = 1, with_ties = FALSE)
+  best_weight  <- roc_df %>% slice_max(order_by = weighted_score, n = 1, with_ties = FALSE)
+  
+  # 2) Constrained: maximize sensitivity with specificity ≥ min_spec
+  cand_spec <- roc_df %>% filter(specificity >= min_spec)
+  best_sens_at_spec <- if (nrow(cand_spec)) {
+    cand_spec %>% arrange(desc(sensitivity), desc(specificity)) %>% slice(1)
+  } else {
+    tibble(threshold = NA_real_, sensitivity = NA_real_, specificity = NA_real_,
+           accuracy = NA_real_, bal_accuracy = NA_real_, precision = NA_real_, f1 = NA_real_)
+  }
+  
+  # 3) Constrained: maximize accuracy with sensitivity ≥ target_sens
+  cand_sens <- roc_df %>% filter(sensitivity >= target_sens)
+  best_acc_at_sens <- if (nrow(cand_sens)) {
+    cand_sens %>% arrange(desc(accuracy), desc(specificity)) %>% slice(1)
+  } else {
+    tibble(threshold = NA_real_, sensitivity = NA_real_, specificity = NA_real_,
+           accuracy = NA_real_, bal_accuracy = NA_real_, precision = NA_real_, f1 = NA_real_)
+  }
+  
+  bind_rows(
+    best_acc     %>% mutate(Objective = "max_accuracy"),
+    best_balacc  %>% mutate(Objective = "max_balacc"),
+    best_weight  %>% mutate(Objective = paste0("sens_weighted_α=", sens_weight)),
+    best_sens_at_spec %>% mutate(Objective = paste0("sens_at_spec≥", min_spec)),
+    best_acc_at_sens  %>% mutate(Objective = paste0("acc_at_sens≥", target_sens))
+  ) %>%
+    transmute(
+      Model            = prob_col,
+      Objective,
+      Threshold        = threshold,
+      Sensitivity      = sensitivity,
+      Specificity      = specificity,
+      Accuracy         = accuracy,
+      BalancedAccuracy = bal_accuracy,
+      Precision        = precision,
+      F1               = f1
+    )
+}
+
+# Run for all models on the WHOLE cohort
+tuned_whole <- map_dfr(
+  prob_cols,
+  ~tune_thresholds_one(.x,
+                       dat         = whole,
+                       prev        = prev_whole,
+                       min_spec    = 0.8,   # adjust these to taste
+                       target_sens = 0.8,
+                       sens_weight = 0.7)
+)
+
+# Round for display and write alongside your existing outputs
+tuned_whole_out <- tuned_whole %>%
+  mutate(across(where(is.numeric), ~round(.x, 3)))
+
+print(tuned_whole_out)
+
+# If you still have all_perf_metrics in memory, write a single workbook with both
+write_xlsx(
+  list(
+    `All Performance Metrics (old)` = all_perf_metrics,
+    `Whole Cohort Tuned Thresholds` = tuned_whole_out
+  ),
+  path = "Final Tables and Figures/Supplementary_Table_All_Model_Metrics_with_Tuned_Whole.xlsx"
+)
+
+
+### See fixed threshold 
+# ------------------------------------------------------------
+# Helper: metrics from a prob column, fixed threshold
+# ------------------------------------------------------------
+metrics_at_threshold <- function(dat, prob_col, thr, label_col = "MRD_truth") {
+  stopifnot(prob_col %in% names(dat), label_col %in% names(dat))
+  
+  df <- dat %>%
+    select(all_of(c(label_col, prob_col))) %>%
+    rename(y = !!label_col, p = !!prob_col) %>%
+    filter(!is.na(y) & !is.na(p)) %>%
+    mutate(pred = as.integer(p >= thr))
+  
+  if (nrow(df) == 0) {
+    return(tibble(
+      Model = prob_col, Threshold = thr, N = 0,
+      TP = NA_integer_, FP = NA_integer_, TN = NA_integer_, FN = NA_integer_,
+      Prevalence = NA_real_,
+      Sensitivity = NA_real_, Specificity = NA_real_,
+      Precision = NA_real_, NPV = NA_real_,
+      Accuracy = NA_real_, BalancedAccuracy = NA_real_, F1 = NA_real_
+    ))
+  }
+  
+  TP <- sum(df$pred == 1 & df$y == 1)
+  FP <- sum(df$pred == 1 & df$y == 0)
+  TN <- sum(df$pred == 0 & df$y == 0)
+  FN <- sum(df$pred == 0 & df$y == 1)
+  N  <- TP + FP + TN + FN
+  
+  sens <- if ((TP + FN) > 0) TP / (TP + FN) else NA_real_
+  spec <- if ((TN + FP) > 0) TN / (TN + FP) else NA_real_
+  prec <- if ((TP + FP) > 0) TP / (TP + FP) else NA_real_
+  npv  <- if ((TN + FN) > 0) TN / (TN + FN) else NA_real_
+  acc  <- (TP + TN) / N
+  bal  <- mean(c(sens, spec), na.rm = TRUE)
+  f1   <- if (!is.na(prec) && !is.na(sens) && (prec + sens) > 0) {
+    2 * prec * sens / (prec + sens)
+  } else NA_real_
+  
+  tibble(
+    Model = prob_col,
+    Threshold = thr,
+    N = N,
+    TP = TP, FP = FP, TN = TN, FN = FN,
+    Prevalence = mean(df$y == 1),
+    Sensitivity = sens,
+    Specificity = spec,
+    Precision = prec,
+    NPV = npv,
+    Accuracy = acc,
+    BalancedAccuracy = bal,
+    F1 = f1
+  )
+}
+
+# ------------------------------------------------------------
+# Cohorts: reuse your objects; build a "whole, post-Dx" slice
+# ------------------------------------------------------------
+whole_postdx <- data_scored_masked %>%
+  filter(!timepoint_info %in% c("Baseline", "Diagnosis"))
+
+# Target model and threshold
+mdl <- "BM_base_zscore_prob"
+thr <- 0.38
+
+# Compute for each cohort
+res_whole     <- metrics_at_threshold(whole_postdx, mdl, thr)
+res_frontline <- metrics_at_threshold(frontline,      mdl, thr)
+res_testing   <- metrics_at_threshold(test_cohort,    mdl, thr)
+
+metrics_fixed_038 <- bind_rows(
+  res_whole     %>% mutate(Cohort = "Whole (post-Dx)"),
+  res_frontline %>% mutate(Cohort = "Frontline"),
+  res_testing   %>% mutate(Cohort = "Non-frontline (test)")
+) %>%
+  relocate(Cohort, .before = Model) %>%
+  mutate(across(where(is.numeric), ~round(.x, 3)))
+
+print(metrics_fixed_038)
+
+
+
+## Below here is original code
 ## See what the metrics look like at 95% specificity 
 
 # 1) Filter to frontline cohort and compute prevalence
@@ -1883,15 +2130,15 @@ print(metrics_at_95sens)
 
 ### Save this 
 # Save metrics evaluated at Youden threshold
-write_rds(metrics_youden, file = file.path(outdir, "cfWGS_model_metrics_youden_threshold.rds"))
-write_csv(metrics_youden, file = file.path(outdir, "cfWGS_model_metrics_youden_threshold.csv"))
+write_rds(metrics_youden, file = file.path(outdir, "cfWGS_model_metrics_youden_threshold2.rds"))
+write_csv(metrics_youden, file = file.path(outdir, "cfWGS_model_metrics_youden_threshold2.csv"))
 
 # Save metrics evaluated at fixed 95% specificity (if applicable)
-write_rds(metrics_at_95spec, file = file.path(outdir, "cfWGS_model_metrics_fixed_95spec.rds"))
-write_csv(metrics_at_95spec, file = file.path(outdir, "cfWGS_model_metrics_fixed_95spec.csv"))
+write_rds(metrics_at_95spec, file = file.path(outdir, "cfWGS_model_metrics_fixed_95spec2.rds"))
+write_csv(metrics_at_95spec, file = file.path(outdir, "cfWGS_model_metrics_fixed_95spec3.csv"))
 
-write_rds(metrics_at_95sens, file = file.path(outdir, "cfWGS_model_metrics_fixed_95sens.rds"))
-write_csv(metrics_at_95sens, file = file.path(outdir, "cfWGS_model_metrics_fixed_95sens_updated.csv"))
+write_rds(metrics_at_95sens, file = file.path(outdir, "cfWGS_model_metrics_fixed_95sens2.rds"))
+write_csv(metrics_at_95sens, file = file.path(outdir, "cfWGS_model_metrics_fixed_95sens_updated2.csv"))
 
 
 ## Tidy into one thing 
@@ -1943,12 +2190,12 @@ all_perf_metrics <- all_perf_metrics %>%
 library(writexl)    # or use write.csv if you prefer CSV
 write_xlsx(
   list(`All Performance Metrics` = all_perf_metrics),
-  path = "Final Tables and Figures/Supplementary_Table_4_All_Model_Metrics_Refit4.xlsx"
+  path = "Final Tables and Figures/Supplementary_Table_4_All_Model_Metrics_Refit5.xlsx"
 )
 
 # — or, if prefer CSV:
 write.csv(all_perf_metrics, 
-          "Final Tables and Figures/Supplementary_Table_4_All_Model_Metrics_Refit4.csv", 
+          "Final Tables and Figures/Supplementary_Table_4_All_Model_Metrics_Refit5.csv", 
           row.names = FALSE)
 
 
@@ -2108,15 +2355,15 @@ print(metrics_at_95sens_test)
 
 ### Save this 
 # Save metrics evaluated at Youden threshold
-write_rds(metrics_youden_testing, file = file.path(outdir, "cfWGS_model_metrics_youden_threshold_test_cohort.rds"))
-write_csv(metrics_youden_testing, file = file.path(outdir, "cfWGS_model_metrics_youden_threshold_test_cohort.csv"))
+write_rds(metrics_youden_testing, file = file.path(outdir, "cfWGS_model_metrics_youden_threshold_test_cohort2.rds"))
+write_csv(metrics_youden_testing, file = file.path(outdir, "cfWGS_model_metrics_youden_threshold_test_cohort2.csv"))
 
 # Save metrics evaluated at fixed 95% specificity (if applicable)
-write_rds(metrics_at_95spec_test, file = file.path(outdir, "cfWGS_model_metrics_fixed_95spec_test_cohort.rds"))
-write_csv(metrics_at_95spec_test, file = file.path(outdir, "cfWGS_model_metrics_fixed_95spec_test_cohort.csv"))
+write_rds(metrics_at_95spec_test, file = file.path(outdir, "cfWGS_model_metrics_fixed_95spec_test_cohort2.rds"))
+write_csv(metrics_at_95spec_test, file = file.path(outdir, "cfWGS_model_metrics_fixed_95spec_test_cohort2.csv"))
 
-write_rds(metrics_at_95sens_test, file = file.path(outdir, "cfWGS_model_metrics_fixed_95sens_test_cohort.rds"))
-write_csv(metrics_at_95sens_test, file = file.path(outdir, "cfWGS_model_metrics_fixed_95sens_updated_test_cohort.csv"))
+write_rds(metrics_at_95sens_test, file = file.path(outdir, "cfWGS_model_metrics_fixed_95sens_test_cohort2.rds"))
+write_csv(metrics_at_95sens_test, file = file.path(outdir, "cfWGS_model_metrics_fixed_95sens_updated_test_cohort2.csv"))
 
 
 ## Tidy into one thing 
@@ -2169,12 +2416,12 @@ all_perf_metrics <- all_perf_metrics %>%
 
 write_xlsx(
   list(`All Performance Metrics` = all_perf_metrics),
-  path = "Final Tables and Figures/Supplementary_Table_5_All_Model_Metrics_Refit_Test_Cohort4.xlsx"
+  path = "Final Tables and Figures/Supplementary_Table_5_All_Model_Metrics_Refit_Test_Cohort5.xlsx"
 )
 
 # — or, if prefer CSV:
 write.csv(all_perf_metrics, 
-          "Final Tables and Figures/Supplementary_Table_5_All_Model_Metrics_Refit_Test_Cohort3.csv", 
+          "Final Tables and Figures/Supplementary_Table_5_All_Model_Metrics_Refit_Test_Cohort4.csv", 
           row.names = FALSE)
 
 
@@ -2222,6 +2469,63 @@ write.csv(all_perf_metrics,
 # -----------------------------------------------------------------------------
 # 10A. Performance Summaries & Exports - BM 
 # -----------------------------------------------------------------------------
+
+### First get combined color mapping 
+# Combined colour mapping: Blood_* and BM_* share identical colours
+col_map_all <- c(
+  Blood_base                       = "#000000",  # black
+  BM_base                          = "#000000",  # black
+  
+  Blood_base_zscore                = "#E69F00",  # orange
+  BM_base_zscore                   = "#E69F00",  # orange
+  
+  Blood_plus_fragment              = "#56B4E9",  # sky blue
+  BM_plus_fragment                 = "#56B4E9",  # sky blue
+  
+  Blood_plus_fragment_min          = "#009E73",  # bluish green
+  BM_plus_fragment_min             = "#009E73",  # bluish green
+  
+  Blood_rate_only                  = "#CC79A7",  # magenta 
+  BM_rate_only                     = "#CC79A7",  # magenta
+  
+  Blood_zscore_only_detection_rate = "#0072B2",  # blue
+  BM_zscore_only_detection_rate    = "#0072B2",  # blue
+  
+  Blood_zscore_only_sites          = "#D55E00",  # vermillion
+  BM_zscore_only_sites             = "#D55E00",   # vermillion
+  
+  # ---- Fragmentomics (re-use existing colours) ----
+  Fragmentomics_full               = "#000000",  # black
+  Fragmentomics_min                = "#E69F00",  # orange
+  Fragmentomics_FS_only            = "#56B4E9",  # sky blue
+  Fragmentomics_mean_coverage_only = "#009E73",  # bluish green
+  Fragmentomics_prop_short_only    = "#0072B2",  # blue
+  Fragmentomics_tumor_fraction_only= "#D55E00"   # vermillion
+
+)
+
+# 2) nice human-readable labels 
+pretty_combo_names <- c(BM_base = "All Mut. Features", 
+                        BM_base_zscore = "BM Sites + cVAF Z-score", 
+                        BM_plus_fragment = "BM Mut. + Fragmentomics", 
+                        BM_plus_fragment_min = "BM Mut. + Fragments (min)", 
+                        BM_rate_only = "BM cVAF", 
+                        BM_zscore_only_detection_rate = "BM cVAF Z-score", 
+                        BM_zscore_only_sites = "BM Sites Z-score",
+                        Blood_base                          = "All Mut. Features",
+                        Blood_base_zscore                   = "Blood Sites + cVAF Z-score",
+                        Blood_plus_fragment                 = "Blood Mut. + Fragmentomics",
+                        Blood_plus_fragment_min             = "Blood Mut. + Fragments (min)",
+                        Blood_rate_only                     = "Blood cVAF",
+                        Blood_zscore_only_detection_rate    = "Blood cVAF Z-score",
+                        Blood_zscore_only_sites             = "Blood Sites Z-score",
+                        Fragmentomics_full                  = "FS + MeanCov + TF + PropShort",
+                        Fragmentomics_min                   = "FS + MeanCov",
+                        Fragmentomics_FS_only               = "Fragment Size Only",
+                        Fragmentomics_mean_coverage_only    = "Mean Coverage Only",
+                        Fragmentomics_prop_short_only       = "Prop. Short Fragments Only",
+                        Fragmentomics_tumor_fraction_only   = "Tumor Fraction Only")
+
 #### Plot to see what the model looks like
 # For convenience
 bm_obj      <- nested_bm_validation_updated2
@@ -2276,39 +2580,33 @@ auc_tbl <- roc_df %>% distinct(combo, auc)
 auc_tbl <- auc_tbl %>% arrange(desc(auc))
 roc_df$combo <- factor(roc_df$combo, levels = auc_tbl$combo)
 
-# 2) nice human-readable labels
-pretty_combo_names <- c(
-  BM_base                          = "All Mut Features",
-  BM_base_zscore                   = "BM Sites + cVAF Z-score",
-  BM_plus_fragment                 = "BM + Fragmentomics",
-  BM_plus_fragment_min             = "BM + Fragments (min)",
-  BM_rate_only                     = "BM cVAF",
-  BM_zscore_only_detection_rate    = "BM cVAF Z-score",
-  BM_zscore_only_sites             = "BM Sites Z-score"
-)
-
-## Get colors 
-okabe_ito8 <- c(
-  "#000000",  # black
-  "#E69F00",  # orange
-  "#56B4E9",  # sky blue
-  "#009E73",  # bluish green
-  "#F0E442",  # yellow
-  "#0072B2",  # blue
-  "#D55E00",  # vermillion
-  "#CC79A7"   # reddish purple
-)
+# ── Make one master level order and one named color map ───────────────────────
+combo_levels <- levels(roc_df$combo)  # already AUC-ordered
+combo_levels_chr <- as.character(combo_levels)
+combo_levels_chr_BM <- combo_levels_chr #Reuse for test cohort(?)
 
 # 3) build a vector of final legend labels: “Pretty Name, AUC = 0.83”
 legend_labels <- setNames(
   paste0(
-    pretty_combo_names[levels(roc_df$combo)], 
-    ", AUC = ", 
-    formatC(auc_tbl$auc, digits = 2, format = "f")
+    pretty_combo_names[combo_levels_chr], ", AUC = ",
+    formatC(auc_tbl$auc[match(combo_levels_chr, as.character(auc_tbl$combo))],
+            digits = 2, format = "f")
   ),
-  levels(roc_df$combo)
+  combo_levels_chr
 )
 
+# Single helper for a shared color scale
+scale_cols_shared <- function(labels_vec, title = NULL) {
+  scale_colour_manual(
+    name   = title,
+    values = col_map_all,             # <- fixed colours in AUC order
+    limits = combo_levels_chr,      # <- force same legend/data order
+    breaks = combo_levels_chr,
+    labels = labels_vec,
+    drop   = FALSE
+  )
+}
+  
 # 4) make the plot, using a qualitative brewer palette
 roc_plot <- ggplot(roc_df, aes(x = fpr, y = tpr, colour = combo)) +
   geom_line(size = 1) +
@@ -2317,7 +2615,7 @@ roc_plot <- ggplot(roc_df, aes(x = fpr, y = tpr, colour = combo)) +
     x      = "False-positive rate (1 − specificity)",
     y      = "True-positive rate (sensitivity)",
     colour = NULL,              # no title above the legend
-    title  = "Pooled Outer‑Fold ROC Curve\n(nested 5×5 CV)"
+    title  = "Pooled Outer‑Fold ROC Curve on\nBM-Derived Features (nested 5×5 CV)"
   ) +
   theme_bw(14) +
   theme(
@@ -2328,10 +2626,8 @@ roc_plot <- ggplot(roc_df, aes(x = fpr, y = tpr, colour = combo)) +
     panel.grid = element_blank(),
     plot.title      = element_text(hjust = 0.5, face = "bold")
   ) +
-  scale_colour_manual(
-    values = okabe_ito8[1:length(levels(roc_df$combo))],
-    labels = legend_labels
-  )
+  scale_cols_shared(labels_vec = legend_labels)
+
 
 
 # ── 2) Prepare perf_df with the same factor‐ordering as roc_df ───────────────
@@ -2358,12 +2654,13 @@ perf_plot <- ggplot(perf_df, aes(x = sens_mean, y = spec_mean, colour = combo)) 
   labs(
     x     = "Mean sensitivity (CV)",
     y     = "Mean specificity (CV)",
-    title = "Fold‑Wise Sensitivity & Specificity\n(mean ± SD)"
+    title = "Fold‑Wise Sensitivity & Specificity for\nBM-Derived Features (mean ± SD)"
   ) +
   # reuse the Okabe-Ito palette
-  scale_colour_manual(
-    values = okabe_ito8[ seq_along(levels(perf_df$combo)) ]
-  ) +
+  # scale_colour_manual(
+  #   values = okabe_ito8[ seq_along(levels(perf_df$combo)) ]
+  # ) +
+  scale_cols_shared(labels_vec = legend_labels) +
   theme_bw(base_size = 14) +
   theme(
     panel.grid      = element_blank(),
@@ -2373,17 +2670,55 @@ perf_plot <- ggplot(perf_df, aes(x = sens_mean, y = spec_mean, colour = combo)) 
     axis.text       = element_text(size = 11)
   )
 
+## Add legend
+# Make a named vector of labels
+labels_perf <- setNames(
+  paste0(
+    pretty_combo_names[combo_levels_chr], " (",
+    scales::percent(perf_df$sens_mean[match(combo_levels_chr, as.character(perf_df$combo))], 1),
+    " sens, ",
+    scales::percent(perf_df$spec_mean[match(combo_levels_chr, as.character(perf_df$combo))], 1),
+    " spec)"
+  ),
+  combo_levels_chr
+)
+
+
+perf_plot_with_legend <- perf_plot + theme(    legend.position    = c(0.35, 0.2),  # inside, bottom-right
+                                               legend.background  = element_rect(fill = alpha("white", 0.7), colour = NA),
+                                               legend.key.size    = unit(0.8, "lines"),
+                                               legend.text        = element_text(size = 10)) +
+  scale_cols_shared(labels_vec = labels_perf, title = "Model")
+
+
 # ── 3) Combine with roc_plot ────────────────────────────────────────────────
 combined_plot <- roc_plot + perf_plot + plot_layout(ncol = 2, widths = c(1,1))
 
 # ── 4) Export ───────────────────────────────────────────────────────────────
 ggsave(
-  filename = "Final Tables and Figures/combined_ROC_and_performance_nested_folds_bm_updated.png",
+  filename = "Final Tables and Figures/combined_ROC_and_performance_nested_folds_bm_updated3.png",
   plot     = combined_plot,
   width    = 12,
   height   = 6,
   dpi      = 500
 )
+
+ggsave(
+    filename = "Final Tables and Figures/Performance_nested_folds_bm_updated2_only_performance.png",
+  plot     = perf_plot_with_legend,
+  width    = 6,
+  height   = 6,
+  dpi      = 500
+)
+
+ggsave(
+  filename = "Final Tables and Figures/ROC_plot_folds_bm_updated2.png",
+  plot     = roc_plot,
+  width    = 6,
+  height   = 6,
+  dpi      = 500
+)
+
 
 ## Above is figure 4A and B 
 
@@ -2523,7 +2858,7 @@ p_perf <- ggplot(plot_df, aes(x = combo, y = mean, fill = combo)) +
 # ──────────────────────────────────────────────────────────────────────────────
 # 9. Save
 ggsave(
-  file.path("Final Tables and Figures/Supp5A_classifier_performance_bar_updated2.png"),
+  file.path("Final Tables and Figures/Supp5A_classifier_performance_bar_updated3.png"),
   plot   = p_perf,
   width  = 5,
   height = 3.5,
@@ -2665,7 +3000,7 @@ p_perf <- ggplot(plot_df, aes(x = combo, y = mean, fill = combo)) +
 # ──────────────────────────────────────────────────────────────────────────────
 # 9. Save
 ggsave(
-  file.path("Final Tables and Figures/Supp5A_classifier_performance_bar_test_cohort_updated2.png"),
+  file.path("Final Tables and Figures/Supp5A_classifier_performance_bar_test_cohort_updated3.png"),
   plot   = p_perf,
   width  = 5,
   height = 3.5,
@@ -2829,12 +3164,12 @@ ggsave(
 # 2) pull thresholds and models
 bm_obj <- nested_bm_validation_updated2
 thresh <- bm_obj$thresholds
-mods   <- bm_obj$models[c("BM_zscore_only_sites",
+mods   <- bm_obj$models[c("BM_zscore_only_detection_rate",
                           "BM_base_zscore")]
 
 # nice labels
 model_labs <- c(
-  "Sites model" = "BM_zscore_only_sites",
+  "cVAF model" = "BM_zscore_only_detection_rate",
   "Combined model"  = "BM_base_zscore"
 )
 
@@ -2862,18 +3197,36 @@ cm_list <- imap(mods, function(mod, nm){
 cm_df <- bind_rows(cm_list) %>%
   mutate(model = fct_recode(model, !!!model_labs))
 
+## make grey 
+col_low  <- "#f2f2f2"
+col_high <- "#4a4a4a"
+
+# make text switch to white on darker tiles for legibility (by facet)
+cm_df <- cm_df %>%
+  dplyr::group_by(model) %>%
+  dplyr::mutate(text_col = if_else(Count >= 0.7 * max(Count), "white", "black")) %>%
+  dplyr::ungroup()
+
 # ──────────────────────────────────────────────────────────────────────────────
 # 4) plot 2×2 tiles + add PPV/NPV text
 p_tables <- ggplot(cm_df, aes(x = Pred, y = Obs, fill = Count)) +
-  geom_tile(color = "white") +
-  geom_text(aes(label = Count), size = 5) +
+  geom_tile(color = "white", linewidth = 0) +
+  geom_text(aes(label = Count, color = text_col), size = 5, show.legend = FALSE) +
   facet_wrap(~ model) +
-  scale_fill_viridis_c(
-    option = "D",
+  scale_fill_gradient(
     name   = "Count",
-    begin  = 0.3,      # shift palette toward its lighter end
-    end    = 0.9       # avoid the very darkest purples
-  ) +  
+    low    = col_low,
+    high   = col_high,
+    limits = c(0, max(cm_df$Count)),   # consistent scaling across facets
+    oob    = squish
+  )  +
+  scale_color_identity() +
+  # scale_fill_viridis_c(
+  #   option = "D",
+  #   name   = "Count",
+  #   begin  = 0.3,      # shift palette toward its lighter end
+  #   end    = 0.9       # avoid the very darkest purples
+  # ) +  
   scale_x_discrete(position = "top") +
   scale_y_discrete(limits = c("pos", "neg")) +
   labs(
@@ -2895,7 +3248,7 @@ p_tables <- ggplot(cm_df, aes(x = Pred, y = Obs, fill = Count)) +
 # ──────────────────────────────────────────────────────────────────────────────
 # 5) save
 ggsave(
-  "Final Tables and Figures/Fig4C_confusion_tables_primary_updated3.png",
+  "Final Tables and Figures/Fig4C_confusion_tables_primary_updated4.png",
   plot   = p_tables,
   width  = 5,
   height = 2.75,
@@ -2928,18 +3281,34 @@ cm_list <- imap(mods, function(mod, nm){
 cm_df <- bind_rows(cm_list) %>%
   mutate(model = fct_recode(model, !!!model_labs))
 
+# make text switch to white on darker tiles for legibility (by facet)
+cm_df <- cm_df %>%
+  dplyr::group_by(model) %>%
+  dplyr::mutate(text_col = if_else(Count >= 0.7 * max(Count), "white", "black")) %>%
+  dplyr::ungroup()
+
 # ──────────────────────────────────────────────────────────────────────────────
 # 4) plot 2×2 tiles + add PPV/NPV text
 p_tables <- ggplot(cm_df, aes(x = Pred, y = Obs, fill = Count)) +
-  geom_tile(color = "white") +
-  geom_text(aes(label = Count), size = 5) +
+  geom_tile(color = "white", linewidth = 0) +
+  geom_text(aes(label = Count, color = text_col), size = 5, show.legend = FALSE) +
   facet_wrap(~ model) +
-  scale_fill_viridis_c(
-    option = "D",
+  scale_fill_gradient(
     name   = "Count",
-    begin  = 0.3,      # shift palette toward its lighter end
-    end    = 0.9       # avoid the very darkest purples
-  ) +
+    low    = col_low,
+    high   = col_high,
+    limits = c(0, max(cm_df$Count)),   # consistent scaling across facets
+    oob    = squish
+  )  +
+  scale_color_identity() +
+  # geom_text(aes(label = Count), size = 5) +
+  # facet_wrap(~ model) +
+  # scale_fill_viridis_c(
+  #   option = "D",
+  #   name   = "Count",
+  #   begin  = 0.3,      # shift palette toward its lighter end
+  #   end    = 0.9       # avoid the very darkest purples
+  # ) +
   scale_x_discrete(position = "top") +
   labs(
     x = "Predicted MRD status",
@@ -2961,7 +3330,7 @@ p_tables <- ggplot(cm_df, aes(x = Pred, y = Obs, fill = Count)) +
 # ──────────────────────────────────────────────────────────────────────────────
 # 5) save
 ggsave(
-  "Final Tables and Figures/Fig4C_confusion_tables_test3.png",
+  "Final Tables and Figures/Fig4C_confusion_tables_test4.png",
   plot   = p_tables,
   width  = 5,
   height = 2.75,
@@ -2996,11 +3365,26 @@ roc_dfs <- imap(models_list,
                 })
 
 roc_df  <- bind_rows(roc_dfs)
+
+# DO NOT reorder by validation AUC — lock to training order
+roc_df$combo <- factor(roc_df$combo, levels = combo_levels_chr_BM)
+
 auc_tbl <- roc_df %>% distinct(combo, auc)
 
-# 1) reorder combos by AUC
-auc_tbl <- auc_tbl %>% arrange(desc(auc))
-roc_df$combo <- factor(roc_df$combo, levels = auc_tbl$combo)
+# # 1) reorder combos by AUC
+# auc_tbl <- auc_tbl %>% arrange(desc(auc))
+# roc_df$combo <- factor(roc_df$combo, levels = auc_tbl$combo)
+
+# 3) build a vector of final legend labels: “Pretty Name, AUC = 0.83”
+legend_labels <- setNames(
+  paste0(
+    pretty_combo_names[combo_levels_chr_BM], ", AUC = ",
+    formatC(auc_tbl$auc[match(combo_levels_chr_BM, as.character(auc_tbl$combo))],
+            digits = 2, format = "f")
+  ),
+  combo_levels_chr_BM
+)
+
 
 # 4) make the plot, using a qualitative brewer palette
 roc_plot <- ggplot(roc_df, aes(x = fpr, y = tpr, colour = combo)) +
@@ -3020,10 +3404,8 @@ roc_plot <- ggplot(roc_df, aes(x = fpr, y = tpr, colour = combo)) +
     legend.text        = element_text(size = 10),
     panel.grid = element_blank()
   ) +
-  scale_colour_manual(
-    values = okabe_ito8[1:length(levels(roc_df$combo))],
-    labels = legend_labels
-  )
+  scale_cols_shared(labels_vec = legend_labels)
+
 
 
 # ── 2) Prepare perf_df with the same factor‐ordering as roc_df ───────────────
@@ -3033,18 +3415,16 @@ perf_df <- bm_obj$nested_metrics %>%
   mutate(combo = factor(combo, levels = levels(roc_df$combo)))
 
 # Make a named vector of labels
-labels_perf <- perf_df %>%
-  transmute(
-    combo,
-    pretty = pretty_combo_names[combo],
-    lbl = paste0(
-      pretty,
-      " (", percent(sens_mean, 1),
-      " sens, ", percent(spec_mean, 1),
-      " spec)"
-    )
-  ) %>%
-  { setNames(.$lbl, .$combo) }
+labels_perf <- setNames(
+  paste0(
+    pretty_combo_names[combo_levels_chr], " (",
+    scales::percent(perf_df$sens_mean[match(combo_levels_chr, as.character(perf_df$combo))], 1),
+    " sens, ",
+    scales::percent(perf_df$spec_mean[match(combo_levels_chr, as.character(perf_df$combo))], 1),
+    " spec)"
+  ),
+  combo_levels_chr
+)
     
 # 1) Build performance plot
 perf_plot <- ggplot(perf_df, aes(sens_mean, spec_mean, colour = combo)) +
@@ -3059,10 +3439,7 @@ perf_plot <- ggplot(perf_df, aes(sens_mean, spec_mean, colour = combo)) +
   ), width=0.015) +
   geom_vline(xintercept=0.5, lty=2, colour="grey80") +
   geom_hline(yintercept=0.5, lty=2, colour="grey80") +
-  scale_colour_manual(
-    values = okabe_ito8[1:length(levels(perf_df$combo))],
-    labels = labels_perf
-  ) +
+  scale_cols_shared(labels_vec = labels_perf) +
   scale_x_continuous(limits=c(0,1)) +
   scale_y_continuous(limits=c(0,1)) +
   labs(
@@ -3085,7 +3462,7 @@ combined_plot <- roc_plot + perf_plot + plot_layout(ncol = 2, widths = c(1,1))
 
 # ── 4) Export ───────────────────────────────────────────────────────────────
 ggsave(
-  filename = "Final Tables and Figures/combined_ROC_and_performance_nested_folds_bm_validation_updated2.png",
+  filename = "Final Tables and Figures/combined_ROC_and_performance_nested_folds_bm_validation_updated4.png",
   plot     = combined_plot,
   width    = 12,
   height   = 6,
@@ -3093,7 +3470,7 @@ ggsave(
 )
 
 ggsave(
-  filename = "Final Tables and Figures/4E_performance_nested_folds_bm_validation_updated2.png",
+  filename = "Final Tables and Figures/4E_performance_nested_folds_bm_validation_updated4.png",
   plot     = perf_plot,
   width    = 5,
   height   = 4,
@@ -3112,12 +3489,12 @@ ggsave(
 blood_obj      <- nested_blood_validation_updated2
 
 thresh <- blood_obj$thresholds
-mods   <- blood_obj$models[c("Blood_plus_fragment_min",
+mods   <- blood_obj$models[c("Blood_plus_fragment",
                           "Blood_zscore_only_sites")]
 
 # nice labels
 model_labs <- c(
-  "Combined model" = "Blood_plus_fragment_min",
+  "Combined model" = "Blood_plus_fragment",
   "Sites model"  = "Blood_zscore_only_sites"
 )
 
@@ -3145,18 +3522,32 @@ cm_list <- imap(mods, function(mod, nm){
 cm_df <- bind_rows(cm_list) %>%
   mutate(model = fct_recode(model, !!!model_labs))
 
+# make text switch to white on darker tiles for legibility (by facet)
+cm_df <- cm_df %>%
+  dplyr::group_by(model) %>%
+  dplyr::mutate(text_col = if_else(Count >= 0.7 * max(Count), "white", "black")) %>%
+  dplyr::ungroup()
+
 # ──────────────────────────────────────────────────────────────────────────────
 # 4) plot 2×2 tiles + add PPV/NPV text
 p_tables <- ggplot(cm_df, aes(x = Pred, y = Obs, fill = Count)) +
-  geom_tile(color = "white") +
-  geom_text(aes(label = Count), size = 5) +
+  geom_tile(color = "white", linewidth = 0) +
+  geom_text(aes(label = Count, color = text_col), size = 5, show.legend = FALSE) +
   facet_wrap(~ model) +
-  scale_fill_viridis_c(
-    option = "D",
+  scale_fill_gradient(
     name   = "Count",
-    begin  = 0.3,      # shift palette toward its lighter end
-    end    = 0.9       # avoid the very darkest purples
-  ) +  
+    low    = col_low,
+    high   = col_high,
+    limits = c(0, max(cm_df$Count)),   # consistent scaling across facets
+    oob    = squish
+  )  +
+  scale_color_identity() +
+  # scale_fill_viridis_c(
+  #   option = "D",
+  #   name   = "Count",
+  #   begin  = 0.3,      # shift palette toward its lighter end
+  #   end    = 0.9       # avoid the very darkest purples
+  # ) +  
   scale_x_discrete(position = "top") +
   labs(
     x = "Predicted MRD status",
@@ -3179,7 +3570,7 @@ p_tables <- ggplot(cm_df, aes(x = Pred, y = Obs, fill = Count)) +
 # ──────────────────────────────────────────────────────────────────────────────
 # 5) save
 ggsave(
-  "Final Tables and Figures/Fig5C_confusion_tables_primary_blood4.png",
+  "Final Tables and Figures/Fig5C_confusion_tables_primary_blood5.png",
   plot   = p_tables,
   width  = 5,
   height = 2.75,
@@ -3212,18 +3603,32 @@ cm_list <- imap(mods, function(mod, nm){
 cm_df <- bind_rows(cm_list) %>%
   mutate(model = fct_recode(model, !!!model_labs))
 
+# make text switch to white on darker tiles for legibility (by facet)
+cm_df <- cm_df %>%
+  dplyr::group_by(model) %>%
+  dplyr::mutate(text_col = if_else(Count >= 0.7 * max(Count), "white", "black")) %>%
+  dplyr::ungroup()
+
 # ──────────────────────────────────────────────────────────────────────────────
 # 4) plot 2×2 tiles + add PPV/NPV text
 p_tables <- ggplot(cm_df, aes(x = Pred, y = Obs, fill = Count)) +
-  geom_tile(color = "white") +
-  geom_text(aes(label = Count), size = 5) +
+  geom_tile(color = "white", linewidth = 0) +
+  geom_text(aes(label = Count, color = text_col), size = 5, show.legend = FALSE) +
   facet_wrap(~ model) +
-  scale_fill_viridis_c(
-    option = "D",
+  scale_fill_gradient(
     name   = "Count",
-    begin  = 0.3,      # shift palette toward its lighter end
-    end    = 0.9       # avoid the very darkest purples
-  ) +
+    low    = col_low,
+    high   = col_high,
+    limits = c(0, max(cm_df$Count)),   # consistent scaling across facets
+    oob    = squish
+  )  +
+  scale_color_identity() +
+  # scale_fill_viridis_c(
+  #   option = "D",
+  #   name   = "Count",
+  #   begin  = 0.3,      # shift palette toward its lighter end
+  #   end    = 0.9       # avoid the very darkest purples
+  # ) +
   scale_x_discrete(position = "top") +
   labs(
     x = "Predicted MRD status",
@@ -3246,7 +3651,7 @@ p_tables <- ggplot(cm_df, aes(x = Pred, y = Obs, fill = Count)) +
 # ──────────────────────────────────────────────────────────────────────────────
 # 5) save
 ggsave(
-  "Final Tables and Figures/Fig5C_confusion_tables_test_blood4.png",
+  "Final Tables and Figures/Fig5C_confusion_tables_test_blood5.png",
   plot   = p_tables,
   width  = 5,
   height = 2.75,
@@ -3259,12 +3664,12 @@ ggsave(
 cv_tbl <- metrics_youden %>%
   filter(model %in% c("Blood_zscore_only_sites_prob", 
                       "Blood_rate_only_prob",
-                      "Blood_plus_fragment_min_prob")) %>%
+                      "Blood_plus_fragment_prob")) %>%
   mutate(
     combo = recode(model,
                    Blood_zscore_only_sites_prob           = "Sites model",
                    Blood_rate_only_prob  = "cVAF model",
-                   Blood_plus_fragment_min_prob = "Combined model")
+                   Blood_plus_fragment_prob = "Combined model")
   ) %>%
   # rename so we have *_mean and *_sd
   rename(
@@ -3281,12 +3686,12 @@ cv_tbl <- metrics_youden %>%
 fix95_tbl <- metrics_at_95sens %>%
   filter(model %in% c("Blood_zscore_only_sites_prob", 
                       "Blood_rate_only_prob",
-                      "Blood_plus_fragment_min_prob")) %>%
+                      "Blood_plus_fragment_prob")) %>%
   mutate(
     combo = recode(model,
                    Blood_zscore_only_sites_prob           = "Sites model",
                    Blood_rate_only_prob  = "cVAF model",
-                   Blood_plus_fragment_min_prob = "Combined model")  ) %>%
+                   Blood_plus_fragment_prob = "Combined model")  ) %>%
   select(combo, sensitivity, specificity, accuracy, bal_accuracy, f1) %>%
   rename(
     Sens_95 = sensitivity,
@@ -3386,7 +3791,7 @@ p_perf <- ggplot(plot_df, aes(x = combo, y = mean, fill = combo)) +
 # ──────────────────────────────────────────────────────────────────────────────
 # 9. Save
 ggsave(
-  file.path("Final Tables and Figures/Supp7A_classifier_performance_bar_updated_blood_muts.png"),
+  file.path("Final Tables and Figures/Supp7A_classifier_performance_bar_updated_blood_muts2.png"),
   plot   = p_perf,
   width  = 5,
   height = 3.5,
@@ -3399,12 +3804,12 @@ ggsave(
 cv_tbl <- metrics_youden_testing %>%
   filter(model %in% c("Blood_zscore_only_sites_prob", 
                       "Blood_rate_only_prob",
-                      "Blood_plus_fragment_min_prob")) %>%
+                      "Blood_plus_fragment_prob")) %>%
   mutate(
     combo = recode(model,
                    Blood_zscore_only_sites_prob           = "Sites model",
                    Blood_rate_only_prob  = "cVAF model",
-                   Blood_plus_fragment_min_prob = "Combined model")
+                   Blood_plus_fragment_prob = "Combined model")
   ) %>%
   # rename so we have *_mean and *_sd
   rename(
@@ -3421,12 +3826,12 @@ cv_tbl <- metrics_youden_testing %>%
 fix95_tbl <- metrics_at_95sens_test %>%
   filter(model %in% c("Blood_zscore_only_sites_prob", 
                       "Blood_rate_only_prob",
-                      "Blood_plus_fragment_min_prob")) %>%
+                      "Blood_plus_fragment_prob")) %>%
   mutate(
     combo = recode(model,
                    Blood_zscore_only_sites_prob           = "Sites model",
                    Blood_rate_only_prob  = "cVAF model",
-                   Blood_plus_fragment_min_prob = "Combined model")
+                   Blood_plus_fragment_prob = "Combined model")
     ) %>%
   select(combo, sensitivity, specificity, accuracy, bal_accuracy, f1) %>%
   rename(
@@ -3532,7 +3937,7 @@ p_perf <- ggplot(plot_df, aes(x = combo, y = mean, fill = combo)) +
 # ──────────────────────────────────────────────────────────────────────────────
 # 9. Save
 ggsave(
-  file.path("Final Tables and Figures/Supp_7B_classifier_performance_bar_test_cohort_updated2.png"),
+  file.path("Final Tables and Figures/Supp_7B_classifier_performance_bar_test_cohort_updated3.png"),
   plot   = p_perf,
   width  = 5,
   height = 3.5,
@@ -3867,18 +4272,26 @@ cm_list <- imap(mods, function(mod, nm){
 cm_df <- bind_rows(cm_list) %>%
   mutate(model = fct_recode(model, !!!model_labs))
 
+# make text switch to white on darker tiles for legibility (by facet)
+cm_df <- cm_df %>%
+  dplyr::group_by(model) %>%
+  dplyr::mutate(text_col = if_else(Count >= 0.7 * max(Count), "white", "black")) %>%
+  dplyr::ungroup()
+
 # ──────────────────────────────────────────────────────────────────────────────
 # 4) plot 2×2 tiles + add PPV/NPV text
 p_tables <- ggplot(cm_df, aes(x = Pred, y = Obs, fill = Count)) +
-  geom_tile(color = "white") +
-  geom_text(aes(label = Count), size = 5) +
+  geom_tile(color = "white", linewidth = 0) +
+  geom_text(aes(label = Count, color = text_col), size = 5, show.legend = FALSE) +
   facet_wrap(~ model) +
-  scale_fill_viridis_c(
-    option = "D",
+  scale_fill_gradient(
     name   = "Count",
-    begin  = 0.3,      # shift palette toward its lighter end
-    end    = 0.9       # avoid the very darkest purples
-  ) +  
+    low    = col_low,
+    high   = col_high,
+    limits = c(0, max(cm_df$Count)),   # consistent scaling across facets
+    oob    = squish
+  )  +
+  scale_color_identity() +
   scale_x_discrete(position = "top") +
   labs(
     x = "Predicted MRD status",
@@ -3901,7 +4314,7 @@ p_tables <- ggplot(cm_df, aes(x = Pred, y = Obs, fill = Count)) +
 # ──────────────────────────────────────────────────────────────────────────────
 # 5) save
 ggsave(
-  "Final Tables and Figures/Supp_Fig9E_confusion_tables_primary_fragmentomics.png",
+  "Final Tables and Figures/Supp_Fig9E_confusion_tables_primary_fragmentomics3.png",
   plot   = p_tables,
   width  = 5,
   height = 2.75,
@@ -3934,18 +4347,32 @@ cm_list <- imap(mods, function(mod, nm){
 cm_df <- bind_rows(cm_list) %>%
   mutate(model = fct_recode(model, !!!model_labs))
 
+# make text switch to white on darker tiles for legibility (by facet)
+cm_df <- cm_df %>%
+  dplyr::group_by(model) %>%
+  dplyr::mutate(text_col = if_else(Count >= 0.7 * max(Count), "white", "black")) %>%
+  dplyr::ungroup()
+
 # ──────────────────────────────────────────────────────────────────────────────
 # 4) plot 2×2 tiles + add PPV/NPV text
 p_tables <- ggplot(cm_df, aes(x = Pred, y = Obs, fill = Count)) +
-  geom_tile(color = "white") +
-  geom_text(aes(label = Count), size = 5) +
+  geom_tile(color = "white", linewidth = 0) +
+  geom_text(aes(label = Count, color = text_col), size = 5, show.legend = FALSE) +
   facet_wrap(~ model) +
-  scale_fill_viridis_c(
-    option = "D",
+  scale_fill_gradient(
     name   = "Count",
-    begin  = 0.3,      # shift palette toward its lighter end
-    end    = 0.9       # avoid the very darkest purples
-  ) +
+    low    = col_low,
+    high   = col_high,
+    limits = c(0, max(cm_df$Count)),   # consistent scaling across facets
+    oob    = squish
+  )  +
+  scale_color_identity() +
+  # scale_fill_viridis_c(
+  #   option = "D",
+  #   name   = "Count",
+  #   begin  = 0.3,      # shift palette toward its lighter end
+  #   end    = 0.9       # avoid the very darkest purples
+  # ) +
   scale_x_discrete(position = "top") +
   labs(
     x = "Predicted MRD status",
@@ -3968,7 +4395,7 @@ p_tables <- ggplot(cm_df, aes(x = Pred, y = Obs, fill = Count)) +
 # ──────────────────────────────────────────────────────────────────────────────
 # 5) save
 ggsave(
-  "Final Tables and Figures/Supp_Fig9F_confusion_tables_val_fragmentomics.png",
+  "Final Tables and Figures/Supp_Fig9F_confusion_tables_val_fragmentomics2.png",
   plot   = p_tables,
   width  = 5,
   height = 2.75,
@@ -4041,38 +4468,24 @@ auc_tbl <- roc_df %>%
 auc_tbl <- auc_tbl %>% arrange(desc(auc))
 roc_df$combo <- factor(roc_df$combo, levels = auc_tbl$combo)
 
-# 2) nice human-readable labels
-pretty_combo_names <- c(
-  Blood_base                          = "All Mut Features",
-  Blood_base_zscore                   = "Blood Sites + cVAF Z-score",
-  Blood_plus_fragment                 = "Blood + Fragmentomics",
-  Blood_plus_fragment_min             = "Blood + Fragments (min)",
-  Blood_rate_only                     = "Blood cVAF",
-  Blood_zscore_only_detection_rate    = "Blood cVAF Z-score",
-  Blood_zscore_only_sites             = "Blood Sites Z-score"
-)
+# ── Make one master level order and one named color map ───────────────────────
+combo_levels <- levels(roc_df$combo)  # already AUC-ordered
+combo_levels_chr <- as.character(combo_levels)
 
-## Get colors 
-okabe_ito8 <- c(
-  "#000000",  # black
-  "#E69F00",  # orange
-  "#56B4E9",  # sky blue
-  "#009E73",  # bluish green
-  "#F0E442",  # yellow
-  "#0072B2",  # blue
-  "#D55E00",  # vermillion
-  "#CC79A7"   # reddish purple
-)
+## Save for hold out test set 
+combo_levels_blood <- combo_levels
+combo_levels_chr_blood <- combo_levels_chr
 
 # 3) build a vector of final legend labels: “Pretty Name, AUC = 0.83”
 legend_labels <- setNames(
   paste0(
-    pretty_combo_names[levels(roc_df$combo)], 
-    ", AUC = ", 
-    formatC(auc_tbl$auc, digits = 2, format = "f")
+    pretty_combo_names[combo_levels_chr], ", AUC = ",
+    formatC(auc_tbl$auc[match(combo_levels_chr, as.character(auc_tbl$combo))],
+            digits = 2, format = "f")
   ),
-  levels(roc_df$combo)
+  combo_levels_chr
 )
+
 
 # 4) make the plot, using a qualitative brewer palette
 roc_plot <- ggplot(roc_df, aes(x = fpr, y = tpr, colour = combo)) +
@@ -4082,7 +4495,7 @@ roc_plot <- ggplot(roc_df, aes(x = fpr, y = tpr, colour = combo)) +
     x      = "False-positive rate (1 − specificity)",
     y      = "True-positive rate (sensitivity)",
     colour = NULL,              # no title above the legend
-    title  = "Pooled Outer‑Fold ROC Curve\n(nested 5×5 CV)"
+    title  = "Pooled Outer‑Fold ROC Curve on\nBlood-Derived Features (nested 5×5 CV)"
   ) +
   theme_bw(14) +
   theme(
@@ -4093,10 +4506,12 @@ roc_plot <- ggplot(roc_df, aes(x = fpr, y = tpr, colour = combo)) +
     plot.title      = element_text(hjust = 0.5, face = "bold"),
     panel.grid = element_blank()
   ) +
-  scale_colour_manual(
-    values = okabe_ito8[1:length(levels(roc_df$combo))],
-    labels = legend_labels
-  )
+  # scale_colour_manual(
+  #   values = okabe_ito8[1:length(levels(roc_df$combo))],
+  #   labels = legend_labels
+  # )
+  scale_cols_shared(labels_vec = legend_labels)
+
 
 
 # ── 2) Prepare perf_df with the same factor‐ordering as roc_df ───────────────
@@ -4125,12 +4540,13 @@ perf_plot <- ggplot(perf_df, aes(x = sens_mean, y = spec_mean, colour = combo)) 
   labs(
     x     = "Mean sensitivity (CV)",
     y     = "Mean specificity (CV)",
-    title = "Fold‑Wise Sensitivity & Specificity\n(mean ± SD)"
+    title = "Fold‑Wise Sensitivity & Specificity for\nBlood-Derived Features (mean ± SD)"
   ) +
   # reuse the Okabe-Ito palette
-  scale_colour_manual(
-    values = okabe_ito8[ seq_along(levels(perf_df$combo)) ]
-  ) +
+  # scale_colour_manual(
+  #   values = okabe_ito8[ seq_along(levels(perf_df$combo)) ]
+  # ) +
+  scale_cols_shared(labels_vec = legend_labels) +
   theme_bw(base_size = 14) +
   theme(
     panel.grid      = element_blank(),
@@ -4140,19 +4556,53 @@ perf_plot <- ggplot(perf_df, aes(x = sens_mean, y = spec_mean, colour = combo)) 
     axis.text       = element_text(size = 11)
   )
 
+## Add legend
+# Make a named vector of labels
+labels_perf <- setNames(
+  paste0(
+    pretty_combo_names[combo_levels_chr], " (",
+    scales::percent(perf_df$sens_mean[match(combo_levels_chr, as.character(perf_df$combo))], 1),
+    " sens, ",
+    scales::percent(perf_df$spec_mean[match(combo_levels_chr, as.character(perf_df$combo))], 1),
+    " spec)"
+  ),
+  combo_levels_chr
+)
+
+
+perf_plot_with_legend <- perf_plot + theme(    legend.position    = c(0.37, 0.2),  # inside, bottom-right
+                                               legend.background  = element_rect(fill = alpha("white", 0.7), colour = NA),
+                                               legend.key.size    = unit(0.8, "lines"),
+                                               legend.text        = element_text(size = 10)) +
+  scale_cols_shared(labels_vec = labels_perf, title = "Model")
+
 # ── 3) Combine with roc_plot ────────────────────────────────────────────────
 combined_plot <- roc_plot + perf_plot + plot_layout(ncol = 2, widths = c(1,1))
 
 # ── 4) Export ───────────────────────────────────────────────────────────────
 ggsave(
-  filename = "Final Tables and Figures/Fig_5A_updated_combined_ROC_and_performance_nested_folds_blood_features_updated.png",
+  filename = "Final Tables and Figures/Fig_5A_updated_combined_ROC_and_performance_nested_folds_blood_features_updated2.png",
   plot     = combined_plot,
   width    = 12,
   height   = 6,
   dpi      = 500
 )
 
+ggsave(
+  filename = "Final Tables and Figures/Performance_nested_folds_blood_updated2_only_performance.png",
+  plot     = perf_plot_with_legend,
+  width    = 6,
+  height   = 6,
+  dpi      = 500
+)
 
+ggsave(
+  filename = "Final Tables and Figures/ROC_plot_folds_blood_updated2.png",
+  plot     = roc_plot,
+  width    = 6,
+  height   = 6,
+  dpi      = 500
+)
 
 
 ### Add the metrics from dilution series
@@ -4214,9 +4664,9 @@ if (exists("roc_df")) {
 # ------------------------------------------------------------------
 mark_tbl <- tribble(
   ~combo,                      ~threshold,
-  "Blood_zscore_only_sites",      0.432,
+  "Blood_zscore_only_sites",      0.5166693,
   "Blood_zscore_only_sites",      0.380,
-  "Blood_plus_fragment_min",      0.435
+  "Blood_plus_fragment",      0.4716880
 )
 
 # ------------------------------------------------------------------
@@ -4256,7 +4706,7 @@ marker_pts <- marker_pts %>%
 
 print(marker_pts)
 
-selected_models <- c("Blood_zscore_only_sites", "Blood_plus_fragment_min")
+selected_models <- c("Blood_zscore_only_sites", "Blood_plus_fragment")
 
 roc_plot_tmp <- roc_df %>%
   filter(combo %in% selected_models) %>%               # keep only those two
@@ -4267,7 +4717,7 @@ roc_plot_tmp <- roc_df %>%
     x      = "False-positive rate (1 − specificity)",
     y      = "True-positive rate (sensitivity)",
     colour = NULL,
-    title  = "Full-Cohort ROC (refit on all training samples)"
+    title  = "Full-Cohort ROC (Refit on all Training Samples)"
   ) +
   theme_bw(12) +
   theme(
@@ -4279,10 +4729,10 @@ roc_plot_tmp <- roc_df %>%
   ) +
   scale_colour_manual(
     # pick the same palette entries but only for your two models
-    values = okabe_ito8[ match(selected_models, levels(roc_df$combo)) ],
+    values = col_map_all,
     labels = c(
       Blood_zscore_only_sites          = "Sites model",
-      Blood_plus_fragment_min = "Combined model"
+      Blood_plus_fragment = "Combined model"
     )
   )
 roc_plot_final <- roc_plot_tmp +
@@ -4342,7 +4792,7 @@ roc_plot_final <- roc_plot_tmp +
 
 
 ggsave(
-  file.path("Final Tables and Figures/Supp7D_ROC_performance_blood_updated3.png"),
+  file.path("Final Tables and Figures/Supp7D_ROC_performance_blood_updated4.png"),
   plot   = roc_plot_final,
   width  = 5.5,
   height = 4,
@@ -4381,11 +4831,24 @@ roc_df  <- bind_rows(roc_dfs)
 roc_df <- bind_rows(roc_dfs) %>%
   filter(!grepl("^Fragmentomics_", combo))
 
+# DO NOT reorder by validation AUC — lock to training order
+roc_df$combo <- factor(roc_df$combo, levels = combo_levels_chr_blood)
+
 auc_tbl <- roc_df %>% distinct(combo, auc)
 
 # 1) reorder combos by AUC
-auc_tbl <- auc_tbl %>% arrange(desc(auc))
-roc_df$combo <- factor(roc_df$combo, levels = auc_tbl$combo)
+# auc_tbl <- auc_tbl %>% arrange(desc(auc))
+# roc_df$combo <- factor(roc_df$combo, levels = auc_tbl$combo)
+
+# 3) build a vector of final legend labels: “Pretty Name, AUC = 0.83”
+legend_labels <- setNames(
+  paste0(
+    pretty_combo_names[combo_levels_chr_blood], ", AUC = ",
+    formatC(auc_tbl$auc[match(combo_levels_chr_blood, as.character(auc_tbl$combo))],
+            digits = 2, format = "f")
+  ),
+  combo_levels_chr_blood
+)
 
 # 4) make the plot, using a qualitative brewer palette
 roc_plot <- ggplot(roc_df, aes(x = fpr, y = tpr, colour = combo)) +
@@ -4405,10 +4868,11 @@ roc_plot <- ggplot(roc_df, aes(x = fpr, y = tpr, colour = combo)) +
     legend.text        = element_text(size = 10),
     panel.grid = element_blank()
   ) +
-  scale_colour_manual(
-    values = okabe_ito8[1:length(levels(roc_df$combo))],
-    labels = legend_labels
-  )
+  scale_cols_shared(labels_vec = legend_labels)
+  # scale_colour_manual(
+  #   values = okabe_ito8[1:length(levels(roc_df$combo))],
+  #   labels = legend_labels
+  # )
 
 
 # ── 2) Prepare perf_df with the same factor‐ordering as roc_df ───────────────
@@ -4420,18 +4884,16 @@ perf_df <- blood_obj$nested_metrics %>%
   mutate(combo = factor(combo, levels = levels(roc_df$combo))) 
 
 # Make a named vector of labels
-labels_perf <- perf_df %>%
-  transmute(
-    combo,
-    pretty = pretty_combo_names[combo],
-    lbl = paste0(
-      pretty,
-      " (", percent(sens_mean, 1),
-      " sens, ", percent(spec_mean, 1),
-      " spec)"
-    )
-  ) %>%
-  { setNames(.$lbl, .$combo) }
+labels_perf <- setNames(
+  paste0(
+    pretty_combo_names[combo_levels_chr_blood], " (",
+    scales::percent(perf_df$sens_mean[match(combo_levels_chr_blood, as.character(perf_df$combo))], 1),
+    " sens, ",
+    scales::percent(perf_df$spec_mean[match(combo_levels_chr_blood, as.character(perf_df$combo))], 1),
+    " spec)"
+  ),
+  combo_levels_chr_blood
+)
 
 # 1) Build performance plot
 perf_plot <- ggplot(perf_df, aes(sens_mean, spec_mean, colour = combo)) +
@@ -4446,10 +4908,7 @@ perf_plot <- ggplot(perf_df, aes(sens_mean, spec_mean, colour = combo)) +
   ), width=0.015) +
   geom_vline(xintercept=0.5, lty=2, colour="grey80") +
   geom_hline(yintercept=0.5, lty=2, colour="grey80") +
-  scale_colour_manual(
-    values = okabe_ito8[1:length(levels(perf_df$combo))],
-    labels = labels_perf
-  ) +
+  scale_cols_shared(labels_vec = labels_perf) +
   scale_x_continuous(limits=c(0,1)) +
   scale_y_continuous(limits=c(0,1)) +
   labs(
@@ -4473,7 +4932,7 @@ combined_plot <- roc_plot + perf_plot + plot_layout(ncol = 2, widths = c(1,1))
 
 # ── 4) Export ───────────────────────────────────────────────────────────────
 ggsave(
-  filename = "Final Tables and Figures/Supp_Fig_7C_combined_ROC_and_performance_nested_folds_bm_validation.png",
+  filename = "Final Tables and Figures/Supp_Fig_7C_combined_ROC_and_performance_nested_folds_blood_validation3.png",
   plot     = combined_plot,
   width    = 12,
   height   = 6,
@@ -4481,7 +4940,7 @@ ggsave(
 )
 
 ggsave(
-  filename = "Final Tables and Figures/Supp_Fig_7C_performance_nested_folds_blood_validation_updated.png",
+  filename = "Final Tables and Figures/Supp_Fig_7C_performance_nested_folds_blood_validation_updated3.png",
   plot     = perf_plot,
   width    = 5,
   height   = 4,
@@ -4505,137 +4964,137 @@ ggsave(
 
 
 
-#### Now do ROC curve on validation cohort for BM muts - old 
-# For convenience
-valid_df    <- hold_bm                  # must contain MRD_truth + all predictors
-
-# ── 1. ROC curves on the hold-out cohort ─────────────────────────────────
-roc_dfs <- imap(models_list,
-                function(fit, label) {
-                  # caret::predict returns a data-frame; pull out the column for the + class
-                  prob <- predict(fit, newdata = valid_df, type = "prob")[ , positive_class]
-                  
-                  roc_obj <- roc(response   = valid_df$MRD_truth,
-                                 predictor  = prob,
-                                 levels     = c("neg", "pos"),   # neg first, pos second
-                                 direction  = "<",
-                                 quiet      = TRUE)
-                  
-                  tibble(
-                    combo = label,
-                    fpr   = 1 - roc_obj$specificities,
-                    tpr   = roc_obj$sensitivities,
-                    auc   = as.numeric(auc(roc_obj))
-                  )
-                })
-
-roc_df  <- bind_rows(roc_dfs)
-auc_tbl <- roc_df %>% distinct(combo, auc)
-
-# 1) reorder combos by AUC
-auc_tbl <- auc_tbl %>% arrange(desc(auc))
-roc_df$combo <- factor(roc_df$combo, levels = auc_tbl$combo)
-
-# 4) make the plot, using a qualitative brewer palette
-roc_plot <- ggplot(roc_df, aes(x = fpr, y = tpr, colour = combo)) +
-  geom_line(size = 1) +
-  geom_abline(lty = 2, colour = "grey60") +
-  labs(
-    x      = "False-positive rate (1 − specificity)",
-    y      = "True-positive rate (sensitivity)",
-    colour = NULL,              # no title above the legend
-    title  = "Test Samples ROC Curves"
-  ) +
-  theme_bw(14) +
-  theme(
-    legend.position    = c(0.63, 0.15),  # inside, bottom-right
-    legend.background  = element_rect(fill = alpha("white", 0.7), colour = NA),
-    legend.key.size    = unit(0.8, "lines"),
-    legend.text        = element_text(size = 10),
-    panel.grid = element_blank()
-  ) +
-  scale_colour_manual(
-    values = okabe_ito8[1:length(levels(roc_df$combo))],
-    labels = legend_labels
-  )
-
-
-# ── 2) Prepare perf_df with the same factor‐ordering as roc_df ───────────────
-perf_df <- bm_obj$nested_metrics %>%
-  select(combo, sens_mean, sens_sd, spec_mean, spec_sd) %>%
-  # force the same ordering of combos
-  mutate(combo = factor(combo, levels = levels(roc_df$combo)))
-
-# Make a named vector of labels
-labels_perf <- perf_df %>%
-  transmute(
-    combo,
-    pretty = pretty_combo_names[combo],
-    lbl = paste0(
-      pretty,
-      " (", percent(sens_mean, 1),
-      " sens, ", percent(spec_mean, 1),
-      " spec)"
-    )
-  ) %>%
-  { setNames(.$lbl, .$combo) }
-
-# 1) Build performance plot
-perf_plot <- ggplot(perf_df, aes(sens_mean, spec_mean, colour = combo)) +
-  geom_point(size=3) +
-  geom_errorbarh(aes(
-    xmin = pmax(0, sens_mean - sens_sd),
-    xmax = pmin(1, sens_mean + sens_sd)
-  ), height=0.015) +
-  geom_errorbar(aes(
-    ymin = pmax(0, spec_mean - spec_sd),
-    ymax = pmin(1, spec_mean + spec_sd)
-  ), width=0.015) +
-  geom_vline(xintercept=0.5, lty=2, colour="grey80") +
-  geom_hline(yintercept=0.5, lty=2, colour="grey80") +
-  scale_colour_manual(
-    values = okabe_ito8[1:length(levels(perf_df$combo))],
-    labels = labels_perf
-  ) +
-  scale_x_continuous(limits=c(0,1)) +
-  scale_y_continuous(limits=c(0,1)) +
-  labs(
-    x     = "Mean sensitivity",
-    y     = "Mean specificity",
-    title = "Sensitivity vs. specificity of cfWGS models\nin the test cohort",
-    colour = NULL
-  ) +
-  theme_bw(12) +
-  theme(
-    panel.grid      = element_blank(),
-    legend.position = c(0.05, 0.05),
-    legend.justification = c(0,0),
-    legend.background = element_rect(fill = alpha("white",0.7), colour=NA),
-    plot.title      = element_text(hjust=0.5, face = "bold", size = 14)
-  )
-
-# ── 3) Combine with roc_plot ────────────────────────────────────────────────
-combined_plot <- roc_plot + perf_plot + plot_layout(ncol = 2, widths = c(1,1))
-
-# ── 4) Export ───────────────────────────────────────────────────────────────
-ggsave(
-  filename = "Final Tables and Figures/combined_ROC_and_performance_nested_folds_bm_validation.png",
-  plot     = combined_plot,
-  width    = 12,
-  height   = 6,
-  dpi      = 500
-)
-
-ggsave(
-  filename = "Final Tables and Figures/4E_performance_nested_folds_bm_validation_updated.png",
-  plot     = perf_plot,
-  width    = 6,
-  height   = 4,
-  dpi      = 500
-)
-
-
-
+# #### Now do ROC curve on validation cohort for BM muts - old 
+# # For convenience
+# valid_df    <- hold_bm                  # must contain MRD_truth + all predictors
+# 
+# # ── 1. ROC curves on the hold-out cohort ─────────────────────────────────
+# roc_dfs <- imap(models_list,
+#                 function(fit, label) {
+#                   # caret::predict returns a data-frame; pull out the column for the + class
+#                   prob <- predict(fit, newdata = valid_df, type = "prob")[ , positive_class]
+#                   
+#                   roc_obj <- roc(response   = valid_df$MRD_truth,
+#                                  predictor  = prob,
+#                                  levels     = c("neg", "pos"),   # neg first, pos second
+#                                  direction  = "<",
+#                                  quiet      = TRUE)
+#                   
+#                   tibble(
+#                     combo = label,
+#                     fpr   = 1 - roc_obj$specificities,
+#                     tpr   = roc_obj$sensitivities,
+#                     auc   = as.numeric(auc(roc_obj))
+#                   )
+#                 })
+# 
+# roc_df  <- bind_rows(roc_dfs)
+# auc_tbl <- roc_df %>% distinct(combo, auc)
+# 
+# # 1) reorder combos by AUC
+# auc_tbl <- auc_tbl %>% arrange(desc(auc))
+# roc_df$combo <- factor(roc_df$combo, levels = auc_tbl$combo)
+# 
+# # 4) make the plot, using a qualitative brewer palette
+# roc_plot <- ggplot(roc_df, aes(x = fpr, y = tpr, colour = combo)) +
+#   geom_line(size = 1) +
+#   geom_abline(lty = 2, colour = "grey60") +
+#   labs(
+#     x      = "False-positive rate (1 − specificity)",
+#     y      = "True-positive rate (sensitivity)",
+#     colour = NULL,              # no title above the legend
+#     title  = "Test Samples ROC Curves"
+#   ) +
+#   theme_bw(14) +
+#   theme(
+#     legend.position    = c(0.63, 0.15),  # inside, bottom-right
+#     legend.background  = element_rect(fill = alpha("white", 0.7), colour = NA),
+#     legend.key.size    = unit(0.8, "lines"),
+#     legend.text        = element_text(size = 10),
+#     panel.grid = element_blank()
+#   ) +
+#   scale_colour_manual(
+#     values = okabe_ito8[1:length(levels(roc_df$combo))],
+#     labels = legend_labels
+#   )
+# 
+# 
+# # ── 2) Prepare perf_df with the same factor‐ordering as roc_df ───────────────
+# perf_df <- bm_obj$nested_metrics %>%
+#   select(combo, sens_mean, sens_sd, spec_mean, spec_sd) %>%
+#   # force the same ordering of combos
+#   mutate(combo = factor(combo, levels = levels(roc_df$combo)))
+# 
+# # Make a named vector of labels
+# labels_perf <- perf_df %>%
+#   transmute(
+#     combo,
+#     pretty = pretty_combo_names[combo],
+#     lbl = paste0(
+#       pretty,
+#       " (", percent(sens_mean, 1),
+#       " sens, ", percent(spec_mean, 1),
+#       " spec)"
+#     )
+#   ) %>%
+#   { setNames(.$lbl, .$combo) }
+# 
+# # 1) Build performance plot
+# perf_plot <- ggplot(perf_df, aes(sens_mean, spec_mean, colour = combo)) +
+#   geom_point(size=3) +
+#   geom_errorbarh(aes(
+#     xmin = pmax(0, sens_mean - sens_sd),
+#     xmax = pmin(1, sens_mean + sens_sd)
+#   ), height=0.015) +
+#   geom_errorbar(aes(
+#     ymin = pmax(0, spec_mean - spec_sd),
+#     ymax = pmin(1, spec_mean + spec_sd)
+#   ), width=0.015) +
+#   geom_vline(xintercept=0.5, lty=2, colour="grey80") +
+#   geom_hline(yintercept=0.5, lty=2, colour="grey80") +
+#   scale_colour_manual(
+#     values = okabe_ito8[1:length(levels(perf_df$combo))],
+#     labels = labels_perf
+#   ) +
+#   scale_x_continuous(limits=c(0,1)) +
+#   scale_y_continuous(limits=c(0,1)) +
+#   labs(
+#     x     = "Mean sensitivity",
+#     y     = "Mean specificity",
+#     title = "Sensitivity vs. specificity of cfWGS models\nin the test cohort",
+#     colour = NULL
+#   ) +
+#   theme_bw(12) +
+#   theme(
+#     panel.grid      = element_blank(),
+#     legend.position = c(0.05, 0.05),
+#     legend.justification = c(0,0),
+#     legend.background = element_rect(fill = alpha("white",0.7), colour=NA),
+#     plot.title      = element_text(hjust=0.5, face = "bold", size = 14)
+#   )
+# 
+# # ── 3) Combine with roc_plot ────────────────────────────────────────────────
+# combined_plot <- roc_plot + perf_plot + plot_layout(ncol = 2, widths = c(1,1))
+# 
+# # ── 4) Export ───────────────────────────────────────────────────────────────
+# ggsave(
+#   filename = "Final Tables and Figures/combined_ROC_and_performance_nested_folds_bm_validation.png",
+#   plot     = combined_plot,
+#   width    = 12,
+#   height   = 6,
+#   dpi      = 500
+# )
+# 
+# ggsave(
+#   filename = "Final Tables and Figures/4E_performance_nested_folds_bm_validation_updated.png",
+#   plot     = perf_plot,
+#   width    = 6,
+#   height   = 4,
+#   dpi      = 500
+# )
+# 
+# 
+# 
 
 
 
@@ -4819,37 +5278,20 @@ auc_tbl <- roc_df %>% distinct(combo, auc)
 auc_tbl <- auc_tbl %>% arrange(desc(auc))
 roc_df$combo <- factor(roc_df$combo, levels = auc_tbl$combo)
 
-# 2) nice human-readable labels
-pretty_combo_names <- c(
-  Fragmentomics_full                  = "FS + MeanCov + TF + PropShort",
-  Fragmentomics_min                   = "FS + MeanCov",
-  Fragmentomics_FS_only               = "Fragment Size Only",
-  Fragmentomics_mean_coverage_only    = "Mean Coverage Only",
-  Fragmentomics_prop_short_only       = "Prop. Short Fragments Only",
-  Fragmentomics_tumor_fraction_only   = "Tumor Fraction Only"
-)
-
-## Get colors 
-okabe_ito8 <- c(
-  "#000000",  # black
-  "#E69F00",  # orange
-  "#56B4E9",  # sky blue
-  "#009E73",  # bluish green
-  "#F0E442",  # yellow
-  "#0072B2",  # blue
-  "#D55E00",  # vermillion
-  "#CC79A7"   # reddish purple
-)
+# ── Make one master level order and one named color map ───────────────────────
+combo_levels <- levels(roc_df$combo)  # already AUC-ordered
+combo_levels_chr <- as.character(combo_levels)
 
 # 3) build a vector of final legend labels: “Pretty Name, AUC = 0.83”
 legend_labels <- setNames(
   paste0(
-    pretty_combo_names[levels(roc_df$combo)], 
-    ", AUC = ", 
-    formatC(auc_tbl$auc, digits = 2, format = "f")
+    pretty_combo_names[combo_levels_chr], ", AUC = ",
+    formatC(auc_tbl$auc[match(combo_levels_chr, as.character(auc_tbl$combo))],
+            digits = 2, format = "f")
   ),
-  levels(roc_df$combo)
+  combo_levels_chr
 )
+
 
 # 4) make the plot, using a qualitative brewer palette
 roc_plot <- ggplot(roc_df, aes(x = fpr, y = tpr, colour = combo)) +
@@ -4870,10 +5312,11 @@ roc_plot <- ggplot(roc_df, aes(x = fpr, y = tpr, colour = combo)) +
     panel.grid = element_blank(),
     plot.title      = element_text(hjust = 0.5, face = "bold")
   ) +
-  scale_colour_manual(
-    values = okabe_ito8[1:length(levels(roc_df$combo))],
-    labels = legend_labels
-  )
+  # scale_colour_manual(
+  #   values = okabe_ito8[1:length(levels(roc_df$combo))],
+  #   labels = legend_labels
+  # )
+  scale_cols_shared(labels_vec = legend_labels)
 
 
 # ── 2) Prepare perf_df with the same factor‐ordering as roc_df ───────────────
@@ -4903,9 +5346,10 @@ perf_plot <- ggplot(perf_df, aes(x = sens_mean, y = spec_mean, colour = combo)) 
     title = "Fold‑Wise Sensitivity & Specificity\n(mean ± SD)"
   ) +
   # reuse the Okabe-Ito palette
-  scale_colour_manual(
-    values = okabe_ito8[ seq_along(levels(perf_df$combo)) ]
-  ) +
+  # scale_colour_manual(
+  #   values = okabe_ito8[ seq_along(levels(perf_df$combo)) ]
+  # ) +
+  scale_cols_shared(labels_vec = legend_labels) +
   theme_bw(base_size = 14) +
   theme(
     panel.grid      = element_blank(),
@@ -4918,18 +5362,61 @@ perf_plot <- ggplot(perf_df, aes(x = sens_mean, y = spec_mean, colour = combo)) 
 # ── 3) Combine with roc_plot ────────────────────────────────────────────────
 combined_plot <- roc_plot + perf_plot + plot_layout(ncol = 2, widths = c(1,1))
 
+## Add legend
+# Make a named vector of labels
+labels_perf <- setNames(
+  paste0(
+    pretty_combo_names[combo_levels_chr], " (",
+    scales::percent(perf_df$sens_mean[match(combo_levels_chr, as.character(perf_df$combo))], 1),
+    " sens, ",
+    scales::percent(perf_df$spec_mean[match(combo_levels_chr, as.character(perf_df$combo))], 1),
+    " spec)"
+  ),
+  combo_levels_chr
+)
+
+perf_plot_with_legend <- perf_plot + theme(    legend.position    = c(0.4, 0.15),  # inside, bottom-right
+                                               legend.background  = element_rect(fill = alpha("white", 0.7), colour = NA),
+                                               legend.key.size    = unit(0.8, "lines"),
+                                               legend.text        = element_text(size = 10)) +
+  scale_cols_shared(labels_vec = labels_perf) 
+
+
 # ── 4) Export ───────────────────────────────────────────────────────────────
 ggsave(
-  filename = "Final Tables and Figures/combined_ROC_and_performance_nested_folds_fragmentomics_updated3.png",
+  filename = "Final Tables and Figures/combined_ROC_and_performance_nested_folds_fragmentomics_updated5.png",
   plot     = combined_plot,
   width    = 12,
   height   = 6,
   dpi      = 500
 )
 
+ggsave(
+  filename = "Final Tables and Figures/Performance_nested_folds_fragmentomics_only_performance3.png",
+  plot     = perf_plot_with_legend,
+  width    = 6,
+  height   = 6,
+  dpi      = 500
+)
+
+ggsave(
+  filename = "Final Tables and Figures/ROC_plot_folds_fragmentomics_train2.png",
+  plot     = roc_plot,
+  width    = 6,
+  height   = 6,
+  dpi      = 500
+)
 
 
+combined_plot <- roc_plot + perf_plot_with_legend + plot_layout(ncol = 2, widths = c(1,1))
 
+ggsave(
+  filename = "Final Tables and Figures/combined_ROC_and_performance_nested_folds_fragmentomics_updated6_label.png",
+  plot     = combined_plot,
+  width    = 12,
+  height   = 6,
+  dpi      = 500
+)
 
 
 # -----------------------------------------------------------------------------

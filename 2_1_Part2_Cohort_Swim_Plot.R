@@ -254,6 +254,9 @@ baseline_events <- censor_tbl %>%
     details = NA_character_
   )
 
+## Export this for use in future 
+write.csv(baseline_events, file = "Final Tables and Figures/Baseline dates for samples.csv")
+
 # 2. Last follow-up events from the Censor_date column
 followup_events <- censor_tbl %>%
   transmute(
