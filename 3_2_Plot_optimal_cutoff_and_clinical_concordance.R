@@ -45,9 +45,9 @@ library(scales)   # for percent_format()
 # -------- 1.  Read processed data & thresholds ------------------------------
 outdir   <- "Output_tables_2025"
 OUTPUT_DIR_FIGURES    <- "Output_figures_2025"
-dat      <- readRDS(file.path(outdir, "all_patients_with_BM_and_blood_calls_updated4.rds"))
-PATH_MODEL_LIST       <- "~/Documents/Thesis_work/R/M4/Projects/High_risk_MM_baselinbe_relapse_marrow/Output_tables_2025/selected_combo_models_2025-08-15.rds"
-PATH_THRESHOLD_LIST   <- "~/Documents/Thesis_work/R/M4/Projects/High_risk_MM_baselinbe_relapse_marrow/Output_tables_2025/selected_combo_thresholds_2025-08-15.rds"
+dat      <- readRDS(file.path(outdir, "all_patients_with_BM_and_blood_calls_updated5.rds"))
+PATH_MODEL_LIST       <- "~/Documents/Thesis_work/R/M4/Projects/High_risk_MM_baselinbe_relapse_marrow/Output_tables_2025/selected_combo_models_2025-09-17.rds"
+PATH_THRESHOLD_LIST   <- "~/Documents/Thesis_work/R/M4/Projects/High_risk_MM_baselinbe_relapse_marrow/Output_tables_2025/selected_combo_thresholds_2025-09-17.rds"
 
 selected_models <- readRDS(PATH_MODEL_LIST)
 selected_thr    <- readRDS(PATH_THRESHOLD_LIST)
@@ -84,14 +84,14 @@ front_tbl <- dat %>%
   filter(
     Cohort == "Frontline",
     !is.na(landmark_tp),
-    !is.na(BM_base_zscore_call)
+    !is.na(BM_zscore_only_detection_rate_call)
   ) %>%
   ## Add the screen column 
-  mutate(
-    BM_base_zscore_screen_call  = as.integer(BM_base_zscore_call >= 0.350),
-  ) %>%
+#  mutate(
+#    BM_base_zscore_screen_call  = as.integer(BM_base_zscore_call >= 0.350),
+#  ) %>%
   pivot_longer(
-    cols      = c(Flow_Binary, Adaptive_Binary, BM_base_zscore_call),
+    cols      = c(Flow_Binary, Adaptive_Binary, BM_zscore_only_detection_rate_call),
     names_to  = "Technology",
     values_to = "Result"
   ) %>%
@@ -108,12 +108,102 @@ front_tbl <- dat %>%
       Technology,
       Flow_Binary         = "MFC",
       Adaptive_Binary     = "clonoSEQ",
-      BM_base_zscore_call = "cfWGS",
+      BM_zscore_only_detection_rate_call = "cfWGS",
    #   BM_base_zscore_screen_call = "cfWGS (screen)"
       
     )
   )
 
+## Get double negatives 
+# Reshape to long format for all three methods
+front_long <- dat %>%
+  filter(
+    Cohort == "Frontline",
+    !is.na(landmark_tp),
+    landmark_tp %in% c("Post-ASCT", "Maintenance-1yr")
+  ) %>%
+  filter(!is.na(BM_zscore_only_detection_rate_call)) %>%
+  pivot_longer(
+    cols      = c(Flow_Binary, Adaptive_Binary, BM_zscore_only_detection_rate_call),
+    names_to  = "Technology",
+    values_to = "Result"
+  ) %>%
+  filter(!is.na(Result)) %>%
+  mutate(
+    Technology = recode(
+      Technology,
+      Flow_Binary                     = "MFC",
+      Adaptive_Binary                 = "clonoSEQ",
+      BM_zscore_only_detection_rate_call = "cfWGS"
+    )
+  )
+
+# Find patients negative at both timepoints, per method
+neg_both_tbl <- front_long %>%
+  group_by(Technology, Patient) %>%
+  summarise(
+    n_tp = n_distinct(landmark_tp),
+    all_neg = (n_tp == 2 & all(Result == 0L)),
+    .groups = "drop"
+  ) %>%
+  filter(all_neg)
+
+# Pull sets of patients
+neg_sets <- split(neg_both_tbl$Patient, neg_both_tbl$Technology)
+
+mfc_neg   <- neg_sets[["MFC"]]
+seq_neg   <- neg_sets[["clonoSEQ"]]
+cfwgs_neg <- neg_sets[["cfWGS"]]
+
+# Overlaps
+mfc_also_cfwgs <- intersect(mfc_neg, cfwgs_neg)
+seq_also_cfwgs <- intersect(seq_neg, cfwgs_neg)
+
+# Build sentences
+mfc_sentence <- sprintf(
+  "Of %d patients that were negative at both timepoints by MFC, %d (%.1f%%) were also negative by cfWGS.",
+  length(mfc_neg),
+  length(mfc_also_cfwgs),
+  100 * length(mfc_also_cfwgs) / max(1, length(mfc_neg))
+)
+
+seq_sentence <- sprintf(
+  "Of %d patients that were negative at both timepoints by clonoSEQ, %d (%.1f%%) were also negative by cfWGS.",
+  length(seq_neg),
+  length(seq_also_cfwgs),
+  100 * length(seq_also_cfwgs) / max(1, length(seq_neg))
+)
+
+mfc_sentence
+seq_sentence
+
+## Counts 
+# 1) Counts per landmark timepoint
+front_counts <- dat %>%
+  filter(Cohort == "Frontline", !is.na(landmark_tp)) %>%
+  mutate(
+    has_screen   = !is.na(BM_zscore_only_detection_rate_call),
+    has_clinical = !is.na(Flow_Binary) | !is.na(Adaptive_Binary)
+  ) %>%
+  group_by(landmark_tp) %>%
+  summarise(
+    n_total_cfWGS_screen = sum(has_screen, na.rm = TRUE),
+    n_with_clinical      = sum(has_screen & has_clinical, na.rm = TRUE),
+    frac_string          = paste0(n_with_clinical, "/", n_total_cfWGS_screen),
+    .groups = "drop"
+  )
+
+concord_sentence <- front_counts %>%
+  mutate(tp_label = recode(landmark_tp, !!!tp_labels)) %>%
+  arrange(match(tp_label, c("post-ASCT", "1-year maintenance"))) %>%
+  summarise(
+    sentence = glue(
+      "We assessed concordance between cfDNA-based MRD and clinical assays at {glue_collapse(glue('{tp_label} in samples with at least one clinical MRD result (n = {n_with_clinical}/{n_total_cfWGS_screen})'), sep = ' and ')}."
+    )
+  ) %>%
+  pull(sentence)
+
+concord_sentence
 
 # ---------------------------------------------------------------------------
 #  4.  NON‑FRONTLINE cohort: pooled positivity -------------------------------
@@ -122,11 +212,11 @@ non_tbl <- dat %>%
   filter(!timepoint_info %in% c("Baseline", "Diagnosis")) %>% 
   filter(
     Cohort == "Non-frontline",
-    !is.na(BM_base_zscore_call),
+    !is.na(BM_zscore_only_detection_rate_call),
     !is.na(MRD_truth) # restrict to only ones with MRD for fair comparison
   ) %>%
   pivot_longer(
-    cols      = c(Flow_Binary, Adaptive_Binary, BM_base_zscore_call),
+    cols      = c(Flow_Binary, Adaptive_Binary, BM_zscore_only_detection_rate_call),
     names_to  = "Technology",
     values_to = "Result"
   ) %>%
@@ -143,7 +233,7 @@ non_tbl <- dat %>%
       Technology,
       Flow_Binary         = "MFC",
       Adaptive_Binary     = "clonoSEQ",
-      BM_base_zscore_call = "cfWGS" 
+      BM_zscore_only_detection_rate_call = "cfWGS" 
   )
   )
 
@@ -151,12 +241,12 @@ non_tbl <- dat %>%
 ## Export
 readr::write_csv(
   front_tbl,
-  file.path(outdir, "Positivity_by_Landmark_TimePoint_BoneMarrow_Frontline_updated3.csv")
+  file.path(outdir, "Positivity_by_Landmark_TimePoint_BoneMarrow_Frontline_updated4.csv")
 )
 
 readr::write_csv(
   non_tbl,
-  file.path(outdir, "Positivity_All_TimePoints_BoneMarrow_NonFrontline_updated3.csv")
+  file.path(outdir, "Positivity_All_TimePoints_BoneMarrow_NonFrontline_updated4.csv")
 )
 
 
@@ -397,7 +487,7 @@ p_non_grouped <- ggplot(non_tbl,
   plot_theme
 
 ggsave(
-  filename = file.path(OUTPUT_DIR_FIGURES, "Fig_4I_BM_positivity_by_tech_updated_non_frontline4.png"),
+  filename = file.path(OUTPUT_DIR_FIGURES, "Fig_4I_BM_positivity_by_tech_updated_non_frontline5.png"),
   plot     = p_non_grouped,
   width    = 3.5,
   height   = 4,
@@ -456,7 +546,7 @@ p_pos_by_tech <- ggplot(combo_tbl,
   
   # ⑤ titles
   labs(
-    title = "MRD Positivity by Technology",
+    title = "MRD Positivity by Technology (BM-informed mutation lists)",
     x     = "Technology",
     y     = "Positivity Rate"
   ) +
@@ -474,10 +564,10 @@ p_pos_by_tech <- ggplot(combo_tbl,
 
 # 4) Save
 ggsave(
-  filename = file.path(OUTPUT_DIR_FIGURES, "Fig_4I_BM_positivity_by_tech_facet2.png"),
+  filename = file.path(OUTPUT_DIR_FIGURES, "Fig_4I_BM_positivity_by_tech_facet5.png"),
   plot     = p_pos_by_tech,
-  width    = 6,    # wider to accommodate two facets
-  height   = 4,
+  width    = 6.5,    # wider to accommodate two facets
+  height   = 3.85,
   dpi      = 500
 )
 
@@ -521,7 +611,8 @@ front_tbl <- dat %>%
   filter(
     Cohort == "Frontline",
     !is.na(landmark_tp),
-    !is.na(Blood_zscore_only_sites_call)
+    !is.na(Blood_zscore_only_sites_call),
+    !is.na(Flow_Binary) | !is.na(Adaptive_Binary)
   ) %>%
   ## Add the screen column 
   mutate(
@@ -550,6 +641,70 @@ front_tbl <- dat %>%
       Blood_zscore_screen_call = "cfWGS (screen)"
     )
   )
+
+## Get double negatives 
+# Reshape to long format for all three methods
+front_long <- dat %>%
+  filter(
+    Cohort == "Frontline",
+    !is.na(landmark_tp),
+    landmark_tp %in% c("Post-ASCT", "Maintenance-1yr")
+  ) %>%
+  filter(!is.na(Blood_zscore_only_sites_call)) %>%
+  pivot_longer(
+    cols      = c(Flow_Binary, Adaptive_Binary, Blood_zscore_only_sites_call),
+    names_to  = "Technology",
+    values_to = "Result"
+  ) %>%
+  filter(!is.na(Result)) %>%
+  mutate(
+    Technology = recode(
+      Technology,
+      Flow_Binary                     = "MFC",
+      Adaptive_Binary                 = "clonoSEQ",
+      Blood_zscore_only_sites_call = "cfWGS"
+    )
+  )
+
+# Find patients negative at both timepoints, per method
+neg_both_tbl <- front_long %>%
+  group_by(Technology, Patient) %>%
+  summarise(
+    n_tp = n_distinct(landmark_tp),
+    all_neg = (n_tp == 2 & all(Result == 0L)),
+    .groups = "drop"
+  ) %>%
+  filter(all_neg)
+
+# Pull sets of patients
+neg_sets <- split(neg_both_tbl$Patient, neg_both_tbl$Technology)
+
+mfc_neg   <- neg_sets[["MFC"]]
+seq_neg   <- neg_sets[["clonoSEQ"]]
+cfwgs_neg <- neg_sets[["cfWGS"]]
+
+# Overlaps
+mfc_also_cfwgs <- intersect(mfc_neg, cfwgs_neg)
+seq_also_cfwgs <- intersect(seq_neg, cfwgs_neg)
+
+# Build sentences
+mfc_sentence <- sprintf(
+  "Of %d patients that were negative at both timepoints by MFC, %d (%.1f%%) were also negative by cfWGS.",
+  length(mfc_neg),
+  length(mfc_also_cfwgs),
+  100 * length(mfc_also_cfwgs) / max(1, length(mfc_neg))
+)
+
+seq_sentence <- sprintf(
+  "Of %d patients that were negative at both timepoints by clonoSEQ, %d (%.1f%%) were also negative by cfWGS.",
+  length(seq_neg),
+  length(seq_also_cfwgs),
+  100 * length(seq_also_cfwgs) / max(1, length(seq_neg))
+)
+
+mfc_sentence
+seq_sentence
+
 
 # ---------------------------------------------------------------------------
 #  4.  NON‑FRONTLINE cohort: pooled positivity -------------------------------
@@ -632,6 +787,47 @@ combo_tbl <- combo_tbl %>%
     
   )
 
+## Make sentence
+# --- CONFIG ---
+fig_ref   <- "Figure 3D"
+cohort_in <- "Training Cohort"                    # change if you want the Test Cohort
+
+# Helper: fetch row for a (timepoint, technology, cohort) and format "XX% (a/b)"
+pull_fmt <- function(df, tp, tech, cohort = cohort_in, digits = 0) {
+  row <- df %>%
+    filter(landmark_tp == tp, Technology == tech, Cohort == cohort) %>%
+    slice(1)
+  
+  if (nrow(row) == 0 || is.na(row$n_total) || row$n_total == 0) return("NA")
+  
+  pct <- round(100 * row$pos_rate, digits)
+  sprintf("%d%% (%d/%d)", pct, row$n_pos, row$n_total)
+}
+
+# Helper: build one sentence for a given timepoint
+build_sentence <- function(df, tp, fig = fig_ref) {
+  scr  <- pull_fmt(df, tp, "cfWGS (screen)")
+  conf <- pull_fmt(df, tp, "cfWGS (confirm)")
+  seqv <- pull_fmt(df, tp, "clonoSEQ")
+  mfc  <- pull_fmt(df, tp, "MFC")
+  
+  sprintf(
+    "At %s, the cfWGS screening threshold identified %s as MRD-positive, whereas the confirmatory threshold was positive in %s, with clinical assays showing %s by clonoSEQ and %s by MFC (%s).",
+    tp, scr, conf, seqv, mfc, fig
+  )
+}
+
+# --- RUN ---
+tp1 <- "Post-ASCT"
+tp2 <- "Maintenance-1yr"
+
+sentence_postASCT   <- build_sentence(combo_tbl, tp1)
+sentence_maint1year <- build_sentence(combo_tbl, tp2)
+
+sentence_postASCT
+sentence_maint1year
+
+
 p_pos_by_tech <- ggplot(combo_tbl, 
                         aes(x    = Technology,
                             y    = pos_rate * 100,
@@ -666,7 +862,7 @@ p_pos_by_tech <- ggplot(combo_tbl,
   
   # ⑤ titles
   labs(
-    title = "MRD Positivity by Technology",
+    title = "MRD Positivity by Technology (Blood-derived mutation lists)",
     x     = "Technology",
     y     = "Positivity Rate"
   ) +
@@ -684,7 +880,7 @@ p_pos_by_tech <- ggplot(combo_tbl,
 
 # 4) Save
 ggsave(
-  filename = file.path(OUTPUT_DIR_FIGURES, "Fig_5I_Blood_positivity_by_tech_facet_updated4.png"),
+  filename = file.path(OUTPUT_DIR_FIGURES, "Fig_5I_Blood_positivity_by_tech_facet_updated5.png"),
   plot     = p_pos_by_tech,
   width    = 6.5,    # wider to accommodate two facets
   height   = 4,
@@ -732,23 +928,23 @@ front <- dat %>% filter(Cohort == "Frontline", !is.na(landmark)) %>% filter(!is.
 # --- 3a. Pairwise concordance at Post‑ASCT ----------------------------------
 pa   <- front %>% filter(landmark == "Post_ASCT")
 post_conc <- bind_rows(
-  pair_concord(pa, "BM_base_zscore_call", "Adaptive_Binary"),
-  pair_concord(pa, "BM_base_zscore_call", "Flow_Binary"),
+  pair_concord(pa, "BM_zscore_only_detection_rate_call", "Adaptive_Binary"),
+  pair_concord(pa, "BM_zscore_only_detection_rate_call", "Flow_Binary"),
   pair_concord(pa, "Adaptive_Binary",  "Flow_Binary")
 )
 
 # --- 3b. Pairwise concordance at Maintenance --------------------------------
 ma   <- front %>% filter(landmark == "Maintenance")
 maint_conc <- bind_rows(
-  pair_concord(ma, "BM_base_zscore_call", "Adaptive_Binary"),
-  pair_concord(ma, "BM_base_zscore_call", "Flow_Binary")
+  pair_concord(ma, "BM_zscore_only_detection_rate_call", "Adaptive_Binary"),
+  pair_concord(ma, "BM_zscore_only_detection_rate_call", "Flow_Binary")
 )
 
 # --- 3c. Positivity counts ---------------------------------------------------
 pos_tbl <- front %>%
   filter(landmark %in% c("Post_ASCT", "Maintenance")) %>%
   pivot_longer(
-    cols      = c(BM_base_zscore_call, Adaptive_Binary, Flow_Binary),
+    cols      = c(BM_zscore_only_detection_rate_call, Adaptive_Binary, Flow_Binary),
     names_to  = "Test",
     values_to = "Result"
   ) %>%
@@ -761,10 +957,10 @@ pos_tbl <- front %>%
   )
 
 ## for non-frontline 
-non <- dat %>% filter(Cohort == "Non-frontline") %>% filter(!is.na(BM_base_zscore_call)) %>% filter(timepoint_info != "Baseline") %>% 
+non <- dat %>% filter(Cohort == "Non-frontline") %>% filter(!is.na(BM_zscore_only_detection_rate_call)) %>% filter(timepoint_info != "Baseline") %>% 
   filter(timepoint_info != "Diagnosis")
 
-non_conc <- pair_concord(non, "BM_base_zscore_call", "Flow_Binary")
+non_conc <- pair_concord(non, "BM_zscore_only_detection_rate_call", "Flow_Binary")
 
 
 
@@ -807,19 +1003,19 @@ print(ppv_maint)
 
 # ---------------------------------------------------------------------------
 # 5.  NON-FRONTLINE cohort ----------------------------------------------------
-non <- dat %>% filter(Cohort == "Non-frontline") %>% filter(!is.na(BM_base_zscore_call)) %>% filter(timepoint_info != "Diagnosis")  %>% filter(timepoint_info != "Baseline")
+non <- dat %>% filter(Cohort == "Non-frontline") %>% filter(!is.na(BM_zscore_only_detection_rate_call)) %>% filter(timepoint_info != "Diagnosis")  %>% filter(timepoint_info != "Baseline")
 
 non_cm <- non %>%
   filter(Cohort != "Frontline",
-         !is.na(BM_base_zscore_call),
+         !is.na(BM_zscore_only_detection_rate_call),
          !is.na(MRD_truth)) %>%
-  tabyl(BM_base_zscore_call, MRD_truth) %>%
+  tabyl(BM_zscore_only_detection_rate_call, MRD_truth) %>%
   # ensure integer rows 0 and 1 exist
   complete(
-    BM_base_zscore_call = c(0L, 1L), 
+    BM_zscore_only_detection_rate_call = c(0L, 1L), 
     fill = list(`0` = 0, `1` = 0)
   ) %>%
-  column_to_rownames("BM_base_zscore_call")
+  column_to_rownames("BM_zscore_only_detection_rate_call")
 
 
 # extract counts
@@ -837,7 +1033,7 @@ spec_non
 # Overall positivity non‑frontline
 non_pos <- non %>%
   pivot_longer(
-    cols      = c(BM_base_zscore_call, Flow_Binary),
+    cols      = c(BM_zscore_only_detection_rate_call, Flow_Binary),
     names_to  = "Test",
     values_to = "Result"
   ) %>%
@@ -875,31 +1071,31 @@ if (write_para) {
   r <- function(a,b,df) df %>% filter(test_a==a, test_b==b) %>% pull(conc_rate)
   
   # post‑ASCT numbers
-  X  <- g("BM_base_zscore_call","Adaptive_Binary", post_conc)
-  Y  <- n("BM_base_zscore_call","Adaptive_Binary", post_conc)
-  XX <- sprintf("%.0f", 100*r("BM_base_zscore_call","Adaptive_Binary", post_conc))
-  Xp <- g("BM_base_zscore_call","Flow_Binary", post_conc)
-  Yp <- n("BM_base_zscore_call","Flow_Binary", post_conc)
-  XXp<- sprintf("%.0f", 100*r("BM_base_zscore_call","Flow_Binary", post_conc))
+  X  <- g("BM_zscore_only_detection_rate_call","Adaptive_Binary", post_conc)
+  Y  <- n("BM_zscore_only_detection_rate_call","Adaptive_Binary", post_conc)
+  XX <- sprintf("%.0f", 100*r("BM_zscore_only_detection_rate_call","Adaptive_Binary", post_conc))
+  Xp <- g("BM_zscore_only_detection_rate_call","Flow_Binary", post_conc)
+  Yp <- n("BM_zscore_only_detection_rate_call","Flow_Binary", post_conc)
+  XXp<- sprintf("%.0f", 100*r("BM_zscore_only_detection_rate_call","Flow_Binary", post_conc))
   Z  <- g("Adaptive_Binary","Flow_Binary", post_conc)
   W  <- n("Adaptive_Binary","Flow_Binary", post_conc)
   YY <- sprintf("%.0f",100*r("Adaptive_Binary","Flow_Binary", post_conc))
   
   # discordant counts
   n_cf_pos_cl_neg <- post_conc %>%
-    filter(test_a=="BM_base_zscore_call", test_b=="Adaptive_Binary") %>%
+    filter(test_a=="BM_zscore_only_detection_rate_call", test_b=="Adaptive_Binary") %>%
     pull(a_pos_b_neg)
   m_cf_neg_cl_pos <- post_conc %>%
-    filter(test_a=="BM_base_zscore_call", test_b=="Adaptive_Binary") %>%
+    filter(test_a=="BM_zscore_only_detection_rate_call", test_b=="Adaptive_Binary") %>%
     pull(a_neg_b_pos)
   
   # maintenance
-  A  <- g("BM_base_zscore_call","Adaptive_Binary", maint_conc)
-  B  <- n("BM_base_zscore_call","Adaptive_Binary", maint_conc)
-  AA <- sprintf("%.0f",100*r("BM_base_zscore_call","Adaptive_Binary", maint_conc))
-  C  <- g("BM_base_zscore_call","Flow_Binary", maint_conc)
-  D  <- n("BM_base_zscore_call","Flow_Binary", maint_conc)
-  BB <- sprintf("%.0f",100*r("BM_base_zscore_call","Flow_Binary", maint_conc))
+  A  <- g("BM_zscore_only_detection_rate_call","Adaptive_Binary", maint_conc)
+  B  <- n("BM_zscore_only_detection_rate_call","Adaptive_Binary", maint_conc)
+  AA <- sprintf("%.0f",100*r("BM_zscore_only_detection_rate_call","Adaptive_Binary", maint_conc))
+  C  <- g("BM_zscore_only_detection_rate_call","Flow_Binary", maint_conc)
+  D  <- n("BM_zscore_only_detection_rate_call","Flow_Binary", maint_conc)
+  BB <- sprintf("%.0f",100*r("BM_zscore_only_detection_rate_call","Flow_Binary", maint_conc))
   
   p <- ppv_post$PPV; q <- ppv_post$NPV
   p2<- ppv_maint$PPV; q2<- ppv_maint$NPV
@@ -910,7 +1106,7 @@ if (write_para) {
     Of the discordant post-ASCT samples, cfWGS was positive/ clonoSEQ negative in {n_cf_pos_cl_neg} cases and negative/ clonoSEQ positive in {m_cf_neg_cl_pos}. 
     At the 1-year maintenance timepoint, cfWGS agreed with clonoSEQ in {A}/{B} ({AA}%) samples and with MFC in {C}/{D} ({BB}%). 
     The PPV and NPV of cfWGS were {sprintf('%.0f',p*100)}% and {sprintf('%.0f',q*100)}% at post-ASCT, and {sprintf('%.0f',p2*100)}% and {sprintf('%.0f',q2*100)}% at maintenance. 
-    In the non-frontline cohort, sensitivity and specificity of cfWGS were {sprintf('%.0f',stats_out$nonfront_sens*100)}% and {sprintf('%.0f',stats_out$nonfront_spec*100)}%, with an overall positivity rate of {stats_out$nonfront_pos %>% filter(Test=='BM_base_zscore_call') %>% summarise(sprintf('%.0f%%', 100*pos/tot)) %>% pull()}.
+    In the non-frontline cohort, sensitivity and specificity of cfWGS were {sprintf('%.0f',stats_out$nonfront_sens*100)}% and {sprintf('%.0f',stats_out$nonfront_spec*100)}%, with an overall positivity rate of {stats_out$nonfront_pos %>% filter(Test=='BM_zscore_only_detection_rate_call') %>% summarise(sprintf('%.0f%%', 100*pos/tot)) %>% pull()}.
   ")
   
   cat(para)
@@ -919,7 +1115,7 @@ if (write_para) {
 
 ### Get PPV and NPV seperately across technologies rather than on MRD truth
 # 1.  General PPV/NPV helper that takes any truth column  -------------------
-ppv_npv_any <- function(df, pred_col = "BM_base_zscore_call", truth_col) {
+ppv_npv_any <- function(df, pred_col = "BM_zscore_only_detection_rate_call", truth_col) {
   tbl <- table(
     Pred  = df[[pred_col]],
     Truth = df[[truth_col]],
@@ -951,14 +1147,14 @@ pa <- dat %>%
 # 3.  Compute PPV/NPV vs. clonoSEQ  --------------------------------------
 ppv_clono <- ppv_npv_any(
   df        = pa %>% filter(!is.na(Adaptive_Binary)),
-  pred_col  = "BM_base_zscore_call",
+  pred_col  = "BM_zscore_only_detection_rate_call",
   truth_col = "Adaptive_Binary"
 )
 
 # 4.  Compute PPV/NPV vs. MFC  ------------------------------------------
 ppv_mfc <- ppv_npv_any(
   df        = pa %>% filter(!is.na(Flow_Binary)),
-  pred_col  = "BM_base_zscore_call",
+  pred_col  = "BM_zscore_only_detection_rate_call",
   truth_col = "Flow_Binary"
 )
 
@@ -971,12 +1167,12 @@ pa <- dat %>%
   filter(Cohort == "Frontline", landmark == "Maintenance")
 ppv_clono <- ppv_npv_any(
   df        = pa %>% filter(!is.na(Adaptive_Binary)),
-  pred_col  = "BM_base_zscore_call",
+  pred_col  = "BM_zscore_only_detection_rate_call",
   truth_col = "Adaptive_Binary"
 )
 ppv_mfc <- ppv_npv_any(
   df        = pa %>% filter(!is.na(Flow_Binary)),
-  pred_col  = "BM_base_zscore_call",
+  pred_col  = "BM_zscore_only_detection_rate_call",
   truth_col = "Flow_Binary"
 )
 
@@ -988,11 +1184,43 @@ pa <- dat %>%
 
 ppv_mfc <- ppv_npv_any(
   df        = pa %>% filter(!is.na(Flow_Binary)),
-  pred_col  = "BM_base_zscore_call",
+  pred_col  = "BM_zscore_only_detection_rate_call",
   truth_col = "Flow_Binary"
 )
 
 bind_rows(ppv_mfc)
+
+
+### Make big paragraph
+# ---- compact wrappers to fetch %PPV/%NPV for a timepoint vs a given truth assay ----
+get_ppvnpv <- function(df, landmark_value, truth_col) {
+  tmp <- df %>%
+    filter(Cohort == "Frontline", landmark == landmark_value, !is.na(.data[[truth_col]]))
+  if (nrow(tmp) == 0) return(c(PPV = NA_real_, NPV = NA_real_))
+  out <- ppv_npv_any(tmp, pred_col = "BM_zscore_only_detection_rate_call", truth_col = truth_col)
+  c(PPV = out$PPV, NPV = out$NPV)
+}
+
+fmt_pct0 <- function(x) ifelse(is.na(x), "NA", sprintf("%.0f%%", 100*x))
+
+# ---- pull numbers ----
+# Post-ASCT
+ppvnpv_post_seq <- get_ppvnpv(dat, "Post_ASCT", "Adaptive_Binary")  # clonoSEQ
+ppvnpv_post_mfc <- get_ppvnpv(dat, "Post_ASCT", "Flow_Binary")      # MFC
+
+# Maintenance-1yr
+ppvnpv_maint_seq <- get_ppvnpv(dat, "Maintenance", "Adaptive_Binary")
+ppvnpv_maint_mfc <- get_ppvnpv(dat, "Maintenance", "Flow_Binary")
+
+para2 <- glue("
+To further assess assay performance, we examined concordance between cfWGS and clinical MRD tests at each time point. 
+At post-ASCT, cfWGS demonstrated high concordance with both clinical assays, agreeing with clonoSEQ in {X}/{Y} ({XX}%) samples (PPV = {fmt_pct0(ppvnpv_post_seq['PPV'])}, NPV = {fmt_pct0(ppvnpv_post_seq['NPV'])}) 
+and with MFC in {Xp}/{Yp} ({XXp}%) samples (PPV = {fmt_pct0(ppvnpv_post_mfc['PPV'])}, NPV = {fmt_pct0(ppvnpv_post_mfc['NPV'])}). 
+At the 1-year maintenance timepoint, cfWGS agreed with clonoSEQ in {A}/{B} ({AA}%) samples (PPV = {fmt_pct0(ppvnpv_maint_seq['PPV'])}, NPV = {fmt_pct0(ppvnpv_maint_seq['NPV'])}) 
+and with MFC in {C}/{D} ({BB}%) samples (PPV = {fmt_pct0(ppvnpv_maint_mfc['PPV'])}, NPV = {fmt_pct0(ppvnpv_maint_mfc['NPV'])}).
+")
+
+cat(para2)
 
 
 ## Export 
@@ -1014,13 +1242,13 @@ readr::write_csv(
   file.path(outdir, "Frontline_BoneMarrow_Positivity_PostASCT_and_Maintenance2.csv")
 )
 
-# 4. Export PPV/NPV at Post-ASCT for BM_base_zscore_call
+# 4. Export PPV/NPV at Post-ASCT for BM_zscore_only_detection_rate_call
 readr::write_csv(
   ppv_post,
   file.path(outdir, "Frontline_BoneMarrow_PostASCT_PPV_NPV2.csv")
 )
 
-# 5. Export PPV/NPV at Maintenance for BM_base_zscore_call
+# 5. Export PPV/NPV at Maintenance for BM_zscore_only_detection_rate_call
 readr::write_csv(
   ppv_maint,
   file.path(outdir, "Frontline_BoneMarrow_Maintenance_PPV_NPV2.csv")
@@ -1032,7 +1260,7 @@ readr::write_csv(
 #### Now make contingency table 
 # helper: build a tidy 2 × 2 contingency table ----------------------------
 make_ct <- function(df,
-                    pred  = "BM_base_zscore_call",   # cfWGS
+                    pred  = "BM_zscore_only_detection_rate_call",   # cfWGS
                     truth = "MRD_truth") {                          # reference
   out <- df %>%
     select(all_of(c(pred, truth))) %>%
@@ -1081,7 +1309,7 @@ writexl::write_xlsx(
     "Contingency_Maintenance"   = ct_maint,
     "Contingency_NonFrontline"  = ct_nonfront
   ),
-  path = file.path(outdir, "cfWGS_vs_MRD_truth_contingency_tables2.xlsx")
+  path = file.path(outdir, "cfWGS_vs_MRD_truth_contingency_tables3.xlsx")
 )
 
 ### Now do to MFC and clonoSEQ seperately 
@@ -1106,7 +1334,7 @@ writexl::write_xlsx(
     "Maintenance_vs_clonoSEQ"  = ct_maint_Clono,
     "NonFront_vs_Flow"         = ct_non_Flow
   ),
-  path = file.path(outdir, "cfWGS_contingency_vs_Flow_clonoSEQ2.xlsx")
+  path = file.path(outdir, "cfWGS_contingency_vs_Flow_clonoSEQ3.xlsx")
 )
 
 
@@ -1184,11 +1412,11 @@ p_post   <- plot_cm(cm_post ,  "Confusion Matrix at Post-ASCT (Training Cohort)"
 p_maint  <- plot_cm(cm_maint,  "Confusion Matrix at 1‑Year Maintenance (Training Cohort)")
 p_non    <- plot_cm(cm_non ,   "Confusion Matrix of Test Cohort")
 
-ggsave("Final Tables and Figures/Fig4_confmat_post_ASCT_updated2.png",
+ggsave("Final Tables and Figures/Fig4_confmat_post_ASCT_updated3.png",
        p_post,  width = 5, height = 2.75, dpi = 600)
-ggsave("Final Tables and Figures/Fig4_confmat_maintenance2.png",
+ggsave("Final Tables and Figures/Fig4_confmat_maintenance3.png",
        p_maint, width = 5, height = 2.75, dpi = 600)
-ggsave("Final Tables and Figures/Fig4_confmat_nonfront2.png",
+ggsave("Final Tables and Figures/Fig4_confmat_nonfront3.png",
        p_non,   width = 3, height = 2.75, dpi = 600)   # single facet – narrower
 
 ## As one 
@@ -1227,7 +1455,7 @@ combined_cm <- (p_post  +
 
 
 # save
-ggsave("Final Tables and Figures/Fig4J_confusion_matrices_all_three_2.png",
+ggsave("Final Tables and Figures/Fig4J_confusion_matrices_all_three_3.png",
        combined_cm,
        width  = 4,
        height = 7,      # three panels tall
@@ -1263,7 +1491,7 @@ combined_cm <- (p_post +
 
 
 # save
-ggsave("Final Tables and Figures/Fig4J_confusion_matrices_all_three_side_by_side2.png",
+ggsave("Final Tables and Figures/Fig4J_confusion_matrices_all_three_side_by_side3.png",
        combined_cm,
        width  = 15,
        height = 3,      # three panels tall
@@ -1276,7 +1504,8 @@ ggsave("Final Tables and Figures/Fig4J_confusion_matrices_all_three_side_by_side
 
 ### Now do for the blood samples 
 front_blood <- dat %>% filter(Cohort == "Frontline", !is.na(landmark)) %>% filter(!is.na(Blood_zscore_only_sites_call))
-non_blood <- dat %>% filter(Cohort == "Non-frontline") %>% filter(!is.na(Blood_zscore_only_sites_call))
+non_blood <- dat %>% filter(Cohort == "Non-frontline") %>% filter(!is.na(Blood_zscore_only_sites_call)) %>% filter(!timepoint_info %in% c("Diagnosis", "Baseline"))
+
 
 make_ct <- function(df,
                     pred  = "Blood_zscore_only_sites_call",   # cfWGS
@@ -1357,7 +1586,7 @@ writexl::write_xlsx(
     "Maintenance_vs_clonoSEQ"  = ct_maint_Clono,
     "NonFront_vs_Flow"         = ct_non_Flow
   ),
-  path = file.path(outdir, "cfWGS_contingency_vs_Flow_clonoSEQ_blood_calls_2.xlsx") ### these are the metrics
+  path = file.path(outdir, "cfWGS_contingency_vs_Flow_clonoSEQ_blood_calls_3.xlsx") ### these are the metrics
 )
 
 
@@ -1460,11 +1689,11 @@ p_post   <- plot_cm(cm_post ,  "Confusion Matrix at Post-ASCT (Training Cohort)"
 p_maint  <- plot_cm(cm_maint,  "Confusion Matrix at 1‑Year Maintenance (Training Cohort)")
 p_non    <- plot_cm(cm_non ,   "Confusion Matrix of Test Cohort")
 
-ggsave("Final Tables and Figures/Fig5_confmat_post_ASCT_blood_updated3.png",
+ggsave("Final Tables and Figures/Fig5_confmat_post_ASCT_blood_updated4.png",
        p_post,  width = 5, height = 2.75, dpi = 600)
-ggsave("Final Tables and Figures/Fig5_confmat_maintenance_blood_updated3.png",
+ggsave("Final Tables and Figures/Fig5_confmat_maintenance_blood_updated4.png",
        p_maint, width = 5, height = 2.75, dpi = 600)
-ggsave("Final Tables and Figures/Fig5_confmat_nonfront_blood_updated3.png",
+ggsave("Final Tables and Figures/Fig5_confmat_nonfront_blood_updated4.png",
        p_non,   width = 3, height = 2.75, dpi = 600)   # single facet – narrower
 
 ## As one 
@@ -1508,6 +1737,340 @@ ggsave("Final Tables and Figures/Fig5J_confusion_matrices_all_three_blood.png",
        width  = 4,
        height = 7,      # three panels tall
        dpi    = 600)
+
+
+
+### Redo blood with the fragment combined model 
+
+### Now do for the blood samples 
+front_blood <- dat %>% filter(Cohort == "Frontline", !is.na(landmark)) %>% filter(!is.na(Blood_plus_fragment_call))
+non_blood <- dat %>% filter(Cohort == "Non-frontline") %>% filter(!is.na(Blood_plus_fragment_call)) %>% filter(!timepoint_info %in% c("Diagnosis", "Baseline"))
+
+
+make_ct <- function(df,
+                    pred  = "Blood_plus_fragment_call",   # cfWGS
+                    truth = "MRD_truth") {                          # reference
+  out <- df %>%
+    select(all_of(c(pred, truth))) %>%
+    drop_na() %>%                                   # keep only paired calls
+    mutate(across(everything(), as.integer)) %>%    # ensure 0/1 integers
+    count(!!sym(pred), !!sym(truth), name = "n") %>%
+    complete(!!sym(pred) := 0:1,
+             !!sym(truth):= 0:1,
+             fill = list(n = 0)) %>%                # add missing cells
+    mutate(row = ifelse(!!sym(pred)==1, "Pred_Pos", "Pred_Neg"),
+           col = ifelse(!!sym(truth)==1,"Truth_Pos","Truth_Neg")) %>%
+    select(row, col, n)
+  
+  # add summary columns
+  tp <- out %>% filter(row=="Pred_Pos",  col=="Truth_Pos")  %>% pull(n)
+  fp <- out %>% filter(row=="Pred_Pos",  col=="Truth_Neg")  %>% pull(n)
+  fn <- out %>% filter(row=="Pred_Neg",  col=="Truth_Pos")  %>% pull(n)
+  tn <- out %>% filter(row=="Pred_Neg",  col=="Truth_Neg")  %>% pull(n)
+  
+  N      <- tp + fp + fn + tn
+  Agree  <- tp + tn
+  tibble(
+    TP = tp, FP = fp, FN = fn, TN = tn,
+    N = N, Agree = Agree,
+    Concordance = Agree / N,
+    Sensitivity = tp/(tp+fn),
+    Specificity = tn/(tn+fp),
+    PPV = tp/(tp+fp),
+    NPV = tn/(tn+fn)
+  )
+}
+
+# 1.  FRONTLINE – post-ASCT -----------------------------------------------
+ct_post_ASCT <- front_blood %>%
+  filter(landmark == "Post_ASCT") %>%
+  make_ct()
+
+# 2.  FRONTLINE – 1-year maintenance --------------------------------------
+ct_maint <- front_blood %>%
+  filter(landmark == "Maintenance") %>%
+  make_ct()
+
+# 3.  NON-FRONTLINE – all baseline / follow-up samples --------------------
+ct_nonfront <- non_blood %>% make_ct()
+
+# 4.  Export  ----------------------------------------------------
+writexl::write_xlsx(
+  list(
+    "Contingency_Post_ASCT"     = ct_post_ASCT,
+    "Contingency_Maintenance"   = ct_maint,
+    "Contingency_NonFrontline"  = ct_nonfront
+  ),
+  path = file.path(outdir, "cfWGS_vs_MRD_truth_contingency_tables_blood2_fragment_combined.xlsx")
+)
+
+### Now do to MFC and clonoSEQ seperately 
+# build the six tables -----------------------------------------------------
+ct_post_Flow   <- front_blood  %>% filter(landmark=="Post_ASCT") %>% 
+  make_ct(truth = "Flow_Binary")
+ct_post_Clono  <- front_blood  %>% filter(landmark=="Post_ASCT") %>% 
+  make_ct(truth = "Adaptive_Binary")
+
+ct_maint_Flow  <- front_blood  %>% filter(landmark=="Maintenance") %>% 
+  make_ct(truth = "Flow_Binary")
+ct_maint_Clono <- front_blood  %>% filter(landmark=="Maintenance") %>% 
+  make_ct(truth = "Adaptive_Binary")
+
+ct_non_Flow    <- non_blood %>% make_ct(truth = "Flow_Binary")
+
+writexl::write_xlsx(
+  list(
+    "Post_ASCT_vs_Flow"        = ct_post_Flow,
+    "Post_ASCT_vs_clonoSEQ"    = ct_post_Clono,
+    "Maintenance_vs_Flow"      = ct_maint_Flow,
+    "Maintenance_vs_clonoSEQ"  = ct_maint_Clono,
+    "NonFront_vs_Flow"         = ct_non_Flow
+  ),
+  path = file.path(outdir, "cfWGS_contingency_vs_Flow_clonoSEQ_blood_calls_3_fragment_combined_model.xlsx") ### these are the metrics
+)
+
+
+# format the sentence you quoted (rounded like your example)
+fmt_pct <- function(x) sprintf("%.0f%%", 100*x)
+
+post_sentence <- glue(
+  "At post-ASCT, confirmatory cfDNA-based MRD demonstrated strong concordance with clonoSEQ ",
+  "({ct_post_Clono$Agree}/{ct_post_Clono$N}, {fmt_pct(ct_post_Clono$Concordance)}; ",
+  "PPV {fmt_pct(ct_post_Clono$PPV)}, NPV {fmt_pct(ct_post_Clono$NPV)}) ",
+  "and moderate concordance with MFC ",
+  "({ct_post_Flow$Agree}/{ct_post_Flow$N}, {fmt_pct(ct_post_Flow$Concordance)}; ",
+  "PPV {fmt_pct(ct_post_Flow$PPV)}, NPV {fmt_pct(ct_post_Flow$NPV)})."
+)
+
+post_sentence
+
+maint_sentence <- glue(
+  "At maintenance, confirmatory cfDNA-based MRD demonstrated strong concordance with clonoSEQ ",
+  "({ct_maint_Clono$Agree}/{ct_maint_Clono$N}, {fmt_pct(ct_maint_Clono$Concordance)}; ",
+  "PPV {fmt_pct(ct_maint_Clono$PPV)}, NPV {fmt_pct(ct_maint_Clono$NPV)}) ",
+  "and moderate concordance with MFC ",
+  "({ct_maint_Flow$Agree}/{ct_maint_Flow$N}, {fmt_pct(ct_maint_Flow$Concordance)}; ",
+  "PPV {fmt_pct(ct_maint_Flow$PPV)}, NPV {fmt_pct(ct_maint_Flow$NPV)})."
+)
+
+maint_sentence
+
+
+
+
+
+### Just make for everything - PPV/NPV to clinical
+## ── Config ─────────────────────────────────────────────────────────────
+TP_FRONTLINE <- c("Post_ASCT", "Maintenance")
+COMPARATORS  <- c(MFC = "Flow_Binary", clonoSEQ = "Adaptive_Binary")
+pct0 <- function(x) ifelse(is.na(x), NA_character_, sprintf("%.0f%%", 100*x))
+pretty_pred <- function(col) {
+  if (col %in% names(techs)) {
+    techs[[col]]
+  } else {
+    col
+  }
+}
+
+# your mapping vector
+techs <- c(
+  BM_zscore_only_sites_call            = "BM Sites Z-score",
+  BM_zscore_only_detection_rate_call   = "BM cVAF Z-score",
+  BM_rate_only_call                    = "BM cVAF",
+  BM_base_call                         = "BM All Mut Features",
+  BM_base_zscore_call                  = "BM Sites + cVAF Z-score",
+  BM_plus_fragment_call                = "BM + Fragmentomics",
+  BM_plus_fragment_min_call            = "BM + Fragments (min)",
+  BM_base_zscore_screen_call           = "BM Sites + cVAF Z-score (screening)",
+  
+  Blood_zscore_only_sites_call         = "Blood Sites Z-score",
+  Blood_zscore_only_detection_rate_call= "Blood cVAF Z-score",
+  Blood_rate_only_call                 = "Blood cVAF",
+  Blood_base_call                      = "Blood All Mut Features",
+  Blood_base_zscore_call               = "Blood Sites + cVAF Z-score",
+  Blood_plus_fragment_call             = "Blood + Fragmentomics",
+  Blood_plus_fragment_min_call         = "Blood + Fragments (min)",
+  
+  Fragmentomics_full_call              = "Fragmentomics: FS + MeanCov + TF + PropShort",
+  Fragmentomics_min_call               = "Fragmentomics: FS + MeanCov",
+  Fragmentomics_FS_only_call           = "Fragmentomics: Fragment Size only",
+  Fragmentomics_mean_coverage_only_call= "Fragmentomics: Mean coverage only",
+  Fragmentomics_prop_short_only_call   = "Fragmentomics: Prop. short fragments only",
+  Fragmentomics_tumor_fraction_only_call = "Fragmentomics: Tumor fraction only"
+)
+
+
+## ── Core contingency (one row) ─────────────────────────────────────────
+compute_ct <- function(df, pred_col, truth_col) {
+  if (!all(c(pred_col, truth_col) %in% names(df))) return(NULL)
+  dd <- df %>% select(all_of(c(pred_col, truth_col))) %>% drop_na() %>% mutate(across(everything(), as.integer))
+  if (nrow(dd) == 0) return(NULL)
+  
+  tbl <- as.data.frame(table(Pred = dd[[pred_col]], Truth = dd[[truth_col]]))
+  tbl <- complete(tbl,
+                  Pred  = factor(c(0,1), levels = c(0,1)),
+                  Truth = factor(c(0,1), levels = c(0,1)),
+                  fill  = list(Freq = 0)) %>% arrange(Pred, Truth)
+  
+  tp <- tbl$Freq[tbl$Pred == 1 & tbl$Truth == 1]
+  fp <- tbl$Freq[tbl$Pred == 1 & tbl$Truth == 0]
+  fn <- tbl$Freq[tbl$Pred == 0 & tbl$Truth == 1]
+  tn <- tbl$Freq[tbl$Pred == 0 & tbl$Truth == 0]
+  
+  N <- tp + fp + fn + tn; Agree <- tp + tn
+  tibble(
+    N = N, Agree = Agree,
+    Concordance = ifelse(N > 0, Agree/N, NA_real_),
+    TP = tp, FP = fp, FN = fn, TN = tn,
+    Sensitivity = ifelse((tp + fn) > 0, tp/(tp+fn), NA_real_),
+    Specificity = ifelse((tn + fp) > 0, tn/(tn+fp), NA_real_),
+    PPV = ifelse((tp + fp) > 0, tp/(tp+fp), NA_real_),
+    NPV = ifelse((tn + fn) > 0, tn/(tn+fn), NA_real_)
+  )
+}
+
+## ── Build metrics for ALL *_call columns ───────────────────────────────
+build_metrics_frontline_vs_nonfront <- function(dat, pred_regex = "_call$") {
+  
+  pred_cols <- names(dat)[grepl(pred_regex, names(dat))]
+  if (length(pred_cols) == 0) stop("No *_call columns found.")
+  
+  out <- list()
+  
+  ## A) FRONTLINE: split by timepoint
+  df_fl <- dat %>% filter(Cohort == "Frontline")
+  for (tp in TP_FRONTLINE) {
+    df_tp <- df_fl %>% filter(landmark == tp)
+    if (nrow(df_tp) == 0) next
+    
+    for (pred in pred_cols) {
+      base_df <- df_tp %>% filter(!is.na(.data[[pred]]))
+      if (nrow(base_df) == 0) next
+      
+      for (cmp_name in names(COMPARATORS)) {
+        truth_col <- COMPARATORS[[cmp_name]]
+        df_pair   <- base_df %>% filter(!is.na(.data[[truth_col]]))
+        if (nrow(df_pair) == 0) next
+        
+        ct <- compute_ct(df_pair, pred_col = pred, truth_col = truth_col)
+        if (is.null(ct)) next
+        
+        out[[length(out) + 1]] <-
+          ct %>%
+          mutate(
+            Cohort      = "Frontline",
+            Timepoint   = tp,
+            Pred_Column = pred,
+            Pred_Label  = pretty_pred(pred),
+            Comparator  = cmp_name,
+            Agree_str   = sprintf("%d/%d", Agree, N),
+            Conc_pct    = pct0(Concordance),
+            PPV_pct     = pct0(PPV),
+            NPV_pct     = pct0(NPV)
+          ) %>%
+          select(Cohort, Timepoint, Pred_Column, Pred_Label, Comparator,
+                 Agree_str, Conc_pct, PPV_pct, NPV_pct,
+                 N, Agree, TP, FP, FN, TN, Concordance, PPV, NPV, Sensitivity, Specificity)
+      }
+    }
+  }
+  
+  ## B) NON-FRONTLINE: aggregate across timepoints (exclude Dx/Baseline)
+  df_nf <- dat %>%
+    filter(Cohort == "Non-frontline",
+           !timepoint_info %in% c("Diagnosis","Baseline"))
+  
+  if (nrow(df_nf) > 0) {
+    for (pred in pred_cols) {
+      base_df <- df_nf %>% filter(!is.na(.data[[pred]]))
+      if (nrow(base_df) == 0) next
+      
+      for (cmp_name in names(COMPARATORS)) {
+        truth_col <- COMPARATORS[[cmp_name]]
+        df_pair   <- base_df %>% filter(!is.na(.data[[truth_col]]))
+        if (nrow(df_pair) == 0) next
+        
+        ct <- compute_ct(df_pair, pred_col = pred, truth_col = truth_col)
+        if (is.null(ct)) next
+        
+        out[[length(out) + 1]] <-
+          ct %>%
+          mutate(
+            Cohort      = "Non-frontline",
+            Timepoint   = "All (excl. Dx/Baseline)",
+            Pred_Column = pred,
+            Pred_Label  = pretty_pred(pred),
+            Comparator  = cmp_name,
+            Agree_str   = sprintf("%d/%d", Agree, N),
+            Conc_pct    = pct0(Concordance),
+            PPV_pct     = pct0(PPV),
+            NPV_pct     = pct0(NPV)
+          ) %>%
+          select(Cohort, Timepoint, Pred_Column, Pred_Label, Comparator,
+                 Agree_str, Conc_pct, PPV_pct, NPV_pct,
+                 N, Agree, TP, FP, FN, TN, Concordance, PPV, NPV, Sensitivity, Specificity)
+      }
+    }
+  }
+  
+  if (length(out) == 0) return(tibble())
+  bind_rows(out) %>% arrange(Cohort, Timepoint, Pred_Label, Comparator)
+}
+
+## ── Sentence helper (handles both cohorts) ─────────────────────────────
+row_to_sentence <- function(row) {
+  tp_phrase <- if (row$Cohort == "Frontline") {
+    if (row$Timepoint == "Maintenance") "At maintenance"
+    else if (row$Timepoint == "Post_ASCT") "At post-ASCT"
+    else glue("At {row$Timepoint}")
+  } else {
+    "Overall in the non-frontline cohort"
+  }
+  glue(
+    "{tp_phrase}, {row$Pred_Label} showed concordance with {row$Comparator} ",
+    "({row$Agree_str}, {row$Conc_pct}; PPV {row$PPV_pct}, NPV {row$NPV_pct})."
+  )
+}
+
+## ── Run ─────────────────────────────────────────────────────────────────
+metrics_tbl <- build_metrics_frontline_vs_nonfront(dat)
+
+metrics_tbl <- metrics_tbl %>%
+  mutate(Cohort = recode(Cohort,
+                         "Frontline" = "Train",
+                         "Non-frontline" = "Test"))
+
+# Example: sentences for Frontline–Maintenance
+# maint_sents <- metrics_tbl %>%
+#   filter(Cohort == "Frontline", Timepoint == "Maintenance") %>%
+#   rowwise() %>% mutate(sentence = row_to_sentence(cur_data())) %>%
+#   ungroup() %>% select(Cohort, Timepoint, Pred_Label, Comparator, sentence)
+
+# Example: sentences for Non-frontline (aggregated)
+# nf_sents <- metrics_tbl %>%
+#   filter(Cohort == "Non-frontline") %>%
+#   rowwise() %>% mutate(sentence = row_to_sentence(cur_data())) %>%
+#   ungroup() %>% select(Cohort, Timepoint, Pred_Label, Comparator, sentence)
+
+# Export
+writexl::write_xlsx(list("All_Call_Metrics" = metrics_tbl),
+                    path = file.path(outdir, "Supplementary_Table_9_All_call_metrics_against_clinical_metrics.xlsx"))
+
+
+# Example: filter to the Combined Model column if it’s named "Blood_plus_fragment_call"
+# metrics_tbl %>% filter(Pred_Column == "Blood_plus_fragment_call")
+
+# Example: export the full table
+# writexl::write_xlsx(list("All_Call_Metrics" = metrics_tbl),
+#   path = file.path(outdir, "All_call_metrics_by_cohort_timepoint.xlsx"))
+
+# Example: make sentences for all rows at Maintenance for Frontline
+# maint_sentences <- metrics_tbl %>%
+#   filter(Cohort == "Frontline", Timepoint == "Maintenance") %>%
+#   rowwise() %>%
+#   mutate(sentence = row_to_sentence(cur_data())) %>%
+#   ungroup() %>%
+#   select(Cohort, Timepoint, Pred_Label, Comparator, sentence)
 
 
 
@@ -1619,11 +2182,11 @@ readr::write_csv(
 
 #### Now report on 
 # Columns you definitely need for inspection
-id_cols   <- c("Patient", "Sample_Code", "Timepoint", "timepoint_info")
+id_cols   <- c("Patient", "Date", "Sample_Code", "Timepoint", "timepoint_info")
 
 # Columns that explain why calls differ
 aux_cols  <- c("Adaptive_Frequency",              # clonoSEQ cumulative VAF (rename to your actual column name)
-               "Flow_pct_cells", grep("^BM.*(_prop|_call)$", names(dat), value = TRUE),
+               "Flow_pct_cells", grep("^BM.*(_prob|_call)$", names(dat), value = TRUE),
                "FS", "Mean.Coverage", "detect_rate_BM", "zscore_BM", 
                "WGS_Tumor_Fraction_Blood_plasma_cfDNA",
                "BM_MutCount_Baseline", "Blood_MutCount_Baseline", "FS_outlier", "Mean.Coverage_outlier")
@@ -1639,7 +2202,7 @@ if (length(missing)) warning("These columns are missing: ", paste(missing, colla
 # 2.  Build one combined table ---------------------------------------------
 combined_discord_tbl <- dat %>%
   filter(
-    !is.na(BM_base_zscore_call),
+    !is.na(BM_zscore_only_detection_rate_call),
     !is.na(landmark),                             # only landmark timepoints
     (!is.na(Adaptive_Binary) | !is.na(Flow_Binary))
   ) %>%
@@ -1658,9 +2221,9 @@ combined_discord_tbl <- dat %>%
     ),
     # Define discordance/concordance category
     category = case_when(
-      BM_base_zscore_call == 1L & Reference == 0L ~
+      BM_zscore_only_detection_rate_call == 1L & Reference == 0L ~
         paste0("cfWGS_pos / ", Comparator, "_neg"),
-      BM_base_zscore_call == 0L & Reference == 1L ~
+      BM_zscore_only_detection_rate_call == 0L & Reference == 1L ~
         paste0("cfWGS_neg / ", Comparator, "_pos"),
       TRUE ~ "concordant"
     )
@@ -1682,7 +2245,7 @@ combined_discord_tbl_slim <- combined_discord_tbl %>% filter(category != "concor
 # 3.  (Optional) write out to CSV ------------------------------------------
 write.csv(
   combined_discord_tbl,
-  file.path(outdir, "Supplementary_Table_combined_discordance_table_BM.csv"),
+  file.path(outdir, "Supplementary_Table_combined_discordance_table_BM2.csv"),
   row.names = FALSE
 )
 
@@ -1691,7 +2254,7 @@ write.csv(
 ### Do for non-frontline now at all timepoints
 combined_discord_tbl_non_frontline <- dat %>%
   filter(
-    !is.na(BM_base_zscore_call),
+    !is.na(BM_zscore_only_detection_rate_call),
     (!is.na(Adaptive_Binary) | !is.na(Flow_Binary))
   ) %>%
   filter(Cohort == "Non-frontline") %>%
@@ -1710,9 +2273,9 @@ combined_discord_tbl_non_frontline <- dat %>%
     ),
     # Define discordance/concordance category
     category = case_when(
-      BM_base_zscore_call == 1L & Reference == 0L ~
+      BM_zscore_only_detection_rate_call == 1L & Reference == 0L ~
         paste0("cfWGS_pos / ", Comparator, "_neg"),
-      BM_base_zscore_call == 0L & Reference == 1L ~
+      BM_zscore_only_detection_rate_call == 0L & Reference == 1L ~
         paste0("cfWGS_neg / ", Comparator, "_pos"),
       TRUE ~ "concordant"
     )
@@ -1732,7 +2295,7 @@ combined_discord_tbl_non_frontline <- dat %>%
 ## Export 
 write.csv(
   combined_discord_tbl_non_frontline,
-  file.path(outdir, "Supplementary_Table_combined_discordance_table_BM_non_frontline.csv"),
+  file.path(outdir, "Supplementary_Table_combined_discordance_table_BM_non_frontline2.csv"),
   row.names = FALSE
 )
 
@@ -1820,10 +2383,9 @@ print(by_comp)
 
 ### Show discordance of blood-derived muts 
 ### Now do one big table with everything discordant
-
 aux_cols  <- c("Adaptive_Frequency",              # clonoSEQ cumulative VAF (rename to your actual column name)
                "Flow_pct_cells",                     # MFC % cells; rename if needed
-               "FS", "Mean.Coverage",  grep("^Blood.*(_prop|_call)$", names(dat), value = TRUE),
+               "FS", "Mean.Coverage",  grep("^Blood.*(_prob|_call)$", names(dat), value = TRUE),
                "WGS_Tumor_Fraction_Blood_plasma_cfDNA",
                "BM_MutCount_Baseline", "Blood_MutCount_Baseline", "FS_outlier", "Mean.Coverage_outlier")
 
@@ -1873,7 +2435,7 @@ combined_discord_tbl_slim <- combined_discord_tbl2 %>% filter(category != "conco
 # 3.  (Optional) write out to CSV ------------------------------------------
 write.csv(
   combined_discord_tbl2,
-  file.path(outdir, "Supplementary_Table_combined_discordance_table_Blood.csv"),
+  file.path(outdir, "Supplementary_Table_combined_discordance_table_Blood2.csv"),
   row.names = FALSE
 )
 
@@ -1901,9 +2463,9 @@ combined_discord_tbl_non_frontline2 <- dat %>%
     ),
     # Define discordance/concordance category
     category = case_when(
-      BM_base_zscore_call == 1L & Reference == 0L ~
+      Blood_zscore_only_sites_call == 1L & Reference == 0L ~
         paste0("cfWGS_pos / ", Comparator, "_neg"),
-      BM_base_zscore_call == 0L & Reference == 1L ~
+      Blood_zscore_only_sites_call == 0L & Reference == 1L ~
         paste0("cfWGS_neg / ", Comparator, "_pos"),
       TRUE ~ "concordant"
     )
@@ -1923,10 +2485,9 @@ combined_discord_tbl_non_frontline2 <- dat %>%
 ## Export 
 write.csv(
   combined_discord_tbl_non_frontline2,
-  file.path(outdir, "Supplementary_Table_combined_discordance_table_blood_non_frontline.csv"),
+  file.path(outdir, "Supplementary_Table_combined_discordance_table_blood_non_frontline2.csv"),
   row.names = FALSE
 )
-
 
 
 
@@ -1936,62 +2497,77 @@ library(openxlsx)
 # --- 0) Load ID map
 id_map <- readRDS("id_map.rds") %>% distinct(Patient, New_ID)
 
-# --- 1) Prep: rename columns + replace Patient with New_ID (if present)
-prepare_tbl <- function(df, id_map){
+Baseline_dates <- read_csv("Final Tables and Figures/Baseline dates for samples.csv")
+# Make a joinable version that uses the same Patient key as your output (New_ID if available)
+baseline_join <- Baseline_dates %>%
+  # assume columns: patient (original ID) and start (baseline date); adapt if needed
+  mutate(start = as_date(start)) %>%
+  left_join(id_map, by = c("patient" = "Patient")) %>%
+  mutate(Patient = coalesce(New_ID, patient)) %>%
+  select(Patient, start)
+
+# --- 1) Prep helper: rename, remap Patient, add days_from_dx, drop raw dates --
+prepare_tbl <- function(df, id_map, baseline_join){
   if (is.null(df)) stop("Input table is NULL.")
+  
   df %>%
-    # ensure it's a tibble first
     tibble::as_tibble() %>%
     ungroup() %>%
     rename(
       clonoSEQ_Tumor_Ig_Frequency = any_of("Adaptive_Frequency"),
       MFC_Pct_Tumor_Cells         = any_of("Flow_pct_cells")
     ) %>%
+    # Map Patient -> New_ID (like before)
     { if ("Patient" %in% names(.)) {
       left_join(., id_map, by = "Patient") %>%
         mutate(Patient = coalesce(New_ID, Patient)) %>%
         select(-any_of("New_ID"))
     } else . } %>%
-    # flatten any list-columns to strings for Excel safety
+    # Add baseline start date and compute days_from_dx when Date exists
+    left_join(baseline_join, by = "Patient") %>%
+    mutate(
+      Date = if ("Date" %in% names(.)) as_date(Date) else Date,
+      days_from_dx = if ("Date" %in% names(.))
+        as.integer(difftime(Date, start, units = "days"))
+      else NA_integer_,
+      months_from_dx = if ("Date" %in% names(.))
+        as.numeric(interval(start, Date) / months(1))
+      else NA_real_
+    ) %>%
+    relocate(any_of(c("days_from_dx","months_from_dx")), .after = "Patient") %>%
+    # flatten any list-cols for Excel safety
     mutate(across(where(is.list), ~ map_chr(., ~ paste0(as.character(.x), collapse = "; ")))) %>%
-    select(-Sample_Code) %>% # remove this column to get rid of sample code with patient iD
-    # finally, convert to plain data.frame for openxlsx
+    # remove identifiers you don’t want to export
+    select(-any_of(c("Sample_Code", "Date", "start"))) %>%
     as.data.frame(check.names = FALSE)
 }
 
-BM_Train    <- prepare_tbl(combined_discord_tbl,               id_map)
-BM_Test     <- prepare_tbl(combined_discord_tbl_non_frontline, id_map)
-Blood_Train <- prepare_tbl(combined_discord_tbl2,              id_map)
-Blood_Test  <- prepare_tbl(combined_discord_tbl_non_frontline2,id_map)
+# --- 2) Build the four tables ----------------------------------------------
+BM_Train    <- prepare_tbl(combined_discord_tbl,                id_map, baseline_join)
+BM_Test     <- prepare_tbl(combined_discord_tbl_non_frontline,  id_map, baseline_join)
+Blood_Train <- prepare_tbl(combined_discord_tbl2,               id_map, baseline_join)
+Blood_Test  <- prepare_tbl(combined_discord_tbl_non_frontline2, id_map, baseline_join)
 
-# --- 2) Writer helper: robust to empty/odd tables
+# --- 3) Write workbook ------------------------------------------------------
 add_sheet_with_style <- function(wb, sheet_name, data) {
   addWorksheet(wb, sheet_name)
-  
-  # If data has zero columns, write a placeholder to avoid openxlsx errors
   if (is.null(ncol(data)) || is.na(ncol(data)) || ncol(data) == 0) {
     writeData(wb, sheet_name, data.frame(`(empty)` = character(0)))
     return(invisible(NULL))
   }
-  
   writeData(wb, sheet_name, data, headerStyle = createStyle(textDecoration = "bold"))
-  
-  # Excel niceties only if there are columns
   addFilter(wb, sheet = sheet_name, rows = 1, cols = 1:ncol(data))
   setColWidths(wb, sheet = sheet_name, cols = 1:ncol(data), widths = "auto")
 }
 
-# --- 3) Build workbook with short sheet names
 wb <- createWorkbook()
 add_sheet_with_style(wb, "BM_Train",    BM_Train)
 add_sheet_with_style(wb, "BM_Test",     BM_Test)
 add_sheet_with_style(wb, "Blood_Train", Blood_Train)
 add_sheet_with_style(wb, "Blood_Test",  Blood_Test)
 
-# Save workbook
-saveWorkbook(wb, "Final Tables and Figures/Supplementary_Table_8_model_comparisons_to_clinical_metrics.xlsx", overwrite = TRUE)
-
-
+saveWorkbook(wb, "Final Tables and Figures/Supplementary_Table_8_model_comparisons_to_clinical_metrics3.xlsx",
+             overwrite = TRUE)
 
 
 
@@ -2015,7 +2591,7 @@ plot_df <- dat %>%
   mutate(Flow_pct_cells = Flow_pct_cells/100) %>% # to be consistent
   filter(
     Cohort == "Frontline",
-    !is.na(BM_base_zscore_prob),
+    !is.na(BM_zscore_only_detection_rate_call),
     !is.na(landmark_tp),
     !is.na(Adaptive_Frequency) | !is.na(Flow_pct_cells)
   ) %>%
@@ -2042,20 +2618,20 @@ plot_df <- dat %>%
       TRUE                     ~ NA_integer_
     ),
     
-    cfwgs_bin = BM_base_zscore_call,
+    cfwgs_bin = BM_zscore_only_detection_rate_call,
     concord   = (cfwgs_bin == ref_binary),
-    detected  = if_else(BM_base_zscore_call == 1,
+    detected  = if_else(BM_zscore_only_detection_rate_call == 1,
                         "detected", "not detected")
   ) %>%
   ungroup() %>%
   mutate(
     x_plot   = if_else(x_val <= 1e-6, 1e-6, x_val),
-    y_plot   = if_else(BM_base_zscore_prob <= 1e-5, 1e-5, BM_base_zscore_prob),
+    y_plot   = if_else(BM_zscore_only_detection_rate_prob <= 1e-5, 1e-5, BM_zscore_only_detection_rate_prob),
     category = if_else(concord, "concordant", "discordant")
   ) %>% 
   select(
     Patient, Sample_Code, landmark_tp, Comparator, x_val, x_plot,
-    BM_base_zscore_prob, y_plot,
+    BM_zscore_only_detection_rate_call, y_plot,
     ref_binary, cfwgs_bin, concord, detected, category,
     Num_days_to_closest_relapse, Flow_Binary, Adaptive_Binary
   )
@@ -2082,18 +2658,24 @@ plot_df2 <- plot_df %>%
 # ------------------------------------------------------------
 # 1.  Tidy / recode (same as you already have)
 # ------------------------------------------------------------
-plot_df2 <- plot_df2 %>%                       # << only this line changes
+hyphen_rx <- "[\u2010\u2011\u2012\u2013\u2014\u2212]"  # all the usual dash culprits
+
+plot_df2 <- plot_df2 %>%
   mutate(
-    landmark_timepoint = factor(landmark_tp,
-                                levels = c("Post‑ASCT", "Maintenance‑1yr")),
+    # normalize dashes and whitespace
+    landmark_tp = str_replace_all(landmark_tp, hyphen_rx, "-") |> trimws(),
+    
+    # now factor with ASCII hyphens
+    landmark_timepoint = factor(
+      landmark_tp,
+      levels = c("Post-ASCT", "Maintenance-1yr")
+    ),
+    
     detect_cat = factor(shape_cat,
-                        levels = c("cfWGS only", "Comparator only",
-                                   "Both", "Neither")),
+                        levels = c("cfWGS only", "Comparator only", "Both", "Neither")),
     relapse_cat = factor(relapse_cat,
-                         levels = c("Relapsed ≤365 d",
-                                    "No relapse ≤365 d")),
-    relapse_flag = if_else(relapse_cat == "Relapsed ≤365 d",
-                           "Relapse", "No relapse")   
+                         levels = c("Relapsed ≤365 d", "No relapse ≤365 d")),
+    relapse_flag = if_else(relapse_cat == "Relapsed ≤365 d", "Relapse", "No relapse")
   )
 
 
@@ -2139,7 +2721,7 @@ corr_df <- plot_df2 %>%
   ) %>%
   mutate(
     label = sprintf("ρ = %.2f\np = %.2f", rho, p),
-    x = 0.035,   # choose your x/y annotation positions for your data
+    x = 0.035,   # choose x/y annotation positions for your data
     y = 0.99
   )
 
@@ -2151,7 +2733,7 @@ p_scatter_simple <- ggplot(plot_df2,
                            aes(x = x_plot, y = y_plot,
                                fill   = relapse_cat)) +  
   # LOD reference lines
-  geom_hline(yintercept = 0.410,   linetype = "dashed", colour = "grey80") +
+  geom_hline(yintercept = 0.4215524,   linetype = "dashed", colour = "grey80") +
   geom_vline(xintercept = lod_clonoMF, linetype = "dashed", colour = "grey80") +
   
   # points
@@ -2169,16 +2751,16 @@ p_scatter_simple <- ggplot(plot_df2,
     expand = expansion(mult = c(0.05, 0.05))
   ) +
   scale_y_continuous(
-    limits = c(0.18, 1),
-    breaks = seq(0.2, 1, by = 0.2),
+    limits = c(0.12, 1),
+    breaks = seq(0, 1, by = 0.2),
     labels = scales::percent_format(accuracy = 1)
   ) +
   facet_grid(rows = vars(landmark_timepoint),
              cols = vars(Comparator)) +
   
-  labs(title = "Comparison of cfWGS MRD Probability\nand Clinical Assays Across Landmark Timepoints",
+  labs(title = "Comparison of cfWGS BM-Derived Muts.\nMRD Probability and Clinical Assays",
        x = "Comparator MRD level",
-       y = "Combined Model Probability") +
+       y = "Model Probability") +
   # start from a white‐background theme with borders
   theme_bw(base_size = 11) +    
   
@@ -2224,8 +2806,10 @@ p_scatter_simple <- ggplot(plot_df2,
     
   ) 
 
+p_scatter_simple
+
 # save
-ggsave("Final Tables and Figures/Fig4K_cfWGS_vs_MFC_clonoSEQ_clean_BM_muts_updated.png",
+ggsave("Final Tables and Figures/Fig4K_cfWGS_vs_MFC_clonoSEQ_clean_BM_muts_updated2.png",
        p_scatter_simple,
        width  = 6.5, height = 5, dpi = 600)
 
@@ -2366,7 +2950,7 @@ corr_df <- plot_df2 %>%
   ) %>%
   mutate(
     label = sprintf("ρ = %.2f\np = %.2f", rho, p),
-    x = 0.001,   # choose your x/y annotation positions for your data
+    x = 0.035,   # choose x/y annotation positions for your data
     y = 0.99
   )
 
@@ -2378,7 +2962,7 @@ p_scatter_simple_blood <- ggplot(plot_df2,
                                  aes(x = x_plot, y = y_plot,
                                      fill   = relapse_cat)) +  
   # LOD reference lines
-  geom_hline(yintercept = 0.432,   linetype = "dashed", colour = "grey80") + # youden threshold of the used model
+  geom_hline(yintercept = 0.5166693,   linetype = "dashed", colour = "grey80") + # youden threshold of the used model
   geom_vline(xintercept = lod_clonoMF, linetype = "dashed", colour = "grey80") +
   
   # points
@@ -2396,16 +2980,16 @@ p_scatter_simple_blood <- ggplot(plot_df2,
     expand = expansion(mult = c(0.05, 0.05))
   ) +
   scale_y_continuous(
-    limits = c(0.36, 1),
+    limits = c(0.34, 1),
     breaks = seq(0.4, 1, by = 0.2),
     labels = scales::percent_format(accuracy = 1)
   ) +
   facet_grid(rows = vars(landmark_timepoint),
              cols = vars(Comparator)) +
   
-  labs(title = "Comparison of cfWGS MRD Probability\nand Clinical Assays Across Landmark Timepoints",
+  labs(title = "Comparison of cfWGS Blood-Derived Muts.\nMRD Probability and Clinical Assays",
        x = "Comparator MRD level",
-       y = "Combined Model Probability") +
+       y = "Model Probability") +
   # start from a white‐background theme with borders
   theme_bw(base_size = 11) +    
   
@@ -2423,7 +3007,7 @@ p_scatter_simple_blood <- ggplot(plot_df2,
   geom_text(
     data = corr_df,
     aes(x = x, y = y, label = label),
-    hjust = 0.5, vjust = 1, size = 2.5,
+    hjust = 0, vjust = 1, size = 2.5,
     inherit.aes = FALSE
   ) +
   # now tweak:
@@ -2454,6 +3038,6 @@ p_scatter_simple_blood <- ggplot(plot_df2,
 p_scatter_simple_blood
 
 # save
-ggsave("Final Tables and Figures/Fig5K_cfWGS_vs_MFC_clonoSEQ_clean_Bloof_muts_updated2.png",
+ggsave("Final Tables and Figures/Fig5K_cfWGS_vs_MFC_clonoSEQ_clean_Blood_muts_updated2.png",
        p_scatter_simple_blood,
        width  = 6.5, height = 5, dpi = 600)
