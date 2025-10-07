@@ -54,7 +54,7 @@ tumor_fraction <- read_tsv("Oct 2024 data/tumor_fraction_cfWGS.txt")
 export_dir <- "Jan2025_exported_data"  
 cna_data <- readRDS(file.path(export_dir, "cna_data.rds"))
 
-CNA_translocation <- readRDS("Jan2025_exported_data/CNA_translocation_July2025.rds") ## From 1_5 script
+CNA_translocation <- readRDS("Jan2025_exported_data/CNA_translocation_Sep2025.rds") ## From 1_5 script
 mutation_data_total <- readRDS("Jan2025_exported_data/mutation_export_updated.rds")
 
 # 3. cfDNA translocation tab (the 4‐call binary table)
@@ -251,64 +251,6 @@ screenshotter_df %>% group_by(Bam) %>% group_walk(~ write_bed(.x, .y$Bam))
 
 
 
-# 2. figure out exactly which barcodes & genes are on your heatmap
-final_BM_barcodes    <- combined_data_heatmap_BM$Tumor_Sample_Barcode ## defined later
-final_blood_barcodes <- combined_data_heatmap_blood$Tumor_Sample_Barcode
-final_genes          <- intersect(myeloma_genes, colnames(combined_data_heatmap_BM))
-
-# 3. filter to those samples + genes
-bm_filt    <- maf_subset@data %>%
-  filter(Tumor_Sample_Barcode %in% final_BM_barcodes,
-         Hugo_Symbol            %in% final_genes)
-
-blood_filt <- maf_subset_blood@data %>%
-  filter(Tumor_Sample_Barcode %in% final_blood_barcodes,
-         Hugo_Symbol            %in% final_genes)
-
-# 4. add back your original BAM name
-bm_filt    <- bm_filt %>%
-  left_join(metada_df_mutation_comparison %>% 
-              select(Bam_clean_tmp, Bam),
-            by = c("Tumor_Sample_Barcode" = "Bam_clean_tmp"))
-
-blood_filt <- blood_filt %>%
-  left_join(metada_df_mutation_comparison %>% 
-              select(Bam_clean_tmp, Bam),
-            by = c("Tumor_Sample_Barcode" = "Bam_clean_tmp"))
-
-# 5. select only the columns you need for IGV
-bm_for_igv <- bm_filt %>%
-  transmute(
-    Sample       = Bam,
-    Chromosome   = Chromosome,
-    Start        = Start_Position,
-    End          = ifelse(is.na(End_Position), Start_Position, End_Position),
-    Gene         = Hugo_Symbol,
-    VariantClass = Variant_Classification
-  )
-
-blood_for_igv <- blood_filt %>%
-  transmute(
-    Sample       = Bam,
-    Chromosome   = Chromosome,
-    Start        = Start_Position,
-    End          = ifelse(is.na(End_Position), Start_Position, End_Position),
-    Gene         = Hugo_Symbol,
-    VariantClass = Variant_Classification
-  )
-
-# 6. write them out
-out_dir <- "Jan2025_exported_data/for_IGV_filtered"
-dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
-
-readr::write_tsv(bm_for_igv,    file.path(out_dir, "BM_heatmap_mutations_for_IGV.tsv"))
-readr::write_tsv(blood_for_igv, file.path(out_dir, "Blood_heatmap_mutations_for_IGV.tsv"))
-
-message("Wrote filtered IGV tables to ", out_dir)
-# ─────────────────────────────────────────────────────────────────────────────
-
-
-
 ###########################################
 ### 1. Bone Marrow (BM) Heatmap Section ###
 ###########################################
@@ -390,7 +332,77 @@ combined_data_heatmap_BM <- combined_data_heatmap_BM %>%
 combined_data_heatmap_BM$Patient_Timepoint[combined_data_heatmap_BM$Tumor_Sample_Barcode == "SPORE_0009_Bm_T_BM066745"] <- "SPORE_0009_Baseline2"
 combined_data_heatmap_BM$Patient_Timepoint[combined_data_heatmap_BM$Tumor_Sample_Barcode == "SPORE_0012_Bm_T_BM069319"] <- "SPORE_0012_Progression2"
 
+###########################################
+### 2. Blood cfDNA Heatmap Section      ###
+###########################################
 
+# 2a. Process mutation data for blood
+maf_subset_blood <- subsetMaf(maf = maf_object_blood, genes = myeloma_genes, includeSyn = FALSE)
+mutation_data_blood <- maf_subset_blood@data %>%
+  select(Tumor_Sample_Barcode, Hugo_Symbol, Variant_Classification) %>%
+  mutate(Mutation_Type = case_when(
+    Variant_Classification %in% c("Nonsense_Mutation", "Frame_Shift_Del", "Frame_Shift_Ins") ~ "Truncating",
+    Variant_Classification %in% c("Missense_Mutation", "In_Frame_Del", "In_Frame_Ins") ~ "Missense",
+    Variant_Classification == "Splice_Site" ~ "Splice_Site",
+    TRUE ~ "Other"
+  )) %>%
+  select(-Variant_Classification) %>%
+  distinct()
+
+mutation_matrix_blood <- mutation_data_blood %>%
+  pivot_wider(
+    names_from = Hugo_Symbol, 
+    values_from = Mutation_Type, 
+    values_fill = NA
+  )
+# 2b. ***Subset to include only BM mutation genes for alignment***
+mutation_matrix_blood <- mutation_matrix_blood %>%
+  select(Tumor_Sample_Barcode, all_of(intersect(myeloma_genes, colnames(.))))
+
+# 2c. Merge with CNA/translocation data (same as BM)
+combined_data_heatmap_blood <- mutation_matrix_blood %>%
+  full_join(CNA_translocation, by = "Tumor_Sample_Barcode")
+
+combined_data_heatmap_blood <- combined_data_heatmap_blood %>%
+  mutate(
+    timepoint_info = ifelse(timepoint_info == "Relapse", "Progression", timepoint_info),
+    timepoint_info = ifelse(timepoint_info == "Diagnosis", "Baseline", timepoint_info)
+  ) %>%
+  filter(timepoint_info %in% c("Baseline", "Progression")) %>%
+  filter(Sample_type %in% c("Blood_plasma_cfDNA"))
+
+# 2d. Replace NAs for mutation columns and for CNA/translocation columns
+existing_cols_blood <- intersect(myeloma_genes, colnames(combined_data_heatmap_blood))
+combined_data_heatmap_blood <- combined_data_heatmap_blood %>%
+  mutate(across(all_of(existing_cols_blood), ~ ifelse(is.na(.), "No Mutation", .)))
+
+combined_data_heatmap_blood <- combined_data_heatmap_blood %>%
+  mutate(across(all_of(cna_trans_cols), ~ ifelse(is.na(.), 0, .)))
+
+combined_data_heatmap_blood <- combined_data_heatmap_blood %>%
+  select(-Bam_File, -Relapsed, -Num_days_to_closest_relapse_absolute, 
+         -Num_days_to_closest_relapse_non_absolute, -Num_days_to_closest_relapse, -`...1`)
+
+combined_data_heatmap_blood <- combined_data_heatmap_blood %>%
+  mutate_at(vars(one_of(cna_cols)), ~ ifelse(. == "1", "Yes", "No")) %>%
+  mutate_at(vars(one_of(translocation_cols)), ~ ifelse(. == 1, "Yes", "No")) %>% 
+  mutate(hyperdiploid = ifelse(hyperdiploid == 1, "Yes", "No"))
+
+# 2e. Remove low-quality IGH-MAF call from blood
+combined_data_heatmap_blood <- combined_data_heatmap_blood %>%
+  filter(!(Tumor_Sample_Barcode == "TFRIM4_0181_Cf_P_VA-07-05-P-DNA" & IGH_MAF == "Yes"))
+
+# 2f. ***Reorder blood samples using Patient info***
+# (Assuming the "Patient" column is available from the join)
+# First, extract the blood Patient IDs
+# Ensure Patient is a character and create a composite key for blood samples
+combined_data_heatmap_blood <- combined_data_heatmap_blood %>%
+  mutate(Patient = as.character(Patient),
+         Patient_Timepoint = paste0(Patient, "_", timepoint_info))
+
+
+
+#### Now that got blood matrix, change order of BM based on the blood
 ### Adjust based on blood (run later)
 # Identify which BM samples have a matching blood sample
 blood_pt <- combined_data_heatmap_blood$Patient_Timepoint
@@ -477,78 +489,15 @@ heatmap_BM <- Heatmap(
 )
 
 draw(heatmap_BM)
-png("heatmap_output_BM_baseline_updated_12.png", width = 11.12, height = 8, units = "in", res = 500)
+png("heatmap_output_BM_baseline_updated_13.png", width = 11.12, height = 8, units = "in", res = 500)
 draw(heatmap_BM)
 dev.off()
 
-###########################################
-### 2. Blood cfDNA Heatmap Section      ###
-###########################################
 
-# 2a. Process mutation data for blood
-maf_subset_blood <- subsetMaf(maf = maf_object_blood, genes = myeloma_genes, includeSyn = FALSE)
-mutation_data_blood <- maf_subset_blood@data %>%
-  select(Tumor_Sample_Barcode, Hugo_Symbol, Variant_Classification) %>%
-  mutate(Mutation_Type = case_when(
-    Variant_Classification %in% c("Nonsense_Mutation", "Frame_Shift_Del", "Frame_Shift_Ins") ~ "Truncating",
-    Variant_Classification %in% c("Missense_Mutation", "In_Frame_Del", "In_Frame_Ins") ~ "Missense",
-    Variant_Classification == "Splice_Site" ~ "Splice_Site",
-    TRUE ~ "Other"
-  )) %>%
-  select(-Variant_Classification) %>%
-  distinct()
 
-mutation_matrix_blood <- mutation_data_blood %>%
-  pivot_wider(
-    names_from = Hugo_Symbol, 
-    values_from = Mutation_Type, 
-    values_fill = NA
-  )
-# 2b. ***Subset to include only BM mutation genes for alignment***
-mutation_matrix_blood <- mutation_matrix_blood %>%
-  select(Tumor_Sample_Barcode, all_of(intersect(myeloma_genes, colnames(.))))
 
-# 2c. Merge with CNA/translocation data (same as BM)
-combined_data_heatmap_blood <- mutation_matrix_blood %>%
-  full_join(CNA_translocation, by = "Tumor_Sample_Barcode")
 
-combined_data_heatmap_blood <- combined_data_heatmap_blood %>%
-  mutate(
-    timepoint_info = ifelse(timepoint_info == "Relapse", "Progression", timepoint_info),
-    timepoint_info = ifelse(timepoint_info == "Diagnosis", "Baseline", timepoint_info)
-  ) %>%
-  filter(timepoint_info %in% c("Baseline", "Progression")) %>%
-  filter(Sample_type %in% c("Blood_plasma_cfDNA"))
-
-# 2d. Replace NAs for mutation columns and for CNA/translocation columns
-existing_cols_blood <- intersect(myeloma_genes, colnames(combined_data_heatmap_blood))
-combined_data_heatmap_blood <- combined_data_heatmap_blood %>%
-  mutate(across(all_of(existing_cols_blood), ~ ifelse(is.na(.), "No Mutation", .)))
-
-combined_data_heatmap_blood <- combined_data_heatmap_blood %>%
-  mutate(across(all_of(cna_trans_cols), ~ ifelse(is.na(.), 0, .)))
-
-combined_data_heatmap_blood <- combined_data_heatmap_blood %>%
-  select(-Bam_File, -Relapsed, -Num_days_to_closest_relapse_absolute, 
-         -Num_days_to_closest_relapse_non_absolute, -Num_days_to_closest_relapse, -`...1`)
-
-combined_data_heatmap_blood <- combined_data_heatmap_blood %>%
-  mutate_at(vars(one_of(cna_cols)), ~ ifelse(. == "1", "Yes", "No")) %>%
-  mutate_at(vars(one_of(translocation_cols)), ~ ifelse(. == 1, "Yes", "No")) %>% 
-  mutate(hyperdiploid = ifelse(hyperdiploid == 1, "Yes", "No"))
-
-# 2e. Remove low-quality IGH-MAF call from blood
-combined_data_heatmap_blood <- combined_data_heatmap_blood %>%
-  filter(!(Tumor_Sample_Barcode == "TFRIM4_0181_Cf_P_VA-07-05-P-DNA" & IGH_MAF == "Yes"))
-
-# 2f. ***Reorder blood samples using Patient info***
-# (Assuming the "Patient" column is available from the join)
-# First, extract the blood Patient IDs
-# Ensure Patient is a character and create a composite key for blood samples
-combined_data_heatmap_blood <- combined_data_heatmap_blood %>%
-  mutate(Patient = as.character(Patient),
-         Patient_Timepoint = paste0(Patient, "_", timepoint_info))
-
+### Now keep going with blood heatmap
 # Split blood samples into those that are common with BM (based on composite key) and extras
 common_blood <- combined_data_heatmap_blood %>% 
   filter(Patient_Timepoint %in% bm_order_composite) %>%
@@ -592,7 +541,12 @@ heatmap_matrix_blood <- as.matrix(temp2)
 #rownames(heatmap_matrix) <- rownames(combined_data_heatmap)  # Keep row names intact
 heatmap_matrix_blood <- t(heatmap_matrix_blood)  # Transpose the matrix
 
-### Align the matrix to the BM
+
+
+
+
+
+### Now align the blood matrix to the BM
 #    Initialize everything as "No Mutation"
 # Capture the gene (row) names from your BM heatmap matrix
 bm_genes <- rownames(heatmap_matrix_BM)
@@ -651,7 +605,7 @@ heatmap_blood <- Heatmap(
 )
 
 draw(heatmap_blood)
-png("heatmap_output_Blood_baseline_updated_13.png", width = 13.5, height = 8, units = "in", res = 500)
+png("heatmap_output_Blood_baseline_updated_14.png", width = 13.5, height = 8, units = "in", res = 500)
 draw(heatmap_blood)
 dev.off()
 
@@ -666,13 +620,72 @@ setdiff(rownames(heatmap_matrix_BM), rownames(heatmap_matrix_blood))
 
 ## Export 
 # save the filtered matrices for use elsewhere
-saveRDS(heatmap_matrix_BM,    file = "heatmap_matrix_BM_July2025.rds")
-saveRDS(heatmap_matrix_blood, file = "heatmap_matrix_blood_Sep2025.rds")
+saveRDS(heatmap_matrix_BM,    file = "heatmap_matrix_BM_Sep2025.rds")
+saveRDS(heatmap_matrix_blood, file = "heatmap_matrix_blood_Sep2025_updated.rds")
 
 # Save bone marrow combined data
-saveRDS(combined_data_heatmap_BM, file = "combined_data_heatmap_BM_July2025.rds")
+saveRDS(combined_data_heatmap_BM, file = "combined_data_heatmap_BM_Sep2025.rds")
 # Save cfDNA (blood) combined data
-saveRDS(combined_data_heatmap_blood, file = "combined_data_heatmap_blood_Sep2025.rds")
+saveRDS(combined_data_heatmap_blood, file = "combined_data_heatmap_blood_Sep2025_updated.rds")
+
+
+
+##### Export iGV tables
+# 2. figure out exactly which barcodes & genes are on your heatmap
+final_BM_barcodes    <- combined_data_heatmap_BM$Tumor_Sample_Barcode ## defined later
+final_blood_barcodes <- combined_data_heatmap_blood$Tumor_Sample_Barcode
+final_genes          <- intersect(myeloma_genes, colnames(combined_data_heatmap_BM))
+
+# 3. filter to those samples + genes
+bm_filt    <- maf_subset@data %>%
+  filter(Tumor_Sample_Barcode %in% final_BM_barcodes,
+         Hugo_Symbol            %in% final_genes)
+
+blood_filt <- maf_subset_blood@data %>%
+  filter(Tumor_Sample_Barcode %in% final_blood_barcodes,
+         Hugo_Symbol            %in% final_genes)
+
+# 4. add back your original BAM name
+bm_filt    <- bm_filt %>%
+  left_join(metada_df_mutation_comparison %>% 
+              select(Bam_clean_tmp, Bam),
+            by = c("Tumor_Sample_Barcode" = "Bam_clean_tmp"))
+
+blood_filt <- blood_filt %>%
+  left_join(metada_df_mutation_comparison %>% 
+              select(Bam_clean_tmp, Bam),
+            by = c("Tumor_Sample_Barcode" = "Bam_clean_tmp"))
+
+# 5. select only the columns you need for IGV
+bm_for_igv <- bm_filt %>%
+  transmute(
+    Sample       = Bam,
+    Chromosome   = Chromosome,
+    Start        = Start_Position,
+    End          = ifelse(is.na(End_Position), Start_Position, End_Position),
+    Gene         = Hugo_Symbol,
+    VariantClass = Variant_Classification
+  )
+
+blood_for_igv <- blood_filt %>%
+  transmute(
+    Sample       = Bam,
+    Chromosome   = Chromosome,
+    Start        = Start_Position,
+    End          = ifelse(is.na(End_Position), Start_Position, End_Position),
+    Gene         = Hugo_Symbol,
+    VariantClass = Variant_Classification
+  )
+
+# 6. write them out
+out_dir <- "Jan2025_exported_data/for_IGV_filtered"
+dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
+
+readr::write_tsv(bm_for_igv,    file.path(out_dir, "BM_heatmap_mutations_for_IGV.tsv"))
+readr::write_tsv(blood_for_igv, file.path(out_dir, "Blood_heatmap_mutations_for_IGV.tsv"))
+
+message("Wrote filtered IGV tables to ", out_dir)
+# ─────────────────────────────────────────────────────────────────────────────
 
 
 
@@ -897,7 +910,7 @@ cfDNA_mat <- cfDNA_mat[-bad_ix, , drop = FALSE]
 #   (assumes you have a data.frame `mut_counts_df` with columns Patient, MutCount)
 # (a) Load your baseline clinical table (if not already loaded)
 #     and keep only one Diagnosis/Baseline row per patient.
-dat_base <- readRDS("Final_aggregate_table_cfWGS_features_with_clinical_and_demographics_updated5.rds") %>%
+dat_base <- readRDS("Final_aggregate_table_cfWGS_features_with_clinical_and_demographics_updated8.rds") %>%
   filter(timepoint_info %in% c("Diagnosis","Baseline")) %>%
   arrange(Patient, timepoint_info) %>%
   group_by(Patient) %>%
@@ -1072,7 +1085,7 @@ draw(
 )
 
 # save
-png("overlay_heatmap_BM_vs_cfDNA_updated9.png", width = 14, height = 8, units = "in", res = 450)
+png("overlay_heatmap_BM_vs_cfDNA_updated10.png", width = 14, height = 8, units = "in", res = 450)
 draw(
   overlay_ht,
   annotation_legend_side = "right",  # where cohort legend goes
@@ -1231,7 +1244,7 @@ lgd_sampletype2 <- Legend(
 )
 
 # save
-png("Final Tables and Figures/Figure_1B_overlay_heatmap_BM_vs_cfDNA_updated_with_FISH_11.png", width = 14, height = 8, units = "in", res = 450)
+png("Final Tables and Figures/Figure_1B_overlay_heatmap_BM_vs_cfDNA_updated_with_FISH_12.png", width = 14, height = 8, units = "in", res = 450)
 draw(
   overlay_ht_2,
   column_title        = "Oncoprint of Genomic Alterations in Bone Marrow versus cfDNA Samples",
@@ -2037,8 +2050,8 @@ supp_concordance_summary <- supp_concordance_summary %>%
   )
 
 # ---- 6) Export ---------------------------------------------------------------
-out_csv <- "Final Tables and Figures/Supp_table_concordance_summary_BM_cfDNA_updated.csv" ## other part of supp table 2
-out_rds <- "Final Tables and Figures/Supp_table_concordance_summary_BM_cfDNA_updated.rds"
+out_csv <- "Final Tables and Figures/Supp_table_concordance_summary_BM_cfDNA_updated2.csv" ## other part of supp table 2
+out_rds <- "Final Tables and Figures/Supp_table_concordance_summary_BM_cfDNA_updated2.rds"
 
 write_csv(supp_concordance_summary, out_csv)
 saveRDS(supp_concordance_summary,   out_rds)

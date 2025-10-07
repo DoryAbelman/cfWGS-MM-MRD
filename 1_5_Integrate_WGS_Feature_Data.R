@@ -63,6 +63,7 @@ metada_df_mutation_comparison <- read_csv("combined_clinical_data_updated_April2
 
 # Load CNA, translocation, and tumor fraction data
 cna_data           <- readRDS(file.path(export_dir, "cna_data.rds"))
+cna_data_sequenza <- readRDS(file.path(export_dir, "cna_data_from_sequenza_400.rds"))
 translocation_data <- readRDS(file.path(export_dir, "translocation_data_cytoband_updated.rds"))
 tumor_fraction     <- read_tsv("Oct 2024 data/tumor_fraction_cfWGS.txt")
 
@@ -73,8 +74,31 @@ maf_object_bm    <- read.maf("combined_maf_temp_bm_May2025.maf")
 
 ### Process CNA and translocation data 
 #saveRDS(CNA_translocation, "CNA_translocation_original_Feb2025.rds")
-CNA_translocation <- 
-  full_join(cna_data, translocation_data)
+
+# 1) Rename Sequenza ID to Sample so downstream stays consistent
+cna_seq_renamed <- cna_data_sequenza %>% select(-Sample) %>%
+  rename(Sample = Bam_clean_tmp) %>%
+  # align columns to legacy CNA table if needed
+  select(any_of(names(cna_data)))
+
+# 2) Drop legacy rows that are present in Sequenza
+overlap_samples <- intersect(cna_data$Sample, cna_seq_renamed$Sample)
+
+cna_legacy_filtered <- cna_data %>%
+  filter(!Sample %in% overlap_samples)
+
+# 3) Combine CNA calls (Sequenza takes precedence)
+cna_combined <- bind_rows(cna_legacy_filtered, cna_seq_renamed)
+
+# (Optional) In case of any lingering duplicates, keep first occurrence
+# cna_combined <- cna_combined %>% distinct(Sample, .keep_all = TRUE)
+
+# 4) Join to translocation data (expects translocation_data$Sample to match Bam_clean_tmp)
+CNA_translocation <- full_join(cna_combined, translocation_data, by = "Sample")
+
+# QC
+message("✅ Combined CNA rows: ", nrow(cna_combined),
+        " | After translocation join: ", nrow(CNA_translocation))
 
 ## Now join this with the metadata to ojoin with the and keep only the diagnosis ones
 # First, remove the '.bam' suffix from the 'Bam' column in 'metada_df_mutation_comparison'
@@ -530,18 +554,18 @@ print(comparison)
 
 ## Export this 
 # Save All_feature_data as an RDS file
-saveRDS(All_feature_data_logical, file = file.path(export_dir, "All_feature_data_Sep2025.rds"))
+saveRDS(All_feature_data_logical, file = file.path(export_dir, "All_feature_data_Sep2025_updated.rds"))
 
 # Save All_feature_data as a text file with tab-separated values
-write.table(All_feature_data_logical, file = file.path(export_dir, "All_feature_data_Sep2025.txt"), sep = "\t", row.names = TRUE, quote = FALSE)
+write.table(All_feature_data_logical, file = file.path(export_dir, "All_feature_data_Sep2025_updated.txt"), sep = "\t", row.names = TRUE, quote = FALSE)
 
 
 ### Save the CNA_Translocation file 
 # Save All_feature_data as an RDS file
-saveRDS(CNA_translocation, file = file.path(export_dir, "CNA_translocation_July2025.rds"))
+saveRDS(CNA_translocation, file = file.path(export_dir, "CNA_translocation_Sep2025.rds"))
 #saveRDS(CNA_translocation, file = file.path(export_dir, "CNA_translocation_June2025.rds"))
 
 
 # Save All_feature_data as a text file with tab-separated values
-write.table(CNA_translocation, file = file.path(export_dir, "CNA_translocation_July2025.txt"), sep = "\t", row.names = TRUE, quote = FALSE)
+write.table(CNA_translocation, file = file.path(export_dir, "CNA_translocation_Sep2025.txt"), sep = "\t", row.names = TRUE, quote = FALSE)
 #write.table(CNA_translocation, file = file.path(export_dir, "CNA_translocation_June2025.txt"), sep = "\t", row.names = TRUE, quote = FALSE)

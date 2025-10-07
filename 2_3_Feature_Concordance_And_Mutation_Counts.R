@@ -13,7 +13,7 @@
 #        • Dumbbell plots of event-level concordance, sensitivity & specificity by ctDNA fraction
 #
 # Inputs:
-#   - Final_aggregate_table_cfWGS_features_with_clinical_and_demographics_updated5.rds
+#   - Final_aggregate_table_cfWGS_features_with_clinical_and_demographics_updated8.rds
 #   - cohort_assignment_table_updated.rds
 #   - Jan2025_exported_data/mutation_export_updated.rds
 #   - Jan2025_exported_data/All_feature_data_June2025.rds
@@ -39,7 +39,7 @@ library(broom)    # for tidy()
 library(purrr)    # for map_df()
 library(tibble)   # for tibble()
 
-file <- readRDS("Final_aggregate_table_cfWGS_features_with_clinical_and_demographics_updated7.rds")
+file <- readRDS("Final_aggregate_table_cfWGS_features_with_clinical_and_demographics_updated8.rds")
 
 
 
@@ -321,7 +321,7 @@ cna_cf <- long %>%
 ## ------------------------------------------------------------------
 ## 8. SAVE RESULTS  -----------------------------------------
 ## ------------------------------------------------------------------
-writexl::write_xlsx(concordance_tbl, "Output_tables_2025_updated/FISH_WGS_concordance_with_cohort_updated4.xlsx")
+writexl::write_xlsx(concordance_tbl, "Output_tables_2025_updated/FISH_WGS_concordance_with_cohort_updated5.xlsx")
 
 
 
@@ -389,7 +389,7 @@ if(!dir.exists("Output_tables_2025")) {
 ### This is the overall concordance to FISH
 write.csv(
   results2,
-  "Output_tables_2025_updated/concordance_by_cohort_and_source_and_tf_to_FISH_updated4.csv",
+  "Output_tables_2025_updated/concordance_by_cohort_and_source_and_tf_to_FISH_updated5.csv",
   row.names = FALSE
 )
 
@@ -419,7 +419,7 @@ evidence_summary <- dat_base %>%
 
 ###### PART 2: See mutation overlap based on the specific base change 
 mutation_data_total <- readRDS("Jan2025_exported_data/mutation_export_updated_more_info2.rds")
-All_feature_data <- readRDS("Jan2025_exported_data/All_feature_data_August2025.rds")
+All_feature_data <- readRDS("Jan2025_exported_data/All_feature_data_Sep2025_updated.rds")
 combined_clinical_data_updated <- read.csv("combined_clinical_data_updated_April2025.csv")
 
 
@@ -747,50 +747,8 @@ pvals
 #–––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––  
 # 1) Correlation matrix (Spearman) + p‐values across all numeric vars  
 #–––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––  
-## For the mutation-list related features, remove the cases without evidence of disease 
-# Define qualifying patients (BM / cfDNA) at Dx/Baseline with evidence of disease
-## Load good patients 
-Good_pts <- read.csv("baseline_high_quality_patients_updated.csv",
-                     stringsAsFactors = FALSE) ## From 2_0 script
-
-BM_good_pts <- Good_pts %>%
-  filter(WGS_Evidence_of_Disease_BM_cells == 1) %>%
-  pull(Patient) %>%
-  unique()
-
-cfDNA_good_pts <- Good_pts %>%
-  filter(WGS_Evidence_of_Disease_Blood_plasma_cfDNA_Relaxed == 1) %>%
-  pull(Patient) %>%
-  unique()
-
-# BM_good_pts <- All_feature_data %>%
-#   filter(Sample_type == "BM_cells",
-#          Evidence_of_Disease == 1,
-#          timepoint_info %in% c("Diagnosis","Baseline")) %>%
-#   pull(Patient) %>%
-#   unique()
-# 
-# cfDNA_good_pts <- All_feature_data %>%
-#   filter(Sample_type == "Blood_plasma_cfDNA",
-#          Evidence_of_Disease == 1,
-#          timepoint_info %in% c("Diagnosis","Baseline")) %>%
-#   pull(Patient) %>%
-#   unique()
-
-# present in second list but NOT in first
-
-# 2) Mask BM/blood metrics to NA for patients that don't qualify
-bm_feats    <- c("zscore_BM", "z_score_detection_rate_BM", "detect_rate_BM")
-blood_feats <- c("zscore_blood", "z_score_detection_rate_blood", "detect_rate_blood")
-
-dat_base2 <- dat_base %>%
-  mutate(
-    across(all_of(bm_feats),    ~ if_else(Patient %in% BM_good_pts,    .x, NA_real_)),
-    across(all_of(blood_feats), ~ if_else(Patient %in% cfDNA_good_pts, .x, NA_real_))
-  )
-
 # Select only numeric columns
-num_df <- dat_base2 %>% select(where(is.numeric))
+num_df <- dat_base %>% select(where(is.numeric))
 
 # rcorr returns:
 #  • r : correlation matrix
@@ -816,8 +774,9 @@ flatten_corr <- function(r_mat, p_mat, n_mat) {
 }
 
 all_corrs <- flatten_corr(r_mat, p_mat, n_mat)
-all_corrs <- all_corrs %>% filter(!is.na(rho))
 
+## Export this 
+write.csv(all_corrs %>% filter(!is.na(p_adj)), file = "Final Tables and Figures/Suplementary_Table_2_All_Feature_Correlations_updated.csv")
 # Adjust p-value for multiple hypothesis test - although not needed since exploratory 
 all_corrs <- all_corrs %>%
   mutate(
@@ -834,8 +793,6 @@ sig_fdr <- all_corrs %>% filter(p_adj < 0.05)
 print(sig_raw)   # exploratory list
 print(sig_fdr)   # more stringent list
 
-## Export this 
-write.csv(all_corrs %>% filter(!is.na(p_adj)), file = "Final Tables and Figures/Suplementary_Table_2_All_Feature_Correlations_updated2.csv")
 
 
 
@@ -1400,7 +1357,7 @@ p_tf <- ggplot(event_tf_conc,
 
 
 # 5) save
-ggsave("Final Tables and Figures/Baseline_concordance/Fig2B_event_concordance_by_TF_updated2.png", p_tf,
+ggsave("Final Tables and Figures/Baseline_concordance/Fig2B_event_concordance_by_TF_updated3.png", p_tf,
        width = 5, height = 4, dpi = 600)
 
 
@@ -1497,7 +1454,7 @@ p_tf_sens2 <- ggplot(tf_plot_df, aes(x = value, y = event, group = event)) +
 
 # 3) save
 ggsave(
-  "Final Tables and Figures/Baseline_concordance/Fig2B_event_concordance_with_sensitivity_updated2.png",
+  "Final Tables and Figures/Baseline_concordance/Fig2B_event_concordance_with_sensitivity_updated3.png",
   p_tf_sens2, width = 5.5, height = 4, dpi = 600
 )
 
@@ -1569,7 +1526,7 @@ metrics_combined <- metrics_combined %>%
     )
   )
 
-write_csv(metrics_combined, "Exported_data_tables_clinical/Supp_table_2_WGS_vs_FISH_metrics_combined.csv")
+write_csv(metrics_combined, "Exported_data_tables_clinical/Supp_table_2_WGS_vs_FISH_metrics_combined2.csv")
 
 
 
@@ -1886,10 +1843,13 @@ p_tf_sens <- ggplot(tf_plot_df_BM, aes(x = value, y = event, group = event)) +
 
 # 3) save
 ggsave(
-  "Final Tables and Figures/Baseline_concordance/Fig2C_event_concordance_between_BM_and_cfDNA_with_sensitivity3_updated.png",
+  "Final Tables and Figures/Baseline_concordance/Fig2C_event_concordance_between_BM_and_cfDNA_with_sensitivity4_updated.png",
   p_tf_sens, width = 5, height = 4, dpi = 600
 )
 
+bad <- tf_plot_df_BM %>%
+  dplyr::filter(is.na(value) | value < 0 | value > 100)
+bad
 
 
 
@@ -1966,9 +1926,10 @@ p_3panel <- ggplot(perf_long,
   )
 
 ggsave(
-  "Final Tables and Figures/Baseline_concordance/Fig2C_BM_cfDNA_conc_sens_spec_byTF_updated3.png",
+  "Final Tables and Figures/Baseline_concordance/Fig2C_BM_cfDNA_conc_sens_spec_byTF_updated4.png",
   p_3panel, width = 5.5, height = 4, dpi = 600
 )
+
 
 
 # Get overall summary
@@ -2072,9 +2033,9 @@ perf_combined <- perf_combined %>%
                 ~ round(.x, 3)))
 # --- 4) Export ----------------------------------------------------------------
 write_csv(perf_combined,
-          "Final Tables and Figures/Supplentary_table_BM_vs_cfDNA_performance_by_event_and_category2.csv") ## this makes second part of supp table 2
+          "Final Tables and Figures/Supplentary_table_BM_vs_cfDNA_performance_by_event_and_category3.csv") ## this makes second part of supp table 2
 saveRDS(perf_combined,
-        "Final Tables and Figures/Supplentary_table_BM_vs_cfDNA_performance_by_event_and_category2.rds")
+        "Final Tables and Figures/Supplentary_table_BM_vs_cfDNA_performance_by_event_and_category3.rds")
 
 
 ## above combined to supplementary table 2
@@ -2120,7 +2081,7 @@ for (s in sheets <- c("BM_vs_cfDNA_by_cohort",
 }
 
 # ---- Save workbook ----
-out_xlsx <- "Final Tables and Figures/Supplementary_Table_2_BM_cfDNA_Concordance.xlsx"
+out_xlsx <- "Final Tables and Figures/Supplementary_Table_2_BM_cfDNA_Concordance_updated.xlsx"
 saveWorkbook(wb, out_xlsx, overwrite = TRUE)
 
 message("Wrote: ", normalizePath(out_xlsx))
@@ -2150,12 +2111,12 @@ readr::write_csv(mean_jaccard,
 ## 3. (Optional) one XLSX workbook with the key performance tables -----
 writexl::write_xlsx(
   list(
-    concordance_all          = concordance_tbl,
+  #  concordance_all          = concordance_tbl,
     concordance_byTF_cohort  = results2,
     BMcfDNA_perf_byTF        = perf_tf_complete,
     FISH_perf = tf_plot_df
   ),
-  path = file.path(outdir, "SV_CNA_performance_summary.xlsx") 
+  path = file.path(outdir, "SV_CNA_performance_summary_updated.xlsx") 
 )
 
 message("✓ Additional outputs written to ", outdir)

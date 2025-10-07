@@ -303,7 +303,7 @@ cfDNA_events <- combined_clinical_data_updated %>%
 # ─────────────────────────────────────────────────────────────────────────────
 # F. MRD test dates
 # ─────────────────────────────────────────────────────────────────────────────
-dat <- read.csv("Final_aggregate_table_cfWGS_features_with_clinical_and_demographics_updated5.csv")
+dat <- read.csv("Final_aggregate_table_cfWGS_features_with_clinical_and_demographics_updated8.csv")
 
 
 mfc_events <- dat %>%
@@ -871,7 +871,7 @@ tf_change <- tf_change %>%
   )
 
 
-### Now try with sites zscore 
+### Now try with cVAF
 ## Add more info to patients 
 Additional_info <- read_csv("MRDetect_output_winter_2025/Processed_R_outputs/Blood_muts_plots_baseline/cfWGS MRDetect Blood data updated Sep with all patients.csv")
 
@@ -924,26 +924,26 @@ message("zscore_blood backfilled: ", filled_n,
 # 1) First non-NA baseline TF where timepoint_info is Baseline/Diagnosis
 baseline_df <- dat2 %>%
   filter(timepoint_info %in% c("Baseline", "Diagnosis"),
-         !is.na(zscore_BM)) %>%
+         !is.na(detect_rate_BM)) %>%
   arrange(Patient, Date) %>%
   group_by(Patient) %>%
   slice_head(n = 1) %>%
   ungroup() %>%
   transmute(Patient,
-            baseline_TF   = zscore_BM,
+            baseline_TF   = detect_rate_BM,
             baseline_date = Date)
 
 # 2) First non-NA TF strictly AFTER that baseline date
 followup_df <- dat2 %>%
   inner_join(baseline_df, by = "Patient") %>%
-  filter(!is.na(zscore_BM),
+  filter(!is.na(detect_rate_BM),
          Date > baseline_date) %>%
   arrange(Patient, Date) %>%
   group_by(Patient) %>%
   slice_head(n = 1) %>%
   ungroup() %>%
   transmute(Patient,
-            first_post_TF   = zscore_BM,
+            first_post_TF   = detect_rate_BM,
             first_post_date = Date)
 
 # 3) Combine + percent change (baseline → first post)
@@ -964,26 +964,26 @@ BM_change <- BM_change %>%
 # 1) First non-NA baseline TF where timepoint_info is Baseline/Diagnosis
 baseline_df <- dat2 %>%
   filter(timepoint_info %in% c("Baseline", "Diagnosis"),
-         !is.na(zscore_blood)) %>%
+         !is.na(detect_rate_blood)) %>%
   arrange(Patient, Date) %>%
   group_by(Patient) %>%
   slice_head(n = 1) %>%
   ungroup() %>%
   transmute(Patient,
-            baseline_TF   = zscore_blood,
+            baseline_TF   = detect_rate_blood,
             baseline_date = Date)
 
 # 2) First non-NA TF strictly AFTER that baseline date
 followup_df <- dat2 %>%
   inner_join(baseline_df, by = "Patient") %>%
-  filter(!is.na(zscore_blood),
+  filter(!is.na(detect_rate_blood),
          Date > baseline_date) %>%
   arrange(Patient, Date) %>%
   group_by(Patient) %>%
   slice_head(n = 1) %>%
   ungroup() %>%
   transmute(Patient,
-            first_post_TF   = zscore_blood,
+            first_post_TF   = detect_rate_blood,
             first_post_date = Date)
 
 # 3) Combine + percent change (baseline → first post)
@@ -1016,6 +1016,12 @@ change_combined <- full_join(
   by = c("Patient", "cohort")
 )
 
+
+### See what is missing 
+setdiff(change_combined$Patient, cohort_df$Patient)
+setdiff(cohort_df$Patient, change_combined$Patient) # Don't have the baseline for these 3 patients
+
+
 ### Use the tumor fraction instead since too many with NAs for the zscore due to poor quality lists
 
 ## Original method, by length of tracking 
@@ -1028,24 +1034,94 @@ change_combined <- full_join(
 # events <- events %>% left_join(patient_order, by = c("cohort", "patient"))
 
 
-## Updated, by tumor fraciton 
-patient_order <- tf_change %>%
+# ## Updated, by tumor fraciton 
+# patient_order <- tf_change %>%
+#   mutate(
+#     cohort = factor(cohort, levels = c("Front-line cohort", "Non-front-line cohort"))
+#   ) %>%
+#   arrange(cohort, is.na(pct_for_plot), pct_for_plot) %>%     # NAs last, then ascending %Δ
+#   group_by(cohort) %>%
+#   mutate(y = row_number()) %>%                               # 1,2,3... within cohort
+#   ungroup() %>%
+#   transmute(
+#     cohort,
+#     patient = Patient,                                       # match events$patient
+#     y,
+#     pct_for_plot,
+#     pct_label
+#   )
+
+# patient_order_tf <- patient_order
+
+
+### by the change in the cVAF
+patient_order <- change_combined %>%
   mutate(
-    cohort = factor(cohort, levels = c("Front-line cohort", "Non-front-line cohort"))
+    cohort = factor(cohort, levels = c("Front-line cohort", "Non-front-line cohort")),
+    in_cohort = Patient %in% cohort_df$Patient,
+    
+    # Use BM if present, else blood
+    primary_change = coalesce(pct_change_bm, pct_change_blood),
+    
+    # Record which metric was used
+    source_metric = case_when(
+      !is.na(pct_change_bm) ~ "bm",
+      is.na(pct_change_bm) & !is.na(pct_change_blood) ~ "blood",
+      TRUE ~ NA_character_
+    ),
+    
+    # Send to end if not in cohort_df or both metrics missing
+    send_to_end = (!in_cohort) | (is.na(pct_change_bm) & is.na(pct_change_blood))
   ) %>%
-  arrange(cohort, is.na(pct_for_plot), pct_for_plot) %>%     # NAs last, then ascending %Δ
+  arrange(
+    cohort,
+    send_to_end,
+    desc(primary_change),
+    Patient
+  ) %>%
   group_by(cohort) %>%
-  mutate(y = row_number()) %>%                               # 1,2,3... within cohort
+  mutate(y = row_number()) %>%
   ungroup() %>%
   transmute(
     cohort,
-    patient = Patient,                                       # match events$patient
+    patient = Patient,
     y,
-    pct_for_plot,
-    pct_label
+    pct_for_plot = primary_change,
+    pct_label = if_else(is.na(primary_change), NA_character_, sprintf("%.1f%%", primary_change)),
+    source_metric
   )
 
-patient_order_tf <- patient_order
+# ---- Add missing patients at bottom ----
+missing_patients <- setdiff(cohort_df$Patient, patient_order$patient)
+
+if (length(missing_patients) > 0) {
+  add_rows <- cohort_df %>%
+    filter(Patient %in% missing_patients) %>%
+    transmute(
+      cohort = factor(Cohort, levels = c("Front", "Non-frontline")),
+      patient = Patient,
+      y = NA_integer_,
+      pct_for_plot = NA_real_,
+      pct_label = NA_character_,
+      source_metric = NA_character_
+    )
+  
+  patient_order <- bind_rows(patient_order, add_rows)
+}
+
+patient_order <- patient_order %>%
+  mutate(
+    cohort = case_when(
+      cohort == "Non-frontline" ~ "Non-front-line cohort",  # fix naming
+      patient == "IMG-127" ~ "Front-line cohort",           # manual override
+      TRUE ~ as.character(cohort)
+    ),
+    cohort = factor(cohort, levels = c("Front-line cohort", "Non-front-line cohort"))
+  )
+
+
+patient_order_cVAF <- patient_order
+
 
 # 2) Join onto eventpatient_order# 2) Join onto events for plotting
 events <- events %>%
@@ -1170,10 +1246,10 @@ combined_plot <- p_front / p_non +
     )
   )
 
-ggsave("swimplot_by_cohort_v4.pdf", combined_plot,
+ggsave("swimplot_by_cohort_v5.pdf", combined_plot,
        width = 12, height = 10, device = cairo_pdf)
 
-ggsave("swimplot_by_cohort_v4.png", combined_plot,
+ggsave("swimplot_by_cohort_v5.png", combined_plot,
        width = 12, height = 10, dpi = 300)
 
 
@@ -1718,6 +1794,8 @@ events_combined2 <- events_combined2 %>%
   )
 
 
+### At this stage, add in the ctDNA change metric
+
 ## Reorder 
 # 1) Compute total follow‑up per patient
 patient_order_tbl <- events_combined2 %>% filter(!(patient == "VA-02" & event == "Last follow-up")) %>% # remove this since not plotted
@@ -1734,7 +1812,13 @@ patient_order_tbl <- events_combined2 %>% filter(!(patient == "VA-02" & event ==
 patient_order <- patient_order_tbl %>% pull(patient)
 
 ## Change back to tumor fraction 
-patient_order <- patient_order_tf
+patient_order_tbl_cVAF <- patient_order_cVAF %>%
+  group_by(cohort, patient) %>%
+  # within each cohort, sort descending so longest follow‑up is first
+  arrange(cohort, desc(pct_for_plot)) %>% 
+  pull(patient)
+
+patient_order <- patient_order_tbl_cVAF 
 
 # 3) Re‑factor your patient column
 events_combined2 <- events_combined2 %>%
@@ -1797,6 +1881,8 @@ write.csv(id_map,
 # Save as RDS
 saveRDS(id_map,
         file = "id_map.rds")
+
+id_map <- readRDS("id_map.rds")
 
 ## Get labels vector
 # build label lookup (id_map: Patient, New_ID)
@@ -1919,7 +2005,7 @@ p_swim <- p_swim +
     breaks = NULL    # no ticks or labels
   )
 
-ggsave("Final Tables and Figures/Test_swim2.png",
+ggsave("Final Tables and Figures/Test_swim3.png",
        p_swim,
        width  = 15,
        height = 10,
@@ -2004,10 +2090,36 @@ ann_paired <- ggplot(patient_order_combined,
   )
 
 
+### Make the tumor fraction annotation
+## Continue from here
+patient_order_cVAF <- patient_order_cVAF %>%
+  mutate(patient = factor(patient, levels = patient_order_tbl_cVAF))
+
+ann_tf <- ggplot(patient_order_cVAF,
+                 aes(x = pct_for_plot, y = patient, group = 1)) +
+  geom_path(colour = "grey70", size = 0.4) +
+  geom_point(colour = "grey20", size = 2) +
+  scale_x_continuous(
+    name   = "Delta\nctDNA cVAF",
+    limits = c(min(patient_order_cVAF$pct_for_plot), max(patient_order_cVAF$pct_for_plot, na.rm = TRUE) * 1.2),
+    expand = c(0, 0)
+  ) +
+  scale_y_discrete(
+    limits = rev(patient_order_tbl_cVAF),
+    expand = c(0, 0)    # shrink vertical padding between rows
+  ) +
+  theme_minimal(base_size = 8) +
+  theme(
+    panel.grid      = element_blank(),
+    axis.title.y    = element_blank(),
+    axis.ticks.y    = element_blank(),
+    axis.text.y     = element_text(size = 10, hjust = 1, lineheight = 0.8),
+    plot.margin     = margin(0, 1, 0, 1)
+  )
 
 ## Assemble final plot
-final_plot <- ann_cohort + p_swim +
-  plot_layout(widths = c(0.05, 0.95),
+final_plot <- ann_cohort + ann_tf + p_swim +
+  plot_layout(widths = c(0.05, 0.1, 0.85),
               guides = "collect") &
   theme(
     # position & spacing

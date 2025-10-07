@@ -490,12 +490,39 @@ cna_data_summary <- cna_data %>%
 
 print(cna_data_summary)
 
+
+### Edit the same so in same format as other tools expect 
+# Add a Tumor_Sample_Barcode column to metada_df_mutation_comparison
+# Clean up Sample names in CNA data to match metadata format
+cna_data_cleaned <- cna_data %>%
+  mutate(Sample = str_remove_all(Sample, "_PG|_WG"))
+
+cna_data_cleaned <- cna_data_cleaned %>%
+  mutate(Sample = ifelse(
+    Sample == "TFRIM4_0189_Bm_P_ZC-02", 
+    "TFRIM4_0189_Bm_P_ZC-02-01-O-DNA", 
+    Sample  # Keep other values unchanged
+  ))
+
+
+# Join to metadata by Sample ↔ Tumor_Sample_Barcode
+cna_data_merged <- cna_data_cleaned %>%
+  left_join(
+    metada_df_mutation_comparison %>%
+      select(Tumor_Sample_Barcode, Bam_clean_tmp),
+    by = c("Sample" = "Tumor_Sample_Barcode")
+  )
+
+# Check results
+message("✅ Merged CNA data with metadata: added Bam_clean_tmp column.")
+
+
 ## ---- Export Results ----
 ## The number in filenames corresponds to the gamma parameter used by Sequenza (γ=400)
 
 # Primary CNA matrix
-saveRDS(cna_data, file = file.path(export_dir, "cna_data_from_sequenza_400.rds"))
-write.table(cna_data,
+saveRDS(cna_data_merged, file = file.path(export_dir, "cna_data_from_sequenza_400.rds"))
+write.table(cna_data_merged,
             file = file.path(export_dir, "cna_data_from_sequenza_400.txt"),
             sep = "\t", row.names = FALSE, quote = FALSE)
 
