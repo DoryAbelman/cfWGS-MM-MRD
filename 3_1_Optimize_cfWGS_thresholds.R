@@ -3411,9 +3411,18 @@ roc_plot <- ggplot(roc_df, aes(x = fpr, y = tpr, colour = combo)) +
 
 
 # ── 2) Prepare perf_df with the same factor‐ordering as roc_df ───────────────
-perf_df <- bm_obj$nested_metrics %>%
-  select(combo, sens_mean, sens_sd, spec_mean, spec_sd) %>%
-  # force the same ordering of combos
+perf_df <- bm_obj$validation_metrics %>%
+  select(combo, 
+         sens_mean = sens_valid,
+         spec_mean = spec_valid) %>%
+  # Add placeholder SD columns (set to 0 so error bars are invisible)
+  mutate(
+    sens_sd = 0,
+    spec_sd = 0
+  ) %>%
+  # Keep only combos that made it into your ROC dataframe
+  filter(combo %in% levels(roc_df$combo)) %>%
+  # Ensure identical factor ordering for plotting consistency
   mutate(combo = factor(combo, levels = levels(roc_df$combo)))
 
 # Make a named vector of labels
@@ -3464,7 +3473,7 @@ combined_plot <- roc_plot + perf_plot + plot_layout(ncol = 2, widths = c(1,1))
 
 # ── 4) Export ───────────────────────────────────────────────────────────────
 ggsave(
-  filename = "Final Tables and Figures/combined_ROC_and_performance_nested_folds_bm_validation_updated4.png",
+  filename = "Final Tables and Figures/combined_ROC_and_performance_nested_folds_bm_validation_updated5.png",
   plot     = combined_plot,
   width    = 12,
   height   = 6,
@@ -3472,7 +3481,7 @@ ggsave(
 )
 
 ggsave(
-  filename = "Final Tables and Figures/4E_performance_nested_folds_bm_validation_updated4.png",
+  filename = "Final Tables and Figures/4E_performance_nested_folds_bm_validation_updated5.png",
   plot     = perf_plot,
   width    = 5,
   height   = 4,
@@ -4083,7 +4092,7 @@ p_perf <- ggplot(plot_df, aes(x = combo, y = mean, fill = combo)) +
 # ──────────────────────────────────────────────────────────────────────────────
 # 9. Save
 ggsave(
-  file.path("Final Tables and Figures/Supp9D_classifier_performance_bar_updated_frag.png"),
+  file.path("Final Tables and Figures/Supp9D_classifier_performance_bar_updated_frag2.png"),
   plot   = p_perf,
   width  = 5,
   height = 3.5,
@@ -4225,7 +4234,7 @@ p_perf <- ggplot(plot_df, aes(x = combo, y = mean, fill = combo)) +
 # ──────────────────────────────────────────────────────────────────────────────
 # 9. Save
 ggsave(
-  file.path("Final Tables and Figures/Supp_Fig9F_classifier_performance_bar_test_cohort_updated2_frag.png"),
+  file.path("Final Tables and Figures/Supp_Fig9F_classifier_performance_bar_test_cohort_updated2_frag2.png"),
   plot   = p_perf,
   width  = 5,
   height = 3.5,
@@ -4318,7 +4327,7 @@ p_tables <- ggplot(cm_df, aes(x = Pred, y = Obs, fill = Count)) +
 # ──────────────────────────────────────────────────────────────────────────────
 # 5) save
 ggsave(
-  "Final Tables and Figures/Supp_Fig9E_confusion_tables_primary_fragmentomics3.png",
+  "Final Tables and Figures/Supp_Fig9E_confusion_tables_primary_fragmentomics4.png",
   plot   = p_tables,
   width  = 5,
   height = 2.75,
@@ -4399,7 +4408,7 @@ p_tables <- ggplot(cm_df, aes(x = Pred, y = Obs, fill = Count)) +
 # ──────────────────────────────────────────────────────────────────────────────
 # 5) save
 ggsave(
-  "Final Tables and Figures/Supp_Fig9F_confusion_tables_val_fragmentomics2.png",
+  "Final Tables and Figures/Supp_Fig9F_confusion_tables_val_fragmentomics3.png",
   plot   = p_tables,
   width  = 5,
   height = 2.75,
@@ -4880,12 +4889,20 @@ roc_plot <- ggplot(roc_df, aes(x = fpr, y = tpr, colour = combo)) +
 
 
 # ── 2) Prepare perf_df with the same factor‐ordering as roc_df ───────────────
-perf_df <- blood_obj$nested_metrics %>%
-  select(combo, sens_mean, sens_sd, spec_mean, spec_sd) %>%
-  # keep only combos that actually made it into your roc_df
+perf_df <- blood_obj$validation_metrics %>%
+  select(combo, 
+         sens_mean = sens_valid,
+         spec_mean = spec_valid) %>%
+  # Add placeholder SD columns (set to 0 so error bars are invisible)
+  mutate(
+    sens_sd = 0,
+    spec_sd = 0
+  ) %>%
+  # Keep only combos that made it into your ROC dataframe
   filter(combo %in% levels(roc_df$combo)) %>%
-  # now drop any leftover unused levels
-  mutate(combo = factor(combo, levels = levels(roc_df$combo))) 
+  # Ensure identical factor ordering for plotting consistency
+  mutate(combo = factor(combo, levels = levels(roc_df$combo)))
+
 
 # Make a named vector of labels
 labels_perf <- setNames(
@@ -4936,7 +4953,7 @@ combined_plot <- roc_plot + perf_plot + plot_layout(ncol = 2, widths = c(1,1))
 
 # ── 4) Export ───────────────────────────────────────────────────────────────
 ggsave(
-  filename = "Final Tables and Figures/Supp_Fig_7C_combined_ROC_and_performance_nested_folds_blood_validation3.png",
+  filename = "Final Tables and Figures/Supp_Fig_7C_combined_ROC_and_performance_nested_folds_blood_validation4.png",
   plot     = combined_plot,
   width    = 12,
   height   = 6,
@@ -4944,7 +4961,7 @@ ggsave(
 )
 
 ggsave(
-  filename = "Final Tables and Figures/Supp_Fig_7C_performance_nested_folds_blood_validation_updated3.png",
+  filename = "Final Tables and Figures/Supp_Fig_7C_performance_nested_folds_blood_validation_updated4.png",
   plot     = perf_plot,
   width    = 5,
   height   = 4,
@@ -5388,7 +5405,7 @@ perf_plot_with_legend <- perf_plot + theme(    legend.position    = c(0.4, 0.15)
 
 # ── 4) Export ───────────────────────────────────────────────────────────────
 ggsave(
-  filename = "Final Tables and Figures/combined_ROC_and_performance_nested_folds_fragmentomics_updated5.png",
+  filename = "Final Tables and Figures/combined_ROC_and_performance_nested_folds_fragmentomics_updated6.png",
   plot     = combined_plot,
   width    = 12,
   height   = 6,
@@ -5396,7 +5413,7 @@ ggsave(
 )
 
 ggsave(
-  filename = "Final Tables and Figures/Performance_nested_folds_fragmentomics_only_performance3.png",
+  filename = "Final Tables and Figures/Performance_nested_folds_fragmentomics_only_performance4.png",
   plot     = perf_plot_with_legend,
   width    = 6,
   height   = 6,
@@ -5404,7 +5421,7 @@ ggsave(
 )
 
 ggsave(
-  filename = "Final Tables and Figures/ROC_plot_folds_fragmentomics_train2.png",
+  filename = "Final Tables and Figures/ROC_plot_folds_fragmentomics_train3.png",
   plot     = roc_plot,
   width    = 6,
   height   = 6,
@@ -5415,12 +5432,184 @@ ggsave(
 combined_plot <- roc_plot + perf_plot_with_legend + plot_layout(ncol = 2, widths = c(1,1))
 
 ggsave(
-  filename = "Final Tables and Figures/combined_ROC_and_performance_nested_folds_fragmentomics_updated6_label.png",
+  filename = "Final Tables and Figures/combined_ROC_and_performance_nested_folds_fragmentomics_updated7_label.png",
   plot     = combined_plot,
   width    = 12,
   height   = 6,
   dpi      = 500
 )
+
+
+### Redo for validation set 
+#### Now do the performance plot on validation cohort
+# For convenience
+valid_df    <- hold_fragmentomics                # must contain MRD_truth + all predictors
+
+# ── 1. ROC curves on the hold-out cohort ─────────────────────────────────
+roc_dfs <- imap(models_list,
+                function(fit, label) {
+                  # caret::predict returns a data-frame; pull out the column for the + class
+                  prob <- predict(fit, newdata = valid_df, type = "prob")[ , positive_class]
+                  
+                  roc_obj <- roc(response   = valid_df$MRD_truth,
+                                 predictor  = prob,
+                                 levels     = c("neg", "pos"),   # neg first, pos second
+                                 direction  = "<",
+                                 quiet      = TRUE)
+                  
+                  tibble(
+                    combo = label,
+                    fpr   = 1 - roc_obj$specificities,
+                    tpr   = roc_obj$sensitivities,
+                    auc   = as.numeric(auc(roc_obj))
+                  )
+                })
+
+roc_df  <- bind_rows(roc_dfs)
+
+# DO NOT reorder by validation AUC — lock to training order
+roc_df$combo <- factor(roc_df$combo, levels = combo_levels_chr)
+
+auc_tbl <- roc_df %>% distinct(combo, auc)
+
+# 1) reorder combos by AUC
+# auc_tbl <- auc_tbl %>% arrange(desc(auc))
+# roc_df$combo <- factor(roc_df$combo, levels = auc_tbl$combo)
+
+# 3) build a vector of final legend labels: “Pretty Name, AUC = 0.83”
+legend_labels <- setNames(
+  paste0(
+    pretty_combo_names[combo_levels_chr], ", AUC = ",
+    formatC(auc_tbl$auc[match(combo_levels_chr, as.character(auc_tbl$combo))],
+            digits = 2, format = "f")
+  ),
+  combo_levels_chr
+)
+
+# 4) make the plot, using a qualitative brewer palette
+roc_plot <- ggplot(roc_df, aes(x = fpr, y = tpr, colour = combo)) +
+  geom_line(size = 1) +
+  geom_abline(lty = 2, colour = "grey60") +
+  labs(
+    x      = "False-positive rate (1 − specificity)",
+    y      = "True-positive rate (sensitivity)",
+    colour = NULL,              # no title above the legend
+    title  = "Test Samples ROC Curves"
+  ) +
+  theme_bw(14) +
+  theme(
+    legend.position    = c(0.63, 0.15),  # inside, bottom-right
+    legend.background  = element_rect(fill = alpha("white", 0.7), colour = NA),
+    legend.key.size    = unit(0.8, "lines"),
+    legend.text        = element_text(size = 10),
+    panel.grid = element_blank()
+  ) +
+  scale_cols_shared(labels_vec = legend_labels)
+# scale_colour_manual(
+#   values = okabe_ito8[1:length(levels(roc_df$combo))],
+#   labels = legend_labels
+# )
+
+
+# ── 2) Prepare perf_df with the same factor‐ordering as roc_df ───────────────
+perf_df <- fragmentomics_obj$validation_metrics %>%
+  select(combo, 
+         sens_mean = sens_valid,
+         spec_mean = spec_valid) %>%
+  # Add placeholder SD columns (set to 0 so error bars are invisible)
+  mutate(
+    sens_sd = 0,
+    spec_sd = 0
+  ) %>%
+  # Keep only combos that made it into your ROC dataframe
+  filter(combo %in% levels(roc_df$combo)) %>%
+  # Ensure identical factor ordering for plotting consistency
+  mutate(combo = factor(combo, levels = levels(roc_df$combo)))
+
+# Make a named vector of labels
+labels_perf <- setNames(
+  paste0(
+    pretty_combo_names[combo_levels_chr], " (",
+    scales::percent(perf_df$sens_mean[match(combo_levels_chr, as.character(perf_df$combo))], 1),
+    " sens, ",
+    scales::percent(perf_df$spec_mean[match(combo_levels_chr, as.character(perf_df$combo))], 1),
+    " spec)"
+  ),
+  combo_levels_chr
+)
+
+# 1) Build performance plot
+perf_plot <- ggplot(perf_df, aes(sens_mean, spec_mean, colour = combo)) +
+  geom_point(size=3) +
+  geom_errorbarh(aes(
+    xmin = pmax(0, sens_mean - sens_sd),
+    xmax = pmin(1, sens_mean + sens_sd)
+  ), height=0.015) +
+  geom_errorbar(aes(
+    ymin = pmax(0, spec_mean - spec_sd),
+    ymax = pmin(1, spec_mean + spec_sd)
+  ), width=0.015) +
+  geom_vline(xintercept=0.5, lty=2, colour="grey80") +
+  geom_hline(yintercept=0.5, lty=2, colour="grey80") +
+  scale_cols_shared(labels_vec = labels_perf) +
+  scale_x_continuous(limits=c(0,1)) +
+  scale_y_continuous(limits=c(0,1)) +
+  labs(
+    x     = "Mean sensitivity",
+    y     = "Mean specificity",
+    title = "Sensitivity vs. Specificity of cfWGS\nModels in the Test Cohort",
+    colour = NULL
+  ) +
+  theme_bw(12) +
+  theme(
+    panel.grid      = element_blank(),
+    legend.position = c(0.03, 0.03),
+    legend.justification = c(0,0),
+    legend.background = element_rect(
+      fill = alpha("white", 0.7),  # lower alpha → more transparent
+      colour = NA
+    ),
+    plot.title      = element_text(hjust=0.5, face = "bold", size = 16)
+  )
+
+# ── 3) Combine with roc_plot ────────────────────────────────────────────────
+combined_plot <- roc_plot + perf_plot + plot_layout(ncol = 2, widths = c(1,1))
+
+
+# ── 4) Export ───────────────────────────────────────────────────────────────
+ggsave(
+  filename = "Final Tables and Figures/Supp_Fig_9C_combined_ROC_and_performance_nested_folds_fragmentomics_validation3.png",
+  plot     = combined_plot,
+  width    = 12,
+  height   = 6,
+  dpi      = 500
+)
+
+ggsave(
+  filename = "Final Tables and Figures/Supp_Fig_9C_performance_nested_folds_fragmentomics_validation_updated3.png",
+  plot     = perf_plot,
+  width    = 5,
+  height   = 4,
+  dpi      = 500
+)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 # -----------------------------------------------------------------------------

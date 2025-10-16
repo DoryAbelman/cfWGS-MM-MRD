@@ -1372,21 +1372,67 @@ cm_non <- ct_to_long(ct_non_Flow, "Flow (MFC)")
 ## ───────────────────────────────────────────────────────────────
 ## C.  A small plotting helper (avoids repeated code)
 ## ───────────────────────────────────────────────────────────────
-plot_cm <- function(df, main_title){
+
+## Old function
+# plot_cm <- function(df, main_title){
+#   df <- df %>%
+#     mutate(
+#       # now x = Obs (clinical), y = Pred (cfWGS)
+#       Obs  = factor(Obs,  levels = c("neg","pos")),
+#       Pred = factor(Pred, levels = c("pos","neg"))  # note: flipped so “neg” sits in the same corner
+#     )
+#   
+#   ggplot(df, aes(x = Obs, y = Pred, fill = Count)) +
+#     geom_tile(colour = "white") +
+#     geom_text(aes(label = Count), size = 4) +
+#     facet_wrap(~ model, nrow = 1) +
+#     scale_fill_viridis_c(
+#       option = "D", begin = 0.3, end = 0.9, guide = "none"
+#     ) +
+#     scale_x_discrete(position = "top") +
+#     labs(
+#       x = "Clinical MRD",
+#       y = "cfWGS MRD",
+#       title = main_title
+#     ) +
+#     theme_minimal(base_size = 10) +
+#     theme(
+#       strip.text      = element_text(face = "bold"),
+#       axis.text.y     = element_text(size = 9),
+#       axis.text.x     = element_text(size = 9, vjust = 0),
+#       axis.title      = element_text(size = 10),
+#       panel.grid      = element_blank(),
+#       legend.position = "none",
+#       plot.title      = element_text(face = "bold", hjust = 0.5)
+#     )
+# }
+
+## Updated 
+plot_cm <- function(df, main_title,
+                    col_low = "#f2f2f2", col_high = "#4a4a4a") {
+  
   df <- df %>%
     mutate(
-      # now x = Obs (clinical), y = Pred (cfWGS)
+      # keep corners consistent
       Obs  = factor(Obs,  levels = c("neg","pos")),
-      Pred = factor(Pred, levels = c("pos","neg"))  # note: flipped so “neg” sits in the same corner
-    )
+      Pred = factor(Pred, levels = c("pos","neg"))
+    ) %>%
+    group_by(model) %>%                             # choose white text on dark cells (per facet)
+    mutate(text_col = if_else(Count >= 0.7 * max(Count), "white", "black")) %>%
+    ungroup()
   
   ggplot(df, aes(x = Obs, y = Pred, fill = Count)) +
-    geom_tile(colour = "white") +
-    geom_text(aes(label = Count), size = 4) +
+    geom_tile(colour = "white", linewidth = 0) +
+    geom_text(aes(label = Count, color = text_col), size = 4, show.legend = FALSE) +
     facet_wrap(~ model, nrow = 1) +
-    scale_fill_viridis_c(
-      option = "D", begin = 0.3, end = 0.9, guide = "none"
+    scale_fill_gradient(
+      low    = col_low,
+      high   = col_high,
+      limits = c(0, max(df$Count)),
+      oob    = scales::squish,
+      guide  = "none"
     ) +
+    scale_color_identity() +
     scale_x_discrete(position = "top") +
     labs(
       x = "Clinical MRD",
@@ -1405,6 +1451,8 @@ plot_cm <- function(df, main_title){
     )
 }
 
+
+
 ## ───────────────────────────────────────────────────────────────
 ## D.  Draw & save the three panels
 ## ───────────────────────────────────────────────────────────────
@@ -1412,11 +1460,11 @@ p_post   <- plot_cm(cm_post ,  "Confusion Matrix at Post-ASCT (Training Cohort)"
 p_maint  <- plot_cm(cm_maint,  "Confusion Matrix at 1‑Year Maintenance (Training Cohort)")
 p_non    <- plot_cm(cm_non ,   "Confusion Matrix of Test Cohort")
 
-ggsave("Final Tables and Figures/Fig4_confmat_post_ASCT_updated3.png",
+ggsave("Final Tables and Figures/Fig4_confmat_post_ASCT_updated4.png",
        p_post,  width = 5, height = 2.75, dpi = 600)
-ggsave("Final Tables and Figures/Fig4_confmat_maintenance3.png",
+ggsave("Final Tables and Figures/Fig4_confmat_maintenance4.png",
        p_maint, width = 5, height = 2.75, dpi = 600)
-ggsave("Final Tables and Figures/Fig4_confmat_nonfront3.png",
+ggsave("Final Tables and Figures/Fig4_confmat_nonfront4.png",
        p_non,   width = 3, height = 2.75, dpi = 600)   # single facet – narrower
 
 ## As one 
@@ -1561,7 +1609,7 @@ writexl::write_xlsx(
     "Contingency_Maintenance"   = ct_maint,
     "Contingency_NonFrontline"  = ct_nonfront
   ),
-  path = file.path(outdir, "cfWGS_vs_MRD_truth_contingency_tables_blood2.xlsx")
+  path = file.path(outdir, "cfWGS_vs_MRD_truth_contingency_tables_blood3.xlsx")
 )
 
 ### Now do to MFC and clonoSEQ seperately 
@@ -1647,53 +1695,17 @@ cm_maint <- bind_rows(
 cm_non <- ct_to_long(ct_non_Flow, "Flow (MFC)")
 
 ## ───────────────────────────────────────────────────────────────
-## C.  A small plotting helper (avoids repeated code)
-## ───────────────────────────────────────────────────────────────
-plot_cm <- function(df, main_title){
-  df <- df %>%
-    mutate(
-      # now x = Obs (clinical), y = Pred (cfWGS)
-      Obs  = factor(Obs,  levels = c("neg","pos")),
-      Pred = factor(Pred, levels = c("pos","neg"))  # note: flipped so “neg” sits in the same corner
-    )
-  
-  ggplot(df, aes(x = Obs, y = Pred, fill = Count)) +
-    geom_tile(colour = "white") +
-    geom_text(aes(label = Count), size = 4) +
-    facet_wrap(~ model, nrow = 1) +
-    scale_fill_viridis_c(
-      option = "D", begin = 0.3, end = 0.9, guide = "none"
-    ) +
-    scale_x_discrete(position = "top") +
-    labs(
-      x = "Clinical MRD",
-      y = "cfWGS MRD",
-      title = main_title
-    ) +
-    theme_minimal(base_size = 10) +
-    theme(
-      strip.text      = element_text(face = "bold"),
-      axis.text.y     = element_text(size = 9),
-      axis.text.x     = element_text(size = 9, vjust = 0),
-      axis.title      = element_text(size = 10),
-      panel.grid      = element_blank(),
-      legend.position = "none",
-      plot.title      = element_text(face = "bold", hjust = 0.5)
-    )
-}
-
-## ───────────────────────────────────────────────────────────────
-## D.  Draw & save the three panels
+##  Draw & save the three panels
 ## ───────────────────────────────────────────────────────────────
 p_post   <- plot_cm(cm_post ,  "Confusion Matrix at Post-ASCT (Training Cohort)")
 p_maint  <- plot_cm(cm_maint,  "Confusion Matrix at 1‑Year Maintenance (Training Cohort)")
 p_non    <- plot_cm(cm_non ,   "Confusion Matrix of Test Cohort")
 
-ggsave("Final Tables and Figures/Fig5_confmat_post_ASCT_blood_updated4.png",
+ggsave("Final Tables and Figures/Fig5_confmat_post_ASCT_blood_updated5.png",
        p_post,  width = 5, height = 2.75, dpi = 600)
-ggsave("Final Tables and Figures/Fig5_confmat_maintenance_blood_updated4.png",
+ggsave("Final Tables and Figures/Fig5_confmat_maintenance_blood_updated5.png",
        p_maint, width = 5, height = 2.75, dpi = 600)
-ggsave("Final Tables and Figures/Fig5_confmat_nonfront_blood_updated4.png",
+ggsave("Final Tables and Figures/Fig5_confmat_nonfront_blood_updated5.png",
        p_non,   width = 3, height = 2.75, dpi = 600)   # single facet – narrower
 
 ## As one 

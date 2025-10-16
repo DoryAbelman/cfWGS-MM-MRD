@@ -1052,12 +1052,12 @@ thr_tbl <- plot_df_pat %>%
 thr_named <- setNames(thr_tbl$thr, thr_tbl$Metric)
 
 ## Function to plot
-make_panel_minlogic <- function(metric, ylab,
+make_panel_minlogic <- function(metric, data, ylab,
                                 col_after = "red", col_before = "black",
                                 week_cutoff = 75, tol = 0, cap = Inf,
                                 pad_before_weeks = 0, plot_title = NULL) {   # <-- added here
   
-  df0 <- plot_df_pat %>% dplyr::filter(Metric == metric)
+  df0 <- data %>% dplyr::filter(Metric == metric)
   
   # threshold (fallback if not in thr_named)
   thr_val <- suppressWarnings(as.numeric(thr_named[[metric]]))
@@ -1066,34 +1066,63 @@ make_panel_minlogic <- function(metric, ylab,
                                q_flat, na.rm = TRUE)
   }
   
-  # trough (prefer ≤ week_cutoff if available)
-  trough_tbl <- df0 %>%
+  
+  # ---- mark what to show as percent ----
+  percent_metrics <- c("TF_ichorCNA", "Proportion.Short", "cVAF_blood", "cVAF", "sites", "sites_blood")
+  is_percent <- metric %in% percent_metrics
+  
+  ## --- low-tail handling ----------------------------------------------------
+  low_tail_metrics <- c("Mean.Coverage")   # add more if needed
+  is_low <- metric %in% low_tail_metrics
+  
+  # anchor (prefer ≤ week_cutoff if available): trough for high-tail, peak for low-tail
+  anchor_tbl <- df0 %>%
     dplyr::group_by(Patient) %>%
     dplyr::group_modify(~{
-      d <- .x
+      d     <- .x
       d_pre <- d %>% dplyr::filter(Weeks_Since_Baseline <= week_cutoff)
-      r <- if (nrow(d_pre) > 0) d_pre[which.min(d_pre$Value), , drop = FALSE]
-      else                  d    [which.min(d$Value),     , drop = FALSE]
-      tibble::tibble(min_time = r$Weeks_Since_Baseline[1],
-                     min_val  = r$Value[1])
+      pick  <- function(dd) {
+        if (is_low) dd[which.max(dd$Value), , drop = FALSE]  # peak for low-tail
+        else        dd[which.min(dd$Value), , drop = FALSE]  # trough for high-tail
+      }
+      r <- if (nrow(d_pre) > 0) pick(d_pre) else pick(d)
+      tibble::tibble(anchor_time = r$Weeks_Since_Baseline[1],
+                     anchor_val  = r$Value[1])
     }) %>%
     dplyr::ungroup()
   
-  # crossing time: require ANY rise after trough, then first time >= threshold
-  eps <- 1e-8
-  rise_step <- 0.01
+  # crossing time:
+  #  - high-tail: require any *rise* after trough; first time >= threshold
+  #  - low-tail : require any *fall* after peak;   first time <= threshold
+  eps       <- 1e-8
+  step_size <- 0.01
+  
   cross_tbl <- df0 %>%
-    dplyr::left_join(trough_tbl, by = "Patient") %>%
+    dplyr::left_join(anchor_tbl, by = "Patient") %>%
     dplyr::group_by(Patient) %>%
     dplyr::summarise(
-      min_time = dplyr::first(min_time),
-      min_val  = dplyr::first(min_val),
-      rise_ok  = any(Weeks_Since_Baseline > min_time &
-                       Value > (min_val + rise_step), na.rm = TRUE),
+      anchor_time = dplyr::first(anchor_time),
+      anchor_val  = dplyr::first(anchor_val),
+      
+      # did the trajectory move in the expected direction after the anchor?
+      move_ok = if (is_low) {
+        any(Weeks_Since_Baseline > anchor_time &
+              Value < (anchor_val - step_size), na.rm = TRUE)
+      } else {
+        any(Weeks_Since_Baseline > anchor_time &
+              Value > (anchor_val + step_size), na.rm = TRUE)
+      },
+      
+      # first time it crosses the appropriate side of the threshold
       cross_time = {
-        if (is.na(min_time) || !rise_ok) NA_real_ else {
-          t_after <- Weeks_Since_Baseline[Weeks_Since_Baseline > min_time &
-                                            Value >= (thr_val - eps)]
+        if (is.na(anchor_time) || !move_ok) NA_real_ else {
+          t_after <- if (is_low) {
+            Weeks_Since_Baseline[Weeks_Since_Baseline > anchor_time &
+                                   Value <= (thr_val + eps)]
+          } else {
+            Weeks_Since_Baseline[Weeks_Since_Baseline > anchor_time &
+                                   Value >= (thr_val - eps)]
+          }
           if (length(t_after)) min(t_after) else NA_real_
         }
       },
@@ -1107,10 +1136,12 @@ make_panel_minlogic <- function(metric, ylab,
       after_cross_pt = !is.na(cross_time) & Weeks_Since_Baseline >= cross_time,
       Value_plot     = if (is.finite(cap)) pmin(pmax(Value, 0), cap) else Value,
       overcap        = is.finite(cap) & Value > cap,
-      # label: two decimals if <1, integer otherwise
-      label_val      = dplyr::case_when(
-        Value < 1 ~ sprintf("%.2f", Value),
-        TRUE      ~ as.character(round(Value))
+      # label: use % for percent metrics, otherwise numeric
+      label_val = dplyr::case_when(
+        is_percent & Value < 1 ~ sprintf("%.1f%%", Value * 100),
+        is_percent & Value >= 1 ~ sprintf("%.0f%%", Value * 100),
+        !is_percent & Value < 1 ~ sprintf("%.2f", Value),
+        TRUE ~ as.character(round(Value))
       ),
       tp_shape = dplyr::case_when(
         prog_tp ~ "Progression",
@@ -1175,7 +1206,7 @@ make_panel_minlogic <- function(metric, ylab,
     if (!is.finite(cap)) return(0.05)
     if (cap < 1) 0.05 else 0.05   # a bit more headroom for tiny caps
   }
-    
+  
   # ---- PLOT ----
   ggplot(df_plot, aes(Weeks_Since_Baseline, Value_plot, group = Patient)) +
     geom_segment(
@@ -1217,13 +1248,34 @@ make_panel_minlogic <- function(metric, ylab,
       name   = "Timepoint"
     ) +
     scale_fill_manual(values = c(`FALSE` = col_before, `TRUE` = col_after), guide = "none") +
-    # axis ticks; no 'limits' → no dropped rows; cartesian window handles the view
-    scale_y_continuous(
-      breaks = mk_y_breaks(cap),
-      labels = mk_y_labels(cap),
-      expand = expansion(mult = c(0.04, top_expand(cap)))
-    ) +
-    coord_cartesian(ylim = if (is.finite(cap)) c(0, cap) else NULL, clip = "off") +
+    # if Mean.Coverage, flip y-axis and set custom limits
+    # add y-scale/coord conditionally as a list of layers
+    # ---- y-axis scaling ----
+  (
+    if (metric == "Mean.Coverage") {
+      list(
+        scale_y_reverse()
+      )
+    } else if (is_percent) {
+      list(
+        scale_y_continuous(
+          labels = scales::percent_format(accuracy = 1),
+          expand = expansion(mult = c(0.04, top_expand(cap)))
+        ),
+        coord_cartesian(ylim = if (is.finite(cap)) c(0, cap) else NULL, clip = "off"),
+        labs(y = paste0(ylab, " (%)"))
+      )
+    } else {
+      list(
+        scale_y_continuous(
+          breaks = mk_y_breaks(cap),
+          labels = mk_y_labels(cap),
+          expand = expansion(mult = c(0.04, top_expand(cap)))
+        ),
+        coord_cartesian(ylim = if (is.finite(cap)) c(0, cap) else NULL, clip = "off")
+      )
+    }
+  ) +
     guides(
       colour = guide_legend(order = 1, override.aes = list(shape = 16)),
       shape  = guide_legend(order = 2)
@@ -1234,8 +1286,8 @@ make_panel_minlogic <- function(metric, ylab,
 
 
 # Example calls (Z-score panels: no cap)
-p_sites  <- make_panel_minlogic("sites_z", "Prop. Mutant Sites Detected (Z)", plot_title = "Longitudinal trajectories of MRD metrics from baseline BM mutation profiles")
-p_cvaf  <- make_panel_minlogic("cVAF_z",  "Cumulative VAF (Z)", cap = 2500,  plot_title = "Longitudinal trajectories of MRD metrics from baseline BM mutation profiles")    # cap on
+p_sites  <- make_panel_minlogic("sites_z", "Proportion of Mutant Sites Detected (Z)", data = plot_df_pat, plot_title = "Longitudinal trajectories of MRD metrics from baseline BM mutation profiles")
+p_cvaf  <- make_panel_minlogic("cVAF_z",  "Cumulative VAF (Z)", cap = 2500,  data = plot_df_pat, plot_title = "Longitudinal trajectories of MRD metrics from baseline BM mutation profiles")    # cap on
 p_sites
 p_cvaf
 
@@ -1263,7 +1315,7 @@ p_combined
 
 # Save
 ggsave(
-  filename = file.path(outdir, "BM_Zscore_Longitudinal_Monitoring2.png"),
+  filename = file.path(outdir, "BM_Zscore_Longitudinal_Monitoring4.png"),
   plot     = p_combined,
   width    = 12,   # 4 panels across
   height   = 4,
@@ -1272,8 +1324,8 @@ ggsave(
 
 ## Redo for non z-score BM features
 # Example calls (Z-score panels: no cap)
-p_sites  <- make_panel_minlogic("sites", "Prop. Mutant Sites Detected", plot_title = "Longitudinal trajectories of MRD metrics from baseline BM mutation profiles")
-p_cvaf  <- make_panel_minlogic("cVAF",  "Cumulative VAF", cap = 0.25,  plot_title = "Longitudinal trajectories of MRD metrics from baseline BM mutation profiles")    # cap on
+p_sites  <- make_panel_minlogic("sites", "Proportion of Mutant Sites Detected", data = plot_df_pat, plot_title = "Longitudinal trajectories of MRD metrics from baseline BM mutation profiles")
+p_cvaf  <- make_panel_minlogic("cVAF",  "Cumulative VAF", cap = 0.25, data = plot_df_pat, plot_title = "Longitudinal trajectories of MRD metrics from baseline BM mutation profiles")    # cap on
 p_sites
 p_cvaf
 
@@ -1300,7 +1352,7 @@ p_combined <- (p_cvaf + p_sites) +
 p_combined
 
 ggsave(
-  filename = file.path(outdir, "BM_raw_features_Longitudinal_Monitoring2.png"),
+  filename = file.path(outdir, "BM_raw_features_Longitudinal_Monitoring3.png"),
   plot     = p_combined,
   width    = 12,   # 4 panels across
   height   = 4,
@@ -1309,12 +1361,304 @@ ggsave(
 
 
 ## Do for blood and fragmentomic features
+## Create unified plotting and threshold df to use with function 
+## Ensure to flip the regulatory coverage fragment feature
+## Just turn everything below 1 into a percent potentially 
+
+# ------------------------------
+# Helper: sample-level relapse flag
+# ------------------------------
+relapse_flag <- function(days) {
+  dplyr::if_else(days <= 180, TRUE, FALSE, missing = FALSE)
+}
+
+# ------------------------------
+# 1) BM mutation metrics (keep original names)
+# ------------------------------
+plot_df_bm <- dat %>%
+  transmute(
+    Patient,
+    Weeks_Since_Baseline,
+    Num_days_to_closest_relapse,
+    cVAF   = detect_rate_BM,
+    cVAF_z = z_score_detection_rate_BM,
+    sites  = sites_rate_BM,
+    sites_z = zscore_BM,
+    relapse_within_180 = relapse_flag(Num_days_to_closest_relapse),
+    Panel = "BM"
+  ) %>%
+  pivot_longer(
+    cols = c(cVAF, cVAF_z, sites, sites_z),
+    names_to = "Metric", values_to = "Value"
+  ) %>%
+  drop_na(Value)
+
+# ------------------------------
+# 2) Blood mutation metrics (rename so they’re distinct)
+# ------------------------------
+plot_df_blood <- dat %>%
+  transmute(
+    Patient,
+    Weeks_Since_Baseline,
+    Num_days_to_closest_relapse,
+    cVAF_blood   = detect_rate_blood,
+    cVAF_z_blood = z_score_detection_rate_blood,
+    sites_blood  = sites_rate_blood,
+    sites_z_blood = zscore_blood,
+    relapse_within_180 = relapse_flag(Num_days_to_closest_relapse),
+    Panel = "Blood"
+  ) %>%
+  pivot_longer(
+    cols = c(cVAF_blood, cVAF_z_blood, sites_blood, sites_z_blood),
+    names_to = "Metric", values_to = "Value"
+  ) %>%
+  drop_na(Value)
+
+# ------------------------------
+# 3) Fragmentomics metrics
+#     - flip Mean.Coverage (inverse relationship)
+#     - rename ichorCNA TF for a cleaner Metric name
+# ------------------------------
+plot_df_fragmentomics <- dat %>%
+  transmute(
+    Patient,
+    Weeks_Since_Baseline,
+    Num_days_to_closest_relapse,
+    FS,
+    Mean.Coverage,
+    Proportion.Short,
+    TF_ichorCNA = WGS_Tumor_Fraction_Blood_plasma_cfDNA,
+    relapse_within_180 = relapse_flag(Num_days_to_closest_relapse),
+    Panel = "Fragmentomics"
+  ) %>%
+  pivot_longer(
+    cols = c(FS, Mean.Coverage, Proportion.Short, TF_ichorCNA),
+    names_to = "Metric", values_to = "Value"
+  ) %>%
+  drop_na(Value)
+
+# ------------------------------
+# 4) Combine all panels
+# ------------------------------
+plot_df_all <- bind_rows(plot_df_bm, plot_df_blood, plot_df_fragmentomics) %>%
+  # optional: add patient-level relapse factor for faceting
+  group_by(Patient) %>%
+  mutate(patient_relapse180 = any(relapse_within_180, na.rm = TRUE)) %>%
+  ungroup()
+
+plot_df_all <- plot_df_all %>%
+  mutate(prog_tp = !is.na(Num_days_to_closest_relapse) &
+           Num_days_to_closest_relapse == 0)
+
+## Now get thresholds 
+# which metrics should use the *lower* tail?
+low_tail_metrics <- c("Mean.Coverage")   # add others here if needed
+
+# learn thresholds from NON-progressors, follow-up only
+thr_tbl <- plot_df_all %>%
+  dplyr::filter(as.character(patient_relapse180) == "FALSE",
+                Weeks_Since_Baseline > 52) %>%
+  dplyr::group_by(Metric) %>%
+  dplyr::summarise(
+    thr = quantile(
+      Value,
+      # 0.10 for low-tail metrics; 0.90 for the rest
+      ifelse(dplyr::first(Metric) %in% low_tail_metrics, 1 - q_flat, q_flat),
+      na.rm = TRUE
+    ),
+    .groups = "drop"
+  )
+
+thr_named <- setNames(thr_tbl$thr, thr_tbl$Metric)
+
+
+# ------------------------------
+# 5) Labels for plotting
+# ------------------------------
+custom_labels <- c(
+  # BM mutation metrics
+  cVAF    = "Cumulative VAF",
+  cVAF_z  = "Cumulative VAF Z-score",
+  sites   = "Proportion of Sites Detected",
+  sites_z = "Proportion of Sites Detected Z-score",
+  
+  # Blood mutation metrics (renamed)
+  cVAF_blood    = "Cumulative VAF",
+  cVAF_z_blood  = "Cumulative VAF Z-score",
+  sites_blood   = "Proportion of Sites Detected",
+  sites_z_blood = "Proportion of Sites Detected Z-score",
+  
+  # Fragmentomics
+  FS                        = "Fragment-size score",
+  Mean.Coverage.Flipped     = "cfDNA coverage at MM active regulatory sites",
+  Proportion.Short          = "Short-fragment proportion",
+  TF_ichorCNA               = "cfDNA tumor fraction (ichorCNA)"
+)
+
+# optional: lock Metric factor order to labels order
+#plot_df_all <- plot_df_all %>%
+#  mutate(Metric = factor(Metric, levels = names(custom_labels)))
+
+
+## Now plot 
+## Blood features
+# Raw calls 
+p_sites  <- make_panel_minlogic("sites_blood", "Proportion of Mutant Sites Detected", data = plot_df_all, plot_title = "Longitudinal trajectories of MRD metrics from baseline cfDNA mutation profiles")
+p_cvaf  <- make_panel_minlogic("cVAF_blood",  "Cumulative VAF", cap = 0.22,  data = plot_df_all, plot_title = "Longitudinal trajectories of MRD metrics from baseline cfDNA mutation profiles")    # cap on
+p_sites
+p_cvaf
+
+
+# Combine side-by-side with a single legend at the bottom
+p_cvaf <- p_cvaf + ggtitle(NULL)
+p_sites <- p_sites + ggtitle(NULL)
+
+p_combined <- (p_cvaf + p_sites) +
+  plot_annotation(
+    title = "Longitudinal trajectories of MRD metrics from baseline cfDNA mutation profiles"
+  ) +
+  plot_layout(guides = "collect") &                           # <-- collect legends
+  theme(
+    legend.position = "bottom",
+    legend.box      = "horizontal",
+    plot.title = element_text(size = 18, face = "bold", hjust = 0.5)
+  ) &
+  guides(                                                     # optional: one-row legends
+    colour = guide_legend(nrow = 1, byrow = TRUE),
+    shape  = guide_legend(nrow = 1, byrow = TRUE)
+  )
+
+p_combined
+
+ggsave(
+  filename = file.path(outdir, "Blood_raw_features_Longitudinal_Monitoring3.png"),
+  plot     = p_combined,
+  width    = 12,   # 4 panels across
+  height   = 4,
+  dpi      = 600
+)
+
+
+# Example calls (Z-score panels: no cap)
+p_sites  <- make_panel_minlogic("sites_z_blood", "Proportion of Mutant Sites Detected (Z)", data = plot_df_all, plot_title = "Longitudinal trajectories of MRD metrics from baseline cfDNA mutation profiles")
+p_cvaf  <- make_panel_minlogic("cVAF_z_blood",  "Cumulative VAF (Z)", cap = 160,  data = plot_df_all, plot_title = "Longitudinal trajectories of MRD metrics from baseline cfDNA mutation profiles")    # cap on
+p_sites
+p_cvaf
+
+
+# Combine side-by-side with a single legend at the bottom
+p_cvaf <- p_cvaf + ggtitle(NULL)
+p_sites <- p_sites + ggtitle(NULL)
+
+p_combined <- (p_cvaf + p_sites) +
+  plot_annotation(
+    title = "Longitudinal trajectories of MRD metrics from baseline cfDNA mutation profiles"
+  ) +
+  plot_layout(guides = "collect") &                           # <-- collect legends
+  theme(
+    legend.position = "bottom",
+    legend.box      = "horizontal",
+    plot.title = element_text(size = 18, face = "bold", hjust = 0.5)
+  ) &
+  guides(                                                     # optional: one-row legends
+    colour = guide_legend(nrow = 1, byrow = TRUE),
+    shape  = guide_legend(nrow = 1, byrow = TRUE)
+  )
+
+p_combined
+
+ggsave(
+  filename = file.path(outdir, "Blood_zscore_features_Longitudinal_Monitoring3.png"),
+  plot     = p_combined,
+  width    = 12,   # 4 panels across
+  height   = 4,
+  dpi      = 600
+)
+
+
+## Fragmentomic features
+# Example calls (Z-score panels: no cap)
+p_frag2 <- make_panel_minlogic("TF_ichorCNA",  "cfDNA Tumor Fraction", cap = NA,  data = plot_df_all, plot_title = "Longitudinal trajectories of MRD metrics from baseline cfDNA mutation profiles")    # cap on
+p_frag1  <- make_panel_minlogic("Proportion.Short", "Short cfDNA Fragments", data = plot_df_all, plot_title = "Longitudinal trajectories of MRD metrics from baseline cfDNA mutation profiles")
+p_frag1
+p_frag2
+
+# Combine side-by-side with a single legend at the bottom
+p_frag1 <- p_frag1 + ggtitle(NULL)
+p_frag2 <- p_frag2 + ggtitle(NULL)
+
+p_combined <- (p_frag1 + p_frag2) +
+  plot_annotation(
+    title = "Longitudinal trajectories of fragmentomic features"
+  ) +
+  plot_layout(guides = "collect") &                           # <-- collect legends
+  theme(
+    legend.position = "bottom",
+    legend.box      = "horizontal",
+    plot.title = element_text(size = 18, face = "bold", hjust = 0.5)
+  ) &
+  guides(                                                     # optional: one-row legends
+    colour = guide_legend(nrow = 1, byrow = TRUE),
+    shape  = guide_legend(nrow = 1, byrow = TRUE)
+  )
+
+p_combined
+
+ggsave(
+  filename = file.path(outdir, "Fragmentation_Features_1_Longitudinal_Monitoring2.png"),
+  plot     = p_combined,
+  width    = 12,   # 4 panels across
+  height   = 4,
+  dpi      = 600
+)
+
+
+
+## Other features
+p_frag1 <- make_panel_minlogic("FS",  "Fragment-size score", cap = NA,  data = plot_df_all, plot_title = "Longitudinal trajectories of MRD metrics from baseline cfDNA mutation profiles")    # cap on
+p_frag2  <- make_panel_minlogic("Mean.Coverage", "Mean cfDNA coverage (MM regs)", cap = NA, data = plot_df_all, plot_title = "Longitudinal trajectories of MRD metrics from baseline cfDNA mutation profiles")
+p_frag1
+p_frag2
+
+# Combine side-by-side with a single legend at the bottom
+p_frag1 <- p_frag1 + ggtitle(NULL)
+p_frag2 <- p_frag2 + ggtitle(NULL)
+
+p_combined <- (p_frag1 + p_frag2) +
+  plot_annotation(
+    title = "Longitudinal trajectories of fragmentomic features"
+  ) +
+  plot_layout(guides = "collect") &                           # <-- collect legends
+  theme(
+    legend.position = "bottom",
+    legend.box      = "horizontal",
+    plot.title = element_text(size = 18, face = "bold", hjust = 0.5)
+  ) &
+  guides(                                                     # optional: one-row legends
+    colour = guide_legend(nrow = 1, byrow = TRUE),
+    shape  = guide_legend(nrow = 1, byrow = TRUE)
+  )
+
+p_combined
+
+ggsave(
+  filename = file.path(outdir, "Fragmentation_Features_2_Longitudinal_Monitoring2.png"),
+  plot     = p_combined,
+  width    = 12,   # 4 panels across
+  height   = 4,
+  dpi      = 600
+)
 
 
 
 
 
 
+############################################################
+# Section: Progressor vs Non-Progressor Example
+# Purpose: Add illustrative comparison of representative cases
+# Notes: Highlight differences in cfDNA or MRD trajectories
+############################################################
 
 
 #### Add specific example of progressor vs non-progressor 
@@ -1642,6 +1986,17 @@ for(pid in all_pids){
 
 
 
+
+
+
+
+
+
+
+
+
+
+#### Below here is testing and old code no longer needed 
 
 ## Now work on blood muts
 # 1. Pivot to long form
