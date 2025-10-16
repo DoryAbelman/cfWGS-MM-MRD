@@ -75,7 +75,7 @@ library(tidyverse)       # dplyr, purrr, tidyr, readr, etc.
 library(purrr)           # for reduce()
 library(tidyr)           # for pivot_longer()
 library(GenomicRanges)
-
+library(readxl)
 
 ## Load clinical info
 # Load in the patient info 
@@ -94,6 +94,9 @@ metada_df_mutation_comparison <- metada_df_mutation_comparison %>%
 
 
 seg_dir <- "Oct 2024 data/Sequenza/All_Segments_400/"
+
+export_dir <- "Jan2025_exported_data"
+if (!dir.exists(export_dir)) dir.create(export_dir)
 
 # ---- helper: derive ichor-like categorical calls from Sequenza fields
 call_from_CNt_AB <- function(CNt, A, B) {
@@ -132,26 +135,6 @@ wmode <- function(x, w) {
   as.numeric(names(t)[which.max(t)])
 }
 
-# robust weighted mode on integers with dominance score
-robust_ploidy <- function(CNt, start, end, chr, min_seg_bp = 5e6) {
-  # filter autosomes + long enough segments
-  ok <- chr %in% as.character(1:22)
-  L  <- pmax(end - start + 1, 1)
-  CNt_round <- round(CNt)
-  
-  ok <- ok & !is.na(CNt_round) & (L >= min_seg_bp)
-  if (!any(ok)) return(list(ploidy_est = NA_real_, dominance = NA_real_))
-  
-  # length-weighted counts per integer CN
-  tab <- tapply(L[ok], CNt_round[ok], sum, na.rm = TRUE)
-  tab <- tab[order(as.numeric(names(tab)))]
-  # winner and dominance (mass of winner / total mass)
-  winner <- as.numeric(names(tab)[which.max(tab)])
-  dom    <- as.numeric(max(tab) / sum(tab))
-  
-  list(ploidy_est = winner, dominance = dom)
-}
-
 
 # ---- read Sequenza *_segments.txt (optionally .gz), rename cols, make calls
 seg_files <- list.files(seg_dir, pattern = "_segments\\.txt(\\.gz)?$", full.names = TRUE)
@@ -162,8 +145,80 @@ names(seg_data_list) <- basename(seg_files)
 ploidy_list <- vector("list", length(seg_files))   
 
 
+### Get the ploidy from confints
+### Lastly, get the purity and ploidy estimates
+confints_dir <- "Oct 2024 data/Sequenza/All_confints_400/"
+
+# Discover files that end with _confints_CP.txt
+confints <- list.files(
+  confints_dir,
+  pattern = "_confints_CP\\.txt$",
+  full.names = TRUE
+)
+
+if (length(confints) == 0L) {
+  stop("No *_confints_CP.txt files found in: ", confints_dir)
+}
+
+# Safe reader: grab the 2nd row if present; return NA otherwise
+read_pp_safe <- function(path) {
+  df <- suppressMessages(read_tsv(path, show_col_types = FALSE, progress = FALSE))
+  if (nrow(df) < 2L) {
+    warning("File has <2 rows, skipping values: ", basename(path))
+    return(tibble(
+      Sample = NA_character_,
+      Purity = NA_real_,
+      Ploidy = NA_real_,
+      File   = path
+    ))
+  }
+  
+  # Some sequenza outputs use 'cellularity' and 'ploidy.estimate'
+  # Normalize possible name variants just in case.
+  nm <- names(df)
+  nm <- nm |>
+    str_replace("^cellularity$", "cellularity") |>
+    str_replace("^ploidy\\.estimate$", "ploidy.estimate")
+  names(df) <- nm
+  
+  row2 <- df |> slice(2)
+  
+  # Extract clean sample ID from filename
+  sample_id <- basename(path) |> str_remove("_confints_CP\\.txt$")
+  
+  tibble(
+    Sample = sample_id,
+    Purity = suppressWarnings(as.numeric(row2$cellularity)),
+    Ploidy = suppressWarnings(as.numeric(row2$`ploidy.estimate`)),
+    File   = path
+  )
+}
+
+pp_table <- map_dfr(confints, read_pp_safe) |>
+  # Keep only labeled columns for downstream use
+  select(Sample, Purity, Ploidy)
+
+# Basic sanity checks + labeling polish
+pp_table <- pp_table |>
+  mutate(
+    Purity = round(Purity, 4),
+    Ploidy = round(Ploidy, 3)
+  ) |>
+  arrange(Sample)
+
+write.table(pp_table,
+            paste0(export_dir,"/sequenza_purity_ploidy_estimates.txt"),sep="\t", 
+            row.names = FALSE, quote = FALSE)
+
+
+
+ploidy_map <- setNames(pp_table$Ploidy, pp_table$Sample)
+
+ploidy_list   <- vector("list", length(seg_files))
+seg_data_list <- vector("list", length(seg_files))
+
 for (i in seq_along(seg_files)) {
-  f <- seg_files[i]
+  f  <- seg_files[i]
   df <- readr::read_tsv(f, show_col_types = FALSE)
   
   # required columns in Sequenza segments
@@ -171,76 +226,82 @@ for (i in seq_along(seg_files)) {
   miss <- setdiff(req, colnames(df))
   if (length(miss) > 0) stop("Missing columns in ", basename(f), ": ", paste(miss, collapse = ", "))
   
+  # sample id must match the id used in pp_table$Sample
   sample_name <- sub("_segments\\.txt(\\.gz)?$", "", basename(f))
   
-  # ----- estimate baseline (rounded ploidy) from autosomes, length-weighted mode of rounded CNt
-  df_auto <- df %>%
-    transmute(
-      chr   = stringr::str_remove(chromosome, "^chr"),
-      start = as.numeric(start.pos),
-      end   = as.numeric(end.pos),
-      CNt   = as.numeric(CNt)
-    ) %>%
-    filter(chr %in% as.character(1:22)) %>%
-    mutate(seg_len = pmax(end - start + 1, 1),
-           CNt_round = round(CNt))
-  
-  est_ploidy <- wmode(df_auto$CNt_round, df_auto$seg_len)  # assumes wmode() defined earlier
-  baseline   <- ifelse(is.na(est_ploidy), NA_real_, pmax(1, round(est_ploidy)))
-  
-  # record ploidy for reporting
-  ploidy_list[[i]] <- tibble(
-    Sample     = sample_name,
-    ploidy_est = est_ploidy,
-    baseline   = baseline
-  )
-  
-  # ----- build per-segment categorical calls (baseline-aware; fallback to original if baseline is NA)
+  # ---- core numeric frame
   seg_core <- df %>%
-    transmute(
+    dplyr::transmute(
       chr   = stringr::str_remove(chromosome, "^chr"),
-      start = as.numeric(start.pos),
-      end   = as.numeric(end.pos),
-      CNt   = as.numeric(CNt),
-      A     = as.numeric(A),
-      B     = as.numeric(B)
-    )
+      start = suppressWarnings(as.numeric(start.pos)),
+      end   = suppressWarnings(as.numeric(end.pos)),
+      CNt   = suppressWarnings(as.numeric(CNt)),
+      A     = suppressWarnings(as.numeric(A)),
+      B     = suppressWarnings(as.numeric(B))
+    ) %>%
+    dplyr::mutate(seg_len = pmax(end - start + 1, 1))
   
-  if (is.na(baseline)) {
-    # fallback: your original diploid-centric rule if baseline couldn't be estimated
-    seg_calls <- seg_core %>%
-      mutate(Call = call_from_CNt_AB(CNt, A, B))
+  # ---- try to use confints ploidy
+  ploidy_conf <- unname(ploidy_map[sample_name])
+  
+  # If confints missing, fall back to autosome-weighted mode of rounded CNt
+  if (!is.finite(ploidy_conf)) {
+    df_auto <- seg_core %>%
+      dplyr::filter(chr %in% as.character(1:22)) %>%
+      dplyr::mutate(CNt_round = round(CNt))
+    est_ploidy <- wmode(df_auto$CNt_round, df_auto$seg_len)  # assumes wmode() defined upstream
+    baseline_int <- ifelse(is.na(est_ploidy), NA_real_, pmax(1, round(est_ploidy)))
+    source_tag   <- "segments_fallback"
   } else {
-    # baseline-aware labels
-    seg_calls <- seg_core %>%
-      mutate(Call = case_when(
-        is.na(CNt)                 ~ NA_character_,
-        CNt == 0                   ~ "HOMD",
-        CNt == 1                   ~ "HETD",
-        CNt >= baseline + 3        ~ "HLAMP",
-        CNt >  baseline            ~ "GAIN",
-        CNt <  baseline            ~ "LOSS",
-        CNt == baseline & !is.na(B) & B == 0 ~ "CNLOH",  # optional: keep CNLOH tag
-        TRUE                       ~ "NEUT"
-      ))
+    # Use Sequenza confints ploidy; snap to nearest integer for labeling
+    baseline_int <- pmax(1, round(ploidy_conf))
+    source_tag   <- "confints"
   }
   
-  seg_df <- seg_calls %>% select(chr, start, end, Call)
+  # record ploidy sources for QC
+  ploidy_list[[i]] <- tibble::tibble(
+    Sample        = sample_name,
+    ploidy_conf   = ifelse(is.finite(ploidy_conf), ploidy_conf, NA_real_),
+    baseline_int  = baseline_int,
+    baseline_src  = source_tag
+  )
   
-  # stash with sample-specific column name
+  # ---- build per-segment categorical calls (baseline-aware; fallback to diploid if NA)
+  if (is.na(baseline_int)) {
+    seg_calls <- seg_core %>%
+      dplyr::mutate(Call = call_from_CNt_AB(CNt, A, B))  # your original backup rule
+  } else {
+    seg_calls <- seg_core %>%
+      dplyr::mutate(
+        Call = dplyr::case_when(
+          !is.finite(CNt)                    ~ NA_character_,
+          CNt == 0                           ~ "HOMD",
+          CNt == 1                           ~ "HETD",
+          CNt >= baseline_int + 3            ~ "HLAMP",
+          CNt >  baseline_int + 1            ~ "AMP",
+          CNt >  baseline_int                ~ "GAIN",
+          CNt <  baseline_int                ~ "LOSS",
+          CNt == baseline_int & !is.na(B) & B == 0 ~ "CNLOH",
+          CNt == baseline_int                ~ "NEUT",
+          TRUE                               ~ NA_character_
+        )
+      )
+  }
+  
+  seg_df <- seg_calls %>% dplyr::select(chr, start, end, Call)
   colnames(seg_df)[4] <- sample_name
   seg_data_list[[i]] <- seg_df
 }
 
-# ---- combine and ploidy table (unchanged from your flow)
-combined_seg_data <- purrr::reduce(seg_data_list, full_join, by = c("chr","start","end"))
+combined_seg_data <- purrr::reduce(seg_data_list, dplyr::full_join, by = c("chr","start","end")) %>%
+  dplyr::arrange(factor(chr, levels = c(as.character(1:22), "X", "Y")), start)
 
-sample_ploidy <- bind_rows(ploidy_list) %>%
-  arrange(Sample)
+sample_ploidy <- dplyr::bind_rows(ploidy_list) %>%
+  dplyr::arrange(Sample)
 
 
 print(sample_ploidy, n = 50)
-write.csv(sample_ploidy, "Sep_2025_sequenza_ploidy_estimates.csv", row.names = FALSE)
+write.csv(sample_ploidy, "Sep_2025_sequenza_ploidy_estimates_updated.csv", row.names = FALSE)
 
 
 # Harmonize chr labels in segments
@@ -320,13 +381,390 @@ combined_seg_data <- combined_seg_data %>%
     seg_len_in_arm = ifelse(is.na(seg_len_in_arm), 0, seg_len_in_arm)
   )
 
+
+
+### Get FISH probe overlap
+# Tunables
+pad_bp  <- 150000L    # ±150 kb padding around each vendor span
+min_bp  <- 1000L     # require at least 1 kb overlap 
+
+# 1) Load probe table (if not already loaded)
+if (!exists("fish_probe_locations")) {
+  fish_probe_locations <- read_excel("Clinical data/FISH probe locations.xlsx")
+}
+stopifnot(all(c("Chromosome","Location in hg38") %in% names(fish_probe_locations)))
+
+# 2) Map Chromosome -> feature and parse coordinates
+feature_map <- c("1p" = "del1p", "1q" = "amp1q", "17p" = "del17p", "13q" = "del13q")
+
+probe_windows <- fish_probe_locations %>%
+  transmute(
+    feature = dplyr::recode(Chromosome, !!!feature_map, .default = NA_character_),
+    loc     = gsub(",", "", `Location in hg38`)
+  ) %>%
+  tidyr::extract(loc, into = c("chr","start","end"),
+                 regex = "^chr([^:]+):(\\d+)-(\\d+)$", remove = TRUE) %>%
+  mutate(
+    chr   = gsub("^chr","", chr),
+    start = as.integer(start),
+    end   = as.integer(end)
+  ) %>%
+  filter(!is.na(feature), !is.na(chr), !is.na(start), !is.na(end)) %>%
+  mutate(
+    start_pad = pmax(1L, start - pad_bp),
+    end_pad   = end + pad_bp
+  ) %>%
+  distinct(feature, chr, start_pad, end_pad, .keep_all = TRUE)
+
+# 3) Build GRanges: segments and padded probe windows
+sample_cols_seg <- setdiff(
+  names(combined_seg_data),
+  c("chr","start","end","arm","arm_start","arm_end","arm_len","seg_len_in_arm")
+)
+
+seg_gr <- GRanges(
+  seqnames = as.character(combined_seg_data$chr),
+  ranges   = IRanges(as.integer(combined_seg_data$start),
+                     as.integer(combined_seg_data$end))
+)
+
+# Ensure calls are uppercase characters
+calls_df <- combined_seg_data[, sample_cols_seg] |>
+  dplyr::mutate(across(everything(), ~ toupper(as.character(.))))
+
+# If any duplicate sample names, make them unique (prevents subsetting errors)
+if (anyDuplicated(names(calls_df))) {
+  names(calls_df) <- make.unique(names(calls_df), sep = "_dup")
+}
+
+# Correct: one column per sample, no name mangling
+mcols(seg_gr) <- S4Vectors::DataFrame(as.list(calls_df), check.names = FALSE)
+
+# Use the actual names from mcols downstream
+samples <- colnames(mcols(seg_gr))
+
+probe_gr <- GRanges(
+  seqnames = probe_windows$chr,
+  ranges   = IRanges(probe_windows$start_pad, probe_windows$end_pad),
+  feature  = probe_windows$feature
+)
+
+# 4) Overlap probes with segments; compute bp overlap
+hits <- findOverlaps(probe_gr, seg_gr, ignore.strand = TRUE)
+if (length(hits) == 0L) {
+  warning("No overlaps between padded probe windows and segments. Check genome build / chr labels.")
+}
+
+ovl_bp <- width(pintersect(ranges(probe_gr)[queryHits(hits)],
+                           ranges(seg_gr)[subjectHits(hits)]))
+
+hits_df <- tibble::tibble(
+  probe_idx = as.integer(queryHits(hits)),
+  seg_idx   = as.integer(subjectHits(hits)),
+  ovl       = as.integer(ovl_bp)
+) %>%
+  dplyr::filter(ovl >= min_bp) %>%                # apply minimum overlap filter
+  dplyr::arrange(probe_idx, dplyr::desc(ovl))
+
+
+# 5) For each probe and each sample, take the first non-NA call among overlapping
+#    segments ordered by decreasing overlap.
+probe_ids <- seq_along(probe_gr)
+
+final_calls_mat <- matrix(NA_character_, nrow = length(probe_ids), ncol = length(samples),
+                          dimnames = list(NULL, samples))
+
+for (p in probe_ids) {
+  segs <- hits_df %>% dplyr::filter(probe_idx == p) %>% dplyr::pull(seg_idx)
+  if (length(segs) == 0L) next
+  # Subset the mcols matrix for these segments
+  seg_calls <- as.matrix(mcols(seg_gr)[segs, samples, drop = FALSE])
+  # For each sample, pick first non-NA down the rows
+  for (j in seq_along(samples)) {
+    col_vals <- seg_calls[, j]
+    nn <- which(!is.na(col_vals) & nzchar(col_vals))
+    if (length(nn)) final_calls_mat[p, j] <- col_vals[nn[1]]
+  }
+}
+
+# 6) Tidy to long and bin by expected direction
+probe_meta <- tibble::tibble(
+  probe_idx = probe_ids,
+  feature   = as.character(mcols(probe_gr)$feature)
+)
+
+probe_calls_long <- as_tibble(final_calls_mat, .name_repair = "minimal") %>%
+  mutate(probe_idx = probe_ids) %>%
+  tidyr::pivot_longer(cols = all_of(samples), names_to = "Sample", values_to = "probe_call") %>%
+  left_join(probe_meta, by = "probe_idx") %>%
+  select(Sample, feature, probe_call)
+
+gain_labels <- c("GAIN","AMP","HLAMP")
+loss_labels <- c("HOMD","HETD","LOSS","CNLOH")
+dir_map     <- c(amp1q = "gain", del1p = "loss", del13q = "loss", del17p = "loss")
+
+probe_calls_bin <- probe_calls_long %>%
+  mutate(direction = unname(dir_map[feature]),
+         is_altered_at_probe = dplyr::if_else(
+           direction == "gain",
+           as.integer(probe_call %in% gain_labels),
+           as.integer(probe_call %in% loss_labels)
+         )) %>%
+  select(-direction) %>%
+  tidyr::pivot_wider(names_from = feature,
+                     values_from = c(probe_call, is_altered_at_probe),
+                     names_sep = "_")
+# =======================================================================
+
+### Now redo, but using the cytoband instead 
+# ---- Cytoband-based concordance ----
+
+# Expected cytoband file format (UCSC): chrom  start  end  band  gieStain
+# Example row:                          chr1   0      2300000  p36.33  gneg
+cytoband_file <- "cytoband.txt"
+
+cyto <- readr::read_tsv(
+  cytoband_file,
+  col_names = c("chrom", "start", "end", "band", "gieStain"),
+  col_types = readr::cols(
+    chrom = readr::col_character(),
+    start = readr::col_double(),
+    end = readr::col_double(),
+    band = readr::col_character(),
+    gieStain = readr::col_character()
+  ),
+  progress = FALSE
+)
+
+# Clean up chromosome column (remove "chr" prefix if present)
+cyto <- cyto %>%
+  mutate(
+    chrom = gsub("^chr", "", chrom),
+    start = as.integer(start),
+    end   = as.integer(end)
+  ) %>%
+  arrange(chrom, start)
+
+
+# Be forgiving about column names
+nm <- names(cyto)
+stopifnot(
+  any(grepl("^chrom", nm, ignore.case = TRUE)),
+  any(grepl("^start$", nm, ignore.case = TRUE)),
+  any(grepl("^end$",   nm, ignore.case = TRUE)),
+  any(grepl("^band",   nm, ignore.case = TRUE))
+)
+
+# Normalize column names we need
+names(cyto)[grepl("^chrom", names(cyto), ignore.case = TRUE)] <- "chrom"
+names(cyto)[grepl("^start$", names(cyto), ignore.case = TRUE)] <- "start"
+names(cyto)[grepl("^end$",   names(cyto), ignore.case = TRUE)] <- "end"
+names(cyto)[grepl("^band",   names(cyto), ignore.case = TRUE)]  <- "band"
+
+cyto <- cyto %>%
+  mutate(
+    chrom = gsub("^chr", "", chrom),
+    start = as.integer(start),
+    end   = as.integer(end)
+  ) %>%
+  arrange(chrom, start)
+
+# Helper: expand a band tag like "q21" or "q21.3" to the span covering all matching rows
+.band_span <- function(cyto_chr, arm, band_tag) {
+  tag <- paste0(arm, band_tag)            # e.g., "q21"
+  rows <- which(startsWith(cyto_chr$band, tag))
+  if (!length(rows)) return(NULL)
+  tibble::tibble(
+    start = min(cyto_chr$start[rows]),
+    end   = max(cyto_chr$end[rows])
+  )
+}
+
+# Parse Target like:
+#   "17p13.1"            -> chr=17, arm1=p, band1=13.1 (single)
+#   "1q21-q22"           -> chr=1,  arm1=q, band1=21 ; arm2=q, band2=22
+#   "1q21.1-q22.2"       -> range with decimals
+.parse_target <- function(s) {
+  s <- gsub("\\s", "", s)
+  m <- regexec("^([0-9XYM]+)([pq])([0-9]+(?:\\.[0-9]+)?)(?:-([pq])?([0-9]+(?:\\.[0-9]+)?))?$", s)
+  g <- regmatches(s, m)[[1]]
+  if (!length(g)) return(NULL)
+  chr   <- g[2]
+  arm1  <- g[3]; band1 <- g[4]
+  arm2  <- g[5]; band2 <- g[6]
+  if (is.na(arm2) || identical(arm2, "")) arm2 <- arm1
+  if (is.na(band2) || identical(band2, "")) {
+    list(chr = chr, arm1 = arm1, band1 = band1, arm2 = arm1, band2 = band1, is_range = FALSE)
+  } else {
+    list(chr = chr, arm1 = arm1, band1 = band1, arm2 = arm2, band2 = band2, is_range = TRUE)
+  }
+}
+
+# Map each probe row to a cytoband-derived window
+probe_windows_cytoband <- fish_probe_locations %>%
+  transmute(
+    feature = dplyr::recode(Chromosome, !!!feature_map, .default = NA_character_),
+    Target  = Target
+  ) %>%
+  rowwise() %>%
+  mutate(
+    .pt = list(.parse_target(Target))
+  ) %>%
+  ungroup() %>%
+  filter(!purrr::map_lgl(.pt, is.null)) %>%
+  mutate(
+    chr  = purrr::map_chr(.pt, ~ .x$chr),
+    arm1 = purrr::map_chr(.pt, ~ .x$arm1),
+    b1   = purrr::map_chr(.pt, ~ .x$band1),
+    arm2 = purrr::map_chr(.pt, ~ .x$arm2),
+    b2   = purrr::map_chr(.pt, ~ .x$band2)
+  ) %>%
+  select(-.pt) %>%
+  group_by(feature, chr, arm1, b1, arm2, b2) %>%
+  # Resolve to hg38 span using cytobands
+  reframe({
+    cy_chr <- dplyr::filter(cyto, chrom == chr) %>% arrange(start)
+    sspan  <- .band_span(cy_chr, arm1, b1)
+    espan  <- .band_span(cy_chr, arm2, b2)
+    if (is.null(sspan) || is.null(espan)) {
+      tibble::tibble(start = NA_integer_, end = NA_integer_)
+    } else {
+      tibble::tibble(
+        start = min(sspan$start, espan$start),
+        end   = max(sspan$end,   espan$end)
+      )
+    }
+  }) %>%
+  ungroup() %>%
+  filter(!is.na(start), !is.na(end)) %>%
+  mutate(
+    start_pad = pmax(1L, start - pad_bp),
+    end_pad   = end + pad_bp
+  ) %>%
+  distinct(feature, chr, start_pad, end_pad, .keep_all = TRUE)
+
+# Quick sanity check of the tricky one (1q21-q22): should span all q21.* through q22.* on chr1
+# print(dplyr::filter(probe_windows_cytoband, grepl("^amp1q$", feature)))
+
+# Build GRanges for cytoband windows
+probe_gr_cyto <- GRanges(
+  seqnames = probe_windows_cytoband$chr,
+  ranges   = IRanges(probe_windows_cytoband$start_pad, probe_windows_cytoband$end_pad),
+  feature  = probe_windows_cytoband$feature
+)
+
+# Overlaps and bp widths
+hits_cyto <- findOverlaps(probe_gr_cyto, seg_gr, ignore.strand = TRUE)
+if (length(hits_cyto) == 0L) {
+  warning("No overlaps between cytoband windows and segments. Check build/labels.")
+}
+
+ovl_bp_cyto <- width(pintersect(
+  ranges(probe_gr_cyto)[queryHits(hits_cyto)],
+  ranges(seg_gr)[subjectHits(hits_cyto)]
+))
+
+hits_df_cyto <- tibble::tibble(
+  probe_idx = as.integer(queryHits(hits_cyto)),
+  seg_idx   = as.integer(subjectHits(hits_cyto)),
+  ovl       = as.integer(ovl_bp_cyto)
+) %>%
+  dplyr::filter(ovl >= min_bp) %>%
+  dplyr::arrange(probe_idx, dplyr::desc(ovl))
+
+
+# Senestivity/overlap chooser
+probe_ids_cyto <- seq_along(probe_gr_cyto)
+final_calls_mat_cyto <- matrix(
+  NA_character_, nrow = length(probe_ids_cyto), ncol = length(samples),
+  dimnames = list(NULL, samples)
+)
+
+# Severity ladders (edit if your labels differ)
+gain_priority <- c("HLAMP","AMP","GAIN")
+loss_priority <- c("HOMD","HETD","LOSS","CNLOH")
+
+# Feature per cytoband probe
+feature_vec_cyto <- as.character(mcols(probe_gr_cyto)$feature)
+
+for (p in probe_ids_cyto) {
+  seg_rows <- hits_df_cyto %>% dplyr::filter(probe_idx == p)
+  segs     <- seg_rows$seg_idx
+  if (!length(segs)) next
+  
+  # Segment calls for just these overlaps (rows = segments, cols = samples)
+  seg_calls <- as.matrix(mcols(seg_gr)[segs, samples, drop = FALSE])
+  
+  # Overlap widths aligned to 'segs'
+  ovl_here <- seg_rows$ovl
+  
+  # Direction-specific priority for this probe
+  feat <- feature_vec_cyto[p]
+  dir  <- unname(dir_map[feat])   # "gain" or "loss" from your existing dir_map
+  pri  <- if (identical(dir, "gain")) gain_priority else loss_priority
+  
+  # Precompute severity rank per cell (lower is more severe)
+  sev_rank <- apply(seg_calls, 2, function(col) {
+    match(toupper(col), pri, nomatch = length(pri) + 1L)
+  })
+  
+  # Pick, per sample: most severe; tie-break by larger bp overlap
+  for (j in seq_along(samples)) {
+    calls_j <- seg_calls[, j]
+    valid   <- which(!is.na(calls_j) & nzchar(calls_j))
+    if (!length(valid)) next
+    
+    rnk  <- sev_rank[valid, j]
+    best <- which(rnk == min(rnk))
+    if (length(best) > 1L) {
+      best <- best[which.max(ovl_here[valid][best])]
+    }
+    final_calls_mat_cyto[p, j] <- calls_j[valid][best]
+  }
+}
+
+# Tidy long and bin calls by expected direction, mirroring your probe_calls_bin
+probe_meta_cyto <- tibble::tibble(
+  probe_idx = probe_ids_cyto,
+  feature   = as.character(mcols(probe_gr_cyto)$feature)
+)
+
+probe_calls_long_cyto <- as_tibble(final_calls_mat_cyto, .name_repair = "minimal") %>%
+  mutate(probe_idx = probe_ids_cyto) %>%
+  tidyr::pivot_longer(cols = all_of(samples), names_to = "Sample", values_to = "probe_call") %>%
+  dplyr::left_join(probe_meta_cyto, by = "probe_idx") %>%
+  dplyr::select(Sample, feature, probe_call)
+
+probe_calls_bin_cytoband <- probe_calls_long_cyto %>%
+  mutate(
+    direction = unname(dir_map[feature]),
+    is_altered_at_probe = dplyr::if_else(
+      direction == "gain",
+      as.integer(probe_call %in% gain_labels),
+      as.integer(probe_call %in% loss_labels)
+    )
+  ) %>%
+  select(-direction) %>%
+  tidyr::pivot_wider(
+    names_from  = feature,
+    values_from = c(probe_call, is_altered_at_probe),
+    names_sep   = "_"
+  )
+
+
+
+
+
 # (Optional) quick sanity checks
 # combined_seg_data %>% summarize(prop_assigned = mean(!is.na(arm)))
 # combined_seg_data %>% filter(is.na(arm)) %>% count(chr, sort = TRUE)
 
 # ---- save combined (optional)
-write.csv(combined_seg_data, "Sep_2025_combined_sequenza_calls_400.csv", row.names = FALSE)
-saveRDS(combined_seg_data,  "Sep_2025_combined_sequenza_calls_400.rds")
+write.csv(combined_seg_data, "Sep_2025_combined_sequenza_calls_400_updated.csv", row.names = FALSE)
+saveRDS(combined_seg_data,  "Sep_2025_combined_sequenza_calls_400_updated.rds")
+
+write.csv(probe_calls_bin, "Sep_2025_FISH_probe_calls_400_updated.csv", row.names = FALSE)
+saveRDS(probe_calls_bin,  "Sep_2025_FISH_probe_calls_400_updated.rds")
 
 # ---- long format with segment length (for length-weighting)
 sample_cols <- setdiff(
@@ -351,7 +789,7 @@ myeloma_arms_df <- tibble::tribble(
 )
 
 gain_labels <- c("GAIN", "AMP", "HLAMP")
-loss_labels <- c("HOMD", "HETD", "LOSS")
+loss_labels <- c("HOMD", "HETD", "LOSS", "CNLOH")
 
 samples <- unique(long_data$Sample)
 results <- tibble(Sample = samples)
@@ -394,7 +832,7 @@ hyperdiploid_chrs <- c("3","5","7","9","11","15","19","21")
 
 # Adjustable for caller 
 gain_thresh_chr <- 0.65   # was 0.80. 0.60–0.70 is typical for "whole chr gain"
-k_trisomies     <- 5      # call hyperdiploid if at least k of 8 are gained
+k_trisomies     <- 5      # call hyperdiploid if at least k of 5 are gained
 
 # compute PropGained per chr
 gain_prop_tbl <- purrr::map_dfr(hyperdiploid_chrs, function(chr_value){
@@ -471,10 +909,6 @@ cna_data <- myeloma_CNA_matrix_with_HRD %>%
   select(Sample, del1p, amp1q, del13q, del17p, hyperdiploid) %>%
   mutate(across(-Sample, as.character))
 
-export_dir <- "Jan2025_exported_data"
-if (!dir.exists(export_dir)) dir.create(export_dir)
-
-
 ## Check if what have is expected
 # Convert all alteration columns to numeric
 cna_data_summary <- cna_data %>%
@@ -521,16 +955,120 @@ message("✅ Merged CNA data with metadata: added Bam_clean_tmp column.")
 ## The number in filenames corresponds to the gamma parameter used by Sequenza (γ=400)
 
 # Primary CNA matrix
-saveRDS(cna_data_merged, file = file.path(export_dir, "cna_data_from_sequenza_400.rds"))
+saveRDS(cna_data_merged, file = file.path(export_dir, "cna_data_from_sequenza_400_updated.rds"))
 write.table(cna_data_merged,
-            file = file.path(export_dir, "cna_data_from_sequenza_400.txt"),
+            file = file.path(export_dir, "cna_data_from_sequenza_400_updated.txt"),
             sep = "\t", row.names = FALSE, quote = FALSE)
 
 # Summary statistics (proportion of samples per alteration)
-saveRDS(cna_data_summary, file = file.path(export_dir, "cna_data_summary_400.rds"))
+saveRDS(cna_data_summary, file = file.path(export_dir, "cna_data_summary_400_updated.rds"))
 write.table(cna_data_summary,
-            file = file.path(export_dir, "cna_data_summary_400.txt"),
+            file = file.path(export_dir, "cna_data_summary_400_updated.txt"),
             sep = "\t", row.names = FALSE, quote = FALSE)
 
 # Console confirmation
 message("✅ Export complete:")
+
+
+### Now do the same for FISH calls 
+FISH_data_cleaned <- probe_calls_bin %>%
+  mutate(Sample = str_remove_all(Sample, "_PG|_WG"))
+
+FISH_data_cleaned <- FISH_data_cleaned %>%
+  mutate(Sample = ifelse(
+    Sample == "TFRIM4_0189_Bm_P_ZC-02", 
+    "TFRIM4_0189_Bm_P_ZC-02-01-O-DNA", 
+    Sample  # Keep other values unchanged
+  ))
+
+
+# Join to metadata by Sample ↔ Tumor_Sample_Barcode
+FISH_data_cleaned <- FISH_data_cleaned %>%
+  left_join(
+    metada_df_mutation_comparison %>%
+      select(Tumor_Sample_Barcode, Bam_clean_tmp, Patient),
+    by = c("Sample" = "Tumor_Sample_Barcode")
+  )
+
+
+# Export
+saveRDS(FISH_data_cleaned, file = file.path(export_dir, "FISH_data_from_sequenza_400_updated.rds"))
+write.table(FISH_data_cleaned,
+            file = file.path(export_dir, "FISH_data_from_sequenza_400_updated.txt"),
+            sep = "\t", row.names = FALSE, quote = FALSE)
+
+
+## Try again but by cytoband 
+### Now do the same for FISH calls 
+FISH_data_cleaned <- probe_calls_bin_cytoband %>%
+  mutate(Sample = str_remove_all(Sample, "_PG|_WG"))
+
+FISH_data_cleaned <- FISH_data_cleaned %>%
+  mutate(Sample = ifelse(
+    Sample == "TFRIM4_0189_Bm_P_ZC-02", 
+    "TFRIM4_0189_Bm_P_ZC-02-01-O-DNA", 
+    Sample  # Keep other values unchanged
+  ))
+
+
+# Join to metadata by Sample ↔ Tumor_Sample_Barcode
+FISH_data_cleaned <- FISH_data_cleaned %>%
+  left_join(
+    metada_df_mutation_comparison %>%
+      select(Tumor_Sample_Barcode, Bam_clean_tmp, Patient),
+    by = c("Sample" = "Tumor_Sample_Barcode")
+  )
+
+
+# Export
+saveRDS(FISH_data_cleaned, file = file.path(export_dir, "FISH_data_from_sequenza_400_by_cytoband_updated.rds"))
+write.table(FISH_data_cleaned,
+            file = file.path(export_dir, "FISH_data_from_sequenza_400_by_cytoband_updated.txt"),
+            sep = "\t", row.names = FALSE, quote = FALSE)
+
+
+## Lastly for ploidy 
+
+### Now do the same for FISH calls 
+sample_ploidy <- sample_ploidy %>%
+  mutate(Sample = str_remove_all(Sample, "_PG|_WG"))
+
+sample_ploidy <- sample_ploidy %>%
+  mutate(Sample = ifelse(
+    Sample == "TFRIM4_0189_Bm_P_ZC-02", 
+    "TFRIM4_0189_Bm_P_ZC-02-01-O-DNA", 
+    Sample  # Keep other values unchanged
+  ))
+
+
+# Join to metadata by Sample ↔ Tumor_Sample_Barcode
+sample_ploidy <- sample_ploidy %>%
+  left_join(
+    metada_df_mutation_comparison %>%
+      select(Tumor_Sample_Barcode, Bam_clean_tmp, Patient, Timepoint),
+    by = c("Sample" = "Tumor_Sample_Barcode")
+  )
+
+
+## Export 
+saveRDS(sample_ploidy, file = file.path(export_dir, "Sample_ploidy_from_sequenza_400.rds"))
+write.table(sample_ploidy,
+            file = file.path(export_dir, "Sample_ploidy_from_sequenza.txt"),
+            sep = "\t", row.names = FALSE, quote = FALSE)
+
+
+
+
+## Quick check
+fish_summary2 <- filled_df %>% ## this is generated in later script 
+  dplyr::select(Patient, DEL_17P, DEL_1P, AMP_1Q) %>%
+  dplyr::left_join(cohort_df, by = "Patient") %>%
+  dplyr::filter(!is.na(Cohort)) %>%
+  dplyr::filter(
+    DEL_17P == "Positive" |
+      DEL_1P  == "Positive" |
+      AMP_1Q  == "Positive"
+  )
+
+fish_summary2 <- fish_summary %>% 
+  left_join(FISH_data_cleaned)

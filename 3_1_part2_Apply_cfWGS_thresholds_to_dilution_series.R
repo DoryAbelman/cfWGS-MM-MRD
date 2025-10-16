@@ -373,7 +373,7 @@ facet_labels <- c(
   BM_zscore_only_detection_rate_prob             = "BM cVAF model prob.",
   detect_rate_BM                     = "Cumulative VAF (cVAF)",
   z_score_detection_rate_BM    = "cVAF Z‑Score",
-  zscore_BM             = "Prop. Mut. Sites Detected Z-score"
+  zscore_BM             = "Prop. Sites Detected Z-score"
 )
 # 5) clean ggplot - pearson 
 p_bm <- ggplot(plot_df_bm, aes(x = LOD, y = value)) +
@@ -582,7 +582,7 @@ print(combined_plot)
 ### Figure 4G
 # and save
 ggsave(
-  filename = file.path(OUTPUT_DIR_FIGURES, "Fig4G_LOD_combined_updated3.png"),
+  filename = file.path(OUTPUT_DIR_FIGURES, "Fig4G_LOD_combined_updated4.png"),
   plot     = combined_plot,
   width    = 12,        # adjust as needed
   height   = 4,         # one‐line panel
@@ -613,7 +613,7 @@ p_bm_spearman_actual <- ggplot(plot_df_bm, aes(x = LOD, y = value)) +
              labeller = as_labeller(facet_labels)) +
   geom_text(
     data    = annot_spear,
-    aes(x = 0.025, y = Inf, label = label),
+    aes(x = 0.03, y = Inf, label = label),
     hjust   = 0, vjust = 1.2,
     size    = 3
   ) + 

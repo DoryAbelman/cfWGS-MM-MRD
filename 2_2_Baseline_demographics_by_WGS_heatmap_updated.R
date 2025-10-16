@@ -54,7 +54,7 @@ tumor_fraction <- read_tsv("Oct 2024 data/tumor_fraction_cfWGS.txt")
 export_dir <- "Jan2025_exported_data"  
 cna_data <- readRDS(file.path(export_dir, "cna_data.rds"))
 
-CNA_translocation <- readRDS("Jan2025_exported_data/CNA_translocation_Sep2025.rds") ## From 1_5 script
+CNA_translocation <- readRDS("Jan2025_exported_data/CNA_translocation_Sep2025_updated2.rds") ## From 1_5 script
 mutation_data_total <- readRDS("Jan2025_exported_data/mutation_export_updated.rds")
 
 # 3. cfDNA translocation tab (the 4‐call binary table)
@@ -489,7 +489,7 @@ heatmap_BM <- Heatmap(
 )
 
 draw(heatmap_BM)
-png("heatmap_output_BM_baseline_updated_13.png", width = 11.12, height = 8, units = "in", res = 500)
+png("heatmap_output_BM_baseline_updated_15.png", width = 11.12, height = 8, units = "in", res = 500)
 draw(heatmap_BM)
 dev.off()
 
@@ -605,7 +605,7 @@ heatmap_blood <- Heatmap(
 )
 
 draw(heatmap_blood)
-png("heatmap_output_Blood_baseline_updated_14.png", width = 13.5, height = 8, units = "in", res = 500)
+png("heatmap_output_Blood_baseline_updated_15.png", width = 13.5, height = 8, units = "in", res = 500)
 draw(heatmap_blood)
 dev.off()
 
@@ -910,7 +910,7 @@ cfDNA_mat <- cfDNA_mat[-bad_ix, , drop = FALSE]
 #   (assumes you have a data.frame `mut_counts_df` with columns Patient, MutCount)
 # (a) Load your baseline clinical table (if not already loaded)
 #     and keep only one Diagnosis/Baseline row per patient.
-dat_base <- readRDS("Final_aggregate_table_cfWGS_features_with_clinical_and_demographics_updated8.rds") %>%
+dat_base <- readRDS("Final_aggregate_table_cfWGS_features_with_clinical_and_demographics_updated9.rds") %>%
   filter(timepoint_info %in% c("Diagnosis","Baseline")) %>%
   arrange(Patient, timepoint_info) %>%
   group_by(Patient) %>%
@@ -1085,7 +1085,7 @@ draw(
 )
 
 # save
-png("overlay_heatmap_BM_vs_cfDNA_updated10.png", width = 14, height = 8, units = "in", res = 450)
+png("overlay_heatmap_BM_vs_cfDNA_updated13.png", width = 14, height = 8, units = "in", res = 450)
 draw(
   overlay_ht,
   annotation_legend_side = "right",  # where cohort legend goes
@@ -1167,6 +1167,10 @@ if (any(miss)) {
   anon_labels[miss] <- patient_labels[miss]
 }
 
+## Italicize gene names 
+row_font <- ifelse(all_rows %in% c("NRAS","KRAS","TP53","DIS3","BRAF","MAX","IRF4","PRDM1","TRAF3","EGR1","LTB","SP140","NFKBIA","FGFR3","KDM6A","CCND1"),
+                   "italic", "plain")
+
 ### Redraw heatmap
 overlay_ht_2 <- Heatmap(
   matrix("", nrow = length(all_rows), ncol = length(all_cols),
@@ -1183,7 +1187,8 @@ overlay_ht_2 <- Heatmap(
   row_split           = row_group,
   row_title           = c("Mutations","CNAs","Translocations"),
   row_gap             = unit(c(2, 2), "mm"),
-  row_names_gp        = gpar(fontsize = 8),
+#  row_names_gp        = gpar(fontsize = 8),
+  row_names_gp = gpar(fontsize = 8, fontface = row_font),
   column_names_gp     = gpar(fontsize = 8, fontface = "bold"),
   top_annotation      = top_ha,
   
@@ -1244,7 +1249,7 @@ lgd_sampletype2 <- Legend(
 )
 
 # save
-png("Final Tables and Figures/Figure_1B_overlay_heatmap_BM_vs_cfDNA_updated_with_FISH_12.png", width = 14, height = 8, units = "in", res = 450)
+png("Final Tables and Figures/Figure_1B_overlay_heatmap_BM_vs_cfDNA_updated_with_FISH_15.png", width = 14, height = 8, units = "in", res = 450)
 draw(
   overlay_ht_2,
   column_title        = "Oncoprint of Genomic Alterations in Bone Marrow versus cfDNA Samples",

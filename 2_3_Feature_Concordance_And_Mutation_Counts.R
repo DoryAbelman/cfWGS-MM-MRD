@@ -39,7 +39,7 @@ library(broom)    # for tidy()
 library(purrr)    # for map_df()
 library(tibble)   # for tibble()
 
-file <- readRDS("Final_aggregate_table_cfWGS_features_with_clinical_and_demographics_updated8.rds")
+file <- readRDS("Final_aggregate_table_cfWGS_features_with_clinical_and_demographics_updated9.rds")
 
 
 
@@ -325,6 +325,211 @@ writexl::write_xlsx(concordance_tbl, "Output_tables_2025_updated/FISH_WGS_concor
 
 
 
+#### Now redo the above, but looking at the specific FISH probe locations instead 
+# Load FISH CNA data 
+FISH_CNA_combined <- readRDS("Jan2025_exported_data/CNA_at_FISH_sites_combined.rds")
+
+# Keep only Bone Marrow cells and plasma cfDNA samples
+FISH_CNA_combined <- FISH_CNA_combined %>%
+  filter(Sample_type %in% c("BM_cells", "Blood_plasma_cfDNA"))
+
+## Add ploidy to this
+Ploidy_in_BM <- readRDS("Jan2025_exported_data/Sample_ploidy_from_sequenza_400.rds")
+
+colnames(Ploidy_in_BM) <- c(
+  "Sample_ID",             # Unique sequencing sample identifier
+  "Ploidy_Estimate",       # Estimated ploidy from Sequenza confints file
+  "Baseline_Intercept",    # Baseline intercept (if from regression or model fit)
+  "Baseline_Source",       # Indicates source of baseline (e.g., BM, cfDNA, etc.)
+  "Bam_clean_tmp",              # Cleaned BAM filename or path
+  "Patient",            # Patient identifier linking multiple samples
+  "Timepoint"        # Sample collection timepoint (Diagnosis, Relapse, etc.)
+)
+
+
+## Pivot wider 
+FISH_CNA_wide <- FISH_CNA_combined %>%
+  mutate(
+    source = case_when(
+      Sample_type == "Blood_plasma_cfDNA" ~ "blood",
+      Sample_type == "BM_cells"           ~ "BM",
+      TRUE ~ NA_character_
+    )
+  ) %>%
+  filter(!is.na(source)) %>%
+  group_by(Patient, Timepoint, source) %>%
+  arrange(desc(coalesce(Tumor_Fraction, -Inf)), Date_of_sample_collection) %>%
+  slice(1) %>%
+  ungroup() %>%
+  select(
+    Patient, Timepoint, source,
+    probe_call_amp1q, probe_call_del17p, probe_call_del1p,
+    is_altered_at_probe_amp1q, is_altered_at_probe_del17p, is_altered_at_probe_del1p
+  ) %>%
+  pivot_wider(
+    names_from = source,
+    values_from = c(
+      probe_call_amp1q, probe_call_del17p, probe_call_del1p,
+      is_altered_at_probe_amp1q, is_altered_at_probe_del17p, is_altered_at_probe_del1p
+    ),
+    names_glue = "{.value}_{source}"
+  ) %>%
+  relocate(
+    Patient, Timepoint,
+    probe_call_amp1q_blood,  probe_call_amp1q_BM,
+    probe_call_del17p_blood, probe_call_del17p_BM,
+    probe_call_del1p_blood,  probe_call_del1p_BM,
+    is_altered_at_probe_amp1q_blood,  is_altered_at_probe_amp1q_BM,
+    is_altered_at_probe_del17p_blood, is_altered_at_probe_del17p_BM,
+    is_altered_at_probe_del1p_blood,  is_altered_at_probe_del1p_BM
+  )
+
+# Check for duplicates
+dupes <- FISH_CNA_wide %>%
+  count(Patient, Timepoint) %>%
+  filter(n > 1)
+
+# Print duplicates
+if (nrow(dupes) > 0) {
+  message("⚠️ Found duplicate Patient-Timepoint combinations:")
+  print(dupes)
+} else {
+  message("✅ No duplicates found.")
+}
+
+
+## Add it to the other dataframe 
+dat_base_with_FISH <- dat_base %>% 
+  left_join(FISH_CNA_wide) %>% 
+  left_join(Ploidy_in_BM)
+
+
+## ------------------------------------------------------------------
+## 4.  MAPPINGS  -----------------------------------------------------
+## ------------------------------------------------------------------
+map <- tribble(
+  ~fish,      ~wgs_bm,                  ~wgs_cf,                          ~type,
+  "DEL_1P",   "is_altered_at_probe_del1p_BM",     "is_altered_at_probe_del1p_blood",   "CNA",
+  "AMP_1Q",   "is_altered_at_probe_amp1q_BM",     "is_altered_at_probe_amp1q_blood",   "CNA",
+  "DEL_17P",  "is_altered_at_probe_del17p_BM",    "is_altered_at_probe_del17p_blood",  "CNA",
+)
+
+## ------------------------------------------------------------------
+## 5.  TIDY TO LONG FORMAT  -----------------------------------------
+## ------------------------------------------------------------------
+long <- map %>% 
+  pmap_dfr(function(fish, wgs_bm, wgs_cf, type){
+    
+    dat_base_with_FISH %>% 
+      # grab cohort here
+      select(
+        Patient, 
+        cohort,
+        Sample_Code, 
+        !!sym(fish), 
+        !!sym(wgs_bm), 
+        !!sym(wgs_cf),
+        WGS_Tumor_Fraction_Blood_plasma_cfDNA
+      ) %>% 
+      rename(
+        fish_call = !!sym(fish),
+        wgs_bm    = !!sym(wgs_bm),
+        wgs_cf    = !!sym(wgs_cf),
+        tf        = WGS_Tumor_Fraction_Blood_plasma_cfDNA
+      ) %>% 
+      mutate(
+        event      = fish,
+        type       = type,
+        # standardise calls…
+        fish_call = case_when(
+          str_detect(str_to_lower(fish_call), "pos|^1$|true") ~ 1,
+          str_detect(str_to_lower(fish_call), "neg|^0$|false") ~ 0,
+          TRUE ~ NA_real_
+        ),
+        # make WGS calls logical 0/1
+        across(
+          c(wgs_bm, wgs_cf),
+          ~ case_when(
+            str_detect(str_to_lower(.), "^1$|true")  ~ 1,
+            str_detect(str_to_lower(.), "^0$|false") ~ 0,
+            TRUE                                   ~ NA_real_
+          )
+        ),
+        # tumour‐fraction bucket
+        tf_group = case_when(
+          is.na(tf)      ~ "tf_unknown",
+          tf >= tf_cut   ~ "high_tf",
+          TRUE           ~ "low_tf"
+        )
+      ) %>% 
+      pivot_longer(
+        cols      = c(wgs_bm, wgs_cf),
+        names_to  = "wgs_source",
+        values_to = "wgs_call"
+      ) %>% 
+      mutate(
+        wgs_source = recode(
+          wgs_source,
+          wgs_bm = "BM_cells",
+          wgs_cf = "cfDNA"
+        )
+      )
+    
+  })
+
+
+
+
+## ------------------------------------------------------------------
+## 7.  OVERALL, & BY TF GROUP  --------------------------------------
+## ------------------------------------------------------------------
+
+# A)  per‑COHORT × TF‑GROUP  (all combinations)
+conc_cohort_tf2 <- long %>%                     # <‑‑ the “long” object you built
+  group_by(event, type, wgs_source,
+           cohort,                       # Frontline induction-transplant / pre‑treated
+           tf_group)   %>% summarise_concord() %>%                   # high_tf / low_tf / tf_unknow %>% summarise_concord() %>% 
+  ungroup()
+
+# B)  per‑COHORT (ignore TF bucket)  → store tf_group == "all"
+conc_cohort_overall2 <- long %>%
+  group_by(event, type, wgs_source, cohort) %>% 
+  summarise_concord() %>% 
+  mutate(tf_group = "all") %>%            # sentinel level
+  ungroup()
+
+# C)  per‑TF‑GROUP *irrespective* of cohort (optional – drop if you don’t need it)
+conc_tf_overall2 <- long %>%
+  group_by(event, type, wgs_source, tf_group) %>% 
+  summarise_concord() %>% 
+  mutate(cohort = NA) %>%                 # keep same column set
+  ungroup()
+
+# D)  bind them all and order nicely
+concordance_tbl_at_FISH_probe <- bind_rows(
+  conc_cohort_overall2,
+  conc_cohort_tf2,
+  conc_tf_overall2
+) %>% 
+  arrange(type, event, wgs_source, cohort, tf_group)
+
+# have a quick look
+print(concordance_tbl_at_FISH_probe, n = 20)
+
+## ------------------------------------------------------------------
+## 8. SAVE RESULTS  -----------------------------------------
+## ------------------------------------------------------------------
+writexl::write_xlsx(concordance_tbl_at_FISH_probe, "Output_tables_2025_updated/FISH_WGS_concordance_at_FISH_probes_CNA.xlsx")
+
+
+
+
+
+
+
+
+
+
 ## Put everything together for manuscript 
 
 # ------------------------------------------------------------------
@@ -419,7 +624,7 @@ evidence_summary <- dat_base %>%
 
 ###### PART 2: See mutation overlap based on the specific base change 
 mutation_data_total <- readRDS("Jan2025_exported_data/mutation_export_updated_more_info2.rds")
-All_feature_data <- readRDS("Jan2025_exported_data/All_feature_data_Sep2025_updated.rds")
+All_feature_data <- readRDS("Jan2025_exported_data/All_feature_data_Sep2025_updated2.rds")
 combined_clinical_data_updated <- read.csv("combined_clinical_data_updated_April2025.csv")
 
 
@@ -1357,7 +1562,7 @@ p_tf <- ggplot(event_tf_conc,
 
 
 # 5) save
-ggsave("Final Tables and Figures/Baseline_concordance/Fig2B_event_concordance_by_TF_updated3.png", p_tf,
+ggsave("Final Tables and Figures/Baseline_concordance/Fig2B_event_concordance_by_TF_updated4.png", p_tf,
        width = 5, height = 4, dpi = 600)
 
 
@@ -1392,12 +1597,12 @@ pretty_events <- c(
 p_tf_sens2 <- ggplot(tf_plot_df, aes(x = value, y = event, group = event)) +
   
   # grey connector only for the TF strata
-  geom_line(
-    data = filter(tf_plot_df, Measure %in% c("High TF","Low TF")),
-    aes(x = value, y = event, group = event),
-    colour = "grey80", size = 0.6
-  ) +
-  
+  # geom_line(
+  #   data = filter(tf_plot_df, Measure %in% c("High TF","Low TF")),
+  #   aes(x = value, y = event, group = event),
+  #   colour = "grey80", size = 0.6
+  # ) +
+  # 
   # all three measures as points
   geom_point(aes(colour = Measure, shape = Measure),
              size = 3, stroke = 1) +
@@ -1414,16 +1619,17 @@ p_tf_sens2 <- ggplot(tf_plot_df, aes(x = value, y = event, group = event)) +
     name   = "Concordance",
     values = c(
       "High TF"             = viridis(2, end = 0.8)[1],
-      "Low TF"              = viridis(2, end = 0.8)[2],
-      "Overall sensitivity" = "black"
+      "Low TF"              = viridis(2, end = 0.8)[2]
+   #   "Overall sensitivity" = "black"
     )
   ) +
   scale_shape_manual(
     name   = "Concordance",
     values = c(
       "High TF"             = 16,
-      "Low TF"              = 16,
-      "Overall sensitivity" = 8
+      "Low TF"              = 16
+   #   "Overall sensitivity" = 8
+  # "Overall sensitivity" = NA
     )
   ) +
   
@@ -1436,7 +1642,8 @@ p_tf_sens2 <- ggplot(tf_plot_df, aes(x = value, y = event, group = event)) +
   ) +
   
   labs(
-    title = "SV/CNA concordance with FISH (●) and overall sensitivity",
+  #  title = "SV/CNA concordance with FISH (●) and overall sensitivity",
+   title = "Structural and copy-number variant concordance with FISH",
     x     = "Percent",
     y     = NULL
   ) +
@@ -1454,7 +1661,7 @@ p_tf_sens2 <- ggplot(tf_plot_df, aes(x = value, y = event, group = event)) +
 
 # 3) save
 ggsave(
-  "Final Tables and Figures/Baseline_concordance/Fig2B_event_concordance_with_sensitivity_updated3.png",
+  "Final Tables and Figures/Baseline_concordance/Fig2B_event_concordance_with_sensitivity_updated5.png",
   p_tf_sens2, width = 5.5, height = 4, dpi = 600
 )
 
@@ -1526,7 +1733,7 @@ metrics_combined <- metrics_combined %>%
     )
   )
 
-write_csv(metrics_combined, "Exported_data_tables_clinical/Supp_table_2_WGS_vs_FISH_metrics_combined2.csv")
+write_csv(metrics_combined, "Exported_data_tables_clinical/Supp_table_2_WGS_vs_FISH_metrics_combined3.csv")
 
 
 
@@ -1843,7 +2050,7 @@ p_tf_sens <- ggplot(tf_plot_df_BM, aes(x = value, y = event, group = event)) +
 
 # 3) save
 ggsave(
-  "Final Tables and Figures/Baseline_concordance/Fig2C_event_concordance_between_BM_and_cfDNA_with_sensitivity4_updated.png",
+  "Final Tables and Figures/Baseline_concordance/Fig2C_event_concordance_between_BM_and_cfDNA_with_sensitivity4_updated2.png",
   p_tf_sens, width = 5, height = 4, dpi = 600
 )
 
@@ -1882,8 +2089,8 @@ perf_long <- perf_long %>%
 p_3panel <- ggplot(perf_long,
                    aes(x = Percent, y = event, group = event)) +
   # grey connector between High / Low TF
-  geom_line(aes(group = interaction(event, Metric)),
-            colour = "grey80", linewidth = 0.6) +
+ # geom_line(aes(group = interaction(event, Metric)),
+ #           colour = "grey80", linewidth = 0.6) +
   # points for the two strata
   geom_point(aes(colour = TF_group, shape = TF_group),
              size = 3, stroke = 0.8) +
@@ -1926,7 +2133,7 @@ p_3panel <- ggplot(perf_long,
   )
 
 ggsave(
-  "Final Tables and Figures/Baseline_concordance/Fig2C_BM_cfDNA_conc_sens_spec_byTF_updated4.png",
+  "Final Tables and Figures/Baseline_concordance/Fig2C_BM_cfDNA_conc_sens_spec_byTF_updated6.png",
   p_3panel, width = 5.5, height = 4, dpi = 600
 )
 
@@ -2108,15 +2315,116 @@ readr::write_csv(pvals,
 readr::write_csv(mean_jaccard,
                  file.path(outdir, "mean_jaccard_baseline.csv"))
 
+
+## Now get the actual per-sample calls 
+dat_small <- dat_base_with_FISH %>%
+  select(
+    # --- Clinical context ---
+    Patient,
+    Timepoint,
+    timepoint_info,
+    Cohort,
+    WGS_Tumor_Fraction_Blood_plasma_cfDNA,
+    Ploidy_Estimate,
+
+    # --- FISH Calls ---
+    DEL_1P, AMP_1Q, DEL_17P, T_4_14, T_11_14, T_14_16,
+    
+    # --- Probe-level and alteration calls ---
+    probe_call_amp1q_blood,
+    probe_call_amp1q_BM,
+    probe_call_del17p_blood,
+    probe_call_del17p_BM,
+    probe_call_del1p_blood,
+    probe_call_del1p_BM,
+    is_altered_at_probe_amp1q_blood,
+    is_altered_at_probe_amp1q_BM,
+    is_altered_at_probe_del17p_blood,
+    is_altered_at_probe_del17p_BM,
+    is_altered_at_probe_del1p_blood,
+    is_altered_at_probe_del1p_BM,
+    
+    # --- WGS arm-level CNAs ---
+    WGS_del1p_BM_cells,
+    WGS_del1p_Blood_plasma_cfDNA,
+    WGS_amp1q_BM_cells,
+    WGS_amp1q_Blood_plasma_cfDNA,
+    WGS_del17p_BM_cells,
+    WGS_del17p_Blood_plasma_cfDNA,
+    
+    # --- WGS translocations ---
+    WGS_IGH_FGFR3_BM_cells,
+    WGS_IGH_FGFR3_Blood_plasma_cfDNA,
+    WGS_IGH_CCND1_BM_cells,
+    WGS_IGH_CCND1_Blood_plasma_cfDNA,
+    WGS_IGH_MAF_BM_cells,
+    WGS_IGH_MAF_Blood_plasma_cfDNA
+  ) %>%
+  rename(
+    # --- Core clinical ---
+    Ploidy_estimate_BM = Ploidy_Estimate,
+    
+    # --- FISH Calls ---
+    FISH_Call_DEL_1P   = DEL_1P,
+    FISH_Call_AMP_1Q   = AMP_1Q,
+    FISH_Call_DEL_17P  = DEL_17P,
+    FISH_Call_T_4_14   = T_4_14,
+    FISH_Call_T_11_14  = T_11_14,
+    FISH_Call_T_14_16  = T_14_16,
+    
+    # --- Probe-level (add WGS_ prefix) ---
+    WGS_probe_call_amp1q_blood  = probe_call_amp1q_blood,
+    WGS_probe_call_amp1q_BM     = probe_call_amp1q_BM,
+    WGS_probe_call_del17p_blood = probe_call_del17p_blood,
+    WGS_probe_call_del17p_BM    = probe_call_del17p_BM,
+    WGS_probe_call_del1p_blood  = probe_call_del1p_blood,
+    WGS_probe_call_del1p_BM     = probe_call_del1p_BM,
+    
+    WGS_is_altered_at_probe_amp1q_blood  = is_altered_at_probe_amp1q_blood,
+    WGS_is_altered_at_probe_amp1q_BM     = is_altered_at_probe_amp1q_BM,
+    WGS_is_altered_at_probe_del17p_blood = is_altered_at_probe_del17p_blood,
+    WGS_is_altered_at_probe_del17p_BM    = is_altered_at_probe_del17p_BM,
+    WGS_is_altered_at_probe_del1p_blood  = is_altered_at_probe_del1p_blood,
+    WGS_is_altered_at_probe_del1p_BM     = is_altered_at_probe_del1p_BM,
+    
+    # --- Arm-level CNAs ---
+    WGS_arm_del1p_BM_cells              = WGS_del1p_BM_cells,
+    WGS_arm_del1p_Blood_plasma_cfDNA    = WGS_del1p_Blood_plasma_cfDNA,
+    WGS_arm_amp1q_BM_cells              = WGS_amp1q_BM_cells,
+    WGS_arm_amp1q_Blood_plasma_cfDNA    = WGS_amp1q_Blood_plasma_cfDNA,
+    WGS_arm_del17p_BM_cells             = WGS_del17p_BM_cells,
+    WGS_arm_del17p_Blood_plasma_cfDNA   = WGS_del17p_Blood_plasma_cfDNA
+  )
+
+# Fix cohort 
+dat_small <- dat_small %>%
+  mutate(
+    Cohort = case_when(
+      Cohort == "Frontline induction-transplant" ~ "Train",
+      Cohort == "Non-frontline" ~ "Test",
+      TRUE ~ Cohort  # keep other labels unchanged if any exist
+    )
+  )
+
+## Rename patient IDs 
+# --- 0) Load ID map
+id_map <- readRDS("id_map.rds") %>% distinct(Patient, New_ID)
+
+# Make a joinable version that uses the same Patient key as your output (New_ID if available)
+dat_small <- dat_small %>%
+  left_join(id_map, by = c("Patient" = "Patient")) %>%
+  mutate(Patient = coalesce(New_ID, Patient)) 
+
+
 ## 3. (Optional) one XLSX workbook with the key performance tables -----
 writexl::write_xlsx(
   list(
-  #  concordance_all          = concordance_tbl,
-    concordance_byTF_cohort  = results2,
-    BMcfDNA_perf_byTF        = perf_tf_complete,
-    FISH_perf = tf_plot_df
+    A_BM_cfDNA_perf_byTF        = perf_combined,
+    B_FISH_vs_Sample_Concordance = concordance_tbl %>% filter(!is.na(cohort)),
+    C_FISH_vs_Sample_At_Probe = concordance_tbl_at_FISH_probe %>% filter(!is.na(cohort)),
+    D_Individual_Calls = dat_small %>% select(-New_ID)
   ),
-  path = file.path(outdir, "SV_CNA_performance_summary_updated.xlsx") 
+  path = file.path(outdir, "Supplementary_Table_2_SV_CNA_performance_summary_updated.xlsx") 
 )
 
 message("✓ Additional outputs written to ", outdir)

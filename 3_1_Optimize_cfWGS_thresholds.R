@@ -54,7 +54,7 @@ outdir   <- "Output_tables_2025"
 if (!dir.exists(outdir)) dir.create(outdir, recursive = TRUE)
 
 ### Load data 
-file <- readRDS("Final_aggregate_table_cfWGS_features_with_clinical_and_demographics_updated7.rds")
+file <- readRDS("Final_aggregate_table_cfWGS_features_with_clinical_and_demographics_updated9.rds")
 cohort_df <- readRDS("cohort_assignment_table_updated.rds")
 
 dat <- file 
@@ -3195,7 +3195,8 @@ cm_list <- imap(mods, function(mod, nm){
 })
 
 cm_df <- bind_rows(cm_list) %>%
-  mutate(model = fct_recode(model, !!!model_labs))
+  mutate(model = fct_recode(model, !!!model_labs)) %>%
+  mutate(model = fct_relevel(model, "cVAF model", "Combined model"))
 
 ## make grey 
 col_low  <- "#f2f2f2"
@@ -3248,7 +3249,7 @@ p_tables <- ggplot(cm_df, aes(x = Pred, y = Obs, fill = Count)) +
 # ──────────────────────────────────────────────────────────────────────────────
 # 5) save
 ggsave(
-  "Final Tables and Figures/Fig4C_confusion_tables_primary_updated4.png",
+  "Final Tables and Figures/Fig4C_confusion_tables_primary_updated5.png",
   plot   = p_tables,
   width  = 5,
   height = 2.75,
@@ -3279,7 +3280,8 @@ cm_list <- imap(mods, function(mod, nm){
 })
 
 cm_df <- bind_rows(cm_list) %>%
-  mutate(model = fct_recode(model, !!!model_labs))
+  mutate(model = fct_recode(model, !!!model_labs)) %>%
+  mutate(model = fct_relevel(model, "cVAF model", "Combined model"))
 
 # make text switch to white on darker tiles for legibility (by facet)
 cm_df <- cm_df %>%
@@ -3330,7 +3332,7 @@ p_tables <- ggplot(cm_df, aes(x = Pred, y = Obs, fill = Count)) +
 # ──────────────────────────────────────────────────────────────────────────────
 # 5) save
 ggsave(
-  "Final Tables and Figures/Fig4C_confusion_tables_test4.png",
+  "Final Tables and Figures/Fig4C_confusion_tables_test5.png",
   plot   = p_tables,
   width  = 5,
   height = 2.75,
@@ -3520,7 +3522,8 @@ cm_list <- imap(mods, function(mod, nm){
 })
 
 cm_df <- bind_rows(cm_list) %>%
-  mutate(model = fct_recode(model, !!!model_labs))
+  mutate(model = fct_recode(model, !!!model_labs)) %>%
+  mutate(model = fct_relevel(model, "Sites model", "Combined model"))
 
 # make text switch to white on darker tiles for legibility (by facet)
 cm_df <- cm_df %>%
@@ -3570,7 +3573,7 @@ p_tables <- ggplot(cm_df, aes(x = Pred, y = Obs, fill = Count)) +
 # ──────────────────────────────────────────────────────────────────────────────
 # 5) save
 ggsave(
-  "Final Tables and Figures/Fig5C_confusion_tables_primary_blood5.png",
+  "Final Tables and Figures/Fig5C_confusion_tables_primary_blood6.png",
   plot   = p_tables,
   width  = 5,
   height = 2.75,
@@ -3601,7 +3604,8 @@ cm_list <- imap(mods, function(mod, nm){
 })
 
 cm_df <- bind_rows(cm_list) %>%
-  mutate(model = fct_recode(model, !!!model_labs))
+  mutate(model = fct_recode(model, !!!model_labs)) %>%
+  mutate(model = fct_relevel(model, "Sites model", "Combined model"))
 
 # make text switch to white on darker tiles for legibility (by facet)
 cm_df <- cm_df %>%
@@ -3651,7 +3655,7 @@ p_tables <- ggplot(cm_df, aes(x = Pred, y = Obs, fill = Count)) +
 # ──────────────────────────────────────────────────────────────────────────────
 # 5) save
 ggsave(
-  "Final Tables and Figures/Fig5C_confusion_tables_test_blood5.png",
+  "Final Tables and Figures/Fig5C_confusion_tables_test_blood6.png",
   plot   = p_tables,
   width  = 5,
   height = 2.75,

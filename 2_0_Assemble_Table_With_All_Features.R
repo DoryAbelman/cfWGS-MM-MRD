@@ -25,7 +25,7 @@ library(gridExtra)
 
 
 ### Load in all data:
-All_feature_data <- readRDS("Jan2025_exported_data/All_feature_data_Sep2025.rds") 
+All_feature_data <- readRDS("Jan2025_exported_data/All_feature_data_Sep2025_updated2.rds") 
 M4_MRD_filtered <- read_tsv("M4_MRD_filtered.txt") # The MRD data from labs
 
 path <- file.path("MRDetect_output_winter_2025", "Processed_R_outputs", "BM_muts_data")
@@ -1865,10 +1865,10 @@ filled_df <- filled_df %>%
   )
 
 # Write to CSV (for Excel/sharing)
-write.csv(filled_df, file = "Final_aggregate_table_cfWGS_features_with_clinical_and_demographics_updated7.csv", row.names = FALSE)
+write.csv(filled_df, file = "Final_aggregate_table_cfWGS_features_with_clinical_and_demographics_updated9.csv", row.names = FALSE)
 
 # Write to RDS (for loading back into R with full structure)
-saveRDS(filled_df, file = "Final_aggregate_table_cfWGS_features_with_clinical_and_demographics_updated7.rds")
+saveRDS(filled_df, file = "Final_aggregate_table_cfWGS_features_with_clinical_and_demographics_updated9.rds")
 
 
 ## See how many rescued 

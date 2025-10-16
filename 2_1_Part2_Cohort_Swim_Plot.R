@@ -1794,6 +1794,102 @@ events_combined2 <- events_combined2 %>%
   )
 
 
+
+### Add the MRD status 
+### Also try to show it by MRD status at one year maintenance 
+
+### Load data 
+file <- readRDS("Final_aggregate_table_cfWGS_features_with_clinical_and_demographics_updated9.rds")
+
+dat <- file 
+
+# 1.  Join cohort_df and keep frontline only -------------------------------------
+dat <- dat %>%                # <‑‑ your master data
+  left_join(cohort_df, by = "Patient") 
+
+dat <- dat %>% 
+  mutate(
+    MRD_truth = case_when(
+      !is.na(Adaptive_Binary)            ~ Adaptive_Binary,             # use clonoSEQ if available
+      is.na(Adaptive_Binary)
+      & !is.na(Flow_Binary)              ~ Flow_Binary,                 # else use MFC 
+      TRUE                               ~ NA_real_                     # missing if neither assay run
+    )
+  )
+
+## Keep only MRD timepoints to optimize timepoint 
+dat <- dat %>%
+  filter(!timepoint_info %in% c("Diagnosis", "Baseline")) %>% 
+  filter(!is.na(MRD_truth)) %>% 
+  select(Patient, Timepoint, timepoint_info, Cohort, Adaptive_Frequency, Adaptive_Binary, Flow_pct_cells, Flow_Binary, MRD_truth)
+
+
+
+# 1) Reduce to the 1-year maintenance rows and rename assays
+dat_1yr <- dat %>%
+  filter(timepoint_info == "1yr maintenance") %>%
+  transmute(
+    patient = Patient,
+    MFC      = Flow_Binary,
+    clonoSEQ = Adaptive_Binary
+  ) %>%
+  group_by(patient) %>%
+  slice_head(n = 1) %>%   # just in case there are duplicates
+  ungroup()
+
+# 2) Ensure every patient in your figure is represented (even if missing 1yr data)
+all_patients <- tibble(patient = unique(patient_order))
+dat_1yr <- all_patients %>%
+  left_join(dat_1yr, by = "patient")
+
+# 3) Pivot to long format for two tiles (MFC, clonoSEQ)
+df_mrd_long <- dat_1yr %>%
+  pivot_longer(cols = c(MFC, clonoSEQ),
+               names_to = "assay", values_to = "status") %>%
+  mutate(
+    assay  = factor(assay, levels = c("MFC", "clonoSEQ")),
+    status = case_when(
+      status == 1 ~ "MRD+",
+      status == 0 ~ "MRD-",
+      TRUE        ~ "Missing"
+    ),
+    status = factor(status, levels = c("MRD+", "MRD-", "Missing"))
+  )
+
+# 4) Palette (adjust if you have a house style)
+mrd_cols <- c("MRD+" = "#D55E00", "MRD-" = "#009E73", "Missing" = "#CCCCCC")
+
+## Now make new patient order 
+
+# Build per-patient 1-yr row (you already did this)
+# dat_1yr has columns: patient, MFC, clonoSEQ
+# If you used my earlier pick-within-window, substitute that table here instead.
+ord_df <- dat_1yr %>%
+  left_join(cohort_df, by = c("patient" = "Patient")) %>%
+  mutate(
+    # Conservative “worst-of-two” decision rule
+    any_pos   = (MFC == 1) | (clonoSEQ == 1),
+    any_neg   = (MFC == 0) | (clonoSEQ == 0),
+    ord_status = case_when(
+      any_pos                    ~ "MRD+",
+      !any_pos & any_neg         ~ "MRD-",
+      TRUE                       ~ "Missing"
+    ),
+    ord_status = factor(ord_status, levels = c("MRD+", "MRD-", "Missing")),
+    
+    # Helpful tie-breakers:
+    # 1) Prefer patients with clonoSEQ data (higher assay sensitivity) over MFC-only within the same status
+    has_clono = !is.na(clonoSEQ),
+    # 2) Cohort ordering if you want Train above Test (adjust to your labels)
+    Cohort    = fct_relevel(Cohort, c("Train", "Frontline", "Test", "Non-frontline"))
+  )
+
+# Final y-axis order (MRD+ at top, then MRD-, then Missing; within each, clonoSEQ-present first)
+patient_order_mrd <- ord_df %>%
+  arrange(ord_status, desc(has_clono), Cohort, patient) %>%
+  pull(patient) %>%
+  unique()
+
 ### At this stage, add in the ctDNA change metric
 
 ## Reorder 
@@ -1820,12 +1916,15 @@ patient_order_tbl_cVAF <- patient_order_cVAF %>%
 
 patient_order <- patient_order_tbl_cVAF 
 
+
+## Or for MRD 
+patient_order <- patient_order_mrd
+
 # 3) Re‑factor your patient column
 events_combined2 <- events_combined2 %>%
   mutate(
     patient = factor(patient, levels = patient_order)
   )  
-
 
 
 ### Edit the patient labels for de-identification in figure
@@ -2092,34 +2191,127 @@ ann_paired <- ggplot(patient_order_combined,
 
 ### Make the tumor fraction annotation
 ## Continue from here
+# --- prep: order + helpers ---
 patient_order_cVAF <- patient_order_cVAF %>%
-  mutate(patient = factor(patient, levels = patient_order_tbl_cVAF))
+  mutate(
+    patient = factor(patient, levels = patient_order_tbl_cVAF),
+    sign = case_when(
+      is.na(pct_for_plot)       ~ "missing",
+      pct_for_plot >= 0         ~ "increase",
+      TRUE                      ~ "decrease"
+    )
+  )
+
+# symmetric limits around 0 (at least ±100 so your requested ticks fit if possible)
+rng     <- max(abs(patient_order_cVAF$pct_for_plot), na.rm = TRUE)
+max_abs <- max(100, ceiling(rng / 10) * 10)
+limits_x <- c(-max_abs, max_abs)
+
+# ticks you asked for, clipped to the plotting range
+breaks_wanted <- c(-100, -50, 0, 50, 100)
+breaks_x <- breaks_wanted[breaks_wanted >= limits_x[1] & breaks_wanted <= limits_x[2]]
+
+# a small x for left annotation (inside plot area)
+x_annot <- limits_x[1] + 0.02 * diff(limits_x)
 
 ann_tf <- ggplot(patient_order_cVAF,
                  aes(x = pct_for_plot, y = patient, group = 1)) +
-  geom_path(colour = "grey70", size = 0.4) +
-  geom_point(colour = "grey20", size = 2) +
+  # draw change line from 0 to each point
+  geom_segment(aes(x = 0, xend = pct_for_plot, yend = patient),
+               linewidth = 0.6, color = "grey70", na.rm = TRUE) +
+  # point color by source metric
+  geom_point(aes(color = source_metric), size = 2, na.rm = TRUE) +
+  # dotted line at zero
+  geom_vline(xintercept = 0, linetype = "dotted", linewidth = 0.5, color = "grey40") +
+  # x axis symmetric and labelled in %
   scale_x_continuous(
-    name   = "Delta\nctDNA cVAF",
-    limits = c(min(patient_order_cVAF$pct_for_plot), max(patient_order_cVAF$pct_for_plot, na.rm = TRUE) * 1.2),
+    name   = expression(Delta~"ctDNA cVAF"),
+    limits = c(-100, 100),        # adjust if your range is larger
+    breaks = seq(-100, 100, 50),
+    labels = scales::label_number(accuracy = 1, suffix = "%"),
     expand = c(0, 0)
   ) +
+  # use your patient order
   scale_y_discrete(
     limits = rev(patient_order_tbl_cVAF),
-    expand = c(0, 0)    # shrink vertical padding between rows
+    expand = c(0, 0)
   ) +
-  theme_minimal(base_size = 8) +
+  # color palette for clarity
+  scale_color_manual(
+    name = "cVAF Source",
+    values = c("bm" = "black", "blood" = "grey55"),
+    labels = c("bm" = "Bone marrow", "blood" = "Blood"),
+    na.translate = FALSE
+  ) +
+  coord_cartesian(clip = "off") +
+  theme_minimal(base_size = 9) +
   theme(
     panel.grid      = element_blank(),
     axis.title.y    = element_blank(),
     axis.ticks.y    = element_blank(),
-    axis.text.y     = element_text(size = 10, hjust = 1, lineheight = 0.8),
-    plot.margin     = margin(0, 1, 0, 1)
+    axis.text.y     = element_text(size = 9, hjust = 1, lineheight = 0.85),
+    plot.margin     = margin(5, 15, 5, 5),
+    legend.position = "NA",
+    legend.title    = element_text(size = 9),
+    legend.text     = element_text(size = 8)
   )
 
+ann_tf
+
+## Hide y-axis 
+ann_tf <- ann_tf + theme(axis.text.y = element_blank(), axis.title.y = element_blank(), axis.ticks.y = element_blank())
+
+ann_tf
+
+
+
+
+# 5) Build the annotation band
+ann_mrd <- ggplot(df_mrd_long,
+                  aes(x = assay, y = patient, fill = status)) +
+  geom_tile(width = 0.9, height = 0.9) +
+  scale_fill_manual(values = mrd_cols, name = "MRD at 1yr-maintenance") +
+  scale_x_discrete(name = "MRD (1yr)", position = "bottom") +
+  scale_y_discrete(
+    limits = rev(patient_order_mrd),   # your existing order
+    labels = lab_fun,              # your existing label function
+    expand = c(0, 0)
+  ) +
+  theme_minimal(base_size = 8) +
+  theme(
+    panel.grid   = element_blank(),
+    axis.title.y = element_blank(),
+    axis.ticks.y = element_blank(),
+    axis.text.y  = element_blank(),
+    plot.margin  = margin(0, 0, 0, 0)
+  )
+
+# ### Old way
+# ann_tf <- ggplot(patient_order_cVAF,
+#                  aes(x = pct_for_plot, y = patient, group = 1)) +
+#   geom_path(colour = "grey70", size = 0.4) +
+#   geom_point(colour = "grey20", size = 2) +
+#   scale_x_continuous(
+#     name   = "Delta\nctDNA cVAF",
+#     limits = c(min(patient_order_cVAF$pct_for_plot), max(patient_order_cVAF$pct_for_plot, na.rm = TRUE) * 1.2),
+#     expand = c(0, 0)
+#   ) +
+#   scale_y_discrete(
+#     limits = rev(patient_order_tbl_cVAF),
+#     expand = c(0, 0)    # shrink vertical padding between rows
+#   ) +
+#   theme_minimal(base_size = 8) +
+#   theme(
+#     panel.grid      = element_blank(),
+#     axis.title.y    = element_blank(),
+#     axis.ticks.y    = element_blank(),
+#     axis.text.y     = element_text(size = 10, hjust = 1, lineheight = 0.8),
+#     plot.margin     = margin(0, 1, 0, 1)
+#   )
+
 ## Assemble final plot
-final_plot <- ann_cohort + ann_tf + p_swim +
-  plot_layout(widths = c(0.05, 0.1, 0.85),
+final_plot <- ann_cohort + ann_mrd + p_swim +
+  plot_layout(widths = c(0.0225, 0.055, 0.92),
               guides = "collect") &
   theme(
     # position & spacing
@@ -2156,13 +2348,15 @@ final_plot <- ann_cohort + ann_tf + p_swim +
     )
   )
 
-ggsave("Final Tables and Figures/Figure1A_swimplot_with_3_annotations_updated3.png",
+final_plot
+
+ggsave("Final Tables and Figures/Figure1A_swimplot_with_3_annotations_updated5.png",
        final_plot,
        width  = 15,
        height = 10,
        dpi    = 500)
 
-ggsave("Final Tables and Figures/Figure1A_swimplot_with_3_annotations_wide_updated3.png",
+ggsave("Final Tables and Figures/Figure1A_swimplot_with_3_annotations_wide_updated5A.png",
        final_plot,
        width  = 16.5,
        height = 10,

@@ -36,7 +36,7 @@ outdir   <- "Output_tables_2025"
 if (!dir.exists(outdir)) dir.create(outdir, recursive = TRUE)
 
 ### Load data 
-file <- readRDS("Final_aggregate_table_cfWGS_features_with_clinical_and_demographics_updated7.rds")
+file <- readRDS("Final_aggregate_table_cfWGS_features_with_clinical_and_demographics_updated9.rds")
 cohort_df <- readRDS("cohort_assignment_table_updated.rds")
 
 dat <- file 
@@ -59,7 +59,7 @@ dat <- dat %>%
 
 ## Set na the ones without evidence of disease? 
 # Load the RDS file and compute the good-patient sets
-All_feature_data <- readRDS("Jan2025_exported_data/All_feature_data_Sep2025.rds")
+All_feature_data <- readRDS("Jan2025_exported_data/All_feature_data_Sep2025_updated2.rds")
 
 BM_good_pts <- Good_pts %>%
   filter(WGS_Evidence_of_Disease_BM_cells == 1) %>%
@@ -892,6 +892,77 @@ p_cvaf <- ggplot(df_cvaf, aes(Weeks_Since_Baseline, Value, group = Patient)) +
   theme_classic(base_size = 11) +
   theme(strip.background = element_rect(fill = "grey95", colour = NA))
 
+# cap y values at 2500 for plotting only
+## Flag capped points and keep their true values for labeling
+df_cvaf_plot <- df_cvaf %>%
+  mutate(
+    overcap    = Value > 2500,                # TRUE if > 2500
+    Value_plot = pmin(Value, 2500),           # cap for plotting
+    label_val  = ifelse(overcap, round(Value), NA_real_)  # show true value
+  ) %>%
+  filter(!is.na(Weeks_Since_Baseline), !is.na(Value_plot))
+
+## Segments as before, but capped for plotting
+df_cvaf_seg_plot <- df_cvaf %>%
+  arrange(Patient, Weeks_Since_Baseline) %>%
+  group_by(Patient) %>%
+  mutate(
+    x    = Weeks_Since_Baseline,
+    y    = Value,
+    xend = lead(Weeks_Since_Baseline),
+    yend = lead(Value),
+    seg_relapse = lead(relapse_within_180, default = FALSE)
+  ) %>%
+  ungroup() %>%
+  mutate(
+    y_plot    = pmin(pmax(y,    0), 2500),
+    yend_plot = pmin(pmax(yend, 0), 2500)
+  ) %>%
+  filter(!is.na(x), !is.na(xend), !is.na(y_plot), !is.na(yend_plot))
+
+p_cvaf_modified <- ggplot(df_cvaf_plot, aes(Weeks_Since_Baseline, Value_plot, group = Patient)) +
+  geom_segment(
+    data = df_cvaf_seg_plot,
+    aes(x = x, y = y_plot, xend = xend, yend = yend_plot, colour = seg_relapse),
+    size = 0.4, alpha = 0.6
+  ) +
+  # points: circle for ≤2500, triangle for >2500
+  geom_point(aes(color = relapse_within_180, shape = overcap),
+             size = 1.8, alpha = 0.8) +
+  # labels for capped points: print the true value
+  geom_text(
+    data = ~ dplyr::filter(., overcap),
+    aes(label = label_val),
+    vjust = -0.75, size = 2
+  ) +
+  facet_wrap(~ patient_relapse180, nrow = 1,
+             labeller = labeller(patient_relapse180 = patient_relapse_labs_short)) +
+  scale_color_manual(
+    values = c(`FALSE` = "black", `TRUE` = "red"),
+    labels = c(`FALSE` = "No relapse ≤180d", `TRUE` = "Relapse ≤180d"),
+    name   = NULL
+  ) +
+  # shape 16 = filled circle; 17 = filled triangle
+  scale_shape_manual(
+    values = c(`FALSE` = 16, `TRUE` = 17),
+    labels = c(`FALSE` = "≤2500", `TRUE` = ">2500 (capped)"),
+    name   = NULL
+  ) +
+  labs(
+    title = custom_labels["cVAF_z"],
+    x     = "Weeks Since Baseline",
+    y     = "Cumulative VAF (Z)"
+  ) +
+  theme_classic(base_size = 11) +
+  theme(strip.background = element_rect(fill = "grey95", colour = NA),
+        plot.margin = margin(5.5, 5.5, 12, 5.5)) +
+  # give a little headroom so labels above 2500 aren't clipped
+  coord_cartesian(ylim = c(0, 2600), clip = "on") +
+  scale_y_continuous(
+    breaks = c(0, 500, 1000, 1500, 2000, 2500),
+    labels = function(x) ifelse(x == 2500, ">2500", x)
+  )
+
 ## B) Proportion of Sites Detected
 df_sites <- filter(plot_df_pat, Metric == "sites_z")
 df_sites_seg <- df_sites %>%
@@ -938,7 +1009,7 @@ p_sites <- ggplot(df_sites, aes(Weeks_Since_Baseline, Value, group = Patient)) +
   theme(strip.background = element_rect(fill = "grey95", colour = NA))
 
 # 3) Combine them side by side
-p_combined <- p_cvaf + p_sites + 
+p_combined <- p_cvaf_modified + p_sites + 
      plot_annotation(
       title = "Longitudinal trajectories of MRD metrics from baseline BM mutation profiles",
       theme = theme(
@@ -950,12 +1021,300 @@ p_combined <- p_cvaf + p_sites +
     
 # 4) Save
 ggsave(
-  filename = file.path(outdir, "Fig3A_sideBySide_lockedY_zscore_segmented2.png"),
+  filename = file.path(outdir, "Fig3A_sideBySide_lockedY_zscore_segmented4.png"),
   plot     = p_combined,
   width    = 12,   # 4 panels across
   height   = 4,
   dpi      = 600
 )
+
+
+### Redo as function but color based on change 
+
+# ---- knobs to adjust ----
+q_flat <- 0.90     # 90th percentile of non-progressor follow-up values
+tol    <- 0        # require strict increase (set >0 to ignore tiny jitters)
+cap    <- 2500      # no capping for Z-scores; set to 2500 for capped metrics
+week_cutoff <- 250  # define where we look for the patient’s trough
+
+# flag the *actual* clinical progression timepoint (0 days from progression)
+plot_df_pat <- plot_df_pat %>%
+  mutate(prog_tp = !is.na(Num_days_to_closest_relapse) &
+           Num_days_to_closest_relapse == 0)
+
+# learn thresholds from NON-progressors (patients with no relapse ≤180d)
+thr_tbl <- plot_df_pat %>%
+  filter(as.character(patient_relapse180) == "FALSE",
+         Weeks_Since_Baseline > 52) %>%               # follow-up only
+  group_by(Metric) %>%
+  summarise(thr = quantile(Value, q_flat, na.rm = TRUE), .groups = "drop")
+
+thr_named <- setNames(thr_tbl$thr, thr_tbl$Metric)
+
+## Function to plot
+make_panel_minlogic <- function(metric, ylab,
+                                col_after = "red", col_before = "black",
+                                week_cutoff = 75, tol = 0, cap = Inf,
+                                pad_before_weeks = 0, plot_title = NULL) {   # <-- added here
+  
+  df0 <- plot_df_pat %>% dplyr::filter(Metric == metric)
+  
+  # threshold (fallback if not in thr_named)
+  thr_val <- suppressWarnings(as.numeric(thr_named[[metric]]))
+  if (is.na(thr_val)) {
+    thr_val <- stats::quantile(df0$Value[df0$Weeks_Since_Baseline > 0],
+                               q_flat, na.rm = TRUE)
+  }
+  
+  # trough (prefer ≤ week_cutoff if available)
+  trough_tbl <- df0 %>%
+    dplyr::group_by(Patient) %>%
+    dplyr::group_modify(~{
+      d <- .x
+      d_pre <- d %>% dplyr::filter(Weeks_Since_Baseline <= week_cutoff)
+      r <- if (nrow(d_pre) > 0) d_pre[which.min(d_pre$Value), , drop = FALSE]
+      else                  d    [which.min(d$Value),     , drop = FALSE]
+      tibble::tibble(min_time = r$Weeks_Since_Baseline[1],
+                     min_val  = r$Value[1])
+    }) %>%
+    dplyr::ungroup()
+  
+  # crossing time: require ANY rise after trough, then first time >= threshold
+  eps <- 1e-8
+  rise_step <- 0.01
+  cross_tbl <- df0 %>%
+    dplyr::left_join(trough_tbl, by = "Patient") %>%
+    dplyr::group_by(Patient) %>%
+    dplyr::summarise(
+      min_time = dplyr::first(min_time),
+      min_val  = dplyr::first(min_val),
+      rise_ok  = any(Weeks_Since_Baseline > min_time &
+                       Value > (min_val + rise_step), na.rm = TRUE),
+      cross_time = {
+        if (is.na(min_time) || !rise_ok) NA_real_ else {
+          t_after <- Weeks_Since_Baseline[Weeks_Since_Baseline > min_time &
+                                            Value >= (thr_val - eps)]
+          if (length(t_after)) min(t_after) else NA_real_
+        }
+      },
+      .groups = "drop"
+    )
+  
+  # ---- PLOT-FRIENDLY COPIES (cap applied here) ----
+  df_plot <- df0 %>%
+    dplyr::left_join(cross_tbl, by = "Patient") %>%
+    dplyr::mutate(
+      after_cross_pt = !is.na(cross_time) & Weeks_Since_Baseline >= cross_time,
+      Value_plot     = if (is.finite(cap)) pmin(pmax(Value, 0), cap) else Value,
+      overcap        = is.finite(cap) & Value > cap,
+      # label: two decimals if <1, integer otherwise
+      label_val      = dplyr::case_when(
+        Value < 1 ~ sprintf("%.2f", Value),
+        TRUE      ~ as.character(round(Value))
+      ),
+      tp_shape = dplyr::case_when(
+        prog_tp ~ "Progression",
+        TRUE    ~ "Routine follow-up"
+      )
+    ) %>%
+    dplyr::filter(!is.na(Weeks_Since_Baseline), !is.na(Value_plot))
+  
+  seg_plot <- df0 %>%
+    dplyr::left_join(cross_tbl, by = "Patient") %>%
+    dplyr::arrange(Patient, Weeks_Since_Baseline) %>%
+    dplyr::group_by(Patient) %>%
+    dplyr::mutate(
+      x    = Weeks_Since_Baseline,
+      y    = Value,
+      xend = dplyr::lead(Weeks_Since_Baseline),
+      yend = dplyr::lead(Value),
+      y_plot    = if (is.finite(cap)) pmin(pmax(y,    0), cap) else y,
+      yend_plot = if (is.finite(cap)) pmin(pmax(yend, 0), cap) else yend,
+      after_cross_seg = !is.na(cross_time) &
+        (xend >= cross_time - pad_before_weeks)  # color crossing seg too
+    ) %>%
+    dplyr::filter(!is.na(x), !is.na(xend), !is.na(y_plot), !is.na(yend_plot)) %>%
+    dplyr::ungroup()
+  
+  mk_y_breaks <- function(cap) {
+    if (!is.finite(cap)) return(waiver())
+    if (cap >= 1000) {
+      c(0, 500, 1000, 1500, 2000, cap)
+    } else if (cap >= 10) {
+      unique(c(0, pretty(c(0, cap), n = 6), cap))
+    } else if (cap >= 1) {
+      unique(c(0, pretty(c(0, cap), n = 6), cap))
+    } else {
+      # very small caps (e.g., 0.25): a few nicely spaced decimals
+      br <- pretty(c(0, cap), n = 5)
+      unique(c(0, br[br > 0 & br < cap], cap))
+    }
+  }
+  
+  mk_y_labels <- function(cap) {
+    if (!is.finite(cap)) return(waiver())
+    function(x) {
+      if (cap < 1) {
+        labs    <- sprintf("%.2f", x)   # two decimals for tiny ranges
+        cap_lab <- sprintf("%.2f", cap)
+      } else if (cap < 10) {
+        labs    <- sprintf("%.1f", x)   # one decimal for mid ranges
+        cap_lab <- sprintf("%.1f", cap)
+      } else {
+        # integers for large caps (no thousands separator, no .0)
+        labs    <- scales::number_format(accuracy = 1, big.mark = "", decimal.mark = ".")(x)
+        cap_lab <- formatC(cap, format = "f", digits = 0)  # -> "2500"
+      }
+      ix <- which(abs(x - cap) < 1e-8)
+      if (length(ix)) labs[ix] <- paste0(">", cap_lab)
+      labs
+    }
+  }
+  
+  top_expand <- function(cap) {
+    if (!is.finite(cap)) return(0.05)
+    if (cap < 1) 0.05 else 0.05   # a bit more headroom for tiny caps
+  }
+    
+  # ---- PLOT ----
+  ggplot(df_plot, aes(Weeks_Since_Baseline, Value_plot, group = Patient)) +
+    geom_segment(
+      data = seg_plot,
+      aes(x = x, y = y_plot, xend = xend, yend = yend_plot, colour = after_cross_seg),
+      linewidth = 0.55, alpha = 0.85
+    ) +
+    geom_point(
+      aes(colour = after_cross_pt, shape = tp_shape, fill = after_cross_pt),
+      size = 2, alpha = 0.9, stroke = 0.8
+    ) +
+    # labels for capped points (print true value just above the triangle)
+    geom_text(
+      data = dplyr::filter(df_plot, overcap),
+      aes(label = label_val, colour = after_cross_pt),
+      nudge_y = if (is.finite(cap)) cap * 0.03 else 0.03,   # ~3% headroom
+      size = 2.4, show.legend = FALSE
+    ) +
+    facet_wrap(~ patient_relapse180, nrow = 1,
+               labeller = labeller(patient_relapse180 = c(`FALSE`="No relapse ≤180d",
+                                                          `TRUE` ="Relapse ≤180d"))) +
+    labs(
+      title = if (!is.null(plot_title)) plot_title
+      else paste0(metric, " threshold from non-progressors: ", signif(thr_val, 3)),
+      x = "Weeks Since Baseline", y = ylab
+    ) +
+    theme_classic(base_size = 11) +
+    theme(strip.background = element_rect(fill = "grey95", colour = NA),
+          plot.margin = margin(t = 10, r = 8, b = 8, l = 8)) +
+    # color = state relative to threshold
+    scale_color_manual(
+      values = c(`FALSE` = col_before, `TRUE` = col_after),
+      labels = c(`FALSE` = "Below cfDNA threshold", `TRUE` = "Elevated cfDNA signal"),
+      name   = "State"
+    ) +
+    # shape = timepoint type (triangle shows capped)
+    scale_shape_manual(
+      values = c("Routine follow-up" = 16, "Progression" = 23, "Capped (>cap)" = 17),
+      name   = "Timepoint"
+    ) +
+    scale_fill_manual(values = c(`FALSE` = col_before, `TRUE` = col_after), guide = "none") +
+    # axis ticks; no 'limits' → no dropped rows; cartesian window handles the view
+    scale_y_continuous(
+      breaks = mk_y_breaks(cap),
+      labels = mk_y_labels(cap),
+      expand = expansion(mult = c(0.04, top_expand(cap)))
+    ) +
+    coord_cartesian(ylim = if (is.finite(cap)) c(0, cap) else NULL, clip = "off") +
+    guides(
+      colour = guide_legend(order = 1, override.aes = list(shape = 16)),
+      shape  = guide_legend(order = 2)
+    )
+  
+}
+
+
+
+# Example calls (Z-score panels: no cap)
+p_sites  <- make_panel_minlogic("sites_z", "Prop. Mutant Sites Detected (Z)", plot_title = "Longitudinal trajectories of MRD metrics from baseline BM mutation profiles")
+p_cvaf  <- make_panel_minlogic("cVAF_z",  "Cumulative VAF (Z)", cap = 2500,  plot_title = "Longitudinal trajectories of MRD metrics from baseline BM mutation profiles")    # cap on
+p_sites
+p_cvaf
+
+
+# Combine side-by-side with a single legend at the bottom
+p_cvaf <- p_cvaf + ggtitle(NULL)
+p_sites <- p_sites + ggtitle(NULL)
+
+p_combined <- (p_cvaf + p_sites) +
+  plot_annotation(
+    title = "Longitudinal trajectories of MRD metrics from baseline BM mutation profiles"
+  ) +
+  plot_layout(guides = "collect") &                           # <-- collect legends
+  theme(
+    legend.position = "bottom",
+    legend.box      = "horizontal",
+    plot.title = element_text(size = 18, face = "bold", hjust = 0.5)
+  ) &
+  guides(                                                     # optional: one-row legends
+    colour = guide_legend(nrow = 1, byrow = TRUE),
+    shape  = guide_legend(nrow = 1, byrow = TRUE)
+  )
+
+p_combined
+
+# Save
+ggsave(
+  filename = file.path(outdir, "BM_Zscore_Longitudinal_Monitoring2.png"),
+  plot     = p_combined,
+  width    = 12,   # 4 panels across
+  height   = 4,
+  dpi      = 600
+)
+
+## Redo for non z-score BM features
+# Example calls (Z-score panels: no cap)
+p_sites  <- make_panel_minlogic("sites", "Prop. Mutant Sites Detected", plot_title = "Longitudinal trajectories of MRD metrics from baseline BM mutation profiles")
+p_cvaf  <- make_panel_minlogic("cVAF",  "Cumulative VAF", cap = 0.25,  plot_title = "Longitudinal trajectories of MRD metrics from baseline BM mutation profiles")    # cap on
+p_sites
+p_cvaf
+
+
+# Combine side-by-side with a single legend at the bottom
+p_cvaf <- p_cvaf + ggtitle(NULL)
+p_sites <- p_sites + ggtitle(NULL)
+
+p_combined <- (p_cvaf + p_sites) +
+  plot_annotation(
+    title = "Longitudinal trajectories of MRD metrics from baseline BM mutation profiles"
+  ) +
+  plot_layout(guides = "collect") &                           # <-- collect legends
+  theme(
+    legend.position = "bottom",
+    legend.box      = "horizontal",
+    plot.title = element_text(size = 18, face = "bold", hjust = 0.5)
+  ) &
+  guides(                                                     # optional: one-row legends
+    colour = guide_legend(nrow = 1, byrow = TRUE),
+    shape  = guide_legend(nrow = 1, byrow = TRUE)
+  )
+
+p_combined
+
+ggsave(
+  filename = file.path(outdir, "BM_raw_features_Longitudinal_Monitoring2.png"),
+  plot     = p_combined,
+  width    = 12,   # 4 panels across
+  height   = 4,
+  dpi      = 600
+)
+
+
+## Do for blood and fragmentomic features
+
+
+
+
+
+
 
 
 #### Add specific example of progressor vs non-progressor 

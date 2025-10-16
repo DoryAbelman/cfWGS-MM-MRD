@@ -62,8 +62,8 @@ metada_df_mutation_comparison <- read_csv("combined_clinical_data_updated_April2
   )
 
 # Load CNA, translocation, and tumor fraction data
-cna_data           <- readRDS(file.path(export_dir, "cna_data.rds"))
-cna_data_sequenza <- readRDS(file.path(export_dir, "cna_data_from_sequenza_400.rds"))
+cna_data           <- readRDS(file.path(export_dir, "cna_data_ichorCNA.rds"))
+cna_data_sequenza <- readRDS(file.path(export_dir, "cna_data_from_sequenza_400_updated.rds"))
 translocation_data <- readRDS(file.path(export_dir, "translocation_data_cytoband_updated.rds"))
 tumor_fraction     <- read_tsv("Oct 2024 data/tumor_fraction_cfWGS.txt")
 
@@ -120,6 +120,77 @@ tumor_fraction_max <- tumor_fraction %>%
 CNA_translocation <- left_join(CNA_translocation, 
                                tumor_fraction_max, 
                                by = c("Sample" = "Bam"))
+
+
+
+### Now redo with the calls at the specific FISH sites 
+
+# 1) Rename Sequenza ID to Sample so downstream stays consistent
+FISH_sequenza <- readRDS(file.path(export_dir, "FISH_data_from_sequenza_400_updated.rds"))
+FISH_ichor <- readRDS(file.path(export_dir, "FISH_probe_calls_bin_cytoband_ichorCNA.rds"))
+
+FISH_sequenza <- FISH_sequenza %>% select(-Sample) %>%
+  rename(Sample = Bam_clean_tmp) 
+
+# 2) Drop legacy rows that are present in Sequenza
+overlap_samples <- intersect(FISH_ichor$Sample, FISH_sequenza$Sample)
+
+FISH_ichor_filtered <- FISH_ichor %>%
+  filter(!Sample %in% overlap_samples)
+
+# 3) Combine CNA calls (Sequenza takes precedence)
+FISH_CNA_combined <- bind_rows(FISH_ichor_filtered, FISH_sequenza)
+
+## Now join this with the metadata to ojoin with the and keep only the diagnosis ones
+# First, remove the '.bam' suffix from the 'Bam' column in 'metada_df_mutation_comparison'
+metada_df_mutation_comparison <- metada_df_mutation_comparison %>%
+  mutate(Bam_clean_tmp = gsub(".bam$", "", Bam))  # Remove the '.bam' suffix
+
+# Perform the left join
+FISH_CNA_combined <- left_join(FISH_CNA_combined, 
+                               metada_df_mutation_comparison, 
+                               by = c("Sample" = "Bam_clean_tmp"))
+
+## Add the tumor fraction info 
+# Keep only the max Tumor_Fraction for each Bam in tumor_fraction
+tumor_fraction_max <- tumor_fraction %>%
+  group_by(Bam) %>%
+  summarise(Tumor_Fraction = max(Tumor_fraction, na.rm = TRUE))  # Ensure to handle NA values
+
+
+FISH_CNA_combined <- left_join(FISH_CNA_combined, 
+                               tumor_fraction_max, 
+                               by = c("Sample" = "Bam"))
+
+# Now recalculate the lables 
+gain_labels <- c("GAIN","AMP","HLAMP")
+loss_labels <- c("HOMD","HETD","LOSS","CNLOH")
+
+FISH_CNA_combined <- FISH_CNA_combined %>%
+  mutate(
+    # normalize case
+    across(c(probe_call_amp1q, probe_call_del17p, probe_call_del1p),
+           ~ toupper(as.character(.))),
+    
+    # 1 if gain label for amp1q; else 0 (including NA/NEUT)
+    is_altered_at_probe_amp1q  = as.integer(!is.na(probe_call_amp1q)  &
+                                              probe_call_amp1q  %in% gain_labels),
+    
+    # 1 if loss label for 17p and 1p; else 0
+    is_altered_at_probe_del17p = as.integer(!is.na(probe_call_del17p) &
+                                              probe_call_del17p %in% loss_labels),
+    is_altered_at_probe_del1p  = as.integer(!is.na(probe_call_del1p)  &
+                                              probe_call_del1p  %in% loss_labels)
+  )
+
+
+## Now export this 
+saveRDS(FISH_CNA_combined, file = file.path(export_dir, "CNA_at_FISH_sites_combined.rds"))
+write.table(FISH_CNA_combined,
+            file = file.path(export_dir, "CNA_at_FISH_sites_combined.txt"),
+            sep = "\t", row.names = FALSE, quote = FALSE)
+
+
 
 # Filter rows where Tumor_Sample_Barcode is NA
 ## Can get to these later if decide to include**
@@ -457,7 +528,7 @@ All_feature_data_logical <- All_feature_data %>%
       
       # Tier 4 – moderate cfDNA TF + cytogenetics
       Sample_type == "Blood_plasma_cfDNA" & Tumor_Fraction >= 0.03 &
-        (hyperdiploid | del1p | amp1q | del17p | del13q) ~ 1L,
+        (del1p | amp1q | del17p | del13q) ~ 1L,
       
       TRUE ~ 0L
     )
@@ -554,18 +625,18 @@ print(comparison)
 
 ## Export this 
 # Save All_feature_data as an RDS file
-saveRDS(All_feature_data_logical, file = file.path(export_dir, "All_feature_data_Sep2025_updated.rds"))
+saveRDS(All_feature_data_logical, file = file.path(export_dir, "All_feature_data_Sep2025_updated2.rds"))
 
 # Save All_feature_data as a text file with tab-separated values
-write.table(All_feature_data_logical, file = file.path(export_dir, "All_feature_data_Sep2025_updated.txt"), sep = "\t", row.names = TRUE, quote = FALSE)
+write.table(All_feature_data_logical, file = file.path(export_dir, "All_feature_data_Sep2025_updated2.txt"), sep = "\t", row.names = TRUE, quote = FALSE)
 
 
 ### Save the CNA_Translocation file 
 # Save All_feature_data as an RDS file
-saveRDS(CNA_translocation, file = file.path(export_dir, "CNA_translocation_Sep2025.rds"))
+saveRDS(CNA_translocation, file = file.path(export_dir, "CNA_translocation_Sep2025_updated2.rds"))
 #saveRDS(CNA_translocation, file = file.path(export_dir, "CNA_translocation_June2025.rds"))
 
 
 # Save All_feature_data as a text file with tab-separated values
-write.table(CNA_translocation, file = file.path(export_dir, "CNA_translocation_Sep2025.txt"), sep = "\t", row.names = TRUE, quote = FALSE)
+write.table(CNA_translocation, file = file.path(export_dir, "CNA_translocation_Sep2025_updated2.txt"), sep = "\t", row.names = TRUE, quote = FALSE)
 #write.table(CNA_translocation, file = file.path(export_dir, "CNA_translocation_June2025.txt"), sep = "\t", row.names = TRUE, quote = FALSE)

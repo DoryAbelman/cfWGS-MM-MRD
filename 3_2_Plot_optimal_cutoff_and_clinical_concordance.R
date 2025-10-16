@@ -862,7 +862,7 @@ p_pos_by_tech <- ggplot(combo_tbl,
   
   # ⑤ titles
   labs(
-    title = "MRD Positivity by Technology (Blood-derived mutation lists)",
+    title = "MRD Positivity by Technology (cfDNA-derived mutation lists)",
     x     = "Technology",
     y     = "Positivity Rate"
   ) +
@@ -880,7 +880,7 @@ p_pos_by_tech <- ggplot(combo_tbl,
 
 # 4) Save
 ggsave(
-  filename = file.path(OUTPUT_DIR_FIGURES, "Fig_5I_Blood_positivity_by_tech_facet_updated5.png"),
+  filename = file.path(OUTPUT_DIR_FIGURES, "Fig_5I_Blood_positivity_by_tech_facet_updated6.png"),
   plot     = p_pos_by_tech,
   width    = 6.5,    # wider to accommodate two facets
   height   = 4,
@@ -2758,9 +2758,9 @@ p_scatter_simple <- ggplot(plot_df2,
   facet_grid(rows = vars(landmark_timepoint),
              cols = vars(Comparator)) +
   
-  labs(title = "Comparison of cfWGS BM-Derived Muts.\nMRD Probability and Clinical Assays",
+  labs(title = "cfWGS of BM-Derived Mutations MRD\nProbability vs. Clinical Assays",
        x = "Comparator MRD level",
-       y = "Model Probability") +
+       y = "cVAF Model Probability") +
   # start from a white‐background theme with borders
   theme_bw(base_size = 11) +    
   
@@ -2809,7 +2809,7 @@ p_scatter_simple <- ggplot(plot_df2,
 p_scatter_simple
 
 # save
-ggsave("Final Tables and Figures/Fig4K_cfWGS_vs_MFC_clonoSEQ_clean_BM_muts_updated2.png",
+ggsave("Final Tables and Figures/Fig4K_cfWGS_vs_MFC_clonoSEQ_clean_BM_muts_updated4.png",
        p_scatter_simple,
        width  = 6.5, height = 5, dpi = 600)
 
@@ -2987,9 +2987,9 @@ p_scatter_simple_blood <- ggplot(plot_df2,
   facet_grid(rows = vars(landmark_timepoint),
              cols = vars(Comparator)) +
   
-  labs(title = "Comparison of cfWGS Blood-Derived Muts.\nMRD Probability and Clinical Assays",
+  labs(title = "cfWGS of cfDNA-Derived Mutations MRD\nProbability vs. Clinical Assays",
        x = "Comparator MRD level",
-       y = "Model Probability") +
+       y = "Sites Model Probability") +
   # start from a white‐background theme with borders
   theme_bw(base_size = 11) +    
   
@@ -3038,6 +3038,7 @@ p_scatter_simple_blood <- ggplot(plot_df2,
 p_scatter_simple_blood
 
 # save
-ggsave("Final Tables and Figures/Fig5K_cfWGS_vs_MFC_clonoSEQ_clean_Blood_muts_updated2.png",
+ggsave("Final Tables and Figures/Fig5K_cfWGS_vs_MFC_clonoSEQ_clean_Blood_muts_updated3.png",
        p_scatter_simple_blood,
        width  = 6.5, height = 5, dpi = 600)
+

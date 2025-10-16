@@ -1,5 +1,5 @@
 # =============================================================================
-# Script: 1_4_Process_CNA_Data.R
+# Script: process_cna_seg_files.R
 #
 # Description:
 #   This script imports, harmonizes, and summarizes copy-number segment (SEG)
@@ -40,7 +40,7 @@
 #   library(GenomicRanges)
 #
 # Usage:
-#   source("1_4_Process_CNA_Data.R")
+#   source("process_cna_seg_files.R")
 #   # creates combined_seg_data and myeloma_CNA_matrix_with_HRD in working dir
 #
 # Author: Dory Abelman
@@ -49,14 +49,17 @@
 
 
 # Load Libraries:
+library(tidyverse)       # dplyr, purrr, tidyr, readr, etc.
+library(purrr)           # for reduce()
+library(tidyr)           # for pivot_longer()
+library(GenomicRanges)
+library(IRanges)
+library(S4Vectors)
 
 
-source("setup_packages.R")
-source("config.R")
-source("helpers.R")
 ## Load clinical info
 # Load in the patient info 
-metada_df_mutation_comparison <- read_csv("combined_clinical_data_updated_Feb5_2025.csv")
+metada_df_mutation_comparison <- read_csv("combined_clinical_data_updated_April2025.csv")
 
 # Add a Tumor_Sample_Barcode column to metada_df_mutation_comparison
 metada_df_mutation_comparison <- metada_df_mutation_comparison %>%
@@ -143,6 +146,297 @@ saveRDS(combined_seg_data, file = "Oct_2024_combined_corrected_calls.rds")
 
 combined_seg_data <- readRDS("Oct_2024_combined_corrected_calls.rds")
 
+
+
+## Now get FISH concordance with the specific probes
+# =====================================================================
+# Purpose: Recompute per-sample CNA calls at FISH probe cytobands
+#          using ichorCNA segments, independent of other scripts.
+# Output:  probe_calls_bin_cytoband (in memory) + optional exports
+# =====================================================================
+
+fish_probe_xlsx    <- "Clinical data/FISH probe locations.xlsx" # must contain Chromosome, Target, Location in hg38
+# EITHER provide cb_frame as an RDS with columns chr,start,end,band
+cb_frame_rds       <- NULL  # e.g., "cb_frame_hg38.rds"  # set to a path OR leave NULL
+# OR provide a UCSC cytoband txt (no header), which we'll parse
+cytoband_txt       <- "cytoband.txt"  # fallback if cb_frame_rds is NULL
+
+
+
+## ---- Tunables & label maps ----
+pad_bp  <- 150000L  # ±150 kb padding around band windows
+min_bp  <- 1000L    # require >= 1 kb overlap to count
+max_nearest_bp  <- 10e6L     # allow nearest-segment fallback within 10 Mb 
+
+# FISH feature mapping by arm label in fish table
+feature_map <- c("1p" = "del1p", "1q" = "amp1q", "17p" = "del17p", "13q" = "del13q")
+# Direction map for binning
+dir_map     <- c(amp1q = "gain", del1p = "loss", del13q = "loss", del17p = "loss")
+
+# Call label sets
+gain_labels <- c("GAIN", "AMP", "HLAMP")
+loss_labels <- c("HOMD", "HETD")
+
+if (!file.exists(fish_probe_xlsx)) stop("Missing: ", fish_probe_xlsx)
+fish_probe_locations <- readxl::read_excel(fish_probe_xlsx)
+
+# Cytobands: prefer cb_frame RDS if provided; otherwise parse UCSC txt
+if (!is.null(cb_frame_rds)) {
+  if (!file.exists(cb_frame_rds)) stop("Missing: ", cb_frame_rds)
+  cb_frame <- readRDS(cb_frame_rds)
+  cyto <- cb_frame %>%
+    transmute(
+      chrom = gsub("^chr","", as.character(chr)),
+      start = as.integer(start),
+      end   = as.integer(end),
+      band  = as.character(band)
+    ) %>% arrange(chrom, start)
+} else {
+  if (!file.exists(cytoband_txt)) stop("Missing: ", cytoband_txt)
+  cyto <- readr::read_tsv(
+    cytoband_txt,
+    col_names = c("chrom", "start", "end", "band", "gieStain"),
+    col_types = cols(
+      chrom = col_character(),
+      start = col_double(),
+      end   = col_double(),
+      band  = col_character(),
+      gieStain = col_character()
+    ),
+    progress = FALSE
+  ) %>%
+    mutate(
+      chrom = gsub("^chr","", chrom),
+      start = as.integer(start),
+      end   = as.integer(end)
+    ) %>%
+    arrange(chrom, start)
+}
+stopifnot(all(c("chrom","start","end","band") %in% names(cyto)))
+
+## ---- Build GRanges from ichorCNA segments (wide) ----
+# Expect first 4 columns: chr, start, end, arm (your ichor pipeline wrote this)
+need_cols <- c("chr","start","end","arm")
+if (!all(need_cols %in% names(combined_seg_data))) {
+  stop("combined_seg_data must have columns: ", paste(need_cols, collapse = ", "))
+}
+
+sample_cols_seg <- setdiff(names(combined_seg_data), need_cols)
+if (length(sample_cols_seg) == 0L) stop("No sample columns found in combined_seg_data")
+
+# GRanges of all merged segments
+seg_gr <- GRanges(
+  seqnames = as.character(combined_seg_data$chr),
+  ranges   = IRanges(as.integer(combined_seg_data$start),
+                     as.integer(combined_seg_data$end))
+)
+
+# Attach calls (one column per sample) to mcols; uppercase for consistency
+calls_df <- combined_seg_data[, sample_cols_seg] %>%
+  mutate(across(everything(), ~ toupper(as.character(.))))
+if (anyDuplicated(names(calls_df))) {
+  names(calls_df) <- make.unique(names(calls_df), sep = "_dup")
+}
+mcols(seg_gr) <- S4Vectors::DataFrame(as.list(calls_df), check.names = FALSE)
+samples <- colnames(mcols(seg_gr))
+
+## ---- Helpers: band parsing & expansion ----
+.band_span <- function(cyto_chr, arm, band_tag) {
+  tag <- paste0(arm, band_tag)  # e.g., "q21", "p13.1"
+  rows <- which(startsWith(cyto_chr$band, tag))
+  if (!length(rows)) return(NULL)
+  tibble(start = min(cyto_chr$start[rows]),
+         end   = max(cyto_chr$end[rows]))
+}
+
+.parse_target <- function(s) {
+  s <- gsub("\\s", "", s)
+  m <- regexec("^([0-9XYM]+)([pq])([0-9]+(?:\\.[0-9]+)?)(?:-([pq])?([0-9]+(?:\\.[0-9]+)?))?$", s)
+  g <- regmatches(s, m)[[1]]
+  if (!length(g)) return(NULL)
+  chr   <- g[2]
+  arm1  <- g[3]; band1 <- g[4]
+  arm2  <- g[5]; band2 <- g[6]
+  if (is.na(arm2) || identical(arm2, "")) arm2 <- arm1
+  if (is.na(band2) || identical(band2, "")) {
+    list(chr = chr, arm1 = arm1, band1 = band1, arm2 = arm1, band2 = band1, is_range = FALSE)
+  } else {
+    list(chr = chr, arm1 = arm1, band1 = band1, arm2 = arm2, band2 = band2, is_range = TRUE)
+  }
+}
+
+## ---- Turn FISH Targets into genomic windows via cytobands ----
+stopifnot(all(c("Chromosome","Target") %in% names(fish_probe_locations)))
+
+probe_windows_cytoband <- fish_probe_locations %>%
+  transmute(
+    feature = dplyr::recode(Chromosome, !!!feature_map, .default = NA_character_),
+    Target  = Target
+  ) %>%
+  rowwise() %>%
+  mutate(.pt = list(.parse_target(Target))) %>%
+  ungroup() %>%
+  filter(!purrr::map_lgl(.pt, is.null), !is.na(feature)) %>%
+  mutate(
+    chr  = purrr::map_chr(.pt, ~ .x$chr),
+    arm1 = purrr::map_chr(.pt, ~ .x$arm1),
+    b1   = purrr::map_chr(.pt, ~ .x$band1),
+    arm2 = purrr::map_chr(.pt, ~ .x$arm2),
+    b2   = purrr::map_chr(.pt, ~ .x$band2)
+  ) %>%
+  select(-.pt) %>%
+  group_by(feature, chr, arm1, b1, arm2, b2) %>%
+  reframe({
+    cy_chr <- dplyr::filter(cyto, chrom == chr) %>% arrange(start)
+    sspan  <- .band_span(cy_chr, arm1, b1)
+    espan  <- .band_span(cy_chr, arm2, b2)
+    if (is.null(sspan) || is.null(espan)) tibble(start = NA_integer_, end = NA_integer_) else
+      tibble(start = min(sspan$start, espan$start),
+             end   = max(sspan$end,   espan$end))
+  }) %>%
+  ungroup() %>%
+  filter(!is.na(start), !is.na(end)) %>%
+  mutate(
+    start_pad = pmax(1L, start - pad_bp),
+    end_pad   = end + pad_bp
+  ) %>%
+  distinct(feature, chr, start_pad, end_pad, .keep_all = TRUE)
+
+if (!nrow(probe_windows_cytoband)) stop("No valid probe windows built from Target field")
+
+## ---- Overlap probe windows with segments ----
+probe_gr_cyto <- GRanges(
+  seqnames = probe_windows_cytoband$chr,
+  ranges   = IRanges(probe_windows_cytoband$start_pad, probe_windows_cytoband$end_pad),
+  feature  = probe_windows_cytoband$feature
+)
+
+hits_cyto <- findOverlaps(probe_gr_cyto, seg_gr, ignore.strand = TRUE)
+
+ovl_bp_cyto <- if (length(hits_cyto)) width(pintersect(
+  ranges(probe_gr_cyto)[queryHits(hits_cyto)],
+  ranges(seg_gr)[subjectHits(hits_cyto)]
+)) else integer(0)
+
+hits_df_cyto <- tibble::tibble(
+  probe_idx = as.integer(queryHits(hits_cyto)),
+  seg_idx   = as.integer(subjectHits(hits_cyto)),
+  ovl       = as.integer(ovl_bp_cyto),
+  src       = "overlap"
+) %>%
+  dplyr::filter(ovl >= min_bp)
+
+# --- Fallback: nearest segment per probe when no overlaps made it, since ichorCNA skips problematic regions of the genome
+# distanceToNearest returns the *closest* segment (ties broken arbitrarily), with distance in bp.
+nearest_hits <- GenomicRanges::distanceToNearest(probe_gr_cyto, seg_gr, ignore.strand = TRUE)
+
+nearest_df <- tibble::tibble(
+  probe_idx = as.integer(S4Vectors::queryHits(nearest_hits)),
+  seg_idx   = as.integer(S4Vectors::subjectHits(nearest_hits)),
+  dist_bp   = as.integer(S4Vectors::mcols(nearest_hits)$distance)
+) %>%
+  # keep only probes that have no overlapping rows already
+  dplyr::anti_join(hits_df_cyto %>% dplyr::select(probe_idx) %>% dplyr::distinct(),
+                   by = "probe_idx") %>%
+  # enforce a maximum distance cap to avoid silly jumps
+  dplyr::filter(dist_bp <= max_nearest_bp) %>%
+  # encode "overlap score" as negative distance so sorting still prefers overlaps
+  dplyr::transmute(
+    probe_idx,
+    seg_idx,
+    ovl = -dist_bp,   # negative = farther; less negative = closer
+    src = "nearest"
+  )
+
+# Combine, order by probe then "best support" (overlap first, then nearest by distance)
+hits_df_cyto <- dplyr::bind_rows(hits_df_cyto, nearest_df) %>%
+  dplyr::arrange(probe_idx, dplyr::desc(ovl))
+
+## ---- Choose per-sample call by severity first, then overlap ----
+probe_ids_cyto <- seq_along(probe_gr_cyto)
+final_calls_mat_cyto <- matrix(
+  NA_character_, nrow = length(probe_ids_cyto), ncol = length(samples),
+  dimnames = list(NULL, samples)
+)
+
+gain_priority <- c("HLAMP","AMP","GAIN")
+loss_priority <- c("HOMD","HETD","LOSS","CNLOH")
+
+feature_vec_cyto <- as.character(mcols(probe_gr_cyto)$feature)
+
+for (p in probe_ids_cyto) {
+  seg_rows <- hits_df_cyto %>% filter(probe_idx == p)
+  segs     <- seg_rows$seg_idx
+  if (!length(segs)) next
+  
+  seg_calls <- as.matrix(mcols(seg_gr)[segs, samples, drop = FALSE])
+  ovl_here  <- seg_rows$ovl
+  
+  feat <- feature_vec_cyto[p]
+  dir  <- unname(dir_map[feat])   # "gain" or "loss"
+  pri  <- if (identical(dir, "gain")) gain_priority else loss_priority
+  
+  lab <- toupper(seg_calls)  # same shape as seg_calls
+  sev_rank <- array(
+    match(lab, pri, nomatch = length(pri) + 1L),  # unknown => worst rank
+    dim       = dim(lab),
+    dimnames  = dimnames(lab)
+  )
+  
+  for (j in seq_along(samples)) {
+    calls_j <- seg_calls[, j]
+    valid   <- which(!is.na(calls_j) & nzchar(calls_j))
+    if (!length(valid)) next
+    
+    rnk  <- sev_rank[valid, j]
+    best <- which(rnk == min(rnk))
+    if (length(best) > 1L) best <- best[which.max(ovl_here[valid][best])]
+    final_calls_mat_cyto[p, j] <- calls_j[valid][best]
+  }
+}
+
+## ---- Tidy & bin by expected direction ----
+probe_meta_cyto <- tibble(
+  probe_idx = probe_ids_cyto,
+  feature   = as.character(mcols(probe_gr_cyto)$feature)
+)
+
+probe_calls_long_cyto <- as_tibble(final_calls_mat_cyto, .name_repair = "minimal") %>%
+  mutate(probe_idx = probe_ids_cyto) %>%
+  pivot_longer(cols = all_of(samples), names_to = "Sample", values_to = "probe_call") %>%
+  left_join(probe_meta_cyto, by = "probe_idx") %>%
+  select(Sample, feature, probe_call)
+
+probe_calls_bin_cytoband <- probe_calls_long_cyto %>%
+  mutate(
+    direction = unname(dir_map[feature]),
+    is_altered_at_probe = if_else(
+      direction == "gain",
+      as.integer(probe_call %in% gain_labels),
+      as.integer(probe_call %in% loss_labels)
+    )
+  ) %>%
+  select(-direction) %>%
+  pivot_wider(
+    names_from  = feature,
+    values_from = c(probe_call, is_altered_at_probe),
+    names_sep   = "_"
+  )
+
+# View head
+print(head(probe_calls_bin_cytoband, 10))
+
+## ---- Optional exports ----
+export_dir <- "Jan2025_exported_data"
+if (!dir.exists(export_dir)) dir.create(export_dir, recursive = TRUE)
+saveRDS(probe_calls_bin_cytoband, file = file.path(export_dir, "FISH_probe_calls_bin_cytoband_ichorCNA.rds"))
+write.table(probe_calls_bin_cytoband,
+            file = file.path(export_dir, "FISH_probe_calls_bin_cytoband_ichorCNA.txt"),
+            sep = "\t", row.names = FALSE, quote = FALSE)
+
+
+### Now continue with regular data transformations
+
 # Pivot the data (assuming combined_seg_data is already defined)
 long_data <- combined_seg_data %>%
   pivot_longer(cols = -(1:4), names_to = "Sample", values_to = "Value") %>%
@@ -228,6 +522,7 @@ myeloma_CNA_matrix_with_HRD <- results
 
 
 ## Add hyperdiploid info:
+
 ## Edit based on Suzanne new criteria 
 ## Define hyperdiploid chromosomes (full gains required for all eight)
 myeloma_cna_HRD <- list(
@@ -274,9 +569,9 @@ for (i in 1:nrow(hyperdiploid_arms_df)) {
     )
   }
   
-  # Merge with the results table and assign gain indicator if >80% of segments are gained
+  # Merge with the results table and assign gain indicator if >65% of segments are gained
   results <- left_join(results, sample_gains, by = "Sample")
-  results[[hyperdiploid_arms_df$Chr[i]]] <- ifelse(results$ProportionGained > 0.8, 1, 0)
+  results[[hyperdiploid_arms_df$Chr[i]]] <- ifelse(results$ProportionGained > 0.65, 1, 0)
   results <- results %>% select(-ProportionGained)
 }
 
@@ -284,7 +579,7 @@ for (i in 1:nrow(hyperdiploid_arms_df)) {
 results <- results %>%
   mutate(
     hyperdiploid = if_else(
-      rowSums(select(., starts_with("hyperdiploid_"))) == 8,
+      rowSums(select(., starts_with("hyperdiploid_"))) >= 5,
       1, 0
     )
   )
@@ -298,7 +593,7 @@ cna_data <- myeloma_CNA_matrix_with_HRD %>%
   dplyr::select(Sample, del1p, amp1q, del13q, del17p, hyperdiploid) %>%
   mutate_at(vars(-Sample), as.character)  # Convert numeric to character for consistency
 
-
+cna_data_backup <- cna_data
 
 ## Export the important tables 
 # Define the directory for export
@@ -310,8 +605,9 @@ if (!dir.exists(export_dir)) {
 }
 
 # Exporting dataframes as RDS files
-saveRDS(cna_data, file = file.path(export_dir, "cna_data.rds"))
+saveRDS(cna_data, file = file.path(export_dir, "cna_data_ichorCNA.rds"))
 
 # Exporting dataframes as text files
-write.table(cna_data, file = file.path(export_dir, "cna_data.txt"), sep = "\t", row.names = FALSE, quote = FALSE)
+write.table(cna_data, file = file.path(export_dir, "cna_data_ichorCNA.txt"), sep = "\t", row.names = FALSE, quote = FALSE)
+write.table(cna_data_backup, file = file.path(export_dir, "cna_data_backup.txt"), sep = "\t", row.names = FALSE, quote = FALSE)
 

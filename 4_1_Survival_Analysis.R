@@ -18,7 +18,7 @@ final_tbl_rds <- "Exported_data_tables_clinical/Censor_dates_per_patient_for_PFS
 dat_rds       <- "Output_tables_2025/all_patients_with_BM_and_blood_calls_updated5.rds"
 
 ## OUTPUT ----------------------------------------------------------------------
-outdir <- "Output_tables_2025/detection_progression_updated5"
+outdir <- "Output_tables_2025/detection_progression_updated6"
 dir.create(outdir, showWarnings = FALSE, recursive = TRUE)
 
 ## ── 1.  LOAD & TIDY CORE TABLES ──────────────────────────────────────────────
@@ -92,10 +92,10 @@ table(survival_df$timepoint_info)
 techs <- c(
   Flow_Binary        = "MFC",
   Adaptive_Binary    = "clonoSEQ",
-  BM_zscore_only_detection_rate_call    = "cfWGS of BM-Derived Mutations", 
+  BM_zscore_only_detection_rate_call    = "cfWGS of BM-Derived Mutations (cVAF Model)", 
   BM_zscore_only_detection_rate_screen_call    = "cfWGS of BM-derived mutations (high sensetivity)", 
-  Blood_zscore_only_sites_call = "cfWGS of Blood‑Derived Mutations",
-  Blood_plus_fragment_min_call = "cfWGS of Blood‑Derived Mutations + Fragmentomics",
+  Blood_zscore_only_sites_call = "cfWGS of cfDNA-Derived Mutations (Sites Model)",
+  Blood_plus_fragment_min_call = "cfWGS of cfDNA-Derived Mutations (Combined Model)",
   Fragmentomics_mean_coverage_only_call = "Fragmentomics model"
 )
 
@@ -110,8 +110,9 @@ dpi_target <- 500
 # 4) Minimum n per group to plot
 min_n <- 5
 
-pal_2 <- viridis(2, option = "D", begin = 0.3, end = 0.7)   # nice mid‑range hues
+#pal_2 <- viridis(2, option = "D", begin = 0.3, end = 0.7)   # nice mid‑range hues
 # old colors: palette = c("#E7B800","#2E9FDF")
+pal_2 <- c("black", "red") # updated 
 
 tp_labels <- c(
   `diagnosis` = "Diagnosis",
@@ -2596,20 +2597,31 @@ p_prob <- ggplot(df, aes(months_before_event, BM_zscore_only_detection_rate_prob
     breaks       = seq(0, max_mo, by = 12),  # every 12 months
     minor_breaks = seq(0, max_mo, by = 6)    # every 6 months
   ) +
-  scale_y_continuous("cfWGS MRD Probability (%)",
+  scale_y_continuous("cVAF Model Probability",
                      limits = c(0,1),
                      labels = scales::percent_format(1)) +
   
   # 6) colour for relapse status
+  # scale_colour_manual(
+  #   name   = "Patient outcome",
+  #   values = c("No relapse" = "#35608DFF",
+  #              "Relapse"    = "#43BF71FF")
+  # ) +
+  # scale_fill_manual(
+  #   name   = "Patient outcome",
+  #   values = c("No relapse" = "#35608DFF",
+  #              "Relapse"    = "#43BF71FF")
+  # ) +
+  
   scale_colour_manual(
     name   = "Patient outcome",
-    values = c("No relapse" = "#35608DFF",
-               "Relapse"    = "#43BF71FF")
+    values = c("No relapse" = "black",
+               "Relapse"    = "red")
   ) +
   scale_fill_manual(
     name   = "Patient outcome",
-    values = c("No relapse" = "#35608DFF",
-               "Relapse"    = "#43BF71FF")
+    values = c("No relapse" = "black",
+               "Relapse"    = "red")
   ) +
   
   # # 7) stroke scale for MRD call
@@ -2682,7 +2694,8 @@ x_left <- max_mo - 0.02 * max_mo  # a small inset from the left border
 p_prob2 <- p_prob +
   scale_colour_manual(
     name = "Patient outcome",
-    values = c("No relapse" = "#35608DFF", "Relapse" = "#43BF71FF"),
+#    values = c("No relapse" = "#35608DFF", "Relapse" = "#43BF71FF"),
+    values = c("No relapse" = "black", "Relapse" = "red"),
     labels = c(
       paste0("No relapse\n(n=", n_pat_nr, " patients; ", n_time_nr, " samples)"),
       paste0("Relapse\n(n=", n_pat_rl, " patients; ", n_time_rl, " samples)")
@@ -2690,7 +2703,8 @@ p_prob2 <- p_prob +
   ) +
   scale_fill_manual(
     name = "Patient outcome",
-    values = c("No relapse" = "#35608DFF", "Relapse" = "#43BF71FF"),
+ #   values = c("No relapse" = "#35608DFF", "Relapse" = "#43BF71FF"),
+   values = c("No relapse" = "black", "Relapse" = "red"),
     labels = c(
       paste0("No relapse\n(n=", n_pat_nr, " patients; ", n_time_nr, " samples)"),
       paste0("Relapse\n(n=", n_pat_rl, " patients; ", n_time_rl, " samples)")
@@ -2702,10 +2716,10 @@ print(p_prob2)
 # ────────────────────────────────────────────────────────────────
 # 3.  Export  ────────────────────────────────────────────────────
 # ────────────────────────────────────────────────────────────────
-ggsave("Final Tables and Figures/F4C_cfWGS_prob_vs_time_updated4.png",
+ggsave("Final Tables and Figures/F4C_cfWGS_prob_vs_time_updated5.png",
        p_prob, width = 6, height = 4.5, dpi = 600)
 
-ggsave("Final Tables and Figures/F4C_cfWGS_prob_vs_time_updated4_label.png",
+ggsave("Final Tables and Figures/F4C_cfWGS_prob_vs_time_updated5_label.png",
        p_prob2, width = 6, height = 4.5, dpi = 600)
 
 
@@ -2957,13 +2971,109 @@ p_time_inf <- ggplot(plot_df2,
     legend.text     = element_text(size = 10)
   ) +
   
-  labs(title = "Association Between cfWGS MRD Probability\nand Time to Relapse Using BM-Derived Muts.")
+  labs(title = "Association Between cfWGS MRD Probability\nand Time to Relapse Using BM-Derived Mutations")
 
 print(p_time_inf)
 
 # 4) render / save
 ggsave(file.path("Final Tables and Figures/Fig_4D_time_to_relapse_infinity_no_reverse2_BM_muts_updated3.png"),
        p_time_inf, width = 5.5, height = 4.5, dpi = 600)
+
+
+## Try different legend layout 
+library(cowplot)    # get_legend()
+library(patchwork)  # easy assembly
+
+# --- 1) build the main plot *without* a legend (legend handled below) ---
+p_main <- ggplot(plot_df2,
+                 aes(x = BM_zscore_only_detection_rate_prob, y = days_plot)) +
+  geom_vline(xintercept = 0.35, linetype = "dotted", colour = "grey40") +
+  geom_point(aes(colour = progress_status, fill = progress_status),
+             shape = 21, size = 3, colour = "black") +
+  scale_y_continuous(
+    "Days until relapse (or ∞ for censor)",
+    limits = c(0, overflow),
+    breaks = c(seq(0, 1620, by = 180), overflow),
+    labels = c(seq(0, 1620, by = 180), "∞")
+  ) +
+  scale_x_continuous(
+    "cfWGS MRD probability",
+    limits = c(0.1,1),
+    breaks = seq(0.1,1,by=0.2),
+    labels = scales::percent_format(accuracy=1)
+  )  +# colours
+scale_colour_manual(
+  "Patient outcome",
+  values = c("No relapse" = "black", "Relapse" = "red")
+) +
+  scale_fill_manual(
+    "Patient outcome",
+    values = c("No relapse" = "black", "Relapse" = "red")
+  ) +
+  guides(fill = "none") +
+  theme_classic(base_size = 11) +
+  theme(
+    panel.grid      = element_blank(),
+    plot.title      = element_text(face = "bold", hjust = 0.5, size = 12),
+    legend.position = "none"        # <- hide here; we'll place it below
+  ) +
+  labs(title = "Association Between cfWGS MRD Probability\nand Time to Relapse Using BM-Derived Mutations")
+
+# --- 2) LEGEND-ONLY PLOT (do NOT inherit guides(fill = 'none')) ---
+# -----build a dummy legend that always shows both levels -----
+p_legend_only <- ggplot(legend_df, aes(x, y, fill = progress_status)) +
+  # make the plotting layer invisible *in the panel* …
+  geom_point(shape = 21, size = 0, colour = "black", alpha = 0, show.legend = TRUE) +
+  scale_fill_manual(
+    name   = "Patient outcome",
+    values = pal_vals,
+    breaks = names(pal_vals)
+  ) +
+  guides(fill = guide_legend(
+    ncol = 1,                 # <- stack items vertically
+    byrow = TRUE,
+    title.position = "top",   # title on its own line
+    label.hjust = 0,          # left-align labels
+    override.aes = list(shape = 21, size = 3, alpha = 1, colour = "black")
+  )) +
+  theme_void(base_size = 11) +
+  theme(
+    legend.position   = "bottom",
+    legend.direction  = "vertical",         # <- vertical legend
+    legend.title      = element_text(size = 11),
+    legend.text       = element_text(size = 10),
+    legend.key.height = unit(4, "mm"),
+    legend.key.width  = unit(6, "mm"),
+    legend.box.margin = margin(0, 0, 0, 0),
+    plot.margin       = margin(0, 0, 0, 0)
+  )
+
+# --- 3) make two small “text boxes” for the right columns ---
+txt_all <- sprintf("All relapse samples:\nρ=%.2f, p=%s", rho_all, pval_all_str)
+txt_pre <- sprintf("Pre-relapse only:\nρ=%.2f, p=%s", rho_pre, pval_pre_str)
+
+mini_box <- function(s) {
+  ggplot() +
+    annotate("label", x = 0, y = 1, label = s,
+             hjust = 0, vjust = 1, size = 3.5,
+             label.size = 0, fill = scales::alpha("white", 0.7)) +
+    xlim(0,1) + ylim(0,1) +
+    theme_void()
+}
+
+col2 <- mini_box(txt_all)
+col3 <- mini_box(txt_pre)
+
+# --- 4) assemble: plot on top; 3 columns underneath ---
+bottom_row <- p_legend_only | col2 | col3
+final_plot <- p_main / bottom_row + plot_layout(heights = c(1, 0.22))
+
+# show and save
+print(final_plot)
+ggsave("Final Tables and Figures/Fig_4D_time_to_relapse_footer3cols_BM_muts.png",
+       final_plot, width = 5.5, height = 5.5, dpi = 600)
+
+
 
 plot_df2 %>%
   filter(
@@ -3045,22 +3155,32 @@ p_prob <- ggplot(df, aes(months_before_event, Blood_zscore_only_sites_prob, grou
     breaks       = seq(0, max_mo, by = 12),  # every 12 months
     minor_breaks = seq(0, max_mo, by = 6)    # every 6 months
   ) +
-  scale_y_continuous("cfWGS MRD Probability (%)",
+  scale_y_continuous("Sites Model Probability",
                      limits = c(0.3,1),
                      labels = scales::percent_format(1)) +
   
   # 6) colour for relapse status
+  # scale_colour_manual(
+  #   name   = "Patient outcome",
+  #   values = c("No relapse" = "#35608DFF",
+  #              "Relapse"    = "#43BF71FF")
+  # ) +
+  # scale_fill_manual(
+  #   name   = "Patient outcome",
+  #   values = c("No relapse" = "#35608DFF",
+  #              "Relapse"    = "#43BF71FF")
+  # ) +
+  
   scale_colour_manual(
     name   = "Patient outcome",
-    values = c("No relapse" = "#35608DFF",
-               "Relapse"    = "#43BF71FF")
+    values = c("No relapse" = "black",
+               "Relapse"    = "red")
   ) +
   scale_fill_manual(
     name   = "Patient outcome",
-    values = c("No relapse" = "#35608DFF",
-               "Relapse"    = "#43BF71FF")
+    values = c("No relapse" = "black",
+               "Relapse"    = "red")
   ) +
-  
   # # 7) stroke scale for MRD call
   # scale_discrete_manual(
   #   aesthetics = "stroke",
@@ -3084,7 +3204,7 @@ p_prob <- ggplot(df, aes(months_before_event, Blood_zscore_only_sites_prob, grou
   ) +
   
   labs(
-    title    = "Longitudinal cfWGS MRD Probability by Patient Outcome\nUsing Blood-Derived Mutation Lists"
+    title    = "Longitudinal cfWGS MRD Probability by Patient Outcome\nUsing cfDNA-Derived Mutation Lists"
   ) +
   theme_classic(base_size = 11) +
   theme(
@@ -3131,7 +3251,8 @@ x_left <- max_mo - 0.02 * max_mo  # a small inset from the left border
 p_prob2 <- p_prob +
   scale_colour_manual(
     name = "Patient outcome",
-    values = c("No relapse" = "#35608DFF", "Relapse" = "#43BF71FF"),
+#    values = c("No relapse" = "#35608DFF", "Relapse" = "#43BF71FF"),
+    values = c("No relapse" = "black", "Relapse" = "red"),
     labels = c(
       paste0("No relapse\n(n=", n_pat_nr, " patients; ", n_time_nr, " samples)"),
       paste0("Relapse\n(n=", n_pat_rl, " patients; ", n_time_rl, " samples)")
@@ -3139,7 +3260,8 @@ p_prob2 <- p_prob +
   ) +
   scale_fill_manual(
     name = "Patient outcome",
-    values = c("No relapse" = "#35608DFF", "Relapse" = "#43BF71FF"),
+   # values = c("No relapse" = "#35608DFF", "Relapse" = "#43BF71FF"),
+   values = c("No relapse" = "black", "Relapse" = "red"),
     labels = c(
       paste0("No relapse\n(n=", n_pat_nr, " patients; ", n_time_nr, " samples)"),
       paste0("Relapse\n(n=", n_pat_rl, " patients; ", n_time_rl, " samples)")
@@ -3152,10 +3274,10 @@ print(p_prob2)
 # ────────────────────────────────────────────────────────────────
 # 3.  Export  ────────────────────────────────────────────────────
 # ────────────────────────────────────────────────────────────────
-ggsave("Final Tables and Figures/F4C_cfWGS_prob_vs_time_updated3_blood3.png",
+ggsave("Final Tables and Figures/F4C_cfWGS_prob_vs_time_updated3_blood4.png",
        p_prob, width = 6, height = 4.5, dpi = 600)
 
-ggsave("Final Tables and Figures/F4C_cfWGS_prob_vs_time_updated3_blood2_labelled2.png",
+ggsave("Final Tables and Figures/F4C_cfWGS_prob_vs_time_updated3_blood2_labelled3.png",
        p_prob2, width = 6, height = 4.5, dpi = 600)
 
 
@@ -3398,7 +3520,7 @@ p_time_inf <- ggplot(plot_df2,
     legend.text     = element_text(size = 10)
   ) +
   
-  labs(title = "Association Between cfWGS MRD Probability\nand Time to Relapse Using Blood-Derived Muts.")
+  labs(title = "Association Between cfWGS MRD Probability\nand Time to Relapse Using cfDNA-Derived Mutations")
 
 print(p_time_inf)
 
@@ -3413,11 +3535,120 @@ time_to_relapse_blood <- plot_df2
 plot_df2 %>%
   filter(
     is.na(Blood_zscore_only_sites_prob) | is.na(days_plot) |
-      Blood_zscore_only_sites_prob < 0.35 | Blood_zscore_only_sites_prob > 0.9 |
+      Blood_zscore_only_sites_prob < 0.3 | Blood_zscore_only_sites_prob > 1 |
       days_plot < 0 | days_plot > overflow
   )
 
 
+
+### Do different legend layout 
+
+## Try different legend layout 
+
+# --- 1) build the main plot *without* a legend (legend handled below) ---
+p_main <-  ggplot(plot_df2,
+                  aes(x = Blood_zscore_only_sites_prob,
+                      y = days_plot)) +
+  
+  # Youden threshold (if you still want it)
+  geom_vline(xintercept = youden_thr, linetype = "dotted", colour = "grey40") +
+  
+  # points coloured by relapse; stroke = MRD call
+  geom_point(aes(colour = progress_status,
+                 fill   = progress_status),
+             shape = 21, size = 3, colour = "black") +
+  
+  # ∞‐aware y‐axis
+  scale_y_continuous(
+    "Days until relapse (or ∞ for censor)",
+    limits = c(0, overflow),
+    breaks = c(seq(0, 1620, by = 180), overflow),
+    labels = c(seq(0, 1620, by = 180), "∞")
+  ) +
+  
+  # x‐axis as percent
+  scale_x_continuous(
+    "cfWGS MRD probability (%)",
+    limits = c(0.3,1),
+    breaks = seq(0,1,by=0.1),
+    labels = scales::percent_format(accuracy=1)
+  ) +
+  
+  # colours
+  scale_colour_manual(
+    "Patient outcome",
+    values = c("No relapse" = "black", "Relapse" = "red")
+  ) +
+  scale_fill_manual(
+    "Patient outcome",
+    values = c("No relapse" = "black", "Relapse" = "red")
+  ) +
+  
+  # clean theme
+  theme_classic(base_size = 11) +
+  theme(
+    panel.grid      = element_blank(),
+    plot.title      = element_text(face = "bold", hjust = 0.5, size = 12),
+    legend.position = "none",
+    legend.title    = element_text(size = 11),
+    legend.text     = element_text(size = 10)
+  ) +
+  
+  labs(title = "Association Between cfWGS MRD Probability\nand Time to Relapse Using cfDNA-Derived Mutations")
+
+# --- 2) LEGEND-ONLY PLOT (do NOT inherit guides(fill = 'none')) ---
+# -----build a dummy legend that always shows both levels -----
+p_legend_only <- ggplot(legend_df, aes(x, y, fill = progress_status)) +
+  # make the plotting layer invisible *in the panel* …
+  geom_point(shape = 21, size = 0, colour = "black", alpha = 0, show.legend = TRUE) +
+  scale_fill_manual(
+    name   = "Patient outcome",
+    values = pal_vals,
+    breaks = names(pal_vals)
+  ) +
+  guides(fill = guide_legend(
+    ncol = 1,                 # <- stack items vertically
+    byrow = TRUE,
+    title.position = "top",   # title on its own line
+    label.hjust = 0,          # left-align labels
+    override.aes = list(shape = 21, size = 3, alpha = 1, colour = "black")
+  )) +
+  theme_void(base_size = 11) +
+  theme(
+    legend.position   = "bottom",
+    legend.direction  = "vertical",         # <- vertical legend
+    legend.title      = element_text(size = 11),
+    legend.text       = element_text(size = 10),
+    legend.key.height = unit(4, "mm"),
+    legend.key.width  = unit(6, "mm"),
+    legend.box.margin = margin(0, 0, 0, 0),
+    plot.margin       = margin(0, 0, 0, 0)
+  )
+
+# --- 3) make two small “text boxes” for the right columns ---
+txt_all <- sprintf("All relapse samples:\nρ=%.2f, p=%s", rho_all, pval_all_str)
+txt_pre <- sprintf("Pre-relapse only:\nρ=%.2f, p=%s", rho_pre, pval_pre_str)
+
+mini_box <- function(s) {
+  ggplot() +
+    annotate("label", x = 0, y = 1, label = s,
+             hjust = 0, vjust = 1, size = 3.5,
+             label.size = 0, fill = scales::alpha("white", 0.7)) +
+    xlim(0,1) + ylim(0,1) +
+    theme_void()
+}
+
+col2 <- mini_box(txt_all)
+col3 <- mini_box(txt_pre)
+
+# --- 4) assemble: plot on top; 3 columns underneath ---
+bottom_row <- p_legend_only | col2 | col3
+final_plot <- p_main / bottom_row + plot_layout(heights = c(1, 0.22))
+
+# show and save
+print(final_plot)
+ggsave("Final Tables and Figures/Fig_4D_time_to_relapse_footer3cols_blood_muts.png",
+       final_plot, width = 5.5, height = 5.5, dpi = 600)
 
 
 
