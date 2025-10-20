@@ -919,6 +919,36 @@ sentences <- baseline_summary %>%
 # Print them to console (you can copy-paste this block into Word)
 cat(sentences, sep = "\n\n")
 
+# 3) Overall summary across all cohorts ––––––––––––––––––––––––––––––––––––
+overall_summary <- dat_base %>%
+  summarise(
+    n               = dplyr::n(),
+    mean_BM         = mean(BM_Mutation_Count,   na.rm = TRUE),
+    median_BM       = median(BM_Mutation_Count, na.rm = TRUE),
+    sd_BM           = sd(BM_Mutation_Count,     na.rm = TRUE),
+    range_BM        = paste0(min(BM_Mutation_Count, na.rm = TRUE),
+                             "–",
+                             max(BM_Mutation_Count, na.rm = TRUE)),
+    mean_Blood      = mean(Blood_Mutation_Count,   na.rm = TRUE),
+    median_Blood    = median(Blood_Mutation_Count, na.rm = TRUE),
+    sd_Blood        = sd(Blood_Mutation_Count,     na.rm = TRUE),
+    range_Blood     = paste0(min(Blood_Mutation_Count, na.rm = TRUE),
+                             "–",
+                             max(Blood_Mutation_Count, na.rm = TRUE))
+  )
+
+print(overall_summary)
+
+# 4) Descriptive sentence for overall data –––––––––––––––––––––––––––––––––
+overall_sentence <- glue(
+  "Across all cohorts (n = {overall_summary$n}), the mean bone marrow mutation count was ",
+  "{round(overall_summary$mean_BM,1)} (SD = {round(overall_summary$sd_BM,1)}, range {overall_summary$range_BM}), ",
+  "and the mean blood mutation count was {round(overall_summary$mean_Blood,1)} ",
+  "(SD = {round(overall_summary$sd_Blood,1)}, range {overall_summary$range_Blood})."
+)
+
+cat(overall_sentence)
+
 
 #––– 3) Statistical testing––––––––––––––––––––––––––––––––––––––––––––
 
@@ -2424,7 +2454,7 @@ writexl::write_xlsx(
     C_FISH_vs_Sample_At_Probe = concordance_tbl_at_FISH_probe %>% filter(!is.na(cohort)),
     D_Individual_Calls = dat_small %>% select(-New_ID)
   ),
-  path = file.path(outdir, "Supplementary_Table_2_SV_CNA_performance_summary_updated.xlsx") 
+  path = file.path(outdir, "Supplementary_Table_2_SV_CNA_performance_summary_updated2.xlsx") 
 )
 
 message("✓ Additional outputs written to ", outdir)

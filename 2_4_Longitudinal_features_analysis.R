@@ -1239,7 +1239,7 @@ make_panel_minlogic <- function(metric, data, ylab,
     # color = state relative to threshold
     scale_color_manual(
       values = c(`FALSE` = col_before, `TRUE` = col_after),
-      labels = c(`FALSE` = "Below cfDNA threshold", `TRUE` = "Elevated cfDNA signal"),
+      labels = c(`FALSE` = "Low-signal group\n(below 90th percentile of non-progressors ≥ 1 yr; MM-regs upper 90%)", `TRUE` = "High-signal group\n(above 90th percentile; MM-regs lowest 10%)"),
       name   = "State"
     ) +
     # shape = timepoint type (triangle shows capped)
@@ -1605,7 +1605,7 @@ p_combined <- (p_frag1 + p_frag2) +
 p_combined
 
 ggsave(
-  filename = file.path(outdir, "Fragmentation_Features_1_Longitudinal_Monitoring2.png"),
+  filename = file.path(outdir, "Fragmentation_Features_1_Longitudinal_Monitoring4.png"),
   plot     = p_combined,
   width    = 12,   # 4 panels across
   height   = 4,
@@ -1642,7 +1642,7 @@ p_combined <- (p_frag1 + p_frag2) +
 p_combined
 
 ggsave(
-  filename = file.path(outdir, "Fragmentation_Features_2_Longitudinal_Monitoring2.png"),
+  filename = file.path(outdir, "Fragmentation_Features_2_Longitudinal_Monitoring4.png"),
   plot     = p_combined,
   width    = 12,   # 4 panels across
   height   = 4,
@@ -3054,16 +3054,23 @@ p_heatmap_tri <- ggplot(corr_df_tri, aes(x = Metric1, y = Metric2, fill = rho)) 
     title = "Spearman correlation heatmap"
   )
 
+## Force white background 
+p_heatmap_tri <- p_heatmap_tri +
+  theme(
+    panel.background = element_rect(fill = "white", colour = NA),
+    plot.background  = element_rect(fill = "white", colour = NA)
+  )
 
 
 # 8. Save the triangular heatmap
 ### Figure 3B
 ggsave(
-  filename = file.path(outdir, "Fig_heatmap_spearman_upper_triangle2.png"),
+  filename = file.path(outdir, "Fig_heatmap_spearman_upper_triangle4.png"),
   plot     = p_heatmap_tri,
   width    = 6,
   height   = 5,
-  dpi      = 600
+  dpi      = 1800,
+  bg       = "white"
 )
 
 
