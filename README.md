@@ -14,7 +14,8 @@ The code is organised as a series of numbered R scripts that process raw clinica
 | 1.2 | `1_2_Process_Mutation_Data.R` | Prepare mutation calls for baseline and follow‑up samples. | WGS mutation files (MAF). |
 | 1.2B | `1_2_Part2_Get_Mutation_Overlap.R` | Compare bone‑marrow and cfDNA mutations. | Pair of bone‑marrow and cfDNA MAF files per patient. |
 | 1.3 | `1_3_Process_Ig_Translocation_Info.R` | Extract immunoglobulin translocation calls from WGS data. | Structural variant calls from WGS. |
-| 1.4 | `1_4_Process_CNA_Data.R` | Summarise copy number features from WGS results. | Copy number segmentation files. |
+| 1.4 | `1_4_Process_CNA_Data.R` | Summarise copy number features from WGS results using ichorCNA. | Copy number segmentation files. |
+| 1.4A | `1_4A_Process_sequenza_CNA_Data.R` | Summarise copy number features from WGS results using Sequenza. | Copy number segmentation files. |
 | 1.5 | `1_5_Integrate_WGS_Feature_Data.R` | Combine mutation, CNA, and translocation features. | Outputs from steps 1.2–1.4. |
 | 1.6 | `1_6_Identify_High_Quality_Patient_Pairs.R` | Annotate samples that have matched bone‑marrow and cfDNA data. | Integrated feature tables plus clinical metadata. |
 | 1.7A | `1_7A_Process_fragmentomics_data_nucleosome_accessibility.R` | Derive nucleosome accessibility metrics. | Nucleosome‑distance tables for samples and healthy controls. |
