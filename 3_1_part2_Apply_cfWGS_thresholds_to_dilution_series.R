@@ -281,18 +281,34 @@ custom_labels2 <- c(
 )
 
 
-
+## Clean up
 corr_tbl_export <- corr_tbl_export %>%
   mutate(Feature = dplyr::recode(Feature, !!!custom_labels2))
+
+# Move LOD to first column and remove unwanted columns
+dilution_df_clean <- dilution_df |>
+  dplyr::select(
+    LOD,  # make LOD the first column
+    -c(
+      Patient,
+      Date_of_sample_collection,
+      Sample,
+      Bam,
+      Sample_ID,
+      LOD_updated,
+      LOD_original
+    )
+  )
+
 
 write_xlsx(
   list(
     "Correlations" = corr_tbl_export,
-    "Scored Data"            = dilution_df
+    "Scored Data"            = dilution_df_clean
   ),
   path = file.path(
     OUTPUT_DIR_TABLES,
-    "Supplementary_Table_7_Dilution_Series_Combined.xlsx"
+    "Supplementary_Table_7_Dilution_Series_Combined_updated.xlsx"
   )
 )
 

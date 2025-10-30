@@ -1691,7 +1691,8 @@ events_combined2 <- events_combined2 %>%
 # 2) Shapes for the two point types
 shape_map_simple <- c(
   "Sample collection" = 16,  # circle
-  "Clinical MRD assay"         = 17   #  triangle
+  "Clinical MRD assay"         = 17,   #  triangle,
+  "Progression" = 15   # ← square
 )
 
 events_combined2 <- events_combined2 %>%
@@ -2157,6 +2158,15 @@ p_swim <- ggplot() +
     aes(x = start_month_plot, xend = end_month_plot, y = patient, yend = patient),
     colour = "black", linewidth = 5, lineend = "round"
   ) +
+  # Progression square (filled)
+  geom_point(
+    data = prog_marks %>% mutate(point_type = "Progression"),
+    aes(x = start_month_plot, y = y_num, shape = point_type),
+    size        = 2.6,
+    colour      = "red",
+    inherit.aes = TRUE,
+    show.legend = FALSE
+  ) +
   # Point events (ONLY two shapes)
   geom_point(
     data = events_combined2 %>% filter(!is_interval, !is.na(point_type)),
@@ -2172,19 +2182,20 @@ p_swim <- ggplot() +
   #   size     = 5,            # tweak to taste
   #   colour   = "red"
   # ) +
-  geom_segment(
-    data = prog_marks,
-    aes(
-      x    = start_month_plot,
-      xend = start_month_plot,
-      y    = y_num - 0.35,   # height matches your tile height ~0.7
-      yend = y_num + 0.35
-    ),
-    colour      = "red",
-    linewidth   = 1.75,
-    lineend     = "round",
-    inherit.aes = FALSE
-  ) +
+  ### Thicker relapse segment
+  # geom_segment(
+  #   data = prog_marks,
+  #   aes(
+  #     x    = start_month_plot,
+  #     xend = start_month_plot,
+  #     y    = y_num - 0.35,   # height matches your tile height ~0.7
+  #     yend = y_num + 0.35
+  #   ),
+  #   colour      = "red",
+  #   linewidth   = 1.75,
+  #   lineend     = "round",
+  #   inherit.aes = FALSE
+  # ) +
   # Last follow-up arrow
   geom_segment(
     data = events_combined2 %>% filter(is_ongoing),
@@ -2220,6 +2231,14 @@ p_swim <- ggplot() +
   # Scales
   scale_colour_manual(values = chemo_cols_simple, name = "Chemotherapy regimen", drop = FALSE) +
   scale_shape_manual(values = shape_map_simple, name = "Point events", drop = FALSE) +
+  scale_fill_manual(
+    values = c(
+      "Progression" = "red",
+      "Clinical MRD assay" = "white",
+      "Sample collection"  = "white"
+    ),
+    guide = "none"
+  ) +
   scale_x_continuous(
     "\nMonths since baseline",
     limits = c(-1.4, max(month_breaks)),
@@ -2605,13 +2624,13 @@ final_plot <- ann_cohort + ann_mrd + p_swim +
 
 final_plot
 
-ggsave("Final Tables and Figures/Figure1A_swimplot_with_3_annotations_updated9.png",
+ggsave("Final Tables and Figures/Figure1A_swimplot_with_3_annotations_updated10.png",
        final_plot,
        width  = 15,
        height = 10,
        dpi    = 500)
 
-ggsave("Final Tables and Figures/Figure1A_swimplot_with_3_annotations_wide_updated9A.png",
+ggsave("Final Tables and Figures/Figure1A_swimplot_with_3_annotations_wide_updated10A.png",
        final_plot,
        width  = 16.5,
        height = 10,
