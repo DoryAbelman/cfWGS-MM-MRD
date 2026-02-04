@@ -656,6 +656,38 @@ events <- events %>%
   left_join(baseline_tbl, by = "patient") %>%
   filter(!is.na(baseline_date))
 
+
+# 3b. Create index-date version for privacy (days from baseline)
+# First, we need to get baseline_date for each patient from the earlier analysis
+baseline_tbl_recoded <- baseline_tbl %>%
+  left_join(id_map, by = c("patient" = "Patient")) %>%
+  mutate(
+    patient = coalesce(New_ID, patient)  # replace when mapping exists
+  ) %>%
+  select(-New_ID)
+
+all_events_indexed <- all_events_updated %>%
+  left_join(baseline_tbl_recoded, by = c("Patient" = "patient")) %>%
+  mutate(
+    # Calculate days from baseline for each event
+    start_day = as.numeric(start - baseline_date),
+    end_day   = as.numeric(end - baseline_date)
+  ) %>%
+  # Replace absolute dates with index dates for privacy
+  mutate(
+    start = start_day,  # Now contains days from baseline (as numeric)
+    end   = end_day
+  ) %>%
+  # Drop the baseline_date and day columns as they're now in start/end
+  select(-baseline_date, -start_day, -end_day) %>%
+  # Update column names to reflect index dates
+  rename(start_day_from_baseline = start,
+         end_day_from_baseline   = end)
+
+write_csv(all_events_indexed,
+          "Final Tables and Figures/Supp_Table_1_all_events_for_swim_plot_INDEX_DATES_privacy_protected.csv")
+
+
 # ──────────────────────────────────────────────────────────────────────
 # 3. DAYS-FROM-BASELINE & INTERVAL FLAG
 # ──────────────────────────────────────────────────────────────────────

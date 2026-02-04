@@ -280,7 +280,14 @@ Merged_MRDetect_dilution_zscore <- Merged_MRDetect_dilution_joined %>%
     detection_rate_zscore_charm                   = (detection_rate - mean_det_charm) / sd_det_charm,
     detection_rate_zscore_reads_checked_charm     = (detection_rate_as_reads_detected_over_reads_checked - mean_det_checked_charm) / sd_det_checked_charm,
     detection_rate_zscore_total_reads_charm       = (detection_rate_as_reads_detected_over_total_reads - mean_det_total_charm) / sd_det_total_charm,
-    sites_rate_zscore_charm                       = (sites_detection_rate - mean_sites_charm) / sd_sites_charm
+    sites_rate_zscore_charm                       = (sites_detection_rate - mean_sites_charm) / sd_sites_charm,
+    # Difference vs healthy controls (absolute values)
+    detection_rate_diff_vs_hc                     = detection_rate - mean_det_charm,
+    detection_rate_checked_diff_vs_hc             = detection_rate_as_reads_detected_over_reads_checked - mean_det_checked_charm,
+    detection_rate_total_diff_vs_hc               = detection_rate_as_reads_detected_over_total_reads - mean_det_total_charm,
+    sites_rate_diff_vs_hc                         = sites_detection_rate - mean_sites_charm,
+    # Difference vs healthy controls (as percentages)
+    detection_rate_checked_diff_vs_hc_pct         = (detection_rate_checked_diff_vs_hc) * 100
   )
 
 
