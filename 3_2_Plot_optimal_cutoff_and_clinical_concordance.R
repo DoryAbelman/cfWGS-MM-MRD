@@ -3,6 +3,7 @@
 # Project:  cfWGS MRD detection (M4 / SPORE / IMMAGINE)
 # Author:   Dory Abelman
 # Date:     May 28, 2025
+# Updated Feb 2026
 #
 # Purpose:
 #   1. Read the processed dataset produced by `optimize_cfWGS_thresholds.R`
@@ -52,6 +53,40 @@ PATH_THRESHOLD_LIST   <- "~/Documents/Thesis_work/R/M4/Projects/High_risk_MM_bas
 selected_models <- readRDS(PATH_MODEL_LIST)
 selected_thr    <- readRDS(PATH_THRESHOLD_LIST)
 
+# -------- 1b. Load pre-processed EasyM data from 3_1_A ----
+# 3_1_A script exports processed EasyM data with both binary and optimized probabilities
+asco_out_dir  <- "Outputs_ASCO_abstract"
+EasyM_plot_data <- tryCatch(
+  readr::read_csv(
+    file.path(asco_out_dir, "EasyM_processed_for_3_2_plots.csv"),
+    show_col_types = FALSE
+  ),
+  error = function(e) {
+    warning("Could not load EasyM data from 3_1_A: ", e$message)
+    NULL
+  }
+)
+
+if (!is.null(EasyM_plot_data)) {
+  # Merge EasyM data into main dataset
+  dat <- dat %>%
+    mutate(Patient = as.character(Patient), Timepoint = as.character(Timepoint)) %>%
+    left_join(
+      EasyM_plot_data %>%
+        select(Patient, Timepoint, EasyM_Binary, EasyM_prob_optimized),
+      by = c("Patient", "Timepoint")
+    )
+  
+  cat("✓ EasyM data loaded from 3_1_A\n")
+  cat(sprintf("  - Matched %d samples with EasyM_Binary\n", sum(!is.na(dat$EasyM_Binary))))
+  cat(sprintf("  - Matched %d samples with EasyM_prob_optimized\n", sum(!is.na(dat$EasyM_prob_optimized))))
+} else {
+  cat("⚠ EasyM data not available, skipping EasyM integration\n")
+  # Create dummy columns to prevent downstream errors
+  dat <- dat %>%
+    mutate(EasyM_Binary = NA_integer_, EasyM_prob_optimized = NA_real_)
+}
+
 ### Now get positivity rates compared to other tech
 # ---------------------------------------------------------------------------
 #  1.  Helper: summarise positivity rate -------------------------------------
@@ -66,7 +101,7 @@ summarise_pos <- function(df) {
 
 # ---------------------------------------------------------------------------
 #  2.  Recoding of landmark labels --------------------------------------
-# If your `timepoint_info` already uses exactly "Post‑ASCT" and "Maintenance‑1yr"
+# If  `timepoint_info` already uses exactly "Post‑ASCT" and "Maintenance‑1yr"
 # you can drop this mutate() block.
 dat <- dat %>%
   mutate(
@@ -79,19 +114,24 @@ dat <- dat %>%
   )
 
 # ---------------------------------------------------------------------------
-#  3.  FRONTLINE cohort: positivity by landmark ------------------------------
+#  3.  FRONTLINE cohort: positivity by landmark - BM-derived mutations -------
+# Show binary positivity + EasyM clearance-optimized probability
 front_tbl <- dat %>%
   filter(
     Cohort == "Frontline",
     !is.na(landmark_tp),
     !is.na(BM_zscore_only_detection_rate_call)
   ) %>%
-  ## Add the screen column 
-#  mutate(
-#    BM_base_zscore_screen_call  = as.integer(BM_base_zscore_call >= 0.350),
-#  ) %>%
+  ## Prepare two sets of data: binary and probability versions
+  ## For probability-based comparisons, convert to binary using median/optimal cutoff
+  mutate(
+    EasyM_prob_binary = case_when(
+      !is.na(EasyM_prob_optimized) ~ as.integer(EasyM_prob_optimized >= median(EasyM_prob_optimized, na.rm = TRUE)),
+      TRUE ~ NA_integer_
+    )
+  ) %>%
   pivot_longer(
-    cols      = c(Flow_Binary, Adaptive_Binary, BM_zscore_only_detection_rate_call),
+    cols      = c(Flow_Binary, Adaptive_Binary, BM_zscore_only_detection_rate_call, EasyM_Binary, EasyM_prob_binary),
     names_to  = "Technology",
     values_to = "Result"
   ) %>%
@@ -109,8 +149,8 @@ front_tbl <- dat %>%
       Flow_Binary         = "MFC",
       Adaptive_Binary     = "clonoSEQ",
       BM_zscore_only_detection_rate_call = "cfWGS",
-   #   BM_base_zscore_screen_call = "cfWGS (screen)"
-      
+      EasyM_Binary        = "EasyM (any-detect)",
+      EasyM_prob_binary   = "EasyM (clearance-optimized)"
     )
   )
 
@@ -124,7 +164,7 @@ front_long <- dat %>%
   ) %>%
   filter(!is.na(BM_zscore_only_detection_rate_call)) %>%
   pivot_longer(
-    cols      = c(Flow_Binary, Adaptive_Binary, BM_zscore_only_detection_rate_call),
+    cols      = c(Flow_Binary, Adaptive_Binary, BM_zscore_only_detection_rate_call, EasyM_Binary),
     names_to  = "Technology",
     values_to = "Result"
   ) %>%
@@ -134,7 +174,8 @@ front_long <- dat %>%
       Technology,
       Flow_Binary                     = "MFC",
       Adaptive_Binary                 = "clonoSEQ",
-      BM_zscore_only_detection_rate_call = "cfWGS"
+      BM_zscore_only_detection_rate_call = "cfWGS",
+      EasyM_Binary                    = "EasyM"
     )
   )
 
@@ -614,13 +655,16 @@ front_tbl <- dat %>%
     !is.na(Blood_zscore_only_sites_call),
     !is.na(Flow_Binary) | !is.na(Adaptive_Binary)
   ) %>%
-  ## Add the screen column 
+  ## Add the screen column and EasyM probability binary version
   mutate(
     Blood_zscore_screen_call  = as.integer(Blood_zscore_only_sites_prob >= 0.380),
+    EasyM_prob_binary = case_when(
+      !is.na(EasyM_prob_optimized) ~ as.integer(EasyM_prob_optimized >= median(EasyM_prob_optimized, na.rm = TRUE)),
+      TRUE ~ NA_integer_
+    )
   ) %>%
-  
   pivot_longer(
-    cols      = c(Flow_Binary, Adaptive_Binary, Blood_zscore_only_sites_call, Blood_zscore_screen_call),
+    cols      = c(Flow_Binary, Adaptive_Binary, Blood_zscore_only_sites_call, Blood_zscore_screen_call, EasyM_Binary, EasyM_prob_binary),
     names_to  = "Technology",
     values_to = "Result"
   ) %>%
@@ -638,9 +682,15 @@ front_tbl <- dat %>%
       Flow_Binary         = "MFC",
       Adaptive_Binary     = "clonoSEQ",
       Blood_zscore_only_sites_call = "cfWGS (confirm)",
-      Blood_zscore_screen_call = "cfWGS (screen)"
+      Blood_zscore_screen_call = "cfWGS (screen)",
+      EasyM_Binary        = "EasyM (any-detect)",
+      EasyM_prob_binary   = "EasyM (clearance-optimized)"
     )
   )
+#      Blood_zscore_only_sites_call = "cfWGS (confirm)",
+#      Blood_zscore_screen_call = "cfWGS (screen)"
+#    )
+#  )
 
 ## Get double negatives 
 # Reshape to long format for all three methods
@@ -652,7 +702,7 @@ front_long <- dat %>%
   ) %>%
   filter(!is.na(Blood_zscore_only_sites_call)) %>%
   pivot_longer(
-    cols      = c(Flow_Binary, Adaptive_Binary, Blood_zscore_only_sites_call),
+    cols      = c(Flow_Binary, Adaptive_Binary, Blood_zscore_only_sites_call, EasyM_Binary),
     names_to  = "Technology",
     values_to = "Result"
   ) %>%
@@ -662,7 +712,8 @@ front_long <- dat %>%
       Technology,
       Flow_Binary                     = "MFC",
       Adaptive_Binary                 = "clonoSEQ",
-      Blood_zscore_only_sites_call = "cfWGS"
+      Blood_zscore_only_sites_call = "cfWGS",
+      EasyM_Binary                    = "EasyM"
     )
   )
 
@@ -721,7 +772,7 @@ non_tbl <- dat %>%
     Blood_zscore_screen_call  = as.integer(Blood_zscore_only_sites_prob >= 0.380),
   ) %>%
   pivot_longer(
-    cols      = c(Flow_Binary, Adaptive_Binary, Blood_zscore_only_sites_call, Blood_zscore_screen_call),
+    cols      = c(Flow_Binary, Adaptive_Binary, Blood_zscore_only_sites_call, Blood_zscore_screen_call, EasyM_Binary),
     names_to  = "Technology",
     values_to = "Result"
   ) %>%
@@ -739,7 +790,8 @@ non_tbl <- dat %>%
       Flow_Binary         = "MFC",
       Adaptive_Binary     = "clonoSEQ",
       Blood_zscore_only_sites_call = "cfWGS (confirm)",
-      Blood_zscore_screen_call = "cfWGS (screen)"
+      Blood_zscore_screen_call = "cfWGS (screen)",
+      EasyM_Binary        = "EasyM"
     )
   )
 
@@ -2826,6 +2878,119 @@ ggsave("Final Tables and Figures/Fig4K_cfWGS_vs_MFC_clonoSEQ_clean_BM_muts_updat
        width  = 6.5, height = 5, dpi = 600)
 
 
+#### EasyM vs BM model probability  ────────────────────────────────────────────
+# Build plotting data for EasyM comparison
+plot_df_easym_bm <- dat %>%
+  filter(
+    Cohort == "Frontline",
+    !is.na(BM_zscore_only_detection_rate_call),
+    !is.na(landmark_tp),
+    !is.na(EasyM_value)
+  ) %>%
+  mutate(
+    # Set minimum detection floor for plotting
+    EasyM_plot = if_else(EasyM_value <= 1e-6, 1e-6, EasyM_value),
+    BM_prob_plot = if_else(BM_zscore_only_detection_rate_prob <= 1e-5, 
+                           1e-5, BM_zscore_only_detection_rate_prob),
+    
+    # Relapse category
+    relapse_cat = if_else(
+      Num_days_to_closest_relapse <= 365,
+      "Relapsed ≤365 d",
+      "No relapse ≤365 d",
+      missing = "No relapse ≤365 d"
+    ),
+    
+    # Factor landmark timepoint
+    landmark_timepoint = factor(
+      str_replace_all(landmark_tp, hyphen_rx, "-") |> trimws(),
+      levels = c("Post-ASCT", "Maintenance-1yr")
+    )
+  )
+
+# Calculate correlations
+corr_easym_bm <- plot_df_easym_bm %>%
+  group_by(landmark_timepoint) %>%
+  summarize(
+    rho = cor(EasyM_plot, BM_prob_plot, method = "spearman", use = "complete.obs"),
+    p   = cor.test(EasyM_plot, BM_prob_plot, method = "spearman")$p.value,
+    .groups = "drop"
+  ) %>%
+  mutate(
+    label = sprintf("ρ = %.2f\np = %.2f", rho, p),
+    x = 0.035,
+    y = 0.99
+  )
+
+# Create scatter plot
+p_easym_bm <- ggplot(plot_df_easym_bm,
+                     aes(x = EasyM_plot, y = BM_prob_plot, fill = relapse_cat)) +
+  # Reference lines
+  geom_hline(yintercept = 0.4215524, linetype = "dashed", colour = "grey80") +
+  
+  # Points
+  geom_point(shape = 21, size = 2, alpha = 0.9, colour = "black") +
+  
+  # Scales
+  scale_x_log10(
+    breaks = c(1e-6, 1e-5, 1e-4, 1e-3, 1e-2, 1e-1),
+    labels = c("Not detected", "0.001%", "0.01%", "0.1%", "1%", "10%"),
+    expand = expansion(mult = c(0.05, 0.05))
+  ) +
+  scale_y_continuous(
+    limits = c(0.12, 1),
+    breaks = seq(0, 1, by = 0.2),
+    labels = scales::percent_format(accuracy = 1)
+  ) +
+  facet_wrap(~ landmark_timepoint, nrow = 2) +
+  
+  # Labels and theme
+  labs(title = "cfWGS of BM-Derived Mutations MRD\nProbability vs. EasyM",
+       x = "EasyM Proteomic MRD level",
+       y = "cVAF Model Probability") +
+  theme_bw(base_size = 11) +
+  
+  # Colors
+  scale_fill_manual(
+    name = "Relapse ≤1 year",
+    values = c(
+      "Relapsed ≤365 d"   = "red",
+      "No relapse ≤365 d" = "black",
+      "Unknown"           = "#bbbbbb"
+    )
+  ) +
+  
+  # Add correlation text
+  geom_text(
+    data = corr_easym_bm,
+    aes(x = x, y = y, label = label),
+    hjust = 0, vjust = 1, size = 2.5,
+    inherit.aes = FALSE
+  ) +
+  
+  # Theme adjustments
+  theme(
+    panel.border      = element_rect(colour = "black", fill = NA, size = 0.5),
+    panel.grid.major  = element_blank(),
+    panel.grid.minor  = element_blank(),
+    strip.background  = element_rect(fill = "white", colour = "black"),
+    strip.text        = element_text(face = "bold"),
+    axis.title        = element_text(size = 11),
+    axis.text.x       = element_text(angle = 30, hjust = 1),
+    plot.title        = element_text(face = "bold", hjust = 0.5),
+    legend.position   = "right",
+    legend.title      = element_text(face = "bold", size = 9),
+    legend.text       = element_text(size = 8)
+  )
+
+p_easym_bm
+
+# Save
+ggsave("Final Tables and Figures/FigS_EasyM_vs_BM_cfWGS_prob.png",
+       p_easym_bm,
+       width = 5, height = 6, dpi = 600)
+
+
 #### Now redo for blood-derived muts
 # 2.  Build the plotting data  ────────────────────────────────────────────────
 plot_df <- dat %>%
@@ -3054,3 +3219,115 @@ ggsave("Final Tables and Figures/Fig5K_cfWGS_vs_MFC_clonoSEQ_clean_Blood_muts_up
        p_scatter_simple_blood,
        width  = 6.5, height = 5, dpi = 600)
 
+
+#### EasyM vs Blood model probability  ────────────────────────────────────────
+# Build plotting data for EasyM comparison with Blood model
+plot_df_easym_blood <- dat %>%
+  filter(
+    Cohort == "Frontline",
+    !is.na(Blood_zscore_only_sites_call),
+    !is.na(landmark_tp),
+    !is.na(EasyM_value)
+  ) %>%
+  mutate(
+    # Set minimum detection floor for plotting
+    EasyM_plot = if_else(EasyM_value <= 1e-6, 1e-6, EasyM_value),
+    Blood_prob_plot = if_else(Blood_zscore_only_sites_prob <= 1e-5, 
+                              1e-5, Blood_zscore_only_sites_prob),
+    
+    # Relapse category
+    relapse_cat = if_else(
+      Num_days_to_closest_relapse <= 365,
+      "Relapsed ≤365 d",
+      "No relapse ≤365 d",
+      missing = "No relapse ≤365 d"
+    ),
+    
+    # Factor landmark timepoint
+    landmark_timepoint = factor(
+      str_replace_all(landmark_tp, hyphen_rx, "-") |> trimws(),
+      levels = c("Post-ASCT", "Maintenance-1yr")
+    )
+  )
+
+# Calculate correlations
+corr_easym_blood <- plot_df_easym_blood %>%
+  group_by(landmark_timepoint) %>%
+  summarize(
+    rho = cor(EasyM_plot, Blood_prob_plot, method = "spearman", use = "complete.obs"),
+    p   = cor.test(EasyM_plot, Blood_prob_plot, method = "spearman")$p.value,
+    .groups = "drop"
+  ) %>%
+  mutate(
+    label = sprintf("ρ = %.2f\np = %.2f", rho, p),
+    x = 0.035,
+    y = 0.99
+  )
+
+# Create scatter plot
+p_easym_blood <- ggplot(plot_df_easym_blood,
+                        aes(x = EasyM_plot, y = Blood_prob_plot, fill = relapse_cat)) +
+  # Reference lines
+  geom_hline(yintercept = 0.380, linetype = "dashed", colour = "grey80") +
+  
+  # Points
+  geom_point(shape = 21, size = 2, alpha = 0.9, colour = "black") +
+  
+  # Scales
+  scale_x_log10(
+    breaks = c(1e-6, 1e-5, 1e-4, 1e-3, 1e-2, 1e-1),
+    labels = c("Not detected", "0.001%", "0.01%", "0.1%", "1%", "10%"),
+    expand = expansion(mult = c(0.05, 0.05))
+  ) +
+  scale_y_continuous(
+    limits = c(0.34, 1),
+    breaks = seq(0.4, 1, by = 0.2),
+    labels = scales::percent_format(accuracy = 1)
+  ) +
+  facet_wrap(~ landmark_timepoint, nrow = 2) +
+  
+  # Labels and theme
+  labs(title = "cfWGS of cfDNA-Derived Mutations MRD\nProbability vs. EasyM",
+       x = "EasyM Proteomic MRD level",
+       y = "Sites Model Probability") +
+  theme_bw(base_size = 11) +
+  
+  # Colors
+  scale_fill_manual(
+    name = "Relapse ≤1 year",
+    values = c(
+      "Relapsed ≤365 d"   = "red",
+      "No relapse ≤365 d" = "black",
+      "Unknown"           = "#bbbbbb"
+    )
+  ) +
+  
+  # Add correlation text
+  geom_text(
+    data = corr_easym_blood,
+    aes(x = x, y = y, label = label),
+    hjust = 0, vjust = 1, size = 2.5,
+    inherit.aes = FALSE
+  ) +
+  
+  # Theme adjustments
+  theme(
+    panel.border      = element_rect(colour = "black", fill = NA, size = 0.5),
+    panel.grid.major  = element_blank(),
+    panel.grid.minor  = element_blank(),
+    strip.background  = element_rect(fill = "white", colour = "black"),
+    strip.text        = element_text(face = "bold"),
+    axis.title        = element_text(size = 11),
+    axis.text.x       = element_text(angle = 30, hjust = 1),
+    plot.title        = element_text(face = "bold", hjust = 0.5),
+    legend.position   = "right",
+    legend.title      = element_text(face = "bold", size = 9),
+    legend.text       = element_text(size = 8)
+  )
+
+p_easym_blood
+
+# Save
+ggsave("Final Tables and Figures/FigS_EasyM_vs_Blood_cfWGS_prob.png",
+       p_easym_blood,
+       width = 5, height = 6, dpi = 600)

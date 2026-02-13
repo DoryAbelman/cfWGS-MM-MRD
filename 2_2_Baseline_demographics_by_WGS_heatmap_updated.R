@@ -63,9 +63,33 @@ translocation_data <- readRDS(
 )
 
 # 4. MAF objects for BM and blood
-#    these point at the .maf you dumped out in your mutation script
-maf_object_bm    <- read.maf(maf = "combined_maf_temp_bm_May2025.maf")
-maf_object_blood <- read.maf(maf = "combined_maf_temp_blood_Jan2025.maf")
+#    Load from existing RDS files
+# ORIGINAL (MAF files - load from temp reexport):
+# maf_object_bm    <- read.maf(maf = "combined_maf_temp_bm_May2025.maf")
+# maf_object_blood <- read.maf(maf = "combined_maf_temp_blood_Jan2025.maf")
+
+# CURRENT (loading from RDS):
+maf_bm_data <- readRDS(
+  "combined_maf_bm_dx.rds"
+)
+maf_blood_data <- readRDS("combined_maf_blood_all_muts.rds")
+
+# Convert data frames to MAF objects if needed
+if (is.data.frame(maf_bm_data)) {
+  maf_object_bm <- read.maf(maf = maf_bm_data)
+} else {
+  maf_object_bm <- maf_bm_data
+}
+
+if (is.data.frame(maf_blood_data)) {
+  maf_object_blood <- read.maf(maf = maf_blood_data)
+} else {
+  maf_object_blood <- maf_blood_data
+}
+
+cat("✓ Loaded MAF objects from RDS files\n")
+cat("  BM samples:", length(unique(maf_object_bm@data$Tumor_Sample_Barcode)), "\n")
+cat("  Blood samples:", length(unique(maf_object_blood@data$Tumor_Sample_Barcode)), "\n\n")
 
 
 ### Define the mutation gene list (used for both BM and blood)
@@ -924,6 +948,17 @@ patient_ids <- extract_pid(all_cols)
 #     (these names must match exactly what's in your data frame)
 bm_counts    <- dat_base$BM_Mutation_Count[    match(patient_ids, dat_base$Patient) ]
 blood_counts <- dat_base$Blood_Mutation_Count[ match(patient_ids, dat_base$Patient) ]
+
+# Export mutation counts table
+mutation_counts_table <- dat_base %>%
+  select(Patient, BM_Mutation_Count, Blood_Mutation_Count) %>%
+  arrange(Patient)
+
+write_csv(mutation_counts_table, "Output_tables_2025_updated/patient_mutation_counts.csv")
+saveRDS(mutation_counts_table,   "Output_tables_2025_updated/patient_mutation_counts.rds")
+
+cat("✓ Exported patient mutation counts table\n")
+cat("  Patients:", nrow(mutation_counts_table), "\n\n")
 
 # 2) set up continuous palette for all muts:
 library(circlize)
@@ -2725,4 +2760,145 @@ print(global_concordance)
 
 write_csv(global_concordance, "output_tables/global_concordance.csv")
 saveRDS(global_concordance,   "output_tables/global_concordance.rds")
+
+###############################################################################
+##  2.  EXPORT MM-LIKE/DISEASE-ASSOCIATED FEATURES TABLE  ---------------------
+###############################################################################
+# Create a comprehensive table of all features assessed as MM-like/disease-associated
+
+# Define all feature categories
+cna_cols      <- c("del1p","amp1q","del13q","del17p","hyperdiploid")
+transloc_cols <- c("IGH_MAF","IGH_CCND1","IGH_MYC","IGH_FGFR3")
+
+# Create a feature catalog
+feature_catalog <- data.frame(
+  Feature_ID = c(
+    # Myeloma genes
+    paste0("MUT_", myeloma_genes),
+    # CNAs
+    paste0("CNA_", cna_cols),
+    # Translocations
+    paste0("TRANS_", transloc_cols)
+  ),
+  Feature_Name = c(
+    # Myeloma genes
+    myeloma_genes,
+    # CNAs
+    c("Deletion 1p", "Amplification 1q", "Deletion 13q", "Deletion 17p", "Hyperdiploid"),
+    # Translocations
+    c("IGH-MAF", "IGH-CCND1", "IGH-MYC", "IGH-FGFR3")
+  ),
+  Feature_Category = c(
+    # Myeloma genes
+    rep("Mutation", length(myeloma_genes)),
+    # CNAs
+    rep("Copy Number Alteration", length(cna_cols)),
+    # Translocations
+    rep("Translocation", length(transloc_cols))
+  ),
+  stringsAsFactors = FALSE
+)
+
+write_csv(feature_catalog, "Output_tables_2025_updated/MM_disease_associated_features_catalog.csv")
+saveRDS(feature_catalog,   "Output_tables_2025_updated/MM_disease_associated_features_catalog.rds")
+
+cat("\n✓ Exported MM-like/disease-associated features catalog\n")
+cat("  - Myeloma genes:", length(myeloma_genes), "\n")
+cat("  - CNAs:", length(cna_cols), "\n")
+cat("  - Translocations:", length(transloc_cols), "\n")
+cat("  - Total features assessed:", nrow(feature_catalog), "\n\n")
+
+###############################################################################
+##  3.  EXPORT MM-SPECIFIC MUTATION VAFs  ----------------------------------
+###############################################################################
+# Extract VAF data from the already-subsetted MAF objects
+
+# Load ID mapping and cohort assignments
+id_map <- readRDS("id_map.rds")
+id_lookup <- setNames(id_map$New_ID, id_map$Patient)
+
+# Prepare metadata mapping (Tumor_Sample_Barcode -> Patient, timepoint, cohort)
+metadata_map <- metada_df_mutation_comparison %>%
+  select(Tumor_Sample_Barcode, Patient, timepoint_info) %>%
+  distinct() %>%
+  left_join(cohort_df %>% select(Patient, Cohort), by = "Patient") %>%
+  mutate(
+    Patient_New_ID = id_lookup[Patient],
+    # Filter for only Baseline/Diagnosis timepoints
+    Include = timepoint_info %in% c("Baseline", "Diagnosis")
+  ) %>%
+  filter(Include) %>%
+  select(-Include)
+
+# BM mutations with metadata (only Baseline/Diagnosis)
+vaf_bm <- maf_subset@data %>%
+  select(Tumor_Sample_Barcode, Hugo_Symbol, Chromosome, Start_Position,
+         Reference_Allele, Tumor_Seq_Allele2, t_alt_count, t_ref_count) %>%
+  inner_join(metadata_map, by = "Tumor_Sample_Barcode") %>%
+  mutate(
+    Sample_Type = "Bone Marrow",
+    VAF = ifelse(!is.na(t_alt_count) & !is.na(t_ref_count),
+                 t_alt_count / (t_alt_count + t_ref_count),
+                 NA)
+  ) %>%
+  rename(Gene = Hugo_Symbol) %>%
+  select(Patient_New_ID, Cohort, timepoint_info, Gene, Chromosome, Start_Position,
+         Reference_Allele, Tumor_Seq_Allele2, t_alt_count, t_ref_count, VAF, Sample_Type)
+
+# cfDNA mutations with metadata (only Baseline/Diagnosis)
+vaf_blood <- maf_subset_blood@data %>%
+  select(Tumor_Sample_Barcode, Hugo_Symbol, Chromosome, Start_Position,
+         Reference_Allele, Tumor_Seq_Allele2, t_alt_count, t_ref_count) %>%
+  inner_join(metadata_map, by = "Tumor_Sample_Barcode") %>%
+  mutate(
+    Sample_Type = "cfDNA",
+    VAF = ifelse(!is.na(t_alt_count) & !is.na(t_ref_count),
+                 t_alt_count / (t_alt_count + t_ref_count),
+                 NA)
+  ) %>%
+  rename(Gene = Hugo_Symbol) %>%
+  select(Patient_New_ID, Cohort, timepoint_info, Gene, Chromosome, Start_Position,
+         Reference_Allele, Tumor_Seq_Allele2, t_alt_count, t_ref_count, VAF, Sample_Type)
+
+# Combine both
+vaf_combined <- bind_rows(vaf_bm, vaf_blood) %>%
+  rename(Patient_id = Patient_New_ID) %>%
+  arrange(Patient_id, timepoint_info, Gene)
+
+# Export
+write_csv(vaf_combined, "Output_tables_2025_updated/MM_mutations_VAF_by_sample.csv")
+saveRDS(vaf_combined,   "Output_tables_2025_updated/MM_mutations_VAF_by_sample.rds")
+
+cat("✓ Exported MM-specific mutation VAFs (Baseline/Diagnosis only)\n")
+cat("  - Total mutations with VAF data:", nrow(vaf_combined), "\n")
+cat("  - From BM samples:", nrow(vaf_bm), "\n")
+cat("  - From cfDNA samples:", nrow(vaf_blood), "\n")
+cat("  - Genes covered:", n_distinct(vaf_combined$Gene), "\n")
+cat("  - Patients:", n_distinct(vaf_combined$Patient_New_ID), "\n\n")
+
+# VAF summary statistics by sample type
+vaf_summary <- vaf_combined %>%
+  filter(!is.na(VAF)) %>%
+  group_by(Sample_Type) %>%
+  summarise(
+    n_mutations = n(),
+    Mean_VAF = mean(VAF, na.rm = TRUE),
+    Median_VAF = median(VAF, na.rm = TRUE),
+    SD_VAF = sd(VAF, na.rm = TRUE),
+    Min_VAF = min(VAF, na.rm = TRUE),
+    Q1_VAF = quantile(VAF, 0.25, na.rm = TRUE),
+    Q3_VAF = quantile(VAF, 0.75, na.rm = TRUE),
+    Max_VAF = max(VAF, na.rm = TRUE),
+    IQR_VAF = Q3_VAF - Q1_VAF,
+    .groups = 'drop'
+  )
+
+# Export summary
+write_csv(vaf_summary, "Output_tables_2025_updated/MM_mutations_VAF_summary.csv")
+saveRDS(vaf_summary,   "Output_tables_2025_updated/MM_mutations_VAF_summary.rds")
+
+cat("========== VAF SUMMARY BY SAMPLE TYPE ==========\n")
+print(vaf_summary)
+cat("\n")
+
 

@@ -3,7 +3,7 @@
 # This R script loads a multi‐sheet Excel workbook containing
 # patient diagnosis dates, sample collection information, MRD test dates
 # and treatment line data.  It identifies patients with a baseline
-# sample (bone marrow or peripheral blood) collected within ±14 days of
+# sample (bone marrow or peripheral blood) collected within ±30 days of
 # their documented date of diagnosis.  For the patients meeting this
 # baseline criterion, it then classifies all samples into one of three
 # major categories (Baseline, MRD or Treatment) based on the
@@ -24,6 +24,125 @@ suppressPackageStartupMessages({
   library(tidyr)     # for data tidying
 })
 
+#-------------------------------------------------------------------
+# 0. Load and process patient ID mapping and complete sample inventory
+#-------------------------------------------------------------------
+
+cat("\n========== LOADING PATIENT ID MAPPING AND SAMPLE INVENTORY ==========\n\n")
+
+# Load patient ID mapping file (links PATIENT_ID to STUDY_NAME)
+id_mapping_file <- "Clinical data/IMMAGINE/IMMAGINE  LIBERATE_ID_noMRNorDoB_6Feb2026.xlsx"
+
+if (!file.exists(id_mapping_file)) {
+  stop("ERROR: ID mapping file not found at: ", id_mapping_file)
+}
+
+id_mapping <- read_excel(id_mapping_file) %>%
+  mutate(across(everything(), as.character)) %>%
+  mutate(across(everything(), str_trim))
+
+cat("✓ Loaded ID mapping file with", nrow(id_mapping), "rows\n")
+cat("  Columns:", paste(names(id_mapping), collapse = ", "), "\n\n")
+
+# Load complete sample inventory (all samples from both studies)
+sample_inventory_file <- "Clinical data/IMMAGINE/2025-05-01_LIB-IMMAGINE_sample_report.xlsx"
+
+if (!file.exists(sample_inventory_file)) {
+  stop("ERROR: Sample inventory file not found at: ", sample_inventory_file)
+}
+
+# Get sheet names and load both sheets
+sheet_names <- excel_sheets(sample_inventory_file)
+cat("✓ Found", length(sheet_names), "sheets in sample inventory:", paste(sheet_names, collapse = ", "), "\n")
+
+# Load both sheets
+sheet1 <- read_excel(sample_inventory_file, sheet = sheet_names[1]) %>%
+  mutate(source_sheet = sheet_names[1])
+
+sheet2 <- read_excel(sample_inventory_file, sheet = sheet_names[2]) %>%
+  mutate(source_sheet = sheet_names[2])
+
+# Merge sheets together
+sample_inventory <- bind_rows(sheet1, sheet2)
+
+cat("  Sheet 1:", nrow(sheet1), "samples\n")
+cat("  Sheet 2:", nrow(sheet2), "samples\n")
+cat("  Combined:", nrow(sample_inventory), "samples\n\n")
+
+# Match Event Comment to STUDY_NAME in ID mapping to add PATIENT_ID
+# Clean the Event Comment field for matching
+sample_inventory_with_ids <- sample_inventory %>%
+  mutate(
+    Event_Comment_clean = str_trim(`Event Comment`),
+    STUDY_NAME = Event_Comment_clean
+  ) %>%
+  left_join(
+    id_mapping %>% select(PATIENT_ID, STUDY_NAME),
+    by = "STUDY_NAME"
+  )
+
+# Report matching statistics
+n_matched <- sum(!is.na(sample_inventory_with_ids$PATIENT_ID))
+n_unmatched <- sum(is.na(sample_inventory_with_ids$PATIENT_ID))
+
+cat("========== SAMPLE-TO-PATIENT MATCHING RESULTS ==========\n")
+cat("  Matched to patient ID:", n_matched, "samples\n")
+cat("  Unmatched (no patient ID):", n_unmatched, "samples\n")
+cat("  Match rate:", sprintf("%.1f%%", 100 * n_matched / nrow(sample_inventory_with_ids)), "\n\n")
+
+# Show unique Event Comments that didn't match
+if (n_unmatched > 0) {
+  unmatched_events <- sample_inventory_with_ids %>%
+    filter(is.na(PATIENT_ID)) %>%
+    count(Event_Comment_clean) %>%
+    arrange(desc(n))
+
+  cat("Top unmatched Event Comments:\n")
+  print(head(unmatched_events, 10))
+  cat("\n")
+
+  # Export unmatched Event Comment values as a CSV and an RDS list
+  unmatched_event_list <- unmatched_events$Event_Comment_clean
+
+  # CSV with counts
+  write.csv(as.data.frame(unmatched_events), file = "unmatched_event_comments.csv", row.names = FALSE)
+
+  # RDS containing character vector of unmatched Event Comment strings
+  saveRDS(unmatched_event_list, file = "unmatched_event_comments.rds")
+
+  cat("✓ Exported unmatched Event Comments to 'unmatched_event_comments.csv' and 'unmatched_event_comments.rds'\n\n")
+}
+
+# Export the complete sample inventory with patient IDs
+write.csv(
+  sample_inventory_with_ids,
+  file = "complete_sample_inventory_with_patient_IDs.csv",
+  row.names = FALSE
+)
+cat("✓ Complete sample inventory written to 'complete_sample_inventory_with_patient_IDs.csv'\n\n")
+
+# Create summary table by patient
+patient_sample_summary <- sample_inventory_with_ids %>%
+  filter(!is.na(PATIENT_ID)) %>%
+  group_by(PATIENT_ID) %>%
+  summarise(
+    n_samples = n(),
+    sample_types = paste(unique(`Specimen Type`), collapse = "; "),
+    dates = paste(unique(`Specimen collection date`), collapse = "; "),
+    .groups = 'drop'
+  )
+
+write.csv(
+  patient_sample_summary,
+  file = "patient_sample_summary.csv",
+  row.names = FALSE
+)
+cat("✓ Patient sample summary written to 'patient_sample_summary.csv'\n")
+cat("  Total patients with samples:", nrow(patient_sample_summary), "\n\n")
+
+cat("========== ID MAPPING AND INVENTORY COMPLETE ==========\n\n")
+
+## Now work on getting the info of available samples for the comparison
 # Define the path to the Excel workbook.  The workbook must reside in
 # the working directory or you must adjust the path accordingly.
 file_path <- "Clinical data/IMMAGINE/IMMAGINE  LIBERATE_MRD_withoutMRN_or_DOB_18Dec2025.xlsx"
@@ -125,9 +244,75 @@ samples_clean <- samples_raw %>%
     sample_date = coalesce(SAMPLE_COLLECTION_DATE, COLLECTION_DATE),
     sample_date = as.Date(sample_date),
     sample_type = if_else(is.na(PROCEDURE_TYPE_TEXT), "Unknown", PROCEDURE_TYPE_TEXT),
-    sample_id = row_number()
+    # Standardize sample types: treat Plasma as Peripheral blood sample
+    sample_type = if_else(sample_type == "Plasma", "Peripheral blood sample", sample_type),
+    sample_id = row_number(),
+    data_source = "clinical_excel"
   ) %>%
-  select(sample_id, PATIENT_ID, STUDY_NAME, GENDER, sample_type, sample_date)
+  select(sample_id, PATIENT_ID, STUDY_NAME, GENDER, sample_type, sample_date, data_source)
+
+# Transform sample inventory to match samples_clean structure
+cat("\n========== INTEGRATING SAMPLE INVENTORY WITH CLINICAL SAMPLES ==========\n")
+
+inventory_for_merge <- sample_inventory_with_ids %>%
+  filter(!is.na(PATIENT_ID)) %>%  # Only keep samples with matched patient IDs
+  mutate(
+    PATIENT_ID = str_trim(PATIENT_ID),
+    sample_date = as.Date(`Specimen collection date`),
+    sample_type = if_else(is.na(`Specimen Type`), "Unknown", `Specimen Type`),
+    # Standardize sample types: treat Plasma as Peripheral blood sample
+    sample_type = if_else(sample_type == "Plasma", "Peripheral blood sample", sample_type),
+    GENDER = NA_character_,  # Not available in inventory
+    data_source = "sample_inventory"
+  ) %>%
+  select(PATIENT_ID, STUDY_NAME, GENDER, sample_type, sample_date, data_source)
+
+# Assign sample_id after combining
+inventory_for_merge <- inventory_for_merge %>%
+  mutate(sample_id = row_number() + max(samples_clean$sample_id))
+
+cat("  Clinical Excel samples:", nrow(samples_clean), "\n")
+cat("  Sample Inventory (matched):", nrow(inventory_for_merge), "\n")
+
+# Combine the datasets
+samples_combined <- bind_rows(
+  samples_clean,
+  inventory_for_merge
+)
+
+cat("  Combined total:", nrow(samples_combined), "\n\n")
+
+# Check for potential duplicates (same patient, date, and type)
+duplicates <- samples_combined %>%
+  group_by(PATIENT_ID, sample_date, sample_type) %>%
+  filter(n() > 1) %>%
+  ungroup()
+
+if (nrow(duplicates) > 0) {
+  cat("⚠️  Found", nrow(duplicates), "duplicate samples (same patient, date, type)\n")
+  cat("   Removing duplicates and keeping first occurrence. Review 'removed_duplicate_samples.csv' for details.\n\n")
+  
+  write.csv(duplicates, file = "removed_duplicate_samples.csv", row.names = FALSE)
+  
+  # Remove duplicates by keeping only first occurrence
+  samples_combined <- samples_combined %>%
+    distinct(PATIENT_ID, sample_date, sample_type, .keep_all = TRUE)
+  
+  cat("✓ After deduplication:", nrow(samples_combined), "samples\n")
+  cat("  Removed:", nrow(duplicates) - n_distinct(duplicates$PATIENT_ID, duplicates$sample_date, duplicates$sample_type), "duplicate rows\n\n")
+} else {
+  cat("✓ No duplicate samples detected\n\n")
+}
+
+# Replace samples_clean with the combined (and deduplicated) dataset
+samples_clean <- samples_combined
+
+cat("✓ Using combined dataset with", nrow(samples_clean), "samples from", 
+    n_distinct(samples_clean$PATIENT_ID), "patients\n")
+cat("  - From clinical Excel:", sum(samples_clean$data_source == "clinical_excel"), "\n")
+cat("  - From sample inventory:", sum(samples_clean$data_source == "sample_inventory"), "\n\n")
+
+cat("========== INTEGRATION COMPLETE ==========\n\n")
 
 # Prepare MRD data
 mrd_clean <- mrd_raw %>%
@@ -178,14 +363,14 @@ progression_summary <- line_tx_clean %>%
   ungroup()
 
 #-------------------------------------------------------------------
-# 4. Identify baseline samples (within ±14 days of diagnosis)
+# 4. Identify baseline samples (within ±30 days of diagnosis)
 #-------------------------------------------------------------------
 
 samples_with_dx <- samples_clean %>%
   left_join(date_dx_clean, by = "PATIENT_ID") %>%
   mutate(
     days_from_diagnosis = as.numeric(sample_date - DATE_DIAGNOSIS),
-    baseline_flag = if_else(!is.na(days_from_diagnosis) & abs(days_from_diagnosis) <= 14, TRUE, FALSE)
+    baseline_flag = if_else(!is.na(days_from_diagnosis) & abs(days_from_diagnosis) <= 30, TRUE, FALSE)
   )
 
 #-------------------------------------------------------------------
@@ -626,3 +811,4 @@ if (length(multi_timepoint_patients) > 0) {
 cat("\n===== END DETAILED ANALYSIS =====\n\n")
 
 cat("\n✓ Script completed successfully!\n")
+

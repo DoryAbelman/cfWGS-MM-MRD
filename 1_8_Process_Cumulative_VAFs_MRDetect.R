@@ -345,6 +345,40 @@ saveRDS(Merged_MRDetect_zscore,
 message("→ MRDetect tables (raw & z-scored) written to: ", outdir)
 
 
+# ──────────────────────────────────────────────────────────────────────────────
+# 14a) Export individual detection rates for baseline/diagnosis + healthy controls
+# ──────────────────────────────────────────────────────────────────────────────
+# Extract all baseline/diagnosis samples from MM cohort + all CHARM_healthy samples
+detection_rates_all_samples <- Merged_MRDetect_zscore %>%
+  filter(
+    # Include MM baseline/diagnosis samples
+    (Timepoint %in% c("01", "T0") & Study == "CHARM_healthy")
+  ) %>%
+  select(
+    Study, Patient, Patient_Bam, Sample_ID_Bam, BAM, VCF, VCF_clean,
+    Sample_type_Bam, timepoint_info_Bam, Mut_source, Filter_source,
+    sites_checked, reads_checked, sites_detected, reads_detected, total_reads,
+    detection_rate, 
+    detection_rate_as_reads_detected_over_reads_checked,
+    detection_rate_as_reads_detected_over_total_reads,
+    sites_detection_rate,
+    detection_rate_zscore_charm,
+    detection_rate_zscore_reads_checked_charm,
+    detection_rate_zscore_total_reads_charm,
+    sites_rate_zscore_charm
+  ) %>%
+  arrange(Study, Patient_Bam, Mut_source, Filter_source)
+
+# Export as CSV and RDS
+write_csv(detection_rates_all_samples,
+          file = file.path(outdir, "All_detection_rates_baseline_and_controls_Feb2026.csv"))
+saveRDS(detection_rates_all_samples,
+        file = file.path(outdir, "All_detection_rates_baseline_and_controls_Feb2026.rds"))
+
+message("→ Individual detection rates (baseline + healthy controls) written to: ", outdir)
+message("  Total samples exported: ", nrow(detection_rates_all_samples))
+
+
 ## See what is NA
 # show BAM file paths where Patient_Bam is NA
 Merged_MRDetect_zscore %>%
