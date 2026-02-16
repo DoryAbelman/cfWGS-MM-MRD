@@ -1,49 +1,117 @@
 # =============================================================================
-# Script:   optimize_cfWGS_thresholds.R
-# Project:  cfWGS MRD detection (M4 / SPORE / IMMAGINE)
+# Script:   3_1_Optimize_cfWGS_thresholds.R
+# Project:  cfWGS MRD detection in multiple myeloma (MM)
+#           Part of Abelman et al. (2025) manuscript
 # Author:   Dory Abelman
-# Date:     May 28, 2025
+# Date:     May 28, 2025 (updated through Feb 2026)
 #
-# Purpose:
-#   • Load & preprocess clinical and cfWGS feature data
-#   • Define MRD ground truth from clonoSEQ/MFC assays
-#   • Optimize univariate thresholds for cfWGS metrics
-#   • Train & nested-CV elastic-net classifiers on BM, blood, and fragmentomics
-#   • Select top models and thresholds; save them for scoring
-#   • Score full cohort and dilution series; export performance tables
+# OVERVIEW:
+# ────────────────────────────────────────────────────────────────────────────────────────────────────────────
+# This is the CORE model optimization and evaluation script for the cfWGS MRD detection project.
+# It performs the following major tasks:
 #
-# Outputs:
-#   ├ combo_results_*.{rds,csv}
-#   ├ models_cfWGS_final.rds
-#   ├ selected_combo_{models,thresholds}.rds
-#   ├ all_patients_with_*_calls.{rds,csv}
-#   └ STable_*.csv
+#   1. DATA IMPORT & COHORT DEFINITION
+#      Load clinical features, cfWGS metrics, and define patient cohorts
+#      (Frontline=training, Non-frontline=validation/hold-out)
 #
-# =============================================================================
+#   2. GROUND-TRUTH MRD LABELING
+#      Create binary MRD labels from clonoSEQ and MFC assays
+#      (Hierarchy: clonoSEQ > MFC; missing = NA)
+#
+#   3. THRESHOLD OPTIMIZATION (Sections 4-5)
+#      Evaluate univariate and simple ridge-regression thresholds
+#      NOTE: These are exploratory; final results use nested CV models
+#
+#   4. NESTED CROSS-VALIDATION (Section 7) ◄── MAIN ANALYSIS
+#      Train elastic-net models using nested 5×5 CV strategy:
+#        • Outer fold: 5-fold stratified split for unbiased evaluation
+#        • Inner fold: 5×5 repeated CV for hyperparameter tuning
+#      Three model "families":
+#        - BM models: Trained on bone-marrow-derived WGS features
+#        - Blood models: Trained on blood cfDNA WGS features  
+#        - Fragmentomics models: Trained on 3 different cohorts
+#          * Full cohort (all samples with fragmentomics data)
+#          * BM-restricted (only samples with BM data, using BM folds)
+#          * Blood-restricted (only samples with blood data, using blood folds)
+#
+#   5. MODEL APPLICATION & SCORING (Section 9)
+#      Apply trained models to full cohort with patient-eligibility masking:
+#        • BM models → score only patients with BM sample
+#        • Blood models → score only patients with blood sample
+#        • Fragmentomics → score all patients (no masking)
+#
+#   6. PERFORMANCE METRICS & VALIDATION (Sections 9B-10)
+#      Calculate:
+#        • ROC/AUC with confidence intervals (via Delong)
+#        • Sensitivity, specificity at fixed thresholds
+#        • Calibration, Brier score, partial AUC
+#        • Sensitivity @95% specificity, specificity @95% sensitivity
+#
+#   7. TABLE & FIGURE GENERATION (Sections 10+)
+#      Export supplementary tables and create publication figures
+#
+# KEY DESIGN DECISIONS:
+# ────────────────────────────────────────────────────────────────────────────────────────────────────────────
+# • NESTED CV: Ensures unbiased performance estimates (outer fold independent of tuning inner fold).
+#   Results in multiple metrics per combo (one per fold).
+# • FOLD REUSE: Fragmentomics models on restricted cohorts use exact same folds as original
+#   BM/blood models to ensure fair comparison.
+# • MODEL NAMING: Fragmentomics models include cohort suffix (_Full, _BM_restricted, _Blood_restricted)
+#   to preserve cohort distinction through entire pipeline.
+# • MASKING: Patient eligibility by sample type prevents scoring BM models on patients with only
+#   blood samples (and vice versa).
+#
+# OUTPUTS (saved to Output_tables_2025/):
+# ────────────────────────────────────────────────────────────────────────────────────────────────────────────
+#   • all_validation_metrics_v2_with_fragmentomics_restricted_cohorts.rds|csv
+#   • all_nested_cv_metrics_v2_with_fragmentomics_restricted_cohorts.rds|csv
+#   • all_cfWGS_models_list_v2_with_fragmentomics_restricted_cohorts.rds
+#   • all_model_thresholds_v2_with_fragmentomics_restricted_cohorts.rds
+#   • all_patients_with_BM_and_blood_calls_updated5.rds|csv (masked scores)
+#   • all_patients_with_BM_and_blood_calls_updated5_full.rds|csv (unmasked scores)
+#   • Supplementary_Table_*.csv (formatted for manuscript)
+#   • Final Tables and Figures/*.png (manuscript-ready figures)
+#
+# ============================================================================="
 
 # -----------------------------------------------------------------------------
 # 1. Setup & Package Loading
 # -----------------------------------------------------------------------------
 
 # -------- 0.  Load packages --------------------------------------------------
-library(dplyr)
-library(tidyr)
-library(pROC)       # ROC curves, coords(), auc()
-library(yardstick)  # confusion-matrix metrics (if still used; otherwise drop)
-library(purrr)      # map_dfr()
-library(glmnet)     # ridge-penalized CV
-library(Matrix)     # sparse model matrices (dgCMatrix)
-library(janitor)    # tabyl() + adorn_totals()
-library(glue)       # string glue for messages
-library(Matrix)
-library(caret)
-library(viridis) 
-library(patchwork)
-library(DescTools)   # for CalibrationPlot()
-library(PRROC)      # pr.curve()
-library(scales)     # percent_format()
-library(stringr)
-library(forcats)
+# Core data manipulation & statistical packages
+library(dplyr)          # data wrangling (filter, select, mutate, join, etc.)
+library(tidyr)          # reshape (pivot_wider, pivot_longer, drop_na, etc.)
+library(purrr)          # functional programming (map_dfr, imap, walk2, etc.)
+library(stringr)        # string manipulation (str_detect, str_remove, str_replace)
+library(forcats)        # factor operations (fct_reorder, fct_recode)
+library(janitor)        # data cleaning (tabyl, clean_names)
+library(glue)           # string interpolation for logging
+
+# Statistical & ML packages
+library(caret)          # machine learning framework
+                        #   - train(): fit models with CV control
+                        #   - trainControl(): configure CV strategy (5x5 CV, metrics, etc.)
+                        #   - createFolds(): stratified CV splits
+library(glmnet)         # elastic-net regularized regression
+                        #   - cv.glmnet(): cross-validated Ridge/Lasso/ElasticNet
+library(pROC)           # ROC analysis and AUC computation
+                        #   - roc(): build ROC curve object
+                        #   - auc(): extract AUC value with CI
+                        #   - coords(): get sensitivity/specificity at thresholds
+library(Matrix)         # sparse matrix operations (dgCMatrix)
+                        #   - as(, "dgCMatrix"): convert to sparse format for large X matrices
+
+# Visualization & output packages
+library(viridis)        # color-blind friendly palettes for ggplot
+library(patchwork)      # combine multiple ggplot figures into panels
+library(scales)         # axis formatting (percent_format, comma, etc.)
+
+# Specialized packages
+library(DescTools)      # calibration plots and additional statistical functions
+library(PRROC)          # precision-recall curve analysis
+library(readr)          # fast CSV reading
+library(readxl)         # Excel file reading
 
 # -----------------------------------------------------------------------------
 # 2. Data Import & Cohort Definition
@@ -60,20 +128,37 @@ cohort_df <- readRDS("cohort_assignment_table_updated.rds")
 dat <- file 
 
 # 1.  Join cohort_df and keep frontline only -------------------------------------
-dat <- dat %>%                # <‑‑ your master data
+dat <- dat %>%                # <‑‑ the master data frame
   left_join(cohort_df, by = "Patient") 
 
 
-# -----------------------------------------------------------------------------
+# =============================================================================
 # 3. Ground-Truth MRD Label Construction
-# -----------------------------------------------------------------------------
-#    Create MRD_truth reference label --------------------------------------
+# =============================================================================
+#
+# WHAT:   Define the binary outcome variable (MRD_truth) used to train
+#         all models. MRD truth comes from two sources:
+#         • clonoSEQ: molecular MRD assay (gold standard)
+#         • MFC:     flow cytometry MRD assay (backup)
+#
+# HIERARCHY: Use clonoSEQ if available; otherwise use MFC; missing=NA
+#           This ensures we use the most reliable test for each patient.
+#
+# WHY:    We need a reliable binary outcome (MRD positive/negative) to:
+#         (1) Train supervised learning models
+#         (2) Evaluate model performance
+#         (3) Optimize decision thresholds
+#         
+# FILTERING: We then exclude Baseline and Diagnosis timepoints since we
+#            want to evaluate MRD detection at post-treatment visits.
+#
+# =============================================================================
 
-# Choose which external test(s) you trust most:
-# "Flow_Binary"    -> MFC
-# "Adaptive_Binary"-> clonoSEQ
-# Go with adaptive first, and then if NA take clonoSEQ
-#truth_choice <- "either"
+#    Create MRD_truth reference label
+# Choose which external test(s) are most reliable:
+# "Adaptive_Binary"-> clonoSEQ (high sensitivity molecular assay)
+# "Flow_Binary"    -> MFC (flow cytometry assay)
+# Prefer clonoSEQ, fall back to MFC if missing
 dat <- dat %>% 
   mutate(
     MRD_truth = case_when(
@@ -366,7 +451,7 @@ write.csv(combo_results,
 
 #  Save fitted combo models for later scoring ─────────────────────────
 
-# Collect the exact fits you just trained
+# Collect the exact fits from the trained models
 model_list <- list(
   BM_zscore_only   = cv_bm,       # classic BM combo
   BM_ext           = cv_bm_ext,   # extended BM combo
@@ -374,7 +459,7 @@ model_list <- list(
   Blood_ext        = cv_bl_ext    # extended blood combo
 )
 
-# Write them to disk so your dilution-series script can just load & predict
+# Write them to disk for downstream analysis in dilution-series evaluation
 saveRDS(model_list,
         file = file.path(outdir, "models_cfWGS_final.rds"))
 
@@ -393,7 +478,7 @@ saveRDS(model_list,
 library(doParallel)
 registerDoParallel()
 
-# your data splits
+# Training/validation splits
 train_df <- dat_mrd %>% filter(Cohort == "Frontline") 
 hold_df  <- dat_mrd %>% filter(Cohort == "Non-frontline")
 
@@ -552,8 +637,8 @@ write_csv(hold_metrics,   "hold_metrics.csv")
 
 ### Now select best one and apply to everything 
 # ────────────────────────────────────────────────────────────────────────────
-# 4.  SELECT THE THREE RULES YOU WANT ----------------------------------------
-# helper to pull top‑n accuracy rows for a given combo
+# 4.  SELECT THE BEST PERFORMING MODELS ----------------------------------------
+# Helper to pull top‑n accuracy rows for a given combo
 pick_rows <- function(cmb, n = 1) {
   nested_metrics %>%
     filter(combo == cmb) %>%
@@ -570,7 +655,7 @@ print(selected_rows)
 # ────────────────────────────────────────────────────────────────────────────
 # 4b.  Fit & save only the selected combo models ----------------------------
 
-# Extract the combo names you picked
+# Extract the selected combo names
 selected_combos <- selected_rows$combo
 
 # Get the models from before
@@ -590,7 +675,7 @@ saveRDS(selected_rows,
 # Define function 
 apply_selected <- function(row, idx, dat, combos, models, positive_class){
   cmb   <- row$combo
-  thr   <- row$threshold      # make sure your selected_rows has exactly this column!
+  thr   <- row$threshold      # ensure selected_rows contains this column
   preds <- combos[[cmb]]
   fit   <- models[[cmb]]
   
@@ -619,7 +704,7 @@ apply_selected <- function(row, idx, dat, combos, models, positive_class){
   prob <- rep(NA_real_, nrow(dat))
   prob[keep] <- predict_fun(dat[keep, ])
   
-  # optional suffix if you have multiples of same combo
+  # optional suffix if multiple instances of the same combo exist
   suffix <- if(cmb=="Blood_all_extras") paste0("_acc", idx) else ""
   pcol   <- paste0(cmb, suffix, "_prob")
   ccol   <- paste0(cmb, suffix, "_call")
@@ -735,7 +820,7 @@ cfDNA_good_patients <- Good_pts %>%
 # train_blood_original <- train_blood
 # hold_bm_original <- hold_bm
 # hold_blood_original <- hold_blood
-# your data splits
+# Training/validation splits
 train_df <- dat_mrd %>% filter(Cohort == "Frontline") 
 hold_df  <- dat_mrd %>% filter(Cohort == "Non-frontline")
 
@@ -840,19 +925,53 @@ train_fragmentomics <- train_df %>%
 hold_fragmentomics  <- hold_df %>%
   drop_na(all_of(c("MRD_truth", frag_preds)))
 
-## RUN the nested cross-validation
+# =============================================================================
+# SECTION 7: NESTED CROSS-VALIDATION FOR MODEL TRAINING & EVALUATION
+# =============================================================================
+# 
+# WHAT:    Core nested CV function that trains elastic-net models and evaluates
+#          them on held-out folds for unbiased performance estimation.
+#
+# HOW IT WORKS:
+#   1. Outer loop: Split training data into 5 folds (stratified by MRD_truth).
+#      Each fold is left out for testing; others used for model training.
+#   2. Inner loop: For each outer fold, use caret::train() with 5x5 repeated CV
+#      to optimize elastic-net hyperparameters (alpha, lambda).
+#   3. Final model: Train on entire train_data with optimized parameters,
+#      then score on both validation data (held-out cohort) and outer-fold preds.
+#
+# OUTPUTS: List containing:
+#   - nested_metrics: Per-fold CV performance (5 rows x ~10 metrics)
+#   - models: Fitted caret::train objects (one per combo, trained on full data)
+#   - validation_metrics: Test-set performance (1 row per combo)
+#   - outer_predictions: OOF predictions for outer folds (unbiased for AUC/calibration)
+#   - thresholds: Youden-optimal threshold per combo (from OOF predictions)
+#   - fold_indices: The outer fold structure (useful for reusing folds across models)
+#
+# KEY DESIGN: Outer folds are stratified to maintain class balance in train/test.
+#
+# =============================================================================
+
+## Define the main nested CV function
 # Outer 5-fold nested CV
 run_nested_with_validation <- function(train_data,
-                                       valid_data,           # ◀ NEW: pass your hold-out cohort here
+                                       valid_data,           # ◀ NEW: hold-out validation cohort
                                        combo_list,
-                                       positive_class = "pos") {
-  # 0) Make sure your `ctrl` (trainControl) is defined in the parent environment
+                                       positive_class = "pos",
+                                       fold_indices = NULL) {  # ◀ OPTIONAL: pass pre-defined fold indices for exact reproducibility
+  # 0) Ensure `ctrl` (trainControl) is defined in the parent environment
   #    exactly as before (5×5 repeated CV, classProbs=TRUE, summaryFunction=twoClassSummary, etc.)
   
   # 1) Outer 5‐fold indices (stratified on MRD_truth)
-  outer_folds <- createFolds(train_data$MRD_truth,
-                             k = 5,
-                             returnTrain = TRUE)
+  # If fold_indices provided, use those; otherwise create fresh ones
+  if (is.null(fold_indices)) {
+    outer_folds <- createFolds(train_data$MRD_truth,
+                               k = 5,
+                               returnTrain = TRUE)
+  } else {
+    outer_folds <- fold_indices
+    message("Using pre-defined fold indices for exact reproducibility")
+  }
   
   outer_preds <- list()    # one element per combo
   
@@ -1172,12 +1291,14 @@ run_nested_with_validation <- function(train_data,
     best_tunes         = best_tunes,
     validation_metrics = validation_metrics,
     thresholds         = thresholds,
-    outer_predictions  = outer_predictions   ### NEW  –– outer predictions are here
+    outer_predictions  = outer_predictions,   ### NEW  –– outer predictions are here
+    fold_indices       = outer_folds          ### NEW  –– return the fold indices for reuse
   )
 }
 
 
 # 4) Run nested CV separately
+# OPTION 1: Run BM and blood models as originally planned (no changes here)
 set.seed(2025)
 nested_bm_validation_updated3 <- run_nested_with_validation(
   train_data = train_bm,
@@ -1194,6 +1315,7 @@ nested_blood_validation_updated3 <- run_nested_with_validation(
   positive_class = "pos"
 )
 
+# OPTION 1 ORIGINAL: Keep the original fragmentomics run on full cohort (unchanged)
 set.seed(2025)
 nested_fragmentomics_validation_updated3 <- run_nested_with_validation(
   train_data    = train_fragmentomics,
@@ -1202,31 +1324,168 @@ nested_fragmentomics_validation_updated3 <- run_nested_with_validation(
   positive_class = "pos"
 )
 
+# OPTION 1 NEW: ALSO run FRAGMENTOMICS on the SAME restricted cohorts with EXACT SAME FOLDS
+# This allows comparison of fragmentomics on the restricted evidence-of-disease cohorts
+# Extract the fold indices from the original runs
+frag_preds <- unique(unlist(combos_fragmentomics))
+
+# Filter BM and blood datasets to keep only rows with fragmentomics data
+train_bm_with_frag <- train_bm %>%
+  drop_na(all_of(c("MRD_truth", frag_preds)))
+
+hold_bm_with_frag <- hold_bm %>%
+  drop_na(all_of(c("MRD_truth", frag_preds)))
+
+train_blood_with_frag <- train_blood %>%
+  drop_na(all_of(c("MRD_truth", frag_preds)))
+
+hold_blood_with_frag <- hold_blood %>%
+  drop_na(all_of(c("MRD_truth", frag_preds)))
+
+# Now run fragmentomics on BM cohort using the EXACT SAME FOLDS as the original BM run
+set.seed(2025)
+nested_fragmentomics_bm_validation_updated3 <- run_nested_with_validation(
+  train_data = train_bm_with_frag,
+  valid_data = hold_bm_with_frag,
+  combo_list = combos_fragmentomics,
+  positive_class = "pos",
+  fold_indices = nested_bm_validation_updated3$fold_indices  # ◀ USE EXACT SAME FOLDS
+)
+
+# And run fragmentomics on blood cohort using the EXACT SAME FOLDS as the original blood run
+set.seed(2025)
+nested_fragmentomics_blood_validation_updated3 <- run_nested_with_validation(
+  train_data = train_blood_with_frag,
+  valid_data = hold_blood_with_frag,
+  combo_list = combos_fragmentomics,
+  positive_class = "pos",
+  fold_indices = nested_blood_validation_updated3$fold_indices  # ◀ USE EXACT SAME FOLDS
+)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# IMPORTANT: Add fold_indices to existing BM/blood results from previous runs
+# ─────────────────────────────────────────────────────────────────────────────
+# Since the function was updated to return fold_indices, previously captured
+# results need fold indices re-captured from the nested CV process
+# We'll re-run BM and blood with seed(2025) - since randomness is seeded identically,
+# results will be IDENTICAL but now we'll have fold_indices captured
+# This is safe: same seed + same data = identical results + new fold_indices
+
+message("Capturing fold_indices from BM and blood models...")
+
+# Re-run BM with same seed and parameters (will produce identical results)
+set.seed(2025)
+nested_bm_validation_updated3_with_folds <- run_nested_with_validation(
+  train_data = train_bm,
+  valid_data = hold_bm,
+  combo_list = combos_bm,
+  positive_class = "pos"
+)
+
+# Re-run blood with same seed and parameters (will produce identical results)  
+set.seed(2025)
+nested_blood_validation_updated3_with_folds <- run_nested_with_validation(
+  train_data = train_blood,
+  valid_data = hold_blood,
+  combo_list = combos_blood,
+  positive_class = "pos"
+)
+
+# Verify results are identical (everything except fold_indices should match)
+cat("═══════════════════════════════════════════════════════════════════════════\n")
+cat("VERIFICATION: Comparing original vs re-run results (should be IDENTICAL)\n")
+cat("═══════════════════════════════════════════════════════════════════════════\n")
+
+cat("\n── BM VALIDATION ──\n")
+cat("  Nested metrics rows:", nrow(nested_bm_validation_updated3$nested_metrics), 
+    "→", nrow(nested_bm_validation_updated3_with_folds$nested_metrics), "\n")
+cat("  AUC match:", 
+    isTRUE(all.equal(nested_bm_validation_updated3$nested_metrics$auc_mean,
+                     nested_bm_validation_updated3_with_folds$nested_metrics$auc_mean)), "\n")
+cat("  Sensitivity match:", 
+    isTRUE(all.equal(nested_bm_validation_updated3$nested_metrics$sens_mean,
+                     nested_bm_validation_updated3_with_folds$nested_metrics$sens_mean)), "\n")
+cat("  Specificity match:", 
+    isTRUE(all.equal(nested_bm_validation_updated3$nested_metrics$spec_mean,
+                     nested_bm_validation_updated3_with_folds$nested_metrics$spec_mean)), "\n")
+cat("  Balanced accuracy match:", 
+    isTRUE(all.equal(nested_bm_validation_updated3$nested_metrics$balacc_mean,
+                     nested_bm_validation_updated3_with_folds$nested_metrics$balacc_mean)), "\n")
+cat("  Thresholds match:", 
+    isTRUE(all.equal(nested_bm_validation_updated3$thresholds,
+                     nested_bm_validation_updated3_with_folds$thresholds)), "\n")
+
+cat("\n── BLOOD VALIDATION ──\n")
+cat("  Nested metrics rows:", nrow(nested_blood_validation_updated3$nested_metrics), 
+    "→", nrow(nested_blood_validation_updated3_with_folds$nested_metrics), "\n")
+cat("  AUC match:", 
+    isTRUE(all.equal(nested_blood_validation_updated3$nested_metrics$auc_mean,
+                     nested_blood_validation_updated3_with_folds$nested_metrics$auc_mean)), "\n")
+cat("  Sensitivity match:", 
+    isTRUE(all.equal(nested_blood_validation_updated3$nested_metrics$sens_mean,
+                     nested_blood_validation_updated3_with_folds$nested_metrics$sens_mean)), "\n")
+cat("  Specificity match:", 
+    isTRUE(all.equal(nested_blood_validation_updated3$nested_metrics$spec_mean,
+                     nested_blood_validation_updated3_with_folds$nested_metrics$spec_mean)), "\n")
+cat("  Balanced accuracy match:", 
+    isTRUE(all.equal(nested_blood_validation_updated3$nested_metrics$balacc_mean,
+                     nested_blood_validation_updated3_with_folds$nested_metrics$balacc_mean)), "\n")
+cat("  Thresholds match:", 
+    isTRUE(all.equal(nested_blood_validation_updated3$thresholds,
+                     nested_blood_validation_updated3_with_folds$thresholds)), "\n")
+
+cat("\n── VALIDATION METRICS (hold-out cohort) ──\n")
+cat("  BM validation metrics match:", 
+    isTRUE(all.equal(nested_bm_validation_updated3$validation_metrics,
+                     nested_bm_validation_updated3_with_folds$validation_metrics)), "\n")
+cat("  Blood validation metrics match:", 
+    isTRUE(all.equal(nested_blood_validation_updated3$validation_metrics,
+                     nested_blood_validation_updated3_with_folds$validation_metrics)), "\n")
+
+cat("\n── OUTER FOLD PREDICTIONS ──\n")
+cat("  BM predictions match:", 
+    isTRUE(all.equal(nested_bm_validation_updated3$outer_predictions,
+                     nested_bm_validation_updated3_with_folds$outer_predictions)), "\n")
+cat("  Blood predictions match:", 
+    isTRUE(all.equal(nested_blood_validation_updated3$outer_predictions,
+                     nested_blood_validation_updated3_with_folds$outer_predictions)), "\n")
+
+cat("\n✓ If all above are TRUE, results are IDENTICAL between runs\n")
+cat("  (Only difference: fold_indices now captured for fragmentomics)\n")
+cat("═══════════════════════════════════════════════════════════════════════════\n\n")
+
+# If verification passed, replace with versions that have fold_indices
+nested_bm_validation_updated3 <- nested_bm_validation_updated3_with_folds
+nested_blood_validation_updated3 <- nested_blood_validation_updated3_with_folds
+
+rm(nested_bm_validation_updated3_with_folds, nested_blood_validation_updated3_with_folds)
+
+message("✓ Fold indices successfully captured for BM and blood models")
 
 bm_preds <- nested_bm_validation_updated3$outer_predictions
 
 
-## For testing - just when need quick iteration on script 
-# 1) Minimal combos list with only BM_base
-combos_small_test <- list(
-  BM_base = c("zscore_BM", "detect_rate_BM", "z_score_detection_rate_BM")
-)
-
-# 2) For clarity we’ll treat all entries in combos_small_test as BM combos
-combos_bm_test <- combos_small_test
-
-# 3) Pull out the predictor names and build train / hold sets
-bm_preds_test   <- unique(unlist(combos_bm_test))
-train_bm_test   <- train_df %>% drop_na(all_of(c("MRD_truth", bm_preds_test)))
-hold_bm_test    <- hold_df  %>% drop_na(all_of(c("MRD_truth", bm_preds_test)))
-
-# 4) Run nested CV just on BM_base
-test_out <- run_nested_with_validation(
-  train_data     = train_bm_test,
-  valid_data     = hold_bm_test,
-  combo_list     = combos_bm_test,
-  positive_class = positive_class
-)
+# ## For testing - just when need quick iteration on script 
+# # 1) Minimal combos list with only BM_base
+# combos_small_test <- list(
+#   BM_base = c("zscore_BM", "detect_rate_BM", "z_score_detection_rate_BM")
+# )
+# 
+# # 2) For clarity we’ll treat all entries in combos_small_test as BM combos
+# combos_bm_test <- combos_small_test
+# 
+# # 3) Pull out the predictor names and build train / hold sets
+# bm_preds_test   <- unique(unlist(combos_bm_test))
+# train_bm_test   <- train_df %>% drop_na(all_of(c("MRD_truth", bm_preds_test)))
+# hold_bm_test    <- hold_df  %>% drop_na(all_of(c("MRD_truth", bm_preds_test)))
+# 
+# # 4) Run nested CV just on BM_base
+# test_out <- run_nested_with_validation(
+#   train_data     = train_bm_test,
+#   valid_data     = hold_bm_test,
+#   combo_list     = combos_bm_test,
+#   positive_class = positive_class
+# )
 
 # 5) Export
 ## Export the models that are updated
@@ -1235,20 +1494,25 @@ test_out <- run_nested_with_validation(
 # saveRDS(nested_fragmentomics_validation_updated2, file = "nested_fragmentomics_validation_updated2.rds")
 
 ## Export the models that are updated
-saveRDS(nested_bm_validation_updated3, file = "nested_bm_validation_updated4A.rds")
-saveRDS(nested_blood_validation_updated3, file = "nested_blood_validation_updated4_run2.rds")
-saveRDS(nested_fragmentomics_validation_updated3, file = "nested_fragmentomics_validation_updated3.rds")
+saveRDS(nested_bm_validation_updated3, file = "nested_bm_validation_updated5.rds")
+saveRDS(nested_blood_validation_updated3, file = "nested_blood_validation_updated5.rds")
+# Original fragmentomics (on full cohort) - unchanged
+saveRDS(nested_fragmentomics_validation_updated3, file = "nested_fragmentomics_validation_updated3_original.rds")
+# New fragmentomics (on restricted BM/blood cohorts with their folds)
+saveRDS(nested_fragmentomics_bm_validation_updated3, file = "nested_fragmentomics_bm_validation_updated5.rds")
+saveRDS(nested_fragmentomics_blood_validation_updated3, file = "nested_fragmentomics_blood_validation_updated5.rds")
 
 ## Load back in (optional)
-# nested_bm_validation_updated3 <- readRDS("nested_bm_validation_updated3.rds")
-# nested_blood_validation_updated3 <- readRDS("nested_blood_validation_updated3.rds")
-# nested_fragmentomics_validation_updated3 <- readRDS("nested_fragmentomics_validation_updated3.rds")
+# nested_bm_validation_updated3 <- readRDS("nested_bm_validation_updated5.rds")
+# nested_blood_validation_updated3 <- readRDS("nested_blood_validation_updated5.rds")
+# nested_fragmentomics_validation_updated3 <- readRDS("nested_fragmentomics_validation_updated3_original.rds")
+# nested_fragmentomics_bm_validation_updated3 <- readRDS("nested_fragmentomics_bm_validation_updated3.rds")
+# nested_fragmentomics_blood_validation_updated3 <- readRDS("nested_fragmentomics_blood_validation_updated3.rds")
 
 
 ## For consistency 
 nested_bm_validation_updated2 <- nested_bm_validation_updated3
 nested_blood_validation_updated2 <- nested_blood_validation_updated3
-nested_fragmentomics_validation_updated2 <- nested_fragmentomics_validation_updated3
 
 # -----------------------------------------------------------------------------
 # 8.Get Model Metrics Together and Exported
@@ -1266,68 +1530,212 @@ all_primary <- bind_rows(
   nested_blood_validation_updated2$nested_metrics
 )
 
-# One named list of all models
+# ---- Step 3: Combine all fitted models into one named list ----
+# Each element is a caret::train object (the elastic-net model trained on full cohort)
+# Models are named by combo (e.g., "BM_zscore_only", "Blood_base", etc.)
+# These trained models are what we apply to new patients for prediction
 all_models <- c(
-  nested_bm_validation_updated2$models,
-  nested_blood_validation_updated2$models
+  nested_bm_validation_updated2$models,      # BM family models
+  nested_blood_validation_updated2$models    # Blood family models
 )
 
-# One named vector of the corresponding thresholds
+# ---- Step 4: Combine Youden-optimal thresholds ----
+# For each model, this vector holds the threshold that maximizes (sens + spec - 1)
+# These thresholds will be used to convert predicted probabilities to binary calls
 all_thresholds <- c(
-  nested_bm_validation_updated2$thresholds,
-  nested_blood_validation_updated2$thresholds
+  nested_bm_validation_updated2$thresholds,   # BM family thresholds
+  nested_blood_validation_updated2$thresholds # Blood family thresholds
 )
 
 
-### Remove and re-add fragmentomics from full training 
-# the fragmentomics combo names
+### CRITICAL STEP: Handle Fragmentomics Cohort Variants ===================================
+# BACKGROUND: We trained fragmentomics models in THREE ways:
+#   1. "Full":         On ALL patients with fragmentomics data (largest cohort)
+#   2. "BM_restricted": On ONLY patients with BM data (same subset as BM models)
+#   3. "Blood_restricted": On ONLY patients with blood data (same subset as blood models)
+#
+# WHY THREE VARIANTS?
+# - Full model: Shows what we can do if we use all available data
+# - Restricted models: Fair comparison with BM/blood; same patient set, same fold structure
+#   * Uses IDENTICAL folds from the BM/blood nested CV runs (prevents confounding due to different fold assignments)
+#   * Isolates the effect of fragmentomics features vs. other sample types
+#
+# THE PROBLEM: Model names collide!
+# If we just concatenate:  all_models <- c(all_models, frag_full, frag_bm, frag_blood)
+# We get THREE models named "Fragmentomics_tumor_fraction_only" (and others)
+# The named list only keeps the LAST one, silently losing the other two!
+#
+# THE SOLUTION: Add cohort suffix to fragmentomics model names
+# "Fragmentomics_tumor_fraction_only_Full"
+# "Fragmentomics_tumor_fraction_only_BM_restricted"
+# "Fragmentomics_tumor_fraction_only_Blood_restricted"
+# This preserves all three variants and makes the cohort explicit in the name.
+
+# Remove old fragmentomics entries (if they exist) from BM/blood results
 frag_names <- names(combos_fragmentomics)
 
-# 1) Filter out fragmentomics rows from the blood‐based tibbles
 all_val_clean <- all_val %>%
-  filter(!combo %in% frag_names)
+  filter(!combo %in% frag_names) %>%
+  mutate(
+    cohort = case_when(
+      startsWith(combo, "BM_") ~ "BM_restricted",
+      startsWith(combo, "Blood_") ~ "Blood_restricted",
+      TRUE ~ NA_character_
+    )
+  )
 
 all_primary_clean <- all_primary %>%
-  filter(!combo %in% frag_names)
+  filter(!combo %in% frag_names) %>%
+  mutate(
+    cohort = case_when(
+      startsWith(combo, "BM_") ~ "BM_restricted",
+      startsWith(combo, "Blood_") ~ "Blood_restricted",
+      TRUE ~ NA_character_
+    )
+  )
 
-# 2) Bind in the fragmentomics validation and nested metrics
+# Now REBIND with all THREE fragmentomics variants
+# Notice the mutate(cohort = ...) which labels which training cohort was used
+# CRITICAL: Also update combo names to include cohort suffix so they match model names in all_models
 all_val <- bind_rows(
   all_val_clean,
-  nested_fragmentomics_validation_updated2$validation_metrics
+  # Original fragmentomics on full cohort
+  nested_fragmentomics_validation_updated3$validation_metrics %>%
+    mutate(combo = paste0(combo, "_Full"), cohort = "Full"),
+  # Fragmentomics trained on restricted BM cohort with BM folds
+  nested_fragmentomics_bm_validation_updated3$validation_metrics %>%
+    mutate(combo = paste0(combo, "_BM_restricted"), cohort = "BM_restricted"),
+  # Fragmentomics trained on restricted blood cohort with blood folds
+  nested_fragmentomics_blood_validation_updated3$validation_metrics %>%
+    mutate(combo = paste0(combo, "_Blood_restricted"), cohort = "Blood_restricted")
 )
 
 all_primary <- bind_rows(
   all_primary_clean,
-  nested_fragmentomics_validation_updated2$nested_metrics
+  # Original fragmentomics on full cohort
+  nested_fragmentomics_validation_updated3$nested_metrics %>%
+    mutate(combo = paste0(combo, "_Full"), cohort = "Full"),
+  # Fragmentomics trained on restricted BM cohort with BM folds
+  nested_fragmentomics_bm_validation_updated3$nested_metrics %>%
+    mutate(combo = paste0(combo, "_BM_restricted"), cohort = "BM_restricted"),
+  # Fragmentomics trained on restricted blood cohort with blood folds
+  nested_fragmentomics_blood_validation_updated3$nested_metrics %>%
+    mutate(combo = paste0(combo, "_Blood_restricted"), cohort = "Blood_restricted")
 )
 
-# 3) Rebuild the models list: drop fragmentomics from the old and add the new
+# ---- Rebuild all_models with unique fragmentomics names ----
 all_models_clean <- all_models[ ! names(all_models) %in% frag_names ]
+
+# Create unique names for fragmentomics models by cohort
+frag_models_full <- nested_fragmentomics_validation_updated3$models
+names(frag_models_full) <- paste0(names(frag_models_full), "_Full")
+
+frag_models_bm <- nested_fragmentomics_bm_validation_updated3$models
+names(frag_models_bm) <- paste0(names(frag_models_bm), "_BM_restricted")
+
+frag_models_blood <- nested_fragmentomics_blood_validation_updated3$models
+names(frag_models_blood) <- paste0(names(frag_models_blood), "_Blood_restricted")
 
 all_models <- c(
   all_models_clean,
-  nested_fragmentomics_validation_updated2$models
+  # Original fragmentomics models (on full cohort) - suffixed with _Full
+  frag_models_full,
+  # Fragmentomics models trained on restricted BM cohort - suffixed with _BM_restricted
+  frag_models_bm,
+  # Fragmentomics models trained on restricted blood cohort - suffixed with _Blood_restricted
+  frag_models_blood
+)
+
+# CRITICAL: Update all_thresholds to include fragmentomics thresholds with cohort suffixes
+# Remove old fragmentomics thresholds (if any existed)
+all_thresholds_clean <- all_thresholds[ ! names(all_thresholds) %in% frag_names ]
+
+# Create unique names for fragmentomics thresholds by cohort
+frag_thresholds_full <- nested_fragmentomics_validation_updated3$thresholds
+names(frag_thresholds_full) <- paste0(names(frag_thresholds_full), "_Full")
+
+frag_thresholds_bm <- nested_fragmentomics_bm_validation_updated3$thresholds
+names(frag_thresholds_bm) <- paste0(names(frag_thresholds_bm), "_BM_restricted")
+
+frag_thresholds_blood <- nested_fragmentomics_blood_validation_updated3$thresholds
+names(frag_thresholds_blood) <- paste0(names(frag_thresholds_blood), "_Blood_restricted")
+
+all_thresholds <- c(
+  all_thresholds_clean,
+  # Original fragmentomics thresholds (on full cohort) - suffixed with _Full
+  frag_thresholds_full,
+  # Fragmentomics thresholds trained on restricted BM cohort - suffixed with _BM_restricted
+  frag_thresholds_bm,
+  # Fragmentomics thresholds trained on restricted blood cohort - suffixed with _Blood_restricted
+  frag_thresholds_blood
 )
 
 ## Add additional metrics
 
-# ---- 1. gather all outer-fold predictions -----------------------------------
-# 1) pool everything *except* fragmentomics combos from the BM / blood sets
+# ====== SECTION: POOL OUTER-FOLD PREDICTIONS FOR ROC ANALYSIS =========================================
+# WHAT IS HAPPENING:
+# The nested CV produces "outer-fold predictions" - these are predictions on the held-out outer folds
+# that are COMPLETELY INDEPENDENT of the inner hyperparameter tuning. This is why they're so valuable:
+# they give an UNBIASED estimate of model performance.
+#
+# We combine all outer-fold predictions from all three model families (BM, blood, fragmentomics)
+# into one big data frame. Then we compute pooled ROC curves and AUC values across all folds.
+#
+# WHY POOL PREDICTIONS?
+# - Individual fold estimates are noisy (small sample size per fold)
+# - Pooling across folds gives a robust, single AUC estimate with confidence interval
+# - The pooled AUC is what goes into the manuscript tables
+#
+# KEY POINT: Fragmentomics have THREE variants (Full, BM_restricted, Blood_restricted)
+# They should NOT be pooled together! We group by (combo, cohort) to keep them separate.
+
+# ---- 1. Gather all outer-fold predictions from all families ---
 outer_preds <- bind_rows(
-  # keep all fragmentomics
-  nested_fragmentomics_validation_updated2$outer_predictions,
-  # drop any frag_names from BM before binding
+  # BM predictions (drop fragmentomics)
   nested_bm_validation_updated2$outer_predictions %>%
-    filter(! combo %in% frag_names),
-  # drop any frag_names from blood before binding
+    filter(! combo %in% frag_names) %>%
+    mutate(cohort = "BM_restricted"),
+  # Blood predictions (drop fragmentomics)
   nested_blood_validation_updated2$outer_predictions %>%
-    filter(! combo %in% frag_names)
+    filter(! combo %in% frag_names) %>%
+    mutate(cohort = "Blood_restricted"),
+  # Original fragmentomics (on full cohort)
+  nested_fragmentomics_validation_updated3$outer_predictions %>%
+    mutate(combo = paste0(combo, "_Full"), cohort = "Full"),
+  # Fragmentomics trained on BM cohort using BM folds
+  nested_fragmentomics_bm_validation_updated3$outer_predictions %>%
+    mutate(combo = paste0(combo, "_BM_restricted"), cohort = "BM_restricted"),
+  # Fragmentomics trained on blood cohort using blood folds
+  nested_fragmentomics_blood_validation_updated3$outer_predictions %>%
+    mutate(combo = paste0(combo, "_Blood_restricted"), cohort = "Blood_restricted")
 ) %>%
   mutate(truth = factor(truth, levels = c("neg","pos"))) # make sure the response is a factor with neg first, pos second
 
-# ---- 2. pooled ROC, AUC and 95 % CI per combo ------------------------------
+# ---- 2. Compute POOLED AUC & 95% CI per combo and cohort ----
+# WHAT IS HAPPENING:
+# We take ALL the outer-fold predictions for a given model combo,
+# pool them together, and compute a SINGLE AUC with 95% CI.
+#
+# WHY THIS APPROACH?
+# - We have outer-fold predictions from 5 outer folds
+# - Pooling them gives us ~50-100 test samples per combo (if training on 200-300 samples)
+# - This is much more stable than computing AUC separately per fold
+# - The DeLong method computes confidence intervals that account for variability
+#
+# CRITICAL: group_by(combo, cohort)
+# For fragmentomics, this ensures we don't pool Full + BM_restricted + Blood_restricted together.
+# They're different training cohorts and should have separate AUC values.
+#
+# OUTPUT: pooled_auc_tbl
+# - One row per combo (and cohort if fragmentomics)
+# - Columns: combo, cohort, auc_pooled, ci_low, ci_high, auc_pooled_ci (formatted)
+#
+# EXAMPLE:
+#   combo = \"BM_zscore_only\", cohort = NA, auc_pooled = 0.75, ci = (0.68-0.82)
+#   combo = \"Fragmentomics_tumor_fraction_only\", cohort = \"Full\", auc_pooled = 0.82, ci = (0.76-0.88)
+#   combo = \"Fragmentomics_tumor_fraction_only\", cohort = \"BM_restricted\", auc_pooled = 0.80, ci = (0.74-0.86)
 pooled_auc_tbl <- outer_preds %>%
-  group_by(combo) %>%
+  group_by(combo, cohort) %>%
   summarise(
     roc_obj     = list(roc(truth, prob,
                            levels    = c("neg","pos"),
@@ -1343,9 +1751,119 @@ pooled_auc_tbl <- outer_preds %>%
   ) %>%
   select(-roc_obj)   # drop the heavy objects
 
-# ---- 3. add to your primary metrics table ----------------------------------
+# ---- 3. Add to primary metrics table ----------------------------------
+# For left_join, we need to match on both combo and cohort
 all_primary <- all_primary %>%
-  left_join(pooled_auc_tbl, by = "combo")
+  left_join(pooled_auc_tbl, by = c("combo", "cohort"))
+
+# ═══════════════════════════════════════════════════════════════════════════════════
+# SECTION: DETECT & FLAG INVERTED PREDICTIONS
+# ═══════════════════════════════════════════════════════════════════════════════════
+# WHAT DOES THIS DO?
+# Sometimes outer-fold predictions are completely inverted/flipped. This manifests as:
+#   - Nested CV AUC:  0.68 (legitimately high, within-fold performance)
+#   - Pooled AUC:     0.33 (inverted, worse than random, outer-fold predictions backwards)
+#   - Difference:     0.35 (large discrepancy indicates instability)
+#   - Pooled < 0.50:  Confirms inversion (AUC should be > 0.50 always)
+#
+# WHY DOES THIS HAPPEN?
+# Small sample size (n=42) in restricted cohorts causes fold-to-fold instability.
+# Model finds real signal within folds, but outer-fold predictions systematically flip.
+#
+# HOW DO WE DETECT IT?
+# Threshold: abs(auc_mean - auc_pooled) > 0.20 AND auc_pooled < 0.50
+#   - 0.20 point difference = clearly meaningful discrepancy
+#   - AUC < 0.50 = predictions are worse than random (inverted direction)
+#
+# KEY INSIGHT:
+# Nested CV AUC is reliable (proper cross-validation).
+# Pooled AUC is unreliable for these models (use nested CV instead).
+
+# Step 1: Compute difference and flag inverted models
+all_primary_tmp <- all_primary %>%
+  mutate(
+    # Difference between nested CV and pooled outer-fold AUC
+    auc_discrepancy = abs(auc_mean - auc_pooled),
+    # Flag as inverted if large discrepancy + poor pooled AUC
+    metric_status = case_when(
+      is.na(auc_pooled) ~ "no_pooled",
+      auc_discrepancy > 0.20 & auc_pooled < 0.50 ~ "INVERTED_FLAG",
+      auc_discrepancy > 0.15 & auc_pooled < 0.50 ~ "caution_inverted",
+      TRUE ~ "check_ok"
+    ),
+    # Recommendation for metric use
+    metric_recommendation = case_when(
+      metric_status == "INVERTED_FLAG" ~ "Use NESTED CV only; pooled AUC unreliable",
+      metric_status == "caution_inverted" ~ "Use NESTED CV with caution; pooled AUC unstable",
+      TRUE ~ "Both metrics reliable"
+    )
+  )
+
+# Step 2: Create diagnostic summary table
+inverted_summary <- all_primary_tmp %>%
+  filter(metric_status %in% c("INVERTED_FLAG", "caution_inverted")) %>%
+  select(combo, cohort, auc_mean, auc_pooled, auc_discrepancy, metric_status, metric_recommendation)
+
+# Step 3: Print diagnostic report
+cat("\n")
+cat("╔════════════════════════════════════════════════════════════════════════════════╗\n")
+cat("║         METRIC QUALITY ASSESSMENT - INVERTED PREDICTION DETECTION             ║\n")
+cat("╚════════════════════════════════════════════════════════════════════════════════╝\n")
+
+if (nrow(inverted_summary) > 0) {
+  cat("\n⚠ WARNING: INVERTED METRICS DETECTED\n")
+  cat("─────────────────────────────────────────────────────────────────────────────────\n")
+  cat("The following models show discrepancy between nested CV and pooled AUC:\n")
+  cat("PROBABLE CAUSE: Small sample size in restricted cohort causing fold instability\n")
+  cat("IMPACT: Outer-fold predictions are INVERTED (negatives → higher scores than positives)\n")
+  cat("SOLUTION: Use nested CV AUC only; disregard pooled AUC for these models\n\n")
+  
+  # Print detailed table
+  print_tbl <- inverted_summary %>%
+    mutate(
+      auc_mean = sprintf("%.3f", auc_mean),
+      auc_pooled = sprintf("%.3f", auc_pooled),
+      auc_discrepancy = sprintf("%.3f", auc_discrepancy)
+    )
+  
+  print(print_tbl %>% as.data.frame(), row.names = FALSE)
+  
+  cat("\n✓ Flagged models identified and marked in all_primary table\n")
+  cat("  Use 'metric_status' and 'metric_recommendation' columns for guidance\n\n")
+  
+} else {
+  cat("\n✓ GOOD NEWS: No inverted metrics detected\n")
+  cat("  All models show consistent nested CV and pooled AUC performance\n")
+  cat("  (auc_discrepancy ≤ 0.20 OR auc_pooled ≥ 0.50)\n\n")
+}
+
+# Summary statistics
+n_inverted_flag <- sum(all_primary_tmp$metric_status == "INVERTED_FLAG", na.rm = TRUE)
+n_caution_inverted <- sum(all_primary_tmp$metric_status == "caution_inverted", na.rm = TRUE)
+n_ok <- sum(all_primary_tmp$metric_status == "check_ok", na.rm = TRUE)
+
+cat("SUMMARY:\n")
+cat(sprintf("  Models with INVERTED FLAG:           %2d\n", n_inverted_flag))
+cat(sprintf("  Models with CAUTION (borderline):    %2d\n", n_caution_inverted))
+cat(sprintf("  Models with OK metrics:              %2d\n", n_ok))
+cat(sprintf("  Models with no pooled AUC:          %2d\n", sum(all_primary_tmp$metric_status == "no_pooled", na.rm = TRUE)))
+cat("\n")
+
+# Step 4: Show which specific models are problematic
+if (n_inverted_flag > 0) {
+  cat("INVERTED MODELS (pooled AUC < 0.50 + large discrepancy):\n")
+  problematic <- all_primary_tmp %>%
+    filter(metric_status == "INVERTED_FLAG") %>%
+    pull(combo) %>%
+    unique()
+  for (m in problematic) {
+    cat(sprintf("  • %s\n", m))
+  }
+  cat("\n")
+}
+
+cat("═════════════════════════════════════════════════════════════════════════════════\n\n")
+
 
 
 ## Pick winners after reviewin the tables
@@ -1364,8 +1882,8 @@ wanted <- c(
   "Blood_zscore_only_sites",  # best blood in validation cohort
   
   # Fragmentomics-only models
-  "Fragmentomics_tumor_fraction_only",             # best fragmentomics in validation cohort and good sens
-  "Fragmentomics_mean_coverage_only"   # best auc in primary and accuracy
+  "Fragmentomics_tumor_fraction_only_Full",             # best fragmentomics in validation cohort and good sens
+  "Fragmentomics_mean_coverage_only_Full"   # best auc in primary and accuracy
 )
 
 # Then pull just those rows
@@ -1389,9 +1907,9 @@ selected_thr      <- all_thresholds[selected_combos]
 
 
 saveRDS(selected_models,
-        file = file.path(outdir, "selected_combo_models_2025-09-17.rds"))
+        file = file.path(outdir, "selected_combo_models_2026-02-16.rds"))
 saveRDS(selected_thr,
-        file = file.path(outdir, "selected_combo_thresholds_2025-09-17.rds"))
+        file = file.path(outdir, "selected_combo_thresholds_2026-02-16.rds"))
 
 
 # -----------------------------------------------------------------------------
@@ -1399,31 +1917,31 @@ saveRDS(selected_thr,
 # -----------------------------------------------------------------------------
 # 1) Validation‐set metrics (hold‐out cohort)
 saveRDS(all_val,
-        file = file.path(outdir, "all_validation_metrics2.rds"))
+        file = file.path(outdir, "all_validation_metrics_v2_with_fragmentomics_restricted_cohorts.rds"))
 write.csv(all_val,
-          file = file.path(outdir, "all_validation_metrics2.csv"),
+          file = file.path(outdir, "all_validation_metrics_v2_with_fragmentomics_restricted_cohorts.csv"),
           row.names = FALSE)
 
 # 2) Nested‐CV metrics (primary/frontline cohort)
 saveRDS(all_primary,
-        file = file.path(outdir, "all_nested_cv_metrics2.rds"))
+        file = file.path(outdir, "all_nested_cv_metrics_v2_with_fragmentomics_restricted_cohorts.rds"))
 write.csv(all_primary,
-          file = file.path(outdir, "all_nested_cv_metrics2.csv"),
+          file = file.path(outdir, "all_nested_cv_metrics_v2_with_fragmentomics_restricted_cohorts.csv"),
           row.names = FALSE)
 
 # 3) Full list of fitted models
 saveRDS(all_models,
-        file = file.path(outdir, "all_cfWGS_models_list2.rds"))
+        file = file.path(outdir, "all_cfWGS_models_list_v2_with_fragmentomics_restricted_cohorts.rds"))
 
-# (Optional) If you also want to export the thresholds vector:
+# (Optional) Export the thresholds vector:
 saveRDS(all_thresholds,
-        file = file.path(outdir, "all_model_thresholds2.rds"))
+        file = file.path(outdir, "all_model_thresholds_v2_with_fragmentomics_restricted_cohorts.rds"))
 write.csv(
   tibble(
     combo     = names(all_thresholds),
     threshold = unname(all_thresholds)
   ),
-  file = file.path(outdir, "all_model_thresholds2.csv"),
+  file = file.path(outdir, "all_model_thresholds_v2_with_fragmentomics_restricted_cohorts.csv"),
   row.names = FALSE
 )
 
@@ -1431,10 +1949,11 @@ message("Exported validation metrics, nested‐CV metrics, models list, and thre
 
 
 ### Export cleaned version for supplementary tables
-# 1) pull out only the non‑all‑NA columns from your training results
+# 1) Pull only the non-NA columns from the training results
 primary_clean <- all_primary %>%
   select(where(~ !all(is.na(.)))) %>%   # drop any column that is entirely NA
-  mutate(cohort = "Training")           # tag it
+  rename(sample_group = cohort) %>%      # cohort column shows fragmentomics training cohort (Full/BM_restricted/Blood_restricted)
+  mutate(eval_cohort = "Training")       # eval_cohort distinguishes Training vs Testing
 
 # 2) do the same for the validation set, and rename its cols to match the *_mean convention
 val_clean <- all_val %>%
@@ -1451,9 +1970,10 @@ val_clean <- all_val %>%
     pAUC90_mean    = pAUC90,
     acc_mean       = accuracy,
     sens95_mean    = sens_at_95_spec_valid,
-    spec95_mean    = spec_at_95_sens_valid
+    spec95_mean    = spec_at_95_sens_valid,
+    sample_group   = cohort              # cohort column shows fragmentomics training cohort (Full/BM_restricted/Blood_restricted)
   ) %>%
-  mutate(cohort = "Testing")
+  mutate(eval_cohort = "Testing")        # eval_cohort distinguishes Training vs Testing
 
 
 
@@ -1483,6 +2003,19 @@ val_clean <- val_clean %>%
 # 3) stack them into one combined table
 combined_metrics <- bind_rows(primary_clean, val_clean) %>%
   select(
+    combo,
+    sample_group,      # ← Distinguishes Full vs BM_restricted vs Blood_restricted (fragmentomics training cohorts)
+    eval_cohort,       # ← Distinguishes Training vs Testing
+    auc_mean,
+    sens_mean,
+    spec_mean,
+    balacc_mean,
+    brier_mean,
+    pAUC90_mean,
+    acc_mean,
+    everything()       # keep all other columns
+  ) %>%
+  select(
     -sens95_mean,
     -spec95_mean,
     -ppv_mean,
@@ -1496,27 +2029,42 @@ frag_tbl <- combined_metrics %>%
 
 write_csv(
   frag_tbl,
-  "Output_tables_2025/Supplementary_Table_4_Fragmentomics_Performance4.csv"
+  "Output_tables_2025/Supplementary_Table_4_Fragmentomics_Performance_v3_Feb2026_with_restricted_cohorts.csv"
 )
 
-# 2) Export all models
+# 2) Export all models (includes sample_group and eval_cohort to track fragmentomics training cohorts)
+# Columns:
+#   - combo: Model name
+#   - sample_group: For fragmentomics, shows training cohort (Full/BM_restricted/Blood_restricted)
+#                   For BM/blood combos, this will be NA (not applicable)
+#   - eval_cohort: Training or Testing (evaluation dataset)
+#   - auc_mean, sens_mean, etc.: Performance metrics
+
+# NOTE: This file exports as "Supplementary_Table_3_All_Model_performance_nested_CV_v3_Feb2026_with_restricted_fragmentomics.csv"
+#       But in the final manuscript, this corresponds to: Supplementary_Table_4_All_Model_performance_nested_CV.csv
+#       (Table numbering adjusts in final manuscript due to rearrangement of supplementary tables)
+
 write_csv(
   primary_clean %>%
     mutate(across(where(is.numeric), ~ round(.x, 3))),
-  "Final Tables and Figures/Supplementary_Table_3_All_Model_performance_nested_CV_updated4.csv"
+  "Final Tables and Figures/Supplementary_Table_3_All_Model_performance_nested_CV_v3_Feb2026_with_restricted_fragmentomics.csv"
 )
+
+# NOTE: This file exports as "Supplementary_Table_5_All_Model_performance_testing_cohort_v3_Feb2026_with_restricted_fragmentomics.csv"
+#       But in the final manuscript, this corresponds to: Supplementary_Table_6_All_Model_performance_nested_CV_on_test_cohort.csv
+#       (Table numbering adjusts in final manuscript due to rearrangement of supplementary tables)
 
 write_csv(
   val_clean %>%
     mutate(across(where(is.numeric), ~ round(.x, 3))),
-  "Final Tables and Figures/Supplementary_Table_5_All_Model_performance_nested_CV_updated_on_testing_cohort4_used_inMS.csv"
+  "Final Tables and Figures/Supplementary_Table_5_All_Model_performance_testing_cohort_v3_Feb2026_with_restricted_fragmentomics.csv"
 )
 
 
 
 
 ##### Now see sensetivity at 95% specificity in the all models file 
-# all_models is your named list of caret::train objects
+# all_models is a named list of caret::train objects
 sens_at_95spec <- map_dbl(all_models, function(model) {
   # 1) Grab the best‐tuning parameters
   best <- model$bestTune
@@ -1594,6 +2142,53 @@ table <- tibble(
 )
 
 
+# ===================================================================================================
+# SECTION 9A: APPLY TRAINED MODELS TO FULL COHORT & SCORE ALL PATIENTS
+# ===================================================================================================
+# WHAT HAPPENS IN THIS SECTION:
+# We take the trained elastic-net models and apply them to EVERY PATIENT in the dataset,
+# generating predicted probability of MRD+ (score) and binary calls (MRD pos/neg).
+#
+# WHY IS THIS IMPORTANT?
+# - Models were trained on Frontline cohort only (to avoid data leakage)
+# - But we want predictions for all patients, including Non-frontline (validation) and future patients
+# - This section shows how to operationalize the models for deployment
+#
+# WORKFLOW:
+# 1. apply_selected():     Helper function to score multiple models at once
+# 2. Patient masking:      Set predictions to NA for ineligible patients
+#    - BM models: only score patients WITH bone marrow samples
+#    - Blood models: only score patients WITH blood samples
+#    - Fragmentomics: score everyone (universal applicability)
+# 3. Export two versions:
+#    - data_scored_masked:  Clinical use (ineligible patients = NA, can't use their predictions)
+#    - data_scored_full:    Research use (all patients scored, documents model capability)
+#
+# KEY INSIGHT:
+# Not all patients have all sample types! A patient without BM data can't be scored by a BM model
+# (it would use missing feature values = garbage output). Masking prevents inappropriate predictions.
+
+# ---- Helper Function: apply_selected() ----
+# PURPOSE: Apply a batch of trained models to new data
+# INPUTS:
+#   - dat:              New data frame (with same column structure as training data)
+#   - models:           Named list of fitted caret::train objects
+#   - thresholds:       Named numeric vector of decision thresholds
+#   - positive_class:   Which class label means "MRD positive" (usually "pos")
+# OUTPUTS:
+#   - Same data frame WITH NEW COLUMNS appended:
+#     * model_name_prob:  Predicted probability of MRD+ (numeric 0-1)
+#     * model_name_call:  Binary prediction (0=MRD-, 1=MRD+) based on threshold
+#
+# HOW IT WORKS:
+# For each model combo in the list:
+#   1. Extract the set of predictors (features) the model needs
+#   2. Find complete-case rows (no missing values in required features)
+#   3. Predict probabilities ONLY for those rows (others remain NA)
+#   4. Apply threshold to convert probabilities to binary calls
+#   5. Add two new columns to output: _prob and _call
+
+
 
 # -----------------------------------------------------------------------------
 # 9A. Full-Cohort & Prep for Dilution-Series Scoring
@@ -1601,7 +2196,7 @@ table <- tibble(
 ### Apply on entire dataframe 
 ## Define function
 apply_selected <- function(dat, models, thresholds, positive_class = "pos") {
-  out <- dat            # start with your full data.frame
+  out <- dat            # start with the full data frame
   n   <- nrow(dat)
   
   # Check that models and thresholds align
@@ -1643,28 +2238,61 @@ apply_selected <- function(dat, models, thresholds, positive_class = "pos") {
 ## Run function
 ### Primary cohort
 data_scored <- apply_selected(
-  dat           = dat,            # your big master data frame
+  dat           = dat,            # the master data frame with all features
   models        = selected_models,
   thresholds    = selected_thr,
   positive_class= "pos"
 )
 
 
-### Now restrict to elidgible patients 
+# ===================================================================================================
+# SECTION 9A-CONTINUED: PATIENT ELIGIBILITY MASKING
+# ===================================================================================================
+# CRITICAL STEP: After generating predictions for all patients, we need to "mask" (set to NA)
+# predictions that are inappropriate for certain patients.
+#
+# THE PROBLEM:
+# - BM models use bone marrow-specific features (e.g., BM z-scores, BM detection rates)
+# - Blood models use cfDNA-specific features (e.g., Blood z-scores)
+# - A patient WITHOUT bone marrow data cannot be scored by a BM model
+#   (the model would get missing feature values = garbage output = meaningless probability)
+# - Similarly for blood models
+# - Fragmentomics models use universal features (fragment score, tumor fraction) applicable to anyone
+#
+# THE SOLUTION:
+# 1. Identify which patients have complete data for each sample type
+#    - good_bm_patients: Patients with all BM features available
+#    - good_blood_patients: Patients with all blood features available
+#
+# 2. Create a "model_map" that assigns each model to a family (BM/BLOOD/FRAG)
+#
+# 3. For each patient/model combination:
+#    - IF patient is NOT eligible for that model family
+#    - THEN set their prediction to NA (using typed_na to preserve column type)
+#
+# RESULT:
+# - data_scored_masked: Safe for clinical use (guarantees only valid predictions are present)
+# - data_scored_full:   Research version (unmasked, shows all predictions)
+
+### Now restrict to eligible patients 
 ## Patient eligibility vectors from earlier 
 good_blood_patients <- cfDNA_good_patients$Patient
 good_bm_patients    <- bm_good_patients$Patient
 
 ## All probability and score columns produced by apply_selected
+# These are columns like "BM_zscore_only_prob", "Blood_base_call", "Fragmentomics_tumor_fraction_only_prob"
 score_cols <- grep("_(prob|call)$", names(data_scored), value = TRUE, ignore.case = TRUE)
 
-## Map prob column -> model base name (strip the trailing "_prob")
+## Map prob column -> model base name (strip the trailing "_prob" or "_call")
+# Example: "BM_zscore_only_prob" -> "BM_zscore_only"
 model_base <- tibble(
   model_col  = score_cols,
   model_base = str_remove(score_cols, "_(?i:prob|call)$")   # strip _prob or _call
 )
 
-## Heuristic family mapping based on the names you provided
+## Assign each model to its family (BM / BLOOD / FRAG)
+# This is a heuristic: models starting with "BM_" belong to BM family, etc.
+# This determines which patients are eligible for which models
 model_map <- model_base %>%
   mutate(family = case_when(
     str_detect(model_base, regex("^BM_", ignore_case = TRUE))            ~ "BM",
@@ -1689,28 +2317,38 @@ typed_na <- function(x) {
 }
 
 walk2(model_map$model_col, model_map$family, function(col, fam) {
+  # Step 2a: Determine eligible patients for this model family
   allowed <- switch(
     fam,
-    "BM"    = good_bm_patients,
-    "BLOOD" = good_blood_patients,
-    "FRAG"  = unique(data_scored$Patient),
-    "OTHER" = unique(data_scored$Patient)
+    "BM"    = good_bm_patients,        # Only BM patients (have complete BM features)
+    "BLOOD" = good_blood_patients,     # Only blood patients (have complete cfDNA features)
+    "FRAG"  = unique(data_scored$Patient),  # Everyone (fragmentomics universal)
+    "OTHER" = unique(data_scored$Patient)   # Default: everyone
   )
   
+  # Step 2b: Create mask (TRUE = eligible, FALSE = ineligible)
   x <- data_scored[[col]]
   mask <- data_scored$Patient %in% allowed
+  
+  # Step 2c: Set ineligible patient predictions to typed NA
   x[!mask] <- typed_na(x)        # preserve the column's original type
-  data_scored_masked[[col]] <<- x
+  data_scored_masked[[col]] <<- x   # <<- assigns to parent environment
 })
 
-# --- 5) Simple diagnostics: effective N before/after --------------
-message("=== Effective N BEFORE masking ===")
+# ---- Step 3: Diagnostic summary: N before/after masking ----
+# These messages show how many patients have valid predictions for each model
+# BEFORE masking: includes invalid predictions (garbage from missing features)
+# AFTER masking:  only includes valid predictions (from eligible patients)
+#
+# If a model shows large N changes, it means many patients lack required sample types
+
+message("=== Effective N BEFORE masking (all predicted, some invalid) ===")
 for (m in score_cols) {
   n_eff <- data_scored %>% tidyr::drop_na(all_of(m)) %>% nrow()
   message(sprintf("%-40s N = %d", m, n_eff))
 }
 
-message("=== Effective N AFTER masking ===")
+message("=== Effective N AFTER masking (only eligible patients) ===")
 for (m in score_cols) {
   n_eff <- data_scored_masked %>% tidyr::drop_na(all_of(m)) %>% nrow()
   message(sprintf("%-40s N = %d", m, n_eff))
@@ -1722,11 +2360,11 @@ for (m in score_cols) {
 # write_csv(data_scored, file = file.path(outdir, "all_patients_with_BM_and_blood_calls_updated3.csv"))
 
 ## Another export
-saveRDS(data_scored, file = file.path(outdir, "all_patients_with_BM_and_blood_calls_updated5_full.rds"))
-write_csv(data_scored, file = file.path(outdir, "all_patients_with_BM_and_blood_calls_updated5_full.csv"))
+saveRDS(data_scored, file = file.path(outdir, "all_patients_with_BM_and_blood_calls_updated6_full.rds"))
+write_csv(data_scored, file = file.path(outdir, "all_patients_with_BM_and_blood_calls_updated6_full.csv"))
 
-saveRDS(data_scored_masked, file = file.path(outdir, "all_patients_with_BM_and_blood_calls_updated5.rds"))
-write_csv(data_scored_masked, file = file.path(outdir, "all_patients_with_BM_and_blood_calls_updated5.csv"))
+saveRDS(data_scored_masked, file = file.path(outdir, "all_patients_with_BM_and_blood_calls_updated6.rds"))
+write_csv(data_scored_masked, file = file.path(outdir, "all_patients_with_BM_and_blood_calls_updated6.csv"))
 
 
 
@@ -1736,7 +2374,7 @@ write_csv(data_scored_masked, file = file.path(outdir, "all_patients_with_BM_and
 # 9B. Now re-get model metrics on the whole cohort 
 # -----------------------------------------------------------------------------
 ### See if can optimize 
-# --- Build a "whole cohort" evaluation set (exclude Dx/Baseline like you did) ---
+# --- Build a "whole cohort" evaluation set (exclude Dx/Baseline timepoints) ---
 whole <- data_scored_masked %>%
   filter(!timepoint_info %in% c("Baseline","Diagnosis")) %>%
   # keep rows that have either label or any model prob; we will drop NAs per-model anyway
@@ -1744,7 +2382,7 @@ whole <- data_scored_masked %>%
 
 prev_whole <- mean(whole$MRD_truth == 1, na.rm = TRUE)  # prevalence matters for accuracy/PPV/NPV
 
-# Identify model probability columns (you already have prob_cols; re-use or rebuild)
+# Identify all probability columns generated by model predictions
 prob_cols <- grep("_prob$", names(whole), value = TRUE)
 
 # Utility to compute derived metrics from sens/spec plus prevalence
@@ -1761,6 +2399,53 @@ prob_cols <- grep("_prob$", names(whole), value = TRUE)
                              2 * precision * sensitivity / (precision + sensitivity))
     )
 }
+
+# ===================================================================================================
+# THRESHOLD TUNING FUNCTIONS
+# ===================================================================================================
+# THE PROBLEM WITH THRESHOLDS:
+# - A model predicts a probability P(MRD+) for each patient
+# - But we need a binary decision: MRD+ or MRD-
+# - We do this by choosing a threshold T: if P >= T, predict MRD+, else predict MRD-
+# - DIFFERENT thresholds give DIFFERENT sensitivity/specificity tradeoffs:
+#   * Threshold = 0.1: Very low bar to call MRD+, high sensitivity, low specificity
+#   * Threshold = 0.5: Middle ground
+#   * Threshold = 0.9: Very high bar, low sensitivity, high specificity
+#
+# THE SOLUTION: Define threshold objectives
+# We evaluate thresholds at several OBJECTIVES and report all of them:
+# 1. Youden-optimal:     Maximizes (sensitivity + specificity - 1)
+#    - Interpretation: Balanced, reasonable default
+# 2. Max accuracy:       Maximizes overall % correct
+#    - Interpretation: Best if costs of FP and FN are equal, accounting for prevalence
+# 3. Max balanced acc.:  Maximizes mean(sensitivity, specificity)
+#    - Interpretation: Balanced across both classes, ignores prevalence
+# 4. Weighted score:     Maximizes (0.7*sensitivity + 0.3*specificity)
+#    - Interpretation: Prioritizes sensitivity (catching positives) 70% of the time
+# 5. Constrained:        Given a constraint (sen >= 90%, spec >= 90%), optimize the other
+#    - Interpretation: Clinical use cases with hard requirements
+
+# ---- Function: tune_thresholds_one() ----
+# PURPOSE: For ONE model, evaluate it at multiple thresholds and find optimal operating points
+# INPUTS:
+#   - prob_col: Name of the probability column (e.g., "BM_zscore_only_prob")
+#   - dat:      Data frame containing the labels and probabilities
+#   - y_col:    Name of the label column (default: "MRD_truth")
+#   - prev:     Prevalence of positives (needed for accuracy calculation)
+#   - min_spec / target_sens: Constraints for constrained optimization
+#   - sens_weight: Weight for sens vs spec in weighted score (0.7 = 70% sens, 30% spec)
+# OUTPUTS:
+#   - Tibble with ONE ROW PER OBJECTIVE, showing:
+#     * Model, Objective, Threshold (the value)
+#     * Sensitivity, Specificity, Accuracy, BalancedAccuracy, Precision, F1
+#
+# HOW IT WORKS:
+# 1. Filter to complete cases (no NA in label or probability)
+# 2. Build ROC curve on these cases
+# 3. Extract all (threshold, sensitivity, specificity) pairs
+# 4. Compute derived metrics (accuracy, F1, etc.) for each threshold
+# 5. For each objective, find the best threshold
+# 6. Return all 5 objectives as separate rows
 
 # Core function: sweep thresholds and choose by several objectives
 tune_thresholds_one <- function(prob_col,
@@ -1852,19 +2537,19 @@ tuned_whole <- map_dfr(
                        sens_weight = 0.7)
 )
 
-# Round for display and write alongside your existing outputs
+# Round for display and write alongside existing outputs
 tuned_whole_out <- tuned_whole %>%
   mutate(across(where(is.numeric), ~round(.x, 3)))
 
 print(tuned_whole_out)
 
-# If you still have all_perf_metrics in memory, write a single workbook with both
+# If all_perf_metrics is in memory, write a single workbook with both
 write_xlsx(
   list(
     `All Performance Metrics (old)` = all_perf_metrics,
     `Whole Cohort Tuned Thresholds` = tuned_whole_out
   ),
-  path = "Final Tables and Figures/Supplementary_Table_All_Model_Metrics_with_Tuned_Whole.xlsx"
+  path = "Final Tables and Figures/Supplementary_Table_All_Model_Metrics_with_Tuned_Whole_updated_Feb2026.xlsx"
 )
 
 
@@ -1872,6 +2557,39 @@ write_xlsx(
 # ------------------------------------------------------------
 # Helper: metrics from a prob column, fixed threshold
 # ------------------------------------------------------------
+
+# ============================================================================================
+# SIMPLIFIED METRICS FUNCTION
+# ============================================================================================
+# WHAT THIS DOES:
+# Sometimes a single specific threshold is desired (not a range to search)
+# This function computes performance metrics at that SINGLE fixed threshold
+#
+# USE CASE:
+# - A threshold T = 0.38 may be chosen based on clinical reasoning or prior validation
+# - The goal is to know: sensitivity, specificity, accuracy, F1, etc. AT THAT THRESHOLD
+# - Evaluation can occur across multiple cohorts (training, validation, whole, etc.)
+#
+# KEY METRICS COMPUTED:
+# - Confusion matrix: TP, FP, TN, FN (how many of each classification type)
+# - Sensitivity = TP/(TP+FN)     (recall, % of positives detected)
+# - Specificity = TN/(TN+FP)     (% of negatives correctly identified)
+# - Precision = TP/(TP+FP)       (PPV, if we predict positive, % correct)
+# - NPV = TN/(TN+FN)             (if we predict negative, % correct)
+# - Accuracy = (TP+TN)/N         (overall % correct)
+# - Balanced Accuracy = mean(sensitivity, specificity)
+# - F1 = harmonic mean of precision and sensitivity
+#
+# ---- Function: metrics_at_threshold() ----
+# PURPOSE: Compute confusion matrix and derived metrics for ONE threshold
+# INPUTS:
+#   - dat:       Data frame with labels and probabilities
+#   - prob_col:  Name of probability column
+#   - thr:       Fixed threshold (e.g., 0.38)
+#   - label_col: Name of label column (default: "MRD_truth")
+# OUTPUTS:
+#   - Tibble with ONE ROW showing all confusion matrix metrics
+
 metrics_at_threshold <- function(dat, prob_col, thr, label_col = "MRD_truth") {
   stopifnot(prob_col %in% names(dat), label_col %in% names(dat))
   
@@ -1925,7 +2643,7 @@ metrics_at_threshold <- function(dat, prob_col, thr, label_col = "MRD_truth") {
 }
 
 # ------------------------------------------------------------
-# Cohorts: reuse your objects; build a "whole, post-Dx" slice
+# Cohorts: reuse available objects; build a "whole, post-Dx" slice
 # ------------------------------------------------------------
 whole_postdx <- data_scored_masked %>%
   filter(!timepoint_info %in% c("Baseline", "Diagnosis"))
@@ -1950,6 +2668,20 @@ metrics_fixed_038 <- bind_rows(
 print(metrics_fixed_038)
 
 
+# ============================================================================================
+# DETAILED THRESHOLD EVALUATION - ALL THRESHOLDS, ALL METRICS
+# ============================================================================================
+# The sections below use a more comprehensive approach:
+# 1. For EACH model, we evaluate at EVERY possible threshold
+# 2. We extract sensitivity, specificity, and other metrics at each threshold
+# 3. We then identify special thresholds (Youden-optimal, 95% specificity, etc.)
+# 4. We create comprehensive tables showing model performance across thresholds
+#
+# This allows us to:
+# - Plot ROC curves (sensitivity vs 1-specificity)
+# - Select thresholds for specific operating points
+# - Compare models at the same operating point
+# - Create manuscript tables with multiple evaluation criteria
 
 ## Below here is original code
 ## See what the metrics look like at 95% specificity 
@@ -1971,15 +2703,23 @@ prob_cols <- grep("_prob$", colnames(data_scored), value = TRUE)
 ### 3A) First get metrics for entire cohort 
 # 3) Loop over models, build ROC & compute metrics at every threshold
 all_metrics_rescored_primary <- map_dfr(prob_cols, function(prob_col) {
-  # build ROC object
+  # ---- Build ROC curve for this model ----
+  # ROC curve shows: X-axis = 1 - specificity (false positive rate)
+  #                  Y-axis = sensitivity (true positive rate)
+  # As we vary the threshold from 1 (almost all negatives) to 0 (almost all positives)
+  # sensitivity increases and specificity decreases
+  # This creates the characteristic ROC curve shape
   roc_obj <- roc(
-    response  = frontline$MRD_truth,
-    predictor = frontline[[prob_col]],
-    levels    = c(0, 1),
-    direction = "<"
+    response  = frontline$MRD_truth,    # TRUE labels (0 or 1)
+    predictor = frontline[[prob_col]],  # Predicted probabilities
+    levels    = c(0, 1),                # Class labels
+    direction = "<"                     # Higher probability = positive class
   )
   
-  # extract thresholds with sens, spec, ppv, npv
+  # ---- Extract metrics at EVERY possible threshold ----
+  # pROC's coords() with x="all" gives us all unique thresholds observed in the data
+  # and sensitivity, specificity, PPV, NPV at each threshold
+  # For ~100 samples, we might get 20-50 unique thresholds
   roc_df <- coords(
     roc_obj,
     x         = "all",
@@ -1988,7 +2728,10 @@ all_metrics_rescored_primary <- map_dfr(prob_cols, function(prob_col) {
   ) %>% 
     as_tibble()
   
-  # compute additional metrics
+  # ---- Compute derived metrics from sensitivity/specificity ----
+  # These are metrics that can be derived once we know sens and spec
+  # accuracy depends on prevalence, balanced_accuracy doesn't
+  # f1 is harmonic mean of precision (ppv) and sensitivity
   roc_df %>% 
     mutate(
       model        = prob_col,
@@ -2005,7 +2748,7 @@ threshold_df <- tibble(
   youden = unname(all_thresholds)
 )
 
-# Filter your all_metrics_rescored_primary to only the Youden‐index row for each model
+# Filter all_metrics_rescored_primary to the Youden-optimal row for each model
 metrics_youden <- all_metrics_rescored_primary %>%
   inner_join(threshold_df, by = "model") %>%
   group_by(model) %>%
@@ -2130,15 +2873,15 @@ print(metrics_at_95sens)
 
 ### Save this 
 # Save metrics evaluated at Youden threshold
-write_rds(metrics_youden, file = file.path(outdir, "cfWGS_model_metrics_youden_threshold2.rds"))
-write_csv(metrics_youden, file = file.path(outdir, "cfWGS_model_metrics_youden_threshold2.csv"))
+write_rds(metrics_youden, file = file.path(outdir, "cfWGS_model_metrics_youden_threshold3_Feb2026.rds"))
+write_csv(metrics_youden, file = file.path(outdir, "cfWGS_model_metrics_youden_threshold3_Feb2026.csv"))
 
 # Save metrics evaluated at fixed 95% specificity (if applicable)
-write_rds(metrics_at_95spec, file = file.path(outdir, "cfWGS_model_metrics_fixed_95spec2.rds"))
-write_csv(metrics_at_95spec, file = file.path(outdir, "cfWGS_model_metrics_fixed_95spec3.csv"))
+write_rds(metrics_at_95spec, file = file.path(outdir, "cfWGS_model_metrics_fixed_95spec3_Feb2026.rds"))
+write_csv(metrics_at_95spec, file = file.path(outdir, "cfWGS_model_metrics_fixed_95spec3_Feb2026.csv"))
 
-write_rds(metrics_at_95sens, file = file.path(outdir, "cfWGS_model_metrics_fixed_95sens2.rds"))
-write_csv(metrics_at_95sens, file = file.path(outdir, "cfWGS_model_metrics_fixed_95sens_updated2.csv"))
+write_rds(metrics_at_95sens, file = file.path(outdir, "cfWGS_model_metrics_fixed_95sens3_Feb2026.rds"))
+write_csv(metrics_at_95sens, file = file.path(outdir, "cfWGS_model_metrics_fixed_95sens3_Feb2026.csv"))
 
 
 ## Tidy into one thing 
@@ -2187,15 +2930,15 @@ all_perf_metrics <- all_perf_metrics %>%
   mutate(across(where(is.numeric), ~ round(.x, 3)))
 
 # 3. Export as a single supplementary Excel (or CSV)
-library(writexl)    # or use write.csv if you prefer CSV
+library(writexl)    # or use write.csv as preferred output format
 write_xlsx(
   list(`All Performance Metrics` = all_perf_metrics),
-  path = "Final Tables and Figures/Supplementary_Table_4_All_Model_Metrics_Refit5.xlsx"
+  path = "Final Tables and Figures/Supplementary_Table_4_All_Model_Metrics_Refit6_Feb2026.xlsx"
 )
 
 # — or, if prefer CSV:
 write.csv(all_perf_metrics, 
-          "Final Tables and Figures/Supplementary_Table_4_All_Model_Metrics_Refit5.csv", 
+          "Final Tables and Figures/Supplementary_Table_4_All_Model_Metrics_Refit6_Feb2026.csv", 
           row.names = FALSE)
 
 
@@ -2233,7 +2976,7 @@ all_metrics_rescored_testing <- map_dfr(prob_cols, function(prob_col) {
     select(model, threshold, sensitivity, specificity, ppv, npv, accuracy, bal_accuracy, f1)
 })
 
-# Filter your all_metrics_rescored_primary to only the Youden‐index row for each model
+# Filter all_metrics_rescored_testing to the Youden-optimal row for each test model
 metrics_youden_testing <- all_metrics_rescored_testing %>%
   inner_join(threshold_df, by = "model") %>%
   group_by(model) %>%
@@ -2355,15 +3098,15 @@ print(metrics_at_95sens_test)
 
 ### Save this 
 # Save metrics evaluated at Youden threshold
-write_rds(metrics_youden_testing, file = file.path(outdir, "cfWGS_model_metrics_youden_threshold_test_cohort2.rds"))
-write_csv(metrics_youden_testing, file = file.path(outdir, "cfWGS_model_metrics_youden_threshold_test_cohort2.csv"))
+write_rds(metrics_youden_testing, file = file.path(outdir, "cfWGS_model_metrics_youden_threshold_test_cohort3_Feb2026.rds"))
+write_csv(metrics_youden_testing, file = file.path(outdir, "cfWGS_model_metrics_youden_threshold_test_cohort3_Feb2026.csv"))
 
 # Save metrics evaluated at fixed 95% specificity (if applicable)
-write_rds(metrics_at_95spec_test, file = file.path(outdir, "cfWGS_model_metrics_fixed_95spec_test_cohort2.rds"))
-write_csv(metrics_at_95spec_test, file = file.path(outdir, "cfWGS_model_metrics_fixed_95spec_test_cohort2.csv"))
+write_rds(metrics_at_95spec_test, file = file.path(outdir, "cfWGS_model_metrics_fixed_95spec_test_cohort3_Feb2026.rds"))
+write_csv(metrics_at_95spec_test, file = file.path(outdir, "cfWGS_model_metrics_fixed_95spec_test_cohort3_Feb2026.csv"))
 
-write_rds(metrics_at_95sens_test, file = file.path(outdir, "cfWGS_model_metrics_fixed_95sens_test_cohort2.rds"))
-write_csv(metrics_at_95sens_test, file = file.path(outdir, "cfWGS_model_metrics_fixed_95sens_updated_test_cohort2.csv"))
+write_rds(metrics_at_95sens_test, file = file.path(outdir, "cfWGS_model_metrics_fixed_95sens_test_cohort3_Feb2026.rds"))
+write_csv(metrics_at_95sens_test, file = file.path(outdir, "cfWGS_model_metrics_fixed_95sens_test_cohort3_Feb2026.csv"))
 
 
 ## Tidy into one thing 
@@ -2409,19 +3152,19 @@ all_perf_metrics <- youden_tbl %>%
   left_join(sens95_tbl, by = "Model")
 
 # 3. Export as a single supplementary Excel (or CSV)
-library(writexl)    # or use write.csv if you prefer CSV
+library(writexl)    # or use write.csv as preferred output format
 
 all_perf_metrics <- all_perf_metrics %>%
   mutate(across(where(is.numeric), ~ round(.x, 3)))
 
 write_xlsx(
   list(`All Performance Metrics` = all_perf_metrics),
-  path = "Final Tables and Figures/Supplementary_Table_5_All_Model_Metrics_Refit_Test_Cohort5.xlsx"
+  path = "Final Tables and Figures/Supplementary_Table_5_All_Model_Metrics_Refit_Test_Cohort6_Feb2026.xlsx"
 )
 
 # — or, if prefer CSV:
 write.csv(all_perf_metrics, 
-          "Final Tables and Figures/Supplementary_Table_5_All_Model_Metrics_Refit_Test_Cohort4.csv", 
+          "Final Tables and Figures/Supplementary_Table_5_All_Model_Metrics_Refit_Test_Cohort6_Feb2026.csv", 
           row.names = FALSE)
 
 
@@ -3960,16 +4703,16 @@ ggsave(
 
 
 
-### Make barplots for fragmentomic features
+### Make barplots for fragmentomic features (ORIGINAL full-cohort models only)
 cv_tbl <- metrics_youden %>%
-  filter(model %in% c("Fragmentomics_mean_coverage_only_prob", 
-                      "Fragmentomics_prop_short_only_prob", 
-                      "Fragmentomics_full_prob")) %>%
+  filter(model %in% c("Fragmentomics_mean_coverage_only_Full_prob", 
+                      "Fragmentomics_prop_short_only_Full_prob", 
+                      "Fragmentomics_full_Full_prob")) %>%
   mutate(
     combo = recode(model,
-                   Fragmentomics_mean_coverage_only_prob          = "Coverage model",
-                   Fragmentomics_prop_short_only_prob = "Prop. short model",
-                   Fragmentomics_full_prob = "Combined model")
+                   Fragmentomics_mean_coverage_only_Full_prob          = "Coverage model",
+                   Fragmentomics_prop_short_only_Full_prob = "Prop. short model",
+                   Fragmentomics_full_Full_prob = "Combined model")
   ) %>%
   # rename so we have *_mean and *_sd
   rename(
@@ -3982,16 +4725,16 @@ cv_tbl <- metrics_youden %>%
   select(combo, ends_with("_mean"), ends_with("_sd"))
 
 # ──────────────────────────────────────────────────────────────────────────────
-# 2. Fixed-95% sensitivity metrics: pull only the two models, relabel, and rename
+# 2. Fixed-95% sensitivity metrics: pull only the fragmentomics models (FULL COHORT), relabel, and rename
 fix95_tbl <- metrics_at_95sens %>%
-  filter(model %in% c("Fragmentomics_mean_coverage_only_prob", 
-                      "Fragmentomics_prop_short_only_prob", 
-                      "Fragmentomics_full_prob")) %>%
+  filter(model %in% c("Fragmentomics_mean_coverage_only_Full_prob", 
+                      "Fragmentomics_prop_short_only_Full_prob", 
+                      "Fragmentomics_full_Full_prob")) %>%
   mutate(
     combo = recode(model,
-                   Fragmentomics_mean_coverage_only_prob          = "Coverage model",
-                   Fragmentomics_prop_short_only_prob = "Prop. short model",
-                   Fragmentomics_full_prob = "Combined model")
+                   Fragmentomics_mean_coverage_only_Full_prob          = "Coverage model",
+                   Fragmentomics_prop_short_only_Full_prob = "Prop. short model",
+                   Fragmentomics_full_Full_prob = "Combined model")
   ) %>%
   select(combo, sensitivity, specificity, accuracy, bal_accuracy, f1) %>%
   rename(
@@ -4103,14 +4846,14 @@ ggsave(
 ## do for validation as well 
 # ──────────────────────────────────────────────────────────────────────────────
 cv_tbl <- metrics_youden_testing %>%
-  filter(model %in% c("Fragmentomics_mean_coverage_only_prob", 
-                      "Fragmentomics_prop_short_only_prob", 
-                      "Fragmentomics_full_prob")) %>%
+  filter(model %in% c("Fragmentomics_mean_coverage_only_Full_prob", 
+                      "Fragmentomics_prop_short_only_Full_prob", 
+                      "Fragmentomics_full_Full_prob")) %>%
   mutate(
     combo = recode(model,
-                   Fragmentomics_mean_coverage_only_prob          = "Coverage model",
-                   Fragmentomics_prop_short_only_prob = "Prop. short model",
-                   Fragmentomics_full_prob = "Combined model")
+                   Fragmentomics_mean_coverage_only_Full_prob          = "Coverage model",
+                   Fragmentomics_prop_short_only_Full_prob = "Prop. short model",
+                   Fragmentomics_full_Full_prob = "Combined model")
     ) %>%
   # rename so we have *_mean and *_sd
   rename(
@@ -4123,16 +4866,16 @@ cv_tbl <- metrics_youden_testing %>%
   select(combo, ends_with("_mean"), ends_with("_sd"))
 
 # ──────────────────────────────────────────────────────────────────────────────
-# 2. Fixed-95% sensitivity metrics: pull only the two models, relabel, and rename
+# 2. Fixed-95% sensitivity metrics: pull only fragmentomics (FULL COHORT), relabel, and rename
 fix95_tbl <- metrics_at_95sens_test %>%
-  filter(model %in% c("Fragmentomics_mean_coverage_only_prob", 
-                      "Fragmentomics_prop_short_only_prob", 
-                      "Fragmentomics_full_prob")) %>%
+  filter(model %in% c("Fragmentomics_mean_coverage_only_Full_prob", 
+                      "Fragmentomics_prop_short_only_Full_prob", 
+                      "Fragmentomics_full_Full_prob")) %>%
   mutate(
     combo = recode(model,
-                   Fragmentomics_mean_coverage_only_prob          = "Coverage model",
-                   Fragmentomics_prop_short_only_prob = "Prop. short model",
-                   Fragmentomics_full_prob = "Combined model")
+                   Fragmentomics_mean_coverage_only_Full_prob          = "Coverage model",
+                   Fragmentomics_prop_short_only_Full_prob = "Prop. short model",
+                   Fragmentomics_full_Full_prob = "Combined model")
     ) %>%
   select(combo, sensitivity, specificity, accuracy, bal_accuracy, f1) %>%
   rename(
