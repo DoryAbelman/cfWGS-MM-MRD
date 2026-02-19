@@ -29,67 +29,157 @@
 #
 # =============================================================================
 
-# -------- 0.  Load packages --------------------------------------------------
-library(dplyr)
-library(tidyr)
-library(ggplot2)
-library(pROC)        # ROC + AUC
-library(patchwork)   # multi‑panel figures
-library(janitor)     # tabyl + adorn_totals
-library(gt)          # pretty contingency tables
-library(glue)
-library(rmda)        # decision‑curve analysis
-library(lubridate)
-library(scales)   # for percent_format()
+# ===========================================================================
+# SECTION 0: SETUP
+# ===========================================================================
+# Load required packages for data wrangling, visualization, and analysis
+
+library(dplyr)       # Data manipulation
+library(tidyr)       # Data reshaping (pivot_*, separate_*, etc.)
+library(ggplot2)     # Publication-quality graphics
+library(pROC)        # ROC curves and AUC calculation
+library(patchwork)   # Multi-panel figure assembly
+library(janitor)     # Quick crosstabs (tabyl) and data cleaning
+library(gt)          # Beautiful HTML/image tables for reports
+library(glue)        # String interpolation for informative messages
+library(rmda)        # Decision curve analysis (DCA) for clinical utility
+library(lubridate)   # Date/time manipulation
+library(scales)      # Formatting helpers (percent_format,, etc.)
+library(readr)       # Fast CSV import/export
 
 
-# -------- 1.  Read processed data & thresholds ------------------------------
-outdir   <- "Output_tables_2025"
-OUTPUT_DIR_FIGURES    <- "Output_figures_2025"
-dat      <- readRDS(file.path(outdir, "all_patients_with_BM_and_blood_calls_updated5.rds"))
-PATH_MODEL_LIST       <- "~/Documents/Thesis_work/R/M4/Projects/High_risk_MM_baselinbe_relapse_marrow/Output_tables_2025/selected_combo_models_2025-09-17.rds"
-PATH_THRESHOLD_LIST   <- "~/Documents/Thesis_work/R/M4/Projects/High_risk_MM_baselinbe_relapse_marrow/Output_tables_2025/selected_combo_thresholds_2025-09-17.rds"
+# ===========================================================================
+# SECTION 1: DATA INPUT AND IDENTIFICATION OF SOURCE FILES
+# ===========================================================================
+# This script integrates cfWGS results with EasyM MRD measurements
+# Output directory structure from prior analyses
 
-selected_models <- readRDS(PATH_MODEL_LIST)
-selected_thr    <- readRDS(PATH_THRESHOLD_LIST)
+outdir <- "Output_tables_2025"
+OUTPUT_DIR_FIGURES <- "Output_figures_2025"
+OUTPUT_DIR_EASYМ <- "Output_EasyM_MRD_analysis_2025"  # Output from script 3_1_A
 
-# -------- 1b. Load pre-processed EasyM data from 3_1_A ----
-# 3_1_A script exports processed EasyM data with both binary and optimized probabilities
-asco_out_dir  <- "Outputs_ASCO_abstract"
-EasyM_plot_data <- tryCatch(
-  readr::read_csv(
-    file.path(asco_out_dir, "EasyM_processed_for_3_2_plots.csv"),
-    show_col_types = FALSE
-  ),
-  error = function(e) {
-    warning("Could not load EasyM data from 3_1_A: ", e$message)
-    NULL
-  }
-)
+# ─────────────────────────────────────────────────────────────────────────
+# SOURCE DATA EXPORT SETUP
+# ─────────────────────────────────────────────────────────────────────────
+# Create subdirectory for figure source data (filtered dataframes & metadata)
+outdir_source_data <- "Output_tables_2025/Source_data"
+if (!dir.exists(outdir_source_data)) {
+  dir.create(outdir_source_data, showWarnings = FALSE)
+  cat(sprintf("✓ Created source data directory: %s\n", outdir_source_data))
+}
 
-if (!is.null(EasyM_plot_data)) {
-  # Merge EasyM data into main dataset
+# Version stamp for consistent file naming across tables and figures
+version_date <- as.character(Sys.Date())
+
+# ===========================================================================
+# SECTION 1A: LOAD EXISTING cfWGS DATA
+# ===========================================================================
+# Read previously processed cfWGS dataset with binary calls and probabilities
+
+cat("\nLoading cfWGS data from prior analysis...\n")
+
+dat <- readRDS(file.path(outdir, "all_patients_with_BM_and_blood_calls_updated5.rds"))
+cat(sprintf("✓ Loaded %d rows from cfWGS dataset\n", nrow(dat)))
+
+# Model and threshold definitions (if needed for benchmarking)
+PATH_MODEL_LIST <- "~/Documents/Thesis_work/R/M4/Projects/High_risk_MM_baselinbe_relapse_marrow/Output_tables_2025/selected_combo_models_2025-09-17.rds"
+PATH_THRESHOLD_LIST <- "~/Documents/Thesis_work/R/M4/Projects/High_risk_MM_baselinbe_relapse_marrow/Output_tables_2025/selected_combo_thresholds_2025-09-17.rds"
+
+if (file.exists(PATH_MODEL_LIST)) {
+  selected_models <- readRDS(PATH_MODEL_LIST)
+  cat("✓ Loaded cfWGS model definitions\n")
+} else {
+  selected_models <- NULL
+  cat("⚠ cfWGS model file not found, proceeding without model details\n")
+}
+
+if (file.exists(PATH_THRESHOLD_LIST)) {
+  selected_thr <- readRDS(PATH_THRESHOLD_LIST)
+  cat("✓ Loaded cfWGS threshold definitions\n")
+} else {
+  selected_thr <- NULL
+  cat("⚠ cfWGS threshold file not found, proceeding without threshold details\n")
+}
+
+# ===========================================================================
+# SECTION 1B: LOAD EasyM DATA FROM SCRIPT 3_1_A
+# ===========================================================================
+# 3_1_A produces the following key files:
+#   1. EasyM_all_samples_with_optimized_calls.csv
+#      Contains: Patient, Timepoint, EasyM_value, EasyM_clinician_binary,
+#                EasyM_optimized_binary, EasyM_optimized_call, threshold_method
+#   2. EasyM_threshold_values_by_timepoint.csv
+#      Contains: Timepoint and corresponding threshold cutoff (%) used
+
+cat("\nLoading EasyM data from script 3_1_A...\n")
+
+EasyM_file <- file.path(OUTPUT_DIR_EASYМ, "EasyM_all_samples_with_optimized_calls.csv")
+
+if (file.exists(EasyM_file)) {
+  EasyM_data <- readr::read_csv(EasyM_file, show_col_types = FALSE)
+  cat(sprintf("✓ Loaded EasyM data: %d samples across %d timepoints\n", 
+              n_distinct(EasyM_data$Patient), n_distinct(EasyM_data$Timepoint)))
+  
+  # Merge EasyM data into cfWGS dataset by matching Patient and Timepoint
   dat <- dat %>%
     mutate(Patient = as.character(Patient), Timepoint = as.character(Timepoint)) %>%
     left_join(
-      EasyM_plot_data %>%
-        select(Patient, Timepoint, EasyM_Binary, EasyM_prob_optimized),
-      by = c("Patient", "Timepoint")
+      EasyM_data %>%
+        select(
+          Patient, Timepoint, 
+          EasyM_value,
+          EasyM_clinician_binary,
+          EasyM_optimized_binary,
+          EasyM_optimized_call,
+          threshold_method
+        ) %>%
+        mutate(Patient = as.character(Patient), Timepoint = as.character(Timepoint)),
+      by = c("Patient", "Timepoint"),
+      relationship = "many-to-one"
     )
   
-  cat("✓ EasyM data loaded from 3_1_A\n")
-  cat(sprintf("  - Matched %d samples with EasyM_Binary\n", sum(!is.na(dat$EasyM_Binary))))
-  cat(sprintf("  - Matched %d samples with EasyM_prob_optimized\n", sum(!is.na(dat$EasyM_prob_optimized))))
+  n_easy_m_matched <- sum(!is.na(dat$EasyM_value))
+  cat(sprintf("✓ Merged EasyM data: %d samples matched with cfWGS\n", n_easy_m_matched))
+  cat(sprintf("  - EasyM_clinician_binary: %d samples\n", sum(!is.na(dat$EasyM_clinician_binary))))
+  cat(sprintf("  - EasyM_optimized_binary: %d samples\n", sum(!is.na(dat$EasyM_optimized_binary))))
+  cat(sprintf("  - Using optimized thresholds: %d samples\n", 
+              sum(dat$threshold_method == "optimized", na.rm = TRUE)))
+  cat(sprintf("  - Using clinician calls: %d samples\n", 
+              sum(dat$threshold_method == "clinician", na.rm = TRUE)))
+  
+  # Load threshold reference table
+  threshold_ref_file <- file.path(OUTPUT_DIR_EASYМ, "tables", "EasyM_threshold_values_by_timepoint.csv")
+  if (file.exists(threshold_ref_file)) {
+    EasyM_thresholds <- readr::read_csv(threshold_ref_file, show_col_types = FALSE)
+    cat(sprintf("✓ Loaded threshold reference: %d timepoints\n", nrow(EasyM_thresholds)))
+  }
+  
 } else {
-  cat("⚠ EasyM data not available, skipping EasyM integration\n")
-  # Create dummy columns to prevent downstream errors
+  cat(sprintf("⚠ EasyM file not found at: %s\n", EasyM_file))
+  cat("   Creating placeholder columns to prevent downstream errors...\n")
+  
+  # Create placeholder columns so downstream code doesn't break
   dat <- dat %>%
-    mutate(EasyM_Binary = NA_integer_, EasyM_prob_optimized = NA_real_)
+    mutate(
+      EasyM_value = NA_real_,
+      EasyM_clinician_binary = NA_integer_,
+      EasyM_optimized_binary = NA_integer_,
+      EasyM_optimized_call = NA_character_,
+      threshold_method = NA_character_
+    )
+  
+  EasyM_thresholds <- NULL
 }
 
-### Now get positivity rates compared to other tech
-# ---------------------------------------------------------------------------
-#  1.  Helper: summarise positivity rate -------------------------------------
+cat("\n")
+
+# ===========================================================================
+# SECTION 2: DATA PREPARATION AND HARMONIZATION
+# ===========================================================================
+# Prepare combined cfWGS + EasyM dataset for visualization and analysis
+
+# Helper function: Calculate positivity rates
+# Used to summarize MRD+ frequencies within subgroups
 summarise_pos <- function(df) {
   df %>%
     summarise(
@@ -99,10 +189,8 @@ summarise_pos <- function(df) {
     )
 }
 
-# ---------------------------------------------------------------------------
-#  2.  Recoding of landmark labels --------------------------------------
-# If  `timepoint_info` already uses exactly "Post‑ASCT" and "Maintenance‑1yr"
-# you can drop this mutate() block.
+# Harmonize timepoint labels for consistent visualization
+# (standardize naming across different assays)
 dat <- dat %>%
   mutate(
     landmark_tp = case_when(
@@ -122,16 +210,10 @@ front_tbl <- dat %>%
     !is.na(landmark_tp),
     !is.na(BM_zscore_only_detection_rate_call)
   ) %>%
-  ## Prepare two sets of data: binary and probability versions
-  ## For probability-based comparisons, convert to binary using median/optimal cutoff
-  mutate(
-    EasyM_prob_binary = case_when(
-      !is.na(EasyM_prob_optimized) ~ as.integer(EasyM_prob_optimized >= median(EasyM_prob_optimized, na.rm = TRUE)),
-      TRUE ~ NA_integer_
-    )
-  ) %>%
+  ## Compare both EasyM methods (any-detect and optimized) with other modalities
   pivot_longer(
-    cols      = c(Flow_Binary, Adaptive_Binary, BM_zscore_only_detection_rate_call, EasyM_Binary, EasyM_prob_binary),
+    cols      = c(Flow_Binary, Adaptive_Binary, BM_zscore_only_detection_rate_call, 
+                  EasyM_clinician_binary, EasyM_optimized_binary),
     names_to  = "Technology",
     values_to = "Result"
   ) %>%
@@ -149,13 +231,13 @@ front_tbl <- dat %>%
       Flow_Binary         = "MFC",
       Adaptive_Binary     = "clonoSEQ",
       BM_zscore_only_detection_rate_call = "cfWGS",
-      EasyM_Binary        = "EasyM (any-detect)",
-      EasyM_prob_binary   = "EasyM (clearance-optimized)"
+      EasyM_clinician_binary = "EasyM (any)",
+      EasyM_optimized_binary = "EasyM (opt)"
     )
   )
 
 ## Get double negatives 
-# Reshape to long format for all three methods
+# Reshape to long format for all methods including both EasyM approaches
 front_long <- dat %>%
   filter(
     Cohort == "Frontline",
@@ -164,7 +246,8 @@ front_long <- dat %>%
   ) %>%
   filter(!is.na(BM_zscore_only_detection_rate_call)) %>%
   pivot_longer(
-    cols      = c(Flow_Binary, Adaptive_Binary, BM_zscore_only_detection_rate_call, EasyM_Binary),
+    cols      = c(Flow_Binary, Adaptive_Binary, BM_zscore_only_detection_rate_call, 
+                  EasyM_clinician_binary, EasyM_optimized_binary),
     names_to  = "Technology",
     values_to = "Result"
   ) %>%
@@ -175,7 +258,8 @@ front_long <- dat %>%
       Flow_Binary                     = "MFC",
       Adaptive_Binary                 = "clonoSEQ",
       BM_zscore_only_detection_rate_call = "cfWGS",
-      EasyM_Binary                    = "EasyM"
+      EasyM_clinician_binary          = "EasyM (any)",
+      EasyM_optimized_binary          = "EasyM (opt)"
     )
   )
 
@@ -282,12 +366,12 @@ non_tbl <- dat %>%
 ## Export
 readr::write_csv(
   front_tbl,
-  file.path(outdir, "Positivity_by_Landmark_TimePoint_BoneMarrow_Frontline_updated4.csv")
+  file.path(outdir, "Positivity_by_Landmark_TimePoint_BoneMarrow_Frontline_updated5.csv")
 )
 
 readr::write_csv(
   non_tbl,
-  file.path(outdir, "Positivity_All_TimePoints_BoneMarrow_NonFrontline_updated4.csv")
+  file.path(outdir, "Positivity_All_TimePoints_BoneMarrow_NonFrontline_updated5.csv")
 )
 
 
@@ -322,22 +406,35 @@ plot_theme <- theme_minimal(base_size = 11) +
     plot.margin      = margin(10, 10, 30, 10)      # t, r, b, l  (pt)
   )
 
-# ---------------------------------------------------------------------------
-#  1.  Frontline plot  ------------------------------------------------------------
+# ===========================================================================
+# SECTION 3: FIGURE GENERATION - POSITIVITY RATE COMPARISONS BY TIMEPOINT
+# ===========================================================================
+# Compare MRD+ detection rates across cfWGS, EasyM clinician, and EasyM optimized
+# Stratified by treatment phase (post-ASCT vs maintenance)
 
-# 1) Clean and re-factor your time-point column
+# ---------------------------------------------------------------------------
+#  SUBSECTION 3.1: Frontline/Post-ASCT Positivity Rates
+# ---------------------------------------------------------------------------
+# Compare MRD+ detection at post-ASCT landmark between methods
+
+# Clean and re-factor timepoint column
 front_tbl <- front_tbl %>%
-  # 1) normalize that unicode hyphen to the ASCII hyphen-minus
+  # Normalize unicode hyphen to ASCII hyphen-minus for consistent rendering
   mutate(
     landmark_tp = str_replace_all(landmark_tp, "\u2011", "-")
   ) %>%
-  # 2) now convert to a factor with Post-ASCT first
+  # Convert to factor with standardized order
   mutate(
     landmark_tp = factor(landmark_tp,
                          levels = c("Post-ASCT", "Maintenance-1yr"))
+  ) %>%
+  # Reorder Technology for consistent display order across all plots
+  mutate(
+    Technology = factor(Technology,
+                        levels = c("cfWGS", "clonoSEQ", "MFC", "EasyM (opt)", "EasyM (any)"))
   )
 
-# 2) Rebuild the grouped barplot for frontline
+# Build grouped barplot comparing MRD+ rates across technologies and timepoints
 p_front_grouped <- ggplot(front_tbl, 
                           aes(x    = Technology,
                               y    = pos_rate * 100,
@@ -352,7 +449,7 @@ p_front_grouped <- ggplot(front_tbl,
   ) +
   scale_y_continuous(
     labels = scales::percent_format(scale = 1),
-    expand = expansion(mult = c(0, 0.05)),
+    expand = expansion(mult = c(0, 0.08)),
     limits = c(0, 100)
   ) +
   labs(
@@ -366,16 +463,24 @@ p_front_grouped <- ggplot(front_tbl,
   ) +
   geom_text(aes(label = sprintf("%.0f%%", pos_rate * 100)),
             position = position_dodge(width = 0.8),
-            vjust    = -0.3,
+            vjust    = -0.4,
             size     = 3.5)
 
 # 4) save
 ggsave(
-    filename = file.path(OUTPUT_DIR_FIGURES, "Fig_BM_positivity_by_tech_updated.png"),
+    filename = file.path(OUTPUT_DIR_FIGURES, "Fig_BM_positivity_by_tech_updated5.png"),
   plot     = p_front_grouped,
   width    = 6,
   height   = 4,
   dpi      = 500
+)
+
+# ══════════════════════════════════════════════════════════════════════════
+# SOURCE DATA: BM positivity by technology (frontline)
+# ══════════════════════════════════════════════════════════════════════════
+readr::write_csv(
+  front_tbl %>% mutate(Figure = "Fig_BM_positivity_by_tech_updated5"),
+  file.path(outdir_source_data, "Fig_BM_positivity_by_tech_updated5_source_data.csv")
 )
 
 
@@ -404,17 +509,17 @@ p_front_grouped <- ggplot(front_tbl,
     breaks = names(custom_cols)
   ) +
   
-  # ③ y axis as percent, 0–100, small padding
+  # ③ y axis as percent, 0–100, with adequate spacing for 100% label
   scale_y_continuous(
     labels = percent_format(scale = 1),
-    expand = expansion(mult = c(0, 0.02)),
+    expand = expansion(mult = c(0, 0.08)),
     limits = c(0, 100)
   ) +
   
   # ④ labels on top of bars
   geom_text(aes(label = sprintf("%d%%", round(pos_rate * 100))),
             position = position_dodge(width = 0.8),
-            vjust    = -0.3,
+            vjust    = -0.4,
             size     = 3.5,
             family   = "sans") +
   
@@ -427,12 +532,17 @@ p_front_grouped <- ggplot(front_tbl,
   plot_theme
 
 ggsave(
-  filename = file.path(OUTPUT_DIR_FIGURES, "Fig_4I_BM_positivity_by_tech_updated2.png"),
+  filename = file.path(OUTPUT_DIR_FIGURES, "Fig_4I_BM_positivity_by_tech_updated5.png"),
   plot     = p_front_grouped,
   width    = 6,
   height   = 4,
   dpi      = 500
 )
+
+# ══════════════════════════════════════════════════════════════════════════
+# SOURCE DATA: Training cohort BM positivity (updated5, same as Fig_updated5)
+# ══════════════════════════════════════════════════════════════════════════
+# (Already exported above; duplicates omitted)
 
 
 # ---------------------------------------------------------------------------
@@ -443,7 +553,12 @@ non_tbl <- non_tbl %>%
   # 1) normalize that unicode hyphen to the ASCII hyphen-minus
   mutate(
     landmark_tp = str_replace_all(landmark_tp, "\u2011", "-")
-  ) 
+  ) %>%
+  # Reorder Technology for consistent display order across all plots
+  mutate(
+    Technology = factor(Technology,
+                        levels = c("cfWGS", "clonoSEQ", "MFC", "EasyM (opt)", "EasyM (any)"))
+  )
 
 # 2) Rebuild the grouped barplot for frontline
 p_non_grouped <- ggplot(non_tbl, 
@@ -460,7 +575,7 @@ p_non_grouped <- ggplot(non_tbl,
   ) +
   scale_y_continuous(
     labels = scales::percent_format(scale = 1),
-    expand = expansion(mult = c(0, 0.05)),
+    expand = expansion(mult = c(0, 0.08)),
     limits = c(0, 100)
   ) +
   labs(
@@ -474,16 +589,24 @@ p_non_grouped <- ggplot(non_tbl,
   ) +
   geom_text(aes(label = sprintf("%.0f%%", pos_rate * 100)),
             position = position_dodge(width = 0.8),
-            vjust    = -0.3,
+            vjust    = -0.4,
             size     = 3.5)
 
 # 4) save
 ggsave(
-  filename = file.path(OUTPUT_DIR_FIGURES, "Fig_BM_positivity_by_tech_later_line2.png"),
-  plot     = p_front_grouped,
+  filename = file.path(OUTPUT_DIR_FIGURES, "Fig_BM_positivity_by_tech_later_line5.png"),
+  plot     = p_non_grouped,
   width    = 6,
   height   = 4,
   dpi      = 500
+)
+
+# ══════════════════════════════════════════════════════════════════════════
+# SOURCE DATA: Non-frontline BM positivity
+# ══════════════════════════════════════════════════════════════════════════
+readr::write_csv(
+  non_tbl %>% mutate(Figure = "Fig_BM_positivity_by_tech_later_line5"),
+  file.path(outdir_source_data, "Fig_BM_positivity_by_tech_later_line5_source_data.csv")
 )
 
 
@@ -505,17 +628,17 @@ p_non_grouped <- ggplot(non_tbl,
     breaks = names(custom_cols)
   ) +
   
-  # ③ y axis as percent, 0–100, small padding
+  # ③ y axis as percent, 0–100, with adequate spacing for 100% label
   scale_y_continuous(
     labels = percent_format(scale = 1),
-    expand = expansion(mult = c(0, 0.02)),
+    expand = expansion(mult = c(0, 0.08)),
     limits = c(0, 100)
   ) +
   
   # ④ labels on top of bars
   geom_text(aes(label = sprintf("%d%%", round(pos_rate * 100))),
             position = position_dodge(width = 0.8),
-            vjust    = -0.3,
+            vjust    = -0.4,
             size     = 3.5,
             family   = "sans") +
   
@@ -528,12 +651,17 @@ p_non_grouped <- ggplot(non_tbl,
   plot_theme
 
 ggsave(
-  filename = file.path(OUTPUT_DIR_FIGURES, "Fig_4I_BM_positivity_by_tech_updated_non_frontline5.png"),
+  filename = file.path(OUTPUT_DIR_FIGURES, "Fig_4I_BM_positivity_by_tech_updated_non_frontline6.png"),
   plot     = p_non_grouped,
   width    = 3.5,
   height   = 4,
   dpi      = 500
 )
+
+# ══════════════════════════════════════════════════════════════════════════
+# SOURCE DATA: Non-frontline BM positivity (test cohort version)
+# ══════════════════════════════════════════════════════════════════════════
+# (Already exported above; same data as Fig_BM_positivity_by_tech_later_line5)
 
 
 ### Do a facetted figure with both 
@@ -549,7 +677,9 @@ combo_tbl <- combo_tbl %>%
     landmark_tp = factor(landmark_tp,
                          levels = c("Post-ASCT",
                                     "Maintenance-1yr",
-                                    "All timepoints"))
+                                    "All timepoints")),
+    Technology = factor(Technology,
+                        levels = c("cfWGS", "clonoSEQ", "MFC", "EasyM (opt)", "EasyM (any)"))
   )
 
 # 3) Single facetted plot
@@ -605,11 +735,19 @@ p_pos_by_tech <- ggplot(combo_tbl,
 
 # 4) Save
 ggsave(
-  filename = file.path(OUTPUT_DIR_FIGURES, "Fig_4I_BM_positivity_by_tech_facet5.png"),
+  filename = file.path(OUTPUT_DIR_FIGURES, "Fig_4I_BM_positivity_by_tech_facet6.png"),
   plot     = p_pos_by_tech,
   width    = 6.5,    # wider to accommodate two facets
   height   = 3.85,
   dpi      = 500
+)
+
+# ══════════════════════════════════════════════════════════════════════════
+# SOURCE DATA: Faceted BM positivity (training + test cohorts)
+# ══════════════════════════════════════════════════════════════════════════
+readr::write_csv(
+  combo_tbl %>% mutate(Figure = "Fig_4I_BM_positivity_by_tech_facet6"),
+  file.path(outdir_source_data, "Fig_4I_BM_positivity_by_tech_facet6_source_data.csv")
 )
 
 
@@ -655,16 +793,13 @@ front_tbl <- dat %>%
     !is.na(Blood_zscore_only_sites_call),
     !is.na(Flow_Binary) | !is.na(Adaptive_Binary)
   ) %>%
-  ## Add the screen column and EasyM probability binary version
+  ## Add the screen column
   mutate(
-    Blood_zscore_screen_call  = as.integer(Blood_zscore_only_sites_prob >= 0.380),
-    EasyM_prob_binary = case_when(
-      !is.na(EasyM_prob_optimized) ~ as.integer(EasyM_prob_optimized >= median(EasyM_prob_optimized, na.rm = TRUE)),
-      TRUE ~ NA_integer_
-    )
+    Blood_zscore_screen_call  = as.integer(Blood_zscore_only_sites_prob >= 0.380)
   ) %>%
   pivot_longer(
-    cols      = c(Flow_Binary, Adaptive_Binary, Blood_zscore_only_sites_call, Blood_zscore_screen_call, EasyM_Binary, EasyM_prob_binary),
+    cols      = c(Flow_Binary, Adaptive_Binary, Blood_zscore_only_sites_call, Blood_zscore_screen_call, 
+                  EasyM_clinician_binary, EasyM_optimized_binary),
     names_to  = "Technology",
     values_to = "Result"
   ) %>%
@@ -683,8 +818,8 @@ front_tbl <- dat %>%
       Adaptive_Binary     = "clonoSEQ",
       Blood_zscore_only_sites_call = "cfWGS (confirm)",
       Blood_zscore_screen_call = "cfWGS (screen)",
-      EasyM_Binary        = "EasyM (any-detect)",
-      EasyM_prob_binary   = "EasyM (clearance-optimized)"
+      EasyM_clinician_binary = "EasyM (any)",
+      EasyM_optimized_binary = "EasyM (opt)"
     )
   )
 #      Blood_zscore_only_sites_call = "cfWGS (confirm)",
@@ -702,7 +837,8 @@ front_long <- dat %>%
   ) %>%
   filter(!is.na(Blood_zscore_only_sites_call)) %>%
   pivot_longer(
-    cols      = c(Flow_Binary, Adaptive_Binary, Blood_zscore_only_sites_call, EasyM_Binary),
+    cols      = c(Flow_Binary, Adaptive_Binary, Blood_zscore_only_sites_call, 
+                  EasyM_clinician_binary, EasyM_optimized_binary),
     names_to  = "Technology",
     values_to = "Result"
   ) %>%
@@ -713,7 +849,8 @@ front_long <- dat %>%
       Flow_Binary                     = "MFC",
       Adaptive_Binary                 = "clonoSEQ",
       Blood_zscore_only_sites_call = "cfWGS",
-      EasyM_Binary                    = "EasyM"
+      EasyM_clinician_binary          = "EasyM (any)",
+      EasyM_optimized_binary          = "EasyM (opt)"
     )
   )
 
@@ -769,10 +906,11 @@ non_tbl <- dat %>%
   ) %>%
   ## Add the screen column 
   mutate(
-    Blood_zscore_screen_call  = as.integer(Blood_zscore_only_sites_prob >= 0.380),
+    Blood_zscore_screen_call  = as.integer(Blood_zscore_only_sites_prob >= 0.380)
   ) %>%
   pivot_longer(
-    cols      = c(Flow_Binary, Adaptive_Binary, Blood_zscore_only_sites_call, Blood_zscore_screen_call, EasyM_Binary),
+    cols      = c(Flow_Binary, Adaptive_Binary, Blood_zscore_only_sites_call, Blood_zscore_screen_call, 
+                  EasyM_clinician_binary, EasyM_optimized_binary),
     names_to  = "Technology",
     values_to = "Result"
   ) %>%
@@ -791,7 +929,8 @@ non_tbl <- dat %>%
       Adaptive_Binary     = "clonoSEQ",
       Blood_zscore_only_sites_call = "cfWGS (confirm)",
       Blood_zscore_screen_call = "cfWGS (screen)",
-      EasyM_Binary        = "EasyM"
+      EasyM_clinician_binary = "EasyM (any)",
+      EasyM_optimized_binary = "EasyM (opt)"
     )
   )
 
@@ -1279,31 +1418,31 @@ cat(para2)
 # 1. Export post-ASCT pairwise concordance (frontline BM)
 readr::write_csv(
   post_conc,
-  file.path(outdir, "Frontline_BoneMarrow_PostASCT_Pairwise_Concordance2.csv")
+  file.path(outdir, "Frontline_BoneMarrow_PostASCT_Pairwise_Concordance3.csv")
 )
 
 # 2. Export maintenance-timepoint pairwise concordance (frontline BM)
 readr::write_csv(
   maint_conc,
-  file.path(outdir, "Frontline_BoneMarrow_Maintenance_Pairwise_Concordance2.csv")
+  file.path(outdir, "Frontline_BoneMarrow_Maintenance_Pairwise_Concordance3.csv")
 )
 
 # 3. Export frontline positivity counts by test & landmark (Post_ASCT + Maintenance)
 readr::write_csv(
   pos_tbl,
-  file.path(outdir, "Frontline_BoneMarrow_Positivity_PostASCT_and_Maintenance2.csv")
+  file.path(outdir, "Frontline_BoneMarrow_Positivity_PostASCT_and_Maintenance3.csv")
 )
 
 # 4. Export PPV/NPV at Post-ASCT for BM_zscore_only_detection_rate_call
 readr::write_csv(
   ppv_post,
-  file.path(outdir, "Frontline_BoneMarrow_PostASCT_PPV_NPV2.csv")
+  file.path(outdir, "Frontline_BoneMarrow_PostASCT_PPV_NPV3.csv")
 )
 
 # 5. Export PPV/NPV at Maintenance for BM_zscore_only_detection_rate_call
 readr::write_csv(
   ppv_maint,
-  file.path(outdir, "Frontline_BoneMarrow_Maintenance_PPV_NPV2.csv")
+  file.path(outdir, "Frontline_BoneMarrow_Maintenance_PPV_NPV3.csv")
 )
 
 
@@ -1512,12 +1651,28 @@ p_post   <- plot_cm(cm_post ,  "Confusion Matrix at Post-ASCT (Training Cohort)"
 p_maint  <- plot_cm(cm_maint,  "Confusion Matrix at 1‑Year Maintenance (Training Cohort)")
 p_non    <- plot_cm(cm_non ,   "Confusion Matrix of Test Cohort")
 
-ggsave("Final Tables and Figures/Fig4_confmat_post_ASCT_updated4.png",
+ggsave("Final Tables and Figures/Fig4_confmat_post_ASCT_updated5.png",
        p_post,  width = 5, height = 2.75, dpi = 600)
-ggsave("Final Tables and Figures/Fig4_confmat_maintenance4.png",
+ggsave("Final Tables and Figures/Fig4_confmat_maintenance5.png",
        p_maint, width = 5, height = 2.75, dpi = 600)
-ggsave("Final Tables and Figures/Fig4_confmat_nonfront4.png",
+ggsave("Final Tables and Figures/Fig4_confmat_nonfront5.png",
        p_non,   width = 3, height = 2.75, dpi = 600)   # single facet – narrower
+
+# ══════════════════════════════════════════════════════════════════════════
+# SOURCE DATA: Confusion matrices (BM) - individual panels
+# ══════════════════════════════════════════════════════════════════════════
+readr::write_csv(
+  cm_post %>% mutate(Figure = "Fig4_confmat_post_ASCT_updated5"),
+  file.path(outdir_source_data, "Fig4_confmat_post_ASCT_updated5_source_data.csv")
+)
+readr::write_csv(
+  cm_maint %>% mutate(Figure = "Fig4_confmat_maintenance5"),
+  file.path(outdir_source_data, "Fig4_confmat_maintenance5_source_data.csv")
+)
+readr::write_csv(
+  cm_non %>% mutate(Figure = "Fig4_confmat_nonfront5"),
+  file.path(outdir_source_data, "Fig4_confmat_nonfront5_source_data.csv")
+)
 
 ## As one 
 combined_cm <- (p_post  +
@@ -1555,11 +1710,16 @@ combined_cm <- (p_post  +
 
 
 # save
-ggsave("Final Tables and Figures/Fig4J_confusion_matrices_all_three_3.png",
+ggsave("Final Tables and Figures/Fig4J_confusion_matrices_all_three_4.png",
        combined_cm,
        width  = 4,
        height = 7,      # three panels tall
        dpi    = 600)
+
+# ══════════════════════════════════════════════════════════════════════════
+# SOURCE DATA: Combined confusion matrices (stacked)
+# ══════════════════════════════════════════════════════════════════════════
+# (Source data already exported individually above)
 
 ## Side by side 
 combined_cm <- (p_post +
@@ -1591,11 +1751,16 @@ combined_cm <- (p_post +
 
 
 # save
-ggsave("Final Tables and Figures/Fig4J_confusion_matrices_all_three_side_by_side3.png",
+ggsave("Final Tables and Figures/Fig4J_confusion_matrices_all_three_side_by_side4.png",
        combined_cm,
        width  = 15,
        height = 3,      # three panels tall
        dpi    = 600)
+
+# ══════════════════════════════════════════════════════════════════════════
+# SOURCE DATA: Combined confusion matrices (side-by-side)
+# ══════════════════════════════════════════════════════════════════════════
+# (Source data already exported individually above)
 
 
 
@@ -1753,12 +1918,28 @@ p_post   <- plot_cm(cm_post ,  "Confusion Matrix at Post-ASCT (Training Cohort)"
 p_maint  <- plot_cm(cm_maint,  "Confusion Matrix at 1‑Year Maintenance (Training Cohort)")
 p_non    <- plot_cm(cm_non ,   "Confusion Matrix of Test Cohort")
 
-ggsave("Final Tables and Figures/Fig5_confmat_post_ASCT_blood_updated5.png",
+ggsave("Final Tables and Figures/Fig5_confmat_post_ASCT_blood_updated6.png",
        p_post,  width = 5, height = 2.75, dpi = 600)
-ggsave("Final Tables and Figures/Fig5_confmat_maintenance_blood_updated5.png",
+ggsave("Final Tables and Figures/Fig5_confmat_maintenance_blood_updated6.png",
        p_maint, width = 5, height = 2.75, dpi = 600)
-ggsave("Final Tables and Figures/Fig5_confmat_nonfront_blood_updated5.png",
+ggsave("Final Tables and Figures/Fig5_confmat_nonfront_blood_updated6.png",
        p_non,   width = 3, height = 2.75, dpi = 600)   # single facet – narrower
+
+# ══════════════════════════════════════════════════════════════════════════
+# SOURCE DATA: Blood confusion matrices (cfWGS vs clinical - individual panels)
+# ══════════════════════════════════════════════════════════════════════════
+readr::write_csv(
+  cm_post %>% mutate(Figure = "Fig5_confmat_post_ASCT_blood_updated6"),
+  file.path(outdir_source_data, "Fig5_confmat_post_ASCT_blood_updated6_source_data.csv")
+)
+readr::write_csv(
+  cm_maint %>% mutate(Figure = "Fig5_confmat_maintenance_blood_updated6"),
+  file.path(outdir_source_data, "Fig5_confmat_maintenance_blood_updated6_source_data.csv")
+)
+readr::write_csv(
+  cm_non %>% mutate(Figure = "Fig5_confmat_nonfront_blood_updated6"),
+  file.path(outdir_source_data, "Fig5_confmat_nonfront_blood_updated6_source_data.csv")
+)
 
 ## As one 
 combined_cm <- (p_post  +
@@ -2872,14 +3053,24 @@ p_scatter_simple <- ggplot(plot_df2,
 
 p_scatter_simple
 
-# save
+# Save plot to publication-quality resolution
 ggsave("Final Tables and Figures/Fig4K_cfWGS_vs_MFC_clonoSEQ_clean_BM_muts_updated4.png",
        p_scatter_simple,
        width  = 6.5, height = 5, dpi = 600)
 
 
-#### EasyM vs BM model probability  ────────────────────────────────────────────
-# Build plotting data for EasyM comparison
+# ===========================================================================
+# SECTION 4: CROSS-PLATFORM CONCORDANCE VISUALIZATIONS
+# ===========================================================================
+# Generate scatter plots comparing EasyM residual M-protein to cfWGS probabilities
+
+# ---------------------------------------------------------------------------
+# SUBSECTION 4.1: EasyM vs Bone Marrow cfWGS Model
+# ---------------------------------------------------------------------------
+# Visualize relationship between EasyM M-protein % and cfWGS BM model probability
+# Points colored by relapse status, faceted by treatment timepoint
+
+# Prepare data for EasyM vs BM cfWGS comparison
 plot_df_easym_bm <- dat %>%
   filter(
     Cohort == "Frontline",
@@ -2888,12 +3079,12 @@ plot_df_easym_bm <- dat %>%
     !is.na(EasyM_value)
   ) %>%
   mutate(
-    # Set minimum detection floor for plotting
+    # Set minimum detection floor for log-scale visualization
     EasyM_plot = if_else(EasyM_value <= 1e-6, 1e-6, EasyM_value),
     BM_prob_plot = if_else(BM_zscore_only_detection_rate_prob <= 1e-5, 
                            1e-5, BM_zscore_only_detection_rate_prob),
     
-    # Relapse category
+    # Stratify by clinical outcome: relapse within 1 year vs not
     relapse_cat = if_else(
       Num_days_to_closest_relapse <= 365,
       "Relapsed ≤365 d",
@@ -2901,7 +3092,7 @@ plot_df_easym_bm <- dat %>%
       missing = "No relapse ≤365 d"
     ),
     
-    # Factor landmark timepoint
+    # Standardize landmark timepoint labels
     landmark_timepoint = factor(
       str_replace_all(landmark_tp, hyphen_rx, "-") |> trimws(),
       levels = c("Post-ASCT", "Maintenance-1yr")
@@ -3327,7 +3518,94 @@ p_easym_blood <- ggplot(plot_df_easym_blood,
 
 p_easym_blood
 
-# Save
-ggsave("Final Tables and Figures/FigS_EasyM_vs_Blood_cfWGS_prob.png",
+# Save figure to publication-quality resolution
+ggsave("Final Tables and Figures/FigS_EasyM_vs_Blood_cfWGS_prob_updated6.png",
        p_easym_blood,
        width = 5, height = 6, dpi = 600)
+
+# ══════════════════════════════════════════════════════════════════════════
+# SOURCE DATA: EasyM vs blood-derived cfWGS scatter plot
+# ══════════════════════════════════════════════════════════════════════════
+readr::write_csv(
+  plot_df_easym_blood %>% 
+    select(Patient, Timepoint, EasyM_plot, Blood_prob_plot, relapse_cat) %>%
+    mutate(Figure = "FigS_EasyM_vs_Blood_cfWGS_prob_updated6"),
+  file.path(outdir_source_data, "FigS_EasyM_vs_Blood_cfWGS_prob_updated6_source_data.csv")
+)
+
+
+# ===========================================================================
+# COMPLETION SUMMARY AND OUTPUT DOCUMENTATION
+# ===========================================================================
+# Script execution complete. Below is a summary of generated outputs.
+#
+# ─────────────────────────────────────────────────────────────────────────
+# VERSIONING AND SOURCE DATA EXPORTS
+# ─────────────────────────────────────────────────────────────────────────
+# All output files have been versioned to prevent overwriting previous runs:
+#
+# POSITIVITY TABLES:
+#   • Positivity_by_Landmark_TimePoint_BoneMarrow_Frontline_updated5.csv
+#   • Positivity_All_TimePoints_BoneMarrow_NonFrontline_updated5.csv
+#
+# CONCORDANCE & PPV/NPV TABLES:
+#   • Frontline_BoneMarrow_PostASCT_Pairwise_Concordance3.csv
+#   • Frontline_BoneMarrow_Maintenance_Pairwise_Concordance3.csv
+#   • Frontline_BoneMarrow_Positivity_PostASCT_and_Maintenance3.csv
+#   • Frontline_BoneMarrow_PostASCT_PPV_NPV3.csv
+#   • Frontline_BoneMarrow_Maintenance_PPV_NPV3.csv
+#
+# FIGURES & SOURCE DATA:
+#   All figures now have versioned names and corresponding source data exports
+#   to "Output_tables_2025/source_data/" directory:
+#
+#   BM Positivity Figures:
+#     • Fig_BM_positivity_by_tech_updated5.png + source_data.csv
+#     • Fig_4I_BM_positivity_by_tech_updated5.png (same data as updated5)
+#     • Fig_BM_positivity_by_tech_later_line5.png + source_data.csv
+#     • Fig_4I_BM_positivity_by_tech_updated_non_frontline6.png
+#     • Fig_4I_BM_positivity_by_tech_facet6.png + source_data.csv
+#
+#   BM Confusion Matrices:
+#     • Fig4_confmat_post_ASCT_updated5.png + source_data.csv
+#     • Fig4_confmat_maintenance5.png + source_data.csv
+#     • Fig4_confmat_nonfront5.png + source_data.csv
+#     • Fig4J_confusion_matrices_all_three_4.png (combined vertical)
+#     • Fig4J_confusion_matrices_all_three_side_by_side4.png (combined horizontal)
+#
+#   Blood (cfWGS) Confusion Matrices:
+#     • Fig5_confmat_post_ASCT_blood_updated6.png + source_data.csv
+#     • Fig5_confmat_maintenance_blood_updated6.png + source_data.csv
+#     • Fig5_confmat_nonfront_blood_updated6.png + source_data.csv
+#
+#   EasyM vs Blood Scatter:
+#     • FigS_EasyM_vs_Blood_cfWGS_prob_updated6.png + source_data.csv
+#
+# Source data files include all rows/observations shown in each figure,
+# with relevant grouping variables and identifiers for reproducibility.
+# ─────────────────────────────────────────────────────────────────────────
+
+cat("\n", strrep("=", 80), "\n")
+cat("SCRIPT 3_2 COMPLETED SUCCESSFULLY\n")
+cat(strrep("=", 80), "\n\n")
+
+cat("VISUALIZATION OUTPUTS\n")
+cat("────────────────────────────────────────────────────────────────────────────\n")
+cat("All figures saved to: Final Tables and Figures/\n")
+cat("Resolution: 300-600 dpi (publication-quality)\n\n")
+
+cat("KEY FIGURES GENERATED:\n")
+cat("  1. Positivity rate comparisons (cfWGS, EasyM clinician, EasyM optimized)\n")
+cat("     by treatment phase (Post-ASCT, Maintenance-1yr)\n")
+cat("  2. Scatter plots: EasyM M-protein (%) vs cfWGS BM probability\n")
+cat("     - Colored by relapse status (≤365d vs >365d from that timepoint)\n")
+cat("     - Faceted by treatment timepoint\n")
+cat("     - Includes Spearman correlation coefficients\n")
+cat("  3. Scatter plots: EasyM M-protein (%) vs cfWGS blood probability\n")
+cat("     - Same stratification and coloring scheme\n")
+cat("  4. Contingency tables: cfWGS binary calls vs other modalities\n")
+cat("     - Agreement metrics (percent, kappa)\n\n")
+
+cat("DATA INTEGRATION NOTES\n")
+cat("────────────────────────────────────────────────────────────────────────────\n")
+cat(sprintf("✓ cfWGS samples: n = %d rows\n", nrow(dat)))\ncat(sprintf("✓ EasyM samples merged: n = %d (%.1f%% matched)\n",\n                  sum(!is.na(dat$EasyM_value)),\n                  100 * sum(!is.na(dat$EasyM_value)) / nrow(dat)))\ncat(sprintf("  - Using optimized thresholds: %d\n",\n              sum(dat$threshold_method == \"optimized\", na.rm = TRUE)))\ncat(sprintf("  - Using clinician calls: %d\n",\n              sum(dat$threshold_method == \"clinician\", na.rm = TRUE)))\ncat(\"\\n\")\n\ncat(\"METHODOLOGY REMINDER\n\")\ncat(\"────────────────────────────────────────────────────────────────────────────\\n\")\ncat(\"EasyM calls use two approaches per timepoint:\\n\")\ncat(\"  • CLINICIAN: Original MRD+/- classifications from EasyM assay\\n\")\ncat(\"  • OPTIMIZED: Data-driven threshold (log-rank chi-square optimization)\\n\")\ncat(\"\\n\")\ncat(\"Primary timepoints with optimized thresholds:\\n\")\nif (!is.null(EasyM_thresholds) && nrow(EasyM_thresholds) > 0) {\n  for (i in 1:nrow(EasyM_thresholds)) {\n    row <- EasyM_thresholds[i, ]\n    tp <- row$Timepoint\n    cut <- row$opt_cut_raw\n    cat(sprintf(\"  • TP%s: Threshold = %.4f%%\\n\", tp, cut))\n  }\n} else {\n  cat(\"  (Threshold table not available)\\n\")\n}\ncat(\"\\n\")\n\ncat(\"NEXT STEPS\n\")\ncat(\"────────────────────────────────────────────────────────────────────────────\\n\")\ncat(\"→ Review scatter plots for concordance patterns between EasyM and cfWGS\\n\")\ncat(\"→ Check correlation strength and clinical outcome associations by timepoint\\n\")\ncat(\"→ Assess agreement metrics: clinician vs optimized threshold approaches\\n\")\ncat(\"→ Use positivity rate comparisons to contextualize detection sensitivities\\n\")\ncat(\"→ Prepare figures for manuscript and supplementary materials\\n\\n\")\n

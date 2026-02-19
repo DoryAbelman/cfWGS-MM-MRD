@@ -325,7 +325,7 @@ print(results)
 #### See if different combination of features would be better
 # 1.  Define candidate combos ------------------------------------------------
 combos <- list(
-  # — BM combos with zscore —
+  # - BM combos with zscore -
   BM_zscore_only         = c("zscore_BM"),
   BM_base             = c("zscore_BM",    "detect_rate_BM"),
   BM_plus_FS          = c("zscore_BM",    "detect_rate_BM", "FS", "Proportion.Short"),
@@ -333,7 +333,7 @@ combos <- list(
   BM_plus_TF          = c("zscore_BM",    "detect_rate_BM", "WGS_Tumor_Fraction_Blood_plasma_cfDNA"),
   BM_all_extras       = c("zscore_BM",    "detect_rate_BM", "FS",
                           "Mean.Coverage","WGS_Tumor_Fraction_Blood_plasma_cfDNA", "Proportion.Short"),
-  # — BM combos without zscore —
+  # - BM combos without zscore -
   BM_rate_base        = c("detect_rate_BM"),
   BM_rate_plus_FS     = c("detect_rate_BM", "FS", "Proportion.Short"),
   BM_rate_plus_MeanCov= c("detect_rate_BM", "Mean.Coverage"),
@@ -341,7 +341,7 @@ combos <- list(
   BM_rate_all_extras  = c("detect_rate_BM", "FS",
                           "Mean.Coverage","WGS_Tumor_Fraction_Blood_plasma_cfDNA", "Proportion.Short"),
 
-  # — Blood combos with zscore —
+  # - Blood combos with zscore -
   Blood_zscore_only      = c("zscore_blood"),
   Blood_base          = c("zscore_blood", "detect_rate_blood"),
   Blood_plus_FS       = c("zscore_blood", "detect_rate_blood", "FS", "Proportion.Short"),
@@ -350,7 +350,7 @@ combos <- list(
                           "WGS_Tumor_Fraction_Blood_plasma_cfDNA"),
   Blood_all_extras    = c("zscore_blood", "detect_rate_blood", "FS",
                           "Mean.Coverage","WGS_Tumor_Fraction_Blood_plasma_cfDNA", "Proportion.Short"),
-  # — Blood combos without zscore —
+  # - Blood combos without zscore -
   Blood_rate_base     = c("detect_rate_blood"),
   Blood_rate_plus_FS  = c("detect_rate_blood", "FS"),
   Blood_rate_plus_MeanCov = c("detect_rate_blood", "Mean.Coverage"),
@@ -372,7 +372,7 @@ combos <- list(
 
 # 2.  Utility: evaluate one combo ------------------------------------------
 eval_combo <- function(preds, label) {
-  # complete‑case slice
+  # complete-case slice
   df_cc <- train_df %>% drop_na(MRD_truth, all_of(preds))
   
   # skip if too small or only one class
@@ -1291,8 +1291,8 @@ run_nested_with_validation <- function(train_data,
     best_tunes         = best_tunes,
     validation_metrics = validation_metrics,
     thresholds         = thresholds,
-    outer_predictions  = outer_predictions,   ### NEW  –– outer predictions are here
-    fold_indices       = outer_folds          ### NEW  –– return the fold indices for reuse
+    outer_predictions  = outer_predictions,   ### NEW -- outer predictions are here
+    fold_indices       = outer_folds          ### NEW -- return the fold indices for reuse
   )
 }
 
@@ -1747,7 +1747,7 @@ pooled_auc_tbl <- outer_preds %>%
     .groups     = "drop"
   ) %>%
   mutate(
-    auc_pooled_ci = sprintf("%.2f (%.2f–%.2f)", auc_pooled, ci_low, ci_high)
+    auc_pooled_ci = sprintf("%.2f (%.2f-%.2f)", auc_pooled, ci_low, ci_high)
   ) %>%
   select(-roc_obj)   # drop the heavy objects
 
@@ -2936,7 +2936,7 @@ write_xlsx(
   path = "Final Tables and Figures/Supplementary_Table_4_All_Model_Metrics_Refit6_Feb2026.xlsx"
 )
 
-# — or, if prefer CSV:
+# - or, if prefer CSV:
 write.csv(all_perf_metrics, 
           "Final Tables and Figures/Supplementary_Table_4_All_Model_Metrics_Refit6_Feb2026.csv", 
           row.names = FALSE)
@@ -3162,7 +3162,7 @@ write_xlsx(
   path = "Final Tables and Figures/Supplementary_Table_5_All_Model_Metrics_Refit_Test_Cohort6_Feb2026.xlsx"
 )
 
-# — or, if prefer CSV:
+# - or, if prefer CSV:
 write.csv(all_perf_metrics, 
           "Final Tables and Figures/Supplementary_Table_5_All_Model_Metrics_Refit_Test_Cohort6_Feb2026.csv", 
           row.names = FALSE)

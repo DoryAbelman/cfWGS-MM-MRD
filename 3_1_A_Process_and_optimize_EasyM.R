@@ -1,4 +1,28 @@
 ## ============================================================
+## SCRIPT PURPOSE: Process and Optimize EasyM Proteomic MRD Data
+## ============================================================
+# This script performs comprehensive analysis of EasyM (proteomic MRD assay) data
+# in comparison with cfWGS-based MRD detection for multiple myeloma patients.
+#
+# KEY OUTPUTS:
+# 1. Optimized clearance thresholds for EasyM at each timepoint
+# 2. Agreement tables comparing EasyM vs cfWGS calls
+# 3. Survival analyses (PFS) stratified by MRD status
+# 4. Combined risk stratification using both modalities
+# 5. Patient-level tables showing MRD status at each timepoint
+#
+# WORKFLOW:
+# Section 0: Setup and configuration
+# Section 1: Helper functions for data processing
+# Section 2: Load and process EasyM quantitative and binary data
+# Section 3: Generate EasyM-only descriptive plots
+# Section 4: Merge EasyM with cfWGS data
+# Section 5: Survival analysis and Kaplan-Meier curves
+# Section 6: Landmark analyses with threshold optimization
+# Section 7: Export comprehensive results tables
+## ============================================================
+
+## ============================================================
 ## 0) Setup
 ## ============================================================
 suppressPackageStartupMessages({
@@ -9,13 +33,26 @@ suppressPackageStartupMessages({
 })
 
 ## ---- Project paths ----
+# Input: Raw EasyM data from clinical collaborators
+# Output: Processed tables and figures for manuscript
 proj_dir <- "../Aimee_MRD_clinical_manuscript/Data from Aimee MRD/"   # update if needed
-out_dir  <- "Outputs_ASCO_abstract/"
-outdir  <- "Outputs_ASCO_abstract/"
 
+# Main output directory for all results
+# Using descriptive name focusing on analysis type (cfWGS/EasyM MRD) rather than specific meetings
+out_dir  <- "Output_EasyM_MRD_analysis_2025/"
+
+# Create directory if it doesn't exist
 dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
+dir.create(file.path(out_dir, "tables"), showWarnings = FALSE, recursive = TRUE)
+dir.create(file.path(out_dir, "landmark_analyses"), showWarnings = FALSE, recursive = TRUE)
+
+# Print confirmation
+cat(sprintf("\n✓ Output directory created: %s\n\n", normalizePath(out_dir)))
 
 ## ---- Visit ordering (keep consistent everywhere) ----
+# Standardized visit labels used across all scripts
+# V1 = diagnosis, V3 = post-induction, V5 = post-transplant, 
+# V7 = 1-year maintenance, R = relapse
 visit_levels <- c("V1","V3","V5","V7","V8","V9","V10","V11","V12","V13","R")
 
 ## ---- Landmark settings (edit to match abstract) ----
@@ -35,6 +72,8 @@ proteomics_predefined_cutoff <- NA_real_
 ## ============================================================
 ## 1) Helpers (robust IO + consistent shaping)
 ## ============================================================
+# These functions ensure consistent data formatting and error checking
+# throughout the analysis pipeline
 stop_if_missing <- function(df, cols, df_name = "data") {
   missing <- setdiff(cols, colnames(df))
   if (length(missing) > 0) {
@@ -121,6 +160,10 @@ theme_mrd <- theme_bw(base_size = 16) +
 ## ============================================================
 ## 2) EasyM ONLY: load quantitative + binary EasyM data
 ## ============================================================
+# EasyM provides two types of data:
+# 1. Quantitative: Residual M-protein as % of total protein
+# 2. Binary: MRD positive (100) vs negative (0) calls
+# Both are measured longitudinally across treatment visits
 
 ## Update filenames here if EasyM tables are named differently
 EasyM_quant_path <- file.path(proj_dir, "RAPID NOVOR VALUES with values with relapse.csv")
@@ -151,6 +194,9 @@ write_csv(EasyM_joined, file.path(out_dir, "EasyM_long_quant_and_binary.csv"))
 ## ============================================================
 ## 3) EasyM ONLY: plots analogous to your draft, but EasyM only
 ## ============================================================
+# Generate descriptive plots showing:
+# - Longitudinal trajectories of M-protein levels per patient
+# - Proportion of MRD+ patients at each visit
 
 ## 3A) Longitudinal quantitative trajectories
 p_EasyM_traj <- ggplot(EasyM_values_long, aes(x = visit, y = value, group = patient)) +
@@ -205,6 +251,12 @@ ggsave(
 )
 
 
+## ============================================================
+## 4) Merge EasyM with cfWGS data
+## ============================================================
+# Load cfWGS MRD detection data (from prior pipeline steps)
+# and merge with EasyM to enable head-to-head comparisons
+
 ### Now load in the cfWGS data 
 dat_rds       <- "Output_tables_2025/all_patients_with_BM_and_blood_calls_updated5.rds"
 
@@ -215,6 +267,12 @@ dat <- readRDS(dat_rds) %>%
     sample_date    = as.Date(Date),
     timepoint_info = tolower(timepoint_info)
   )
+
+## ============================================================
+## Harmonize visit labels between datasets
+## ============================================================
+# EasyM uses "V1", "V3" etc. while cfWGS uses "01", "03" etc.
+# Convert EasyM format to match cfWGS numbering
 
 ## Now get together in one table 
 library(stringr)
@@ -255,6 +313,12 @@ dat_joined <- dat %>%
   )
 
 
+## ============================================================
+## Create analysis dataset: paired samples only
+## ============================================================
+# Restrict to samples where BOTH EasyM and cfWGS measurements exist
+# Exclude patients with only baseline/diagnosis samples (need follow-up)
+
 ## Keep only samples with both assays, then drop patients who only have diagnosis (Timepoint == "01")
 dat_joined <- dat_joined %>%
   filter(
@@ -271,6 +335,14 @@ dat_joined <- dat_joined %>%
     any(Timepoint != "01", na.rm = TRUE)
   ) %>%
   ungroup()
+
+## ============================================================
+## 5) Cohort description: sample and patient counts
+## ============================================================
+# Summarize the longitudinal cohort for reporting in manuscript
+# - Total patients with paired data
+# - Sample counts at each timepoint
+# - Number of clinical sites
 
 ## Discuss patients with actual longitudinal samples 
 ## Now get the patient, sample and timepoint counts
@@ -335,6 +407,12 @@ n_sites
 
 
 
+## ============================================================
+## 6) Load survival/relapse data and prepare for PFS analysis
+## ============================================================
+# Merge clinical outcomes data (PFS events and censor dates)
+# with the paired MRD measurements to enable time-to-event analysis
+
 ### Now add in the info regarding relapse 
 ## ── 0.  SETUP ────────────────────────────────────────────────────────────────
 library(tidyverse)
@@ -371,6 +449,12 @@ dat <- dat_joined %>%
     timepoint_info = tolower(timepoint_info)
   )
 
+
+## ============================================================
+## 7) Build patient-level survival data frame
+## ============================================================
+# For each MRD measurement, compute time from that sample to PFS event
+# This enables landmark survival analysis from any visit
 
 ## ── 2.  BUILD PFS TABLE (patient-level) ──────────────────────────────────────
 survival_df <- dat %>%
@@ -417,6 +501,18 @@ survival_df <- survival_df %>%
       TRUE ~ NA_integer_
     )
   )
+
+## ============================================================
+## 8) Generate Kaplan-Meier survival curves stratified by MRD status
+## ============================================================
+# For each timepoint and MRD technology, create KM plots showing
+# PFS stratified by MRD positive vs negative status
+#
+# Technologies compared:
+# - MFC (Flow cytometry)
+# - clonoSEQ (NGS-based Ig sequencing)
+# - EasyM (Proteomic M-protein)
+# - cfWGS BM-informed (This study's primary method)
 
 #### get function ready 
 # 2) Friendly tech names
@@ -499,7 +595,7 @@ median_followup_months <- median(baseline_df$time_to_event_days, na.rm = TRUE) /
 n_progressed <- sum(baseline_df$progressed == 1, na.rm = TRUE)
 n_total <- nrow(baseline_df)
 
-## ASCO sentence
+## Summary statistics for manuscript
 cat(
   sprintf(
     "At a median follow-up of %.1f months, %d/%d patients progressed.",
@@ -616,7 +712,19 @@ for(tp in tps) {
 
 
 
-#### Now get other metrics 
+## ============================================================
+## 9) Landmark analysis: detailed statistical comparisons
+## ============================================================
+# At key timepoints (e.g., post-transplant, 1-year maintenance),
+# perform comprehensive head-to-head comparison of EasyM vs cfWGS:
+#
+# Analyses performed:
+# 1. Binary agreement (kappa, percent concordance)
+# 2. Continuous correlation (Spearman rho)
+# 3. Cox proportional hazards models for PFS prediction
+# 4. C-index comparison (discrimination ability)
+# 5. Integrated models (cfWGS + EasyM together)
+# 6. Optimal threshold determination via log-rank maximization
 
 ## ============================================================
 ## 1) Helpers
@@ -920,6 +1028,27 @@ km_surv_at <- function(time, event, group, t_months) {
   out
 }
 
+## ============================================================
+## KEY FUNCTION: find_opt_cut_logrank()
+## ============================================================
+# This function finds the optimal EasyM cutoff threshold at a given landmark
+# by testing all possible cutpoints and selecting the one that maximizes
+# separation between "cleared" vs "residual" groups (via log-rank test).
+#
+# INPUTS:
+#   - time: survival time in months
+#   - event: 1 = progressed, 0 = censored
+#   - marker: continuous EasyM values (log10-transformed)
+#   - min_group_n: minimum patients required in each group
+#
+# OUTPUT:
+#   A list containing:
+#   - cut: optimal cutoff value (log10 scale)
+#   - p: log-rank p-value at this cutoff
+#   - chisq: chi-square statistic
+#   - n_low: patients below cutoff ("cleared")
+#   - n_high: patients above cutoff ("residual")
+#
 # Find an "optimal" cutoff for a continuous marker at a landmark by scanning cutpoints.
 # Criterion: maximize log-rank chi-square (equivalently minimize log-rank p).
 # To avoid absurd splits, enforce a minimum group size per side.
@@ -1024,6 +1153,27 @@ cat(sprintf(
   n_progressed, n_total
 ))
 
+## ============================================================
+## CRITICAL FUNCTION: build_landmark_results()
+## ============================================================
+# This is the main analysis engine that performs comprehensive landmark
+# analysis at a specific timepoint, comparing EasyM vs cfWGS for PFS prediction.
+#
+# INPUT PARAMETERS:
+#   tp: Timepoint code (e.g., "05" = post-transplant, "07" = 1-yr maintenance)
+#   horizon_months: Time horizon for survival estimates (default 24 months)
+#   easyM_cut: Method for dichotomizing EasyM ("median", "top_tertile", or "opt")
+#   easyM_fixed_raw: Pre-specified threshold (if not using optimization)
+#   opt_cut_min_group_n: Minimum patients per group for optimization
+#
+# KEY OUTPUTS (stored in returned list):
+#   1. landmark_df: Patient-level data with MRD calls and survival
+#   2. paragraph: Auto-generated results text for manuscript
+#   3. outputs$agreement: Agreement tables (binary concordance, kappa)
+#   4. outputs$joint: Joint risk groups (cfWGS+/- x EasyM high/low)
+#   5. outputs$opt_cut: Optimized threshold details
+#   6. outputs$models: Cox model results and c-indices
+#
 ## ----------------------------
 ## 4) Landmark analysis + abstract text builder
 ## ----------------------------
@@ -1500,14 +1650,38 @@ build_landmark_results <- function(tp = "07",
   return(list(
     landmark_df = lm_df,
     paragraph   = paragraph,
-    summary     = summary,   # keep what you already built
+    summary     = summary,   # keep what already built
     outputs     = outputs
   ))
   
   
 }
 
-export_landmark_outputs <- function(res, out_dir = "asco_exports", prefix = NULL) {
+## ============================================================
+## EXPORT FUNCTION: export_landmark_outputs()
+## ============================================================
+# Saves all results from a landmark analysis to CSV files for review
+#
+# **KEY TABLE FOR YOUR QUESTION:**
+# The file named "{prefix}_landmark_df.csv" contains:
+#   - Patient ID
+#   - Timepoint
+#   - EasyM_opt_binary: Whether patient is positive (1) or negative (0) 
+#                       using the OPTIMIZED cutoff for that timepoint
+#   - EasyM_value: Raw M-protein percentage
+#   - BM_call: cfWGS binary MRD call
+#   - time_months: Time to progression from this landmark
+#   - event: Whether patient progressed (1) or was censored (0)
+#   - joint_group: Combined risk stratification (e.g., "cfWGS- / EasyM_low")
+#
+# Other exported tables:
+#   - *_agreement_opt_table.csv: 2x2 table of cfWGS vs EasyM agreement
+#   - *_discordant_cases.csv: List of patients where assays disagree
+#   - *_joint_summary.csv: Relapse rates by combined risk group
+#   - *_opt_cut_summary.csv: The calculated optimal threshold value
+#   - *_metrics.csv: C-indices, correlation, p-values
+
+export_landmark_outputs <- function(res, out_dir = "Output_EasyM_MRD_analysis_2025", prefix = NULL) {
   stopifnot(is.list(res), !is.null(res$outputs), !is.null(res$outputs$landmark_df))
   
   if (is.null(prefix)) {
@@ -1515,7 +1689,9 @@ export_landmark_outputs <- function(res, out_dir = "asco_exports", prefix = NULL
     prefix <- paste0("landmark_", tp)
   }
   
-  dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
+  # Create subdirectory for this timepoint's results
+  tp_subdir <- file.path(out_dir, "landmark_analyses")
+  dir.create(tp_subdir, showWarnings = FALSE, recursive = TRUE)
   
   # helper: safe write_csv for NULL objects
   safe_write_csv <- function(x, path) {
@@ -1612,32 +1788,142 @@ export_landmark_outputs <- function(res, out_dir = "asco_exports", prefix = NULL
 `%||%` <- function(a, b) if (!is.null(a)) a else b
 
 
-## ----------------------------
-## 5) Produce ASCO-ready text for a chosen landmark
-## ----------------------------
-#res_07_backup <- res_07
+## ============================================================
+## EXECUTE ANALYSES: Run landmark analyses for key timepoints
+## ============================================================
+## 5) Calculate Thresholds: TP05 & TP07 (ORIGINAL + PRIMARY) 
+##    + Optimized for ALL OTHER Timepoints
+## ============================================================
+# IMPORTANT: To preserve consistency with previous analyses,
+# we use the SAME METHODS that were originally used for TP05 and TP07:
+#   - TP05: Uses MEDIAN threshold (as originally analyzed)
+#   - TP07: Uses OPTIMIZED threshold (as originally analyzed)
+# Then calculate optimized thresholds for all OTHER timepoints
+
+cat("\n============================================================\n")
+cat("Threshold Calculation Strategy:\n")
+cat("  TP05: MEDIAN (original method for consistency)\n")
+cat("  TP07: OPTIMIZED (original method for consistency)\n")
+cat("  Others: OPTIMIZED (exploratory extension)\n")
+cat("============================================================\n\n")
+
+# Initialize storage
+all_landmark_results <- list()
+easyM_thresholds_calc <- numeric(0)
+
+# ============================================================
+# STEP 1: Primary timepoints (TP05 & TP07) - ORIGINAL METHODS
+# ============================================================
+
+cat("\n>>> PRIMARY ANALYSES (using original methods)...\n\n")
+
+# TP07: 1-year maintenance (OPTIMIZED - original method)
+cat("  TP07 (1-year maintenance): Optimized threshold\n")
 res_07 <- build_landmark_results(tp = "07", horizon_months = 24, easyM_cut = "opt", opt_cut_min_group_n = 3)
-cat(res_07$paragraph)
-thr07_raw <- res_07$outputs$opt_cut$cut_raw
-thr07_raw
+all_landmark_results[["07"]] <- res_07
+if (!is.null(res_07$outputs$opt_cut$cut_raw)) {
+  easyM_thresholds_calc["07"] <- res_07$outputs$opt_cut$cut_raw
+  cat(sprintf("    ✓ TP07 threshold: %.4f %% (optimized)\n", easyM_thresholds_calc["07"]))
+} else {
+  cat("    ⚠ Could not calculate TP07 threshold\n")
+}
+export_landmark_outputs(res_07, out_dir = out_dir, prefix = "TP07_1yrMaint")
 
-export_landmark_outputs(res_07, out_dir = "asco_exports", prefix = "TP07_1yrMaint")
-
-
-## Now for timepoint 5 
+# TP05: Post-transplant (MEDIAN - original method)
+cat("  TP05 (post-transplant): Median threshold\n")
 res_05 <- build_landmark_results(tp = "05", horizon_months = 24, easyM_cut = "median", opt_cut_min_group_n = 3)
-cat(res_05$paragraph)
-thr05_raw <- res_05$outputs$opt_cut$cut_raw
-thr05_raw
+all_landmark_results[["05"]] <- res_05
+if (!is.null(res_05$outputs$opt_cut$cut_raw)) {
+  easyM_thresholds_calc["05"] <- res_05$outputs$opt_cut$cut_raw
+  cat(sprintf("    ✓ TP05 threshold: %.4f %% (median-based)\n", easyM_thresholds_calc["05"]))
+} else {
+  cat("    ⚠ Could not calculate TP05 threshold\n")
+}
+export_landmark_outputs(res_05, out_dir = out_dir, prefix = "TP05_Post_transplant")
 
-export_landmark_outputs(res_05, out_dir = "asco_exports", prefix = "TP05_Post_transplant")
+cat("\n✓ Primary timepoints complete (results consistent with previous analyses)\n")
 
+# ============================================================
+# STEP 2: All OTHER timepoints - OPTIMIZED (NEW)
+# ============================================================
 
-## Save thresholds 
-easyM_thresholds_calc <- c(
-  "05" = thr05_raw,
-  "07" = thr07_raw
-)
+cat("\n>>> EXPLORATORY ANALYSES (other timepoints with optimization)...\n\n")
+
+# Get all other timepoints
+all_timepoints <- df %>%
+  filter(Timepoint != "01") %>%
+  pull(Timepoint) %>%
+  unique() %>%
+  sort()
+
+other_timepoints <- setdiff(all_timepoints, c("05", "07"))
+
+if (length(other_timepoints) > 0) {
+  cat(sprintf("Found %d additional timepoints to analyze: %s\n\n", 
+              length(other_timepoints), paste(other_timepoints, collapse = ", ")))
+  
+  for (tp in other_timepoints) {
+    tryCatch({
+      cat(sprintf("  TP%s: Optimized threshold\n", tp))
+      
+      res <- build_landmark_results(
+        tp = tp,
+        horizon_months = 24,
+        easyM_cut = "opt",
+        opt_cut_min_group_n = 3
+      )
+      
+      all_landmark_results[[tp]] <- res
+      
+      if (!is.null(res$outputs$opt_cut$opt) && !is.null(res$outputs$opt_cut$cut_raw)) {
+        threshold_raw <- res$outputs$opt_cut$cut_raw
+        easyM_thresholds_calc[tp] <- threshold_raw
+        
+        cat(sprintf("    ✓ TP%s threshold: %.4f %% (optimized)\n", tp, threshold_raw))
+      } else {
+        cat(sprintf("    ⚠ Could not calculate TP%s threshold (insufficient data)\n", tp))
+      }
+      
+      # Export detailed results
+      prefix <- sprintf("TP%s_landmark", tp)
+      export_landmark_outputs(res, out_dir = out_dir, prefix = prefix)
+      
+    }, error = function(e) {
+      cat(sprintf("    ✗ Error processing TP%s: %s\n", tp, e$message))
+    })
+  }
+  
+  cat("\n✓ Exploratory timepoints complete\n")
+} else {
+  cat("No additional timepoints beyond TP05 and TP07.\n\n")
+}
+
+# ============================================================
+# SUMMARY
+# ============================================================
+
+cat("\n============================================================\n")
+cat("FINAL THRESHOLD SUMMARY\n")
+cat("============================================================\n")
+cat(sprintf("Primary Analyses (Original Methods - MAINTAINED):\n"))
+cat(sprintf("  TP07: %.4f %% (optimized)\n", easyM_thresholds_calc["07"]))
+cat(sprintf("  TP05: %.4f %% (median-based)\n", easyM_thresholds_calc["05"]))
+if (length(other_timepoints) > 0) {
+  cat(sprintf("\nExploratory Analyses (Optimized - NEW):\n"))
+  for (tp in other_timepoints) {
+    if (!is.na(easyM_thresholds_calc[tp])) {
+      cat(sprintf("  TP%s: %.4f %% (optimized)\n", tp, easyM_thresholds_calc[tp]))
+    }
+  }
+}
+cat("============================================================\n")
+cat("\nAll thresholds saved to: EasyM_threshold_values_by_timepoint.csv\n\n")
+
+## ============================================================
+## POOLED CORRELATION ANALYSIS: All post-treatment timepoints
+## ============================================================
+# Examine correlation between cfWGS and EasyM across all follow-up visits
+# (excluding diagnosis, which has different biology)
 
 ## Get overall correlation 
 
@@ -1758,6 +2044,11 @@ writeLines(sentence)
 
 
 
+## ============================================================
+## BASELINE CLINICAL CHARACTERISTICS
+## ============================================================
+# Describe the cohort's clinical features at diagnosis
+
 ### Lastly get clinical info 
 ### Now get info 
 # 1. Define the 8 patients of interest
@@ -1823,53 +2114,186 @@ sentence <- with(counts, glue(
 cat(sentence, "\n")
 
 ## ============================================================
-## EXPORT FOR 3_2 SCRIPT: Processed EasyM data for plots
+## FINAL EXPORT: Comprehensive EasyM table for script 3_2
 ## ============================================================
-# Create a clean version of EasyM data with probabilities for use in 3_2
-# This includes both binary (any-detect) and optimized probability scores
+# Create the MAIN table you'll use in 3_2 with:
+# 1. ALL EasyM measurements (not just landmark pairs)
+# 2. Raw EasyM values
+# 3. Clinician's binary calls (original)
+# 4. Optimized threshold-based calls (per timepoint)
+# 5. Log10 and z-score transformed values
 
-EasyM_for_plots <- dat_joined %>%
-  select(Patient, Timepoint, timepoint_info, Sample_Code, Date,
-         EasyM_value, EasyM_mrd,
-         BM_zscore_only_detection_rate_prob, Blood_zscore_only_sites_prob) %>%
+EasyM_comprehensive <- dat %>%
   mutate(
-    # Binary positivity (any-detect)
-    EasyM_Binary = case_when(
+    Patient     = as.character(Patient),
+    Timepoint   = as.character(Timepoint),
+    EasyM_value = as.numeric(EasyM_value),
+    EasyM_log10 = log10(pmax(EasyM_value, 1e-6))
+  ) %>%
+  select(
+    Patient, Timepoint, timepoint_info, Sample_Code, Date,
+    EasyM_value, EasyM_mrd,
+    BM_zscore_only_detection_rate_prob,
+    BM_zscore_only_detection_rate_call
+  ) %>%
+  mutate(
+    # ============================================================
+    # ORIGINAL CLINICIAN CALLS (for reference/comparison)
+    # ============================================================
+    EasyM_clinician_binary = case_when(
       EasyM_mrd == "MRD+" ~ 1L,
       EasyM_mrd == "MRD-" ~ 0L,
       TRUE ~ NA_integer_
     ),
-    # Optimized probability score for clearance (similar to BM/Blood models)
-    # Using log10-transformed value with z-score scaling for consistency
-    EasyM_prob_optimized = case_when(
-      !is.na(EasyM_value) & EasyM_value > 0 ~ {
-        log10(EasyM_value)
-      },
-      !is.na(EasyM_value) & EasyM_value <= 0 ~ 1e-6,
-      TRUE ~ NA_real_
+    
+    # ============================================================
+    # OPTIMIZED THRESHOLD-BASED CALLS (per timepoint)
+    # ============================================================
+    # Dynamically apply the calculated threshold for each timepoint
+    EasyM_optimized_binary = case_when(
+      # For each timepoint with a calculated threshold, compare volume to that threshold
+      Timepoint %in% names(easyM_thresholds_calc) & !is.na(EasyM_value) ~ 
+        ifelse(EasyM_value > easyM_thresholds_calc[Timepoint], 1L, 0L),
+      
+      # For timepoints without a calculated threshold: fall back to clinician call
+      TRUE ~ case_when(
+        EasyM_mrd == "MRD+" ~ 1L,
+        EasyM_mrd == "MRD-" ~ 0L,
+        TRUE ~ NA_integer_
+      )
+    ),
+    
+    # ============================================================
+    # INTERPRETABLE CALL LABELS
+    # ============================================================
+    EasyM_optimized_call = case_when(
+      # For timepoints with calculated thresholds
+      Timepoint %in% names(easyM_thresholds_calc) ~ 
+        ifelse(EasyM_optimized_binary == 1L,
+               paste0("Residual (>", sprintf("%.3f", easyM_thresholds_calc[Timepoint]), "%)"),
+               paste0("Cleared (≤", sprintf("%.3f", easyM_thresholds_calc[Timepoint]), "%)")),
+      # For other timepoints, use clinician status
+      TRUE ~ case_when(
+        EasyM_mrd == "MRD+" ~ "Clinician: Positive",
+        EasyM_mrd == "MRD-" ~ "Clinician: Negative",
+        TRUE ~ NA_character_
+      )
+    ),
+    
+    # ============================================================
+    # ADDITIONAL USEFUL METRICS FOR PLOTTING
+    # ============================================================
+    EasyM_log10 = log10(pmax(EasyM_value, 1e-6)),
+    
+    # Track which threshold method was used for this sample
+    threshold_method = case_when(
+      Timepoint %in% names(easyM_thresholds_calc) ~ "optimized",
+      TRUE ~ "clinician"
     )
-  )
+  ) %>%
+  filter(!is.na(EasyM_value)) %>%
+  arrange(Patient, Timepoint)
 
-# Export for loading in 3_2
+# Export the comprehensive table
 readr::write_csv(
-  EasyM_for_plots,
-  file.path(out_dir, "EasyM_processed_for_3_2_plots.csv")
+  EasyM_comprehensive,
+  file.path(out_dir, "EasyM_all_samples_with_optimized_calls.csv")
 )
 
-cat("✓ Exported EasyM data for 3_2 plots: EasyM_processed_for_3_2_plots.csv\n")
+cat("✓ Exported comprehensive EasyM table: EasyM_all_samples_with_optimized_calls.csv\n")
+cat("  Columns: Patient, Timepoint, timepoint_info, EasyM_value, \n")
+cat("           EasyM_clinician_binary, EasyM_optimized_binary, EasyM_optimized_call\n\n")
 
-# Also save the optimized cutoff values for reference
+# ============================================================
+# CUTOFF SUMMARY TABLE
+# ============================================================
+# Document all thresholds used for reference
+
 easyM_cutoff_summary <- data.frame(
-  metric = c("median_log10_value", "optimal_cutoff_log10"),
-  value = c(
-    median(log10(EasyM_for_plots$EasyM_value[EasyM_for_plots$EasyM_value > 0]), na.rm = TRUE),
-    ifelse(!is.null(thr07_raw), thr07_raw, NA_real_)
-  )
-)
+  Timepoint = names(easyM_thresholds_calc),
+  Threshold_raw_percent = as.numeric(easyM_thresholds_calc),
+  Threshold_log10 = log10(as.numeric(easyM_thresholds_calc)),
+  Interpretation = case_when(
+    names(easyM_thresholds_calc) == "01" ~ "Diagnosis",
+    names(easyM_thresholds_calc) == "03" ~ "Post-Induction",
+    names(easyM_thresholds_calc) == "05" ~ "Post-Transplant",
+    names(easyM_thresholds_calc) == "07" ~ "1-Year Maintenance",
+    names(easyM_thresholds_calc) == "08" ~ "Follow-up",
+    names(easyM_thresholds_calc) == "09" ~ "Follow-up",
+    names(easyM_thresholds_calc) == "10" ~ "Follow-up",
+    names(easyM_thresholds_calc) == "11" ~ "Follow-up",
+    names(easyM_thresholds_calc) == "12" ~ "Follow-up",
+    names(easyM_thresholds_calc) == "13" ~ "Follow-up",
+    TRUE ~ "Relapse"
+  ),
+  stringsAsFactors = FALSE
+) %>%
+  arrange(Timepoint)
 
 readr::write_csv(
   easyM_cutoff_summary,
-  file.path(out_dir, "EasyM_cutoff_values.csv")
+  file.path(out_dir, "EasyM_threshold_values_by_timepoint.csv")
 )
 
-cat("✓ Exported EasyM cutoff values: EasyM_cutoff_values.csv\n")
+cat("✓ Exported threshold summary: EasyM_threshold_values_by_timepoint.csv\n")
+cat(sprintf("  Calculated thresholds for %d timepoints:\n", nrow(easyM_cutoff_summary)))
+print(easyM_cutoff_summary)
+cat("\n")
+
+# ============================================================
+# SAMPLE COUNTS BY STATUS
+# ============================================================
+# Quick sanity check on how many patients are positive/negative
+
+status_summary <- EasyM_comprehensive %>%
+  group_by(Timepoint, EasyM_optimized_binary, threshold_method) %>%
+  summarise(
+    n_samples = n(),
+    n_patients = n_distinct(Patient),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    Status = ifelse(EasyM_optimized_binary == 1L, "Positive", "Negative"),
+    .keep = "unused"
+  ) %>%
+  arrange(Timepoint, Status)
+
+cat("EasyM Status Distribution by Timepoint (Optimized Calls):\n")
+print(status_summary, n = Inf)
+cat("\n")
+
+# ============================================================
+# COMPLETION SUMMARY
+# ============================================================
+cat("\n", strrep("=", 70), "\n")
+cat("✓ SCRIPT COMPLETED SUCCESSFULLY\n")
+cat(strrep("=", 70), "\n\n")
+
+# Print summary of key files exported
+cat("KEY OUTPUT FILES FOR DOWNSTREAM ANALYSIS:\n")
+cat("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n")
+
+# Main export table
+main_export <- file.path(out_dir, "tables", "EasyM_all_samples_with_optimized_calls.csv")
+cat(sprintf("1. Comprehensive EasyM table with optimized calls:\n   ├─ Path: %s\n\n", main_export))
+
+# Threshold reference
+threshold_export <- file.path(out_dir, "tables", "EasyM_threshold_values_by_timepoint.csv")
+cat(sprintf("2. Threshold values reference:\n   ├─ Path: %s\n\n", threshold_export))
+
+# Landmark analyses directory
+landmarks_dir <- file.path(out_dir, "landmark_analyses")
+cat(sprintf("3. Detailed landmark analysis results:\n   ├─ Directory: %s\n   ├─ Contains per-timepoint analysis results\n\n", landmarks_dir))
+
+cat("THRESHOLD METHODS USED:\n")
+cat("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
+cat("✓ TP05 (post-ASCT):        Median (original method - preserved)\n")
+cat("✓ TP07 (1-year maintenance): Optimized via log-rank (original method - preserved)\n")
+cat("✓ Other timepoints:         Optimized via log-rank (exploratory - new)\n\n")
+
+cat("NEXT STEPS:\n")
+cat("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
+cat("→ Load 'EasyM_all_samples_with_optimized_calls.csv' in script 3_2\n")
+cat("→ Use 'EasyM_optimized_binary' column for primary comparisons vs clinician calls\n\n")
+
+## End of script
