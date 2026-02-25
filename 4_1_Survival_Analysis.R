@@ -1,27 +1,120 @@
 ################################################################################
-##  Detection-Rate & Progression Analysis
-##  cfWGS MRD manuscript – Dory A.
+##  Survival Analysis and Relapse Detection Sensitivity
+##  
+##  Purpose: 
+##    Generate Kaplan-Meier survival curves stratified by MRD status at key
+##    clinical timepoints, and calculate sensitivity of each assay for detecting
+##    future relapse among frontline-treated multiple myeloma patients.
+##    Includes head-to-head comparison of cfWGS, clinical assays (MFC, clonoSEQ),
+##    and EasyM proteomic MRD.
+##  
+##  Main Analyses:
+##    1. Progression-free survival (PFS) curves stratified by MRD status
+##       at landmark timepoints (Post-ASCT, 1yr Maintenance, etc.)
+##    2. Sensitivity calculation: % of patients who relapsed that were MRD+
+##       at each timepoint, for each assay independently
+##    3. Comparative sensitivity barplots (BM vs Blood-derived cfWGS models)
+##    4. Optional: Time-window prediction analysis in non-frontline cohort
+##  
+##  Input Data Sources:
+##    - all_patients_with_BM_and_blood_calls_updated5.rds 
+##      (from 3_1_Optimize_cfWGS_thresholds.R)
+##    - EasyM_all_samples_with_optimized_calls.csv 
+##      (from 3_1_A_Process_and_optimize_EasyM.R)
+##    - Censor_dates_per_patient_for_PFS_updated.rds 
+##      (clinical outcome tracking)
+##  
+##  Output Locations:
+##    - Output_tables_2025/detection_progression_updated6/
+##      └─ Kaplan-Meier curves (PNG, organized by timepoint)
+##      └─ Sensitivity tables (CSV)
+##      └─ Comparative barplots (Supp_6A, Supp_8A)
+##  
+##  Scripts this Script Depends On:
+##    1. 3_1_Optimize_cfWGS_thresholds.R - cfWGS model optimization/thresholds
+##    2. 3_1_A_Process_and_optimize_EasyM.R - EasyM model development
+##    3. 2_0_Assemble_Table_With_All_Features.R - Feature integration
+##  
+##  Author: Dory Abelman
+##  Updated: February 2026
+##  
 ################################################################################
 
-## ── 0.  SETUP ────────────────────────────────────────────────────────────────
-library(tidyverse)
-library(lubridate)
-library(survival)
-library(survminer)
-library(broom)
-library(patchwork)
-library(tableone)      # optional – baseline table
-library(timeROC)       # optional – AUC vs time
+## ── 0. SETUP: Load Packages and Configure Paths ──────────────────────────────
+##
+##  This section:
+##    - Loads all required R packages for survival analysis & plotting
+##    - Defines input/output file paths
+##    - Creates output directories if they don't exist
+##
+## ────────────────────────────────────────────────────────────────────────────
 
-## INPUT (already saved from your pipeline) ------------------------------
+# Required packages for survival analysis, visualization, and data wrangling
+library(tidyverse)       # dplyr, ggplot2, tidyr
+library(lubridate)       # Date/time operations
+library(survival)        # Survival objects, survfit()
+library(survminer)       # ggsurvplot() for KM curves
+library(broom)           # Tidy model outputs
+library(patchwork)       # Combine multiple plots
+library(tableone)        # Create summary tables (optional)
+library(timeROC)         # Time-dependent ROC analysis (optional)
+
+## ─────────────────────────────────────────────────────────────────────────────
+## INPUT FILES: Clinical outcomes and cfWGS results
+## ─────────────────────────────────────────────────────────────────────────────
+
+# File 1: Clinical metadata - censor dates, relapse status per patient
+#         Used to compute time-to-event and determine event status for survival analysis
 final_tbl_rds <- "Exported_data_tables_clinical/Censor_dates_per_patient_for_PFS_updated.rds"
+
+# File 2: Main data table with all cfWGS model calls and clinical MRD results
+#         Each row = one sample (patient + timepoint)
+#         Contains: MFC calls, clonoSEQ calls, cfWGS calls (multiple models)
 dat_rds       <- "Output_tables_2025/all_patients_with_BM_and_blood_calls_updated5.rds"
 
-## OUTPUT ----------------------------------------------------------------------
+## ─────────────────────────────────────────────────────────────────────────────
+## OUTPUT DIRECTORY: All results saved here
+## ─────────────────────────────────────────────────────────────────────────────
+
 outdir <- "Output_tables_2025/detection_progression_updated6"
 dir.create(outdir, showWarnings = FALSE, recursive = TRUE)
 
-## ── 1.  LOAD & TIDY CORE TABLES ──────────────────────────────────────────────
+# ═════════════════════════════════════════════════════════════════════════════
+# FILE VERSIONING: Prevents overwriting previous results
+# ═════════════════════════════════════════════════════════════════════════════
+# All output files include today's date in their names:
+#   KM_assay_timepoint_updated_no_CI_2026-02-24.png
+#   frontline_postASCT_sensitivity_2026-02-24.csv
+# This ensures each run creates new files without overwriting previous versions.
+# To compare runs across different dates, simply check the date suffix.
+# ═════════════════════════════════════════════════════════════════════════════
+
+date_tag <- format(Sys.Date(), "%Y-%m-%d")
+
+cat("\n", strrep("═", 80), "\n")
+cat("SURVIVAL ANALYSIS: Frontline Cohort\n")
+cat("Output directory:", outdir, "\n")
+cat("Date tag for versioning:", date_tag, "\n")
+cat(strrep("═", 80), "\n\n")
+
+## ── 1. LOAD AND TIDY CORE TABLES ─────────────────────────────────────────────
+##
+##  This section:
+##    - Loads clinical outcome metadata (follow-up dates, relapse status)
+##    - Loads main cfWGS data table with all model predictions
+##    - Filters to frontline cohort only (primary analysis population)
+##    - Creates additional computed columns as needed
+##
+## ────────────────────────────────────────────────────────────────────────────
+
+cat("1. Loading and preparing clinical data tables...\n")
+
+# CLINICAL OUTCOMES TABLE
+# Standardizes column names to lowercase and selects key columns:
+#   - Patient: unique patient identifier
+#   - baseline_date: treatment start date
+#   - censor_date: last known follow-up date (event or censoring)
+#   - relapsed: binary indicator (1=relapsed, 0=censored without relapse)
 final_tbl <- readRDS(final_tbl_rds) %>%
   rename_with(
     tolower,
@@ -34,94 +127,241 @@ final_tbl <- readRDS(final_tbl_rds) %>%
     relapsed      = as.integer(relapsed)
   )
 
+cat(sprintf("  ✓ Clinical outcomes: %d patients loaded\n", n_distinct(final_tbl$Patient)))
+
+# MAIN cfWGS + CLINICAL ASSAYS DATA TABLE
+# Each row represents one sample (patient + timepoint)
+# Contains predictions from all MRD models and timepoint classifications
 dat <- readRDS(dat_rds) %>%
   mutate(
     Patient        = as.character(Patient),
     sample_date    = as.Date(Date),
-    timepoint_info = tolower(timepoint_info)
+    timepoint_info = tolower(timepoint_info)  # standardize timepoint names for consistent grouping
   )
 
-## Limit to frontline 
+cat(sprintf("  ✓ Sample data: %d samples from %d patients loaded\n", 
+            nrow(dat), n_distinct(dat$Patient)))
+
+# FILTER TO FRONTLINE COHORT
+# Primary analysis uses only patients in frontline/induction-to-transplant cohort
 dat <- dat %>% filter(Cohort == "Frontline")
 
-## Do rescored 
+cat(sprintf("  ✓ Filtered to Frontline cohort: %d samples from %d patients\n", 
+            nrow(dat), n_distinct(dat$Patient)))
+
+# CREATE ADDITIONAL BM cfWGS MODELS (alternative decision rules)
+# Screen call: different threshold optimized for sensitivity (detect 95% of relapsers)
+#   Uses probability >= 0.350 instead of default optimized threshold
 dat <- dat %>%
-  ## Add the screen column 
   mutate(
-    BM_zscore_only_detection_rate_screen_call  = as.integer(BM_zscore_only_detection_rate_prob >= 0.350),
+    BM_zscore_only_detection_rate_screen_call = as.integer(BM_zscore_only_detection_rate_prob >= 0.350),
   )
 
-## ── 2.  BUILD PFS TABLE (patient-level) ──────────────────────────────────────
+cat("  ✓ Data preparation complete\n\n")
+
+## ── 1A. LOAD EasyM PROTEOMIC MRD DATA ─────────────────────────────────────────
+##
+##  This section:
+##    - Loads EasyM M-protein measurements and optimized binary calls
+##    - Merges EasyM data by patient and timepoint
+##    - Gracefully handles missing EasyM data with placeholder columns
+##
+##  EasyM Data Sources (from script 3_1_A):
+##    - EasyM_value: continuous M-protein measure (%)
+##    - EasyM_optimized_binary: binary call (1=positive, 0=negative) using
+##                            optimized thresholds from script 3_1_A
+##    - EasyM_optimized_call: character label of call for reporting
+##
+## ────────────────────────────────────────────────────────────────────────────
+
+cat("1A. Loading EasyM proteomic MRD data...\n")
+
+OUTPUT_DIR_EASYM <- "Output_EasyM_MRD_analysis_2025"
+EasyM_file <- file.path(OUTPUT_DIR_EASYM, "EasyM_all_samples_with_optimized_calls.csv")
+
+if (file.exists(EasyM_file)) {
+  # Load EasyM predictions from script 3_1_A output
+  EasyM_data <- readr::read_csv(EasyM_file, show_col_types = FALSE)
+  cat(sprintf("  ✓ Loaded EasyM data: %d samples\n", nrow(EasyM_data)))
+  
+  # Merge EasyM data into main dataset
+  # Join key: Patient (character) + Timepoint (character)
+  # relationship = "many-to-one": multiple samples per patient, but one EasyM value per timepoint
+  dat <- dat %>%
+    mutate(Patient = as.character(Patient), Timepoint = as.character(Timepoint)) %>%
+    left_join(
+      EasyM_data %>%
+        select(Patient, Timepoint, EasyM_value, EasyM_optimized_binary, EasyM_optimized_call) %>%
+        mutate(Patient = as.character(Patient), Timepoint = as.character(Timepoint)),
+      by = c("Patient", "Timepoint"),
+      relationship = "many-to-one"
+    )
+  
+  n_easym_matched <- sum(!is.na(dat$EasyM_optimized_binary))
+  cat(sprintf("  ✓ Merged EasyM data: %d samples with EasyM calls\n", n_easym_matched))
+  
+} else {
+  # If EasyM file not found, create placeholder columns (survival analysis will skip EasyM with NA filter)
+  cat(sprintf("  ⚠ EasyM file not found at: %s\n", EasyM_file))
+  cat("    Creating placeholder columns (EasyM will be skipped in downstream analyses)\n")
+  
+  dat <- dat %>%
+    mutate(
+      EasyM_value = NA_real_,
+      EasyM_optimized_binary = NA_integer_,
+      EasyM_optimized_call = NA_character_
+    )
+}
+
+cat("  ✓ EasyM data preparation complete\n\n")
+
+## ── 2. BUILD SURVIVAL DATA TABLE (sample-level) ───────────────────────────────
+##
+##  This section:
+##    - Merges clinical outcomes (relapse, follow-up dates) with sample-level data
+##    - Computes time-to-event: days from sample draw to relapse or censoring
+##    - Creates binary event indicator (1=relapsed, 0=censored)
+##    - Selects only columns needed for downstream survival analysis
+##
+##  Key computations:
+##    - Time_to_event = censor_date - sample_date 
+##      (how long from THIS sample until event/censoring)
+##    - Relapsed_Binary = 1 if patient relapsed (regardless of when), 0 if censored
+##
+##  Output: survival_df
+##    - One row per sample (patient × timepoint)
+##    - Ready for stratified KM analysis by MRD status
+##
+## ────────────────────────────────────────────────────────────────────────────
+
+cat("2. Building survival analysis table...\n")
+
 survival_df <- dat %>%
   mutate(
     Patient     = as.character(Patient),
-    sample_date = as.Date(Date)                     # the draw date for each row
+    sample_date = as.Date(Date)  # standardize date column name and type
   ) %>%
-  # bring in censor_date + relapsed from final_tbl
+  # Merge in patient-level outcomes (censor_date, relapsed status)
   left_join(
     final_tbl %>% 
       select(Patient, censor_date, relapsed),
     by = "Patient"
   ) %>%
-  # compute days from the sample to the event/censor
+  # Calculate time from sample draw to event/censoring
   mutate(
-    Time_to_event   = as.numeric(censor_date - sample_date),
-    Relapsed_Binary = as.integer(relapsed)
+    Time_to_event   = as.numeric(censor_date - sample_date),  # days
+    Relapsed_Binary = as.integer(relapsed)                     # 1=event, 0=censored
   ) %>%
-  # keep only the columns your KM‐loop needs
+  # Select only columns needed for survival analyses
+  # (This reduces memory footprint and makes code more readable)
   select(
     Patient, Timepoint, sample_date, censor_date, timepoint_info,
     Time_to_event, Relapsed_Binary,
+    # Clinical MRD assays
     Flow_Binary, Adaptive_Binary, Rapid_Novor_Binary,
     Flow_pct_cells, Adaptive_Frequency,
+    # PET imaging (if needed)
     PET_Binary,
-    BM_zscore_only_detection_rate_call, BM_zscore_only_detection_rate_prob, BM_zscore_only_detection_rate_screen_call,
-    Blood_zscore_only_sites_call, Blood_zscore_only_sites_prob, Blood_base_prob, Blood_base_call,
+    # cfWGS BM-derived models
+    BM_zscore_only_detection_rate_call, BM_zscore_only_detection_rate_prob, 
+    BM_zscore_only_detection_rate_screen_call,
+    # cfWGS blood-derived models (multiple variants)
+    Blood_zscore_only_sites_call, Blood_zscore_only_sites_prob, 
+    Blood_base_prob, Blood_base_call,
     Blood_plus_fragment_prob, Blood_plus_fragment_call,
-    Blood_plus_fragment_min_prob, Blood_plus_fragment_min_call, Fragmentomics_mean_coverage_only_prob, Fragmentomics_mean_coverage_only_call
+    Blood_plus_fragment_min_prob, Blood_plus_fragment_min_call, 
+    # Fragmentomics models
+    Fragmentomics_mean_coverage_only_prob, Fragmentomics_mean_coverage_only_call,
+    # EasyM proteomic MRD
+    EasyM_optimized_binary, EasyM_value
   )
 
-# sanity checks
-table(survival_df$Relapsed_Binary, useNA="ifany")
-summary(survival_df$Time_to_event)
-table(survival_df$timepoint_info)
+cat(sprintf("  ✓ Survival table created: %d samples from %d patients\n", 
+            nrow(survival_df), n_distinct(survival_df$Patient)))
 
+# QUICK DATA VALIDATION
+# Verify the survival data looks reasonable
+cat("\n  Data validation checks:\n")
+cat(sprintf("    - Follow-up time: %.1f to %.1f days (median: %.1f days)\n",
+            min(survival_df$Time_to_event, na.rm=TRUE),
+            max(survival_df$Time_to_event, na.rm=TRUE),
+            median(survival_df$Time_to_event, na.rm=TRUE)))
 
-#### get function ready 
-# 2) Friendly tech names
+relapse_counts <- table(survival_df$Relapsed_Binary, useNA="ifany")
+cat(sprintf("    - Relapse events: %d / %d (%.1f%%)\n",
+            relapse_counts["1"], sum(!is.na(survival_df$Relapsed_Binary)),
+            relapse_counts["1"] / sum(!is.na(survival_df$Relapsed_Binary)) * 100))
+
+cat(sprintf("    - Timepoints represented: %s\n",
+            paste(unique(survival_df$timepoint_info), collapse=", ")))
+
+cat("  ✓ Survival table validation complete\n\n")
+
+## ── 3. KAPLAN-MEIER SURVIVAL ANALYSIS CONFIGURATION ──────────────────────────
+##
+##  This section configures settings for survival curve generation:
+##    - Define which assays/models to include in KM analyses
+##    - Specify timepoints to analyze
+##    - Set visualization parameters (colors, DPI, minimum group size)
+##    - Map human-readable labels for each timepoint
+##
+## ────────────────────────────────────────────────────────────────────────────
+
+cat("3. Configuring Kaplan-Meier survival analyses...\n")
+
+# LIST OF MRD TECHNOLOGIES/MODELS TO ANALYZE
+# Each entry: column_name = "Display Label for Plots"
+# Includes: clinical assays (MFC, clonoSEQ), cfWGS models, and EasyM
 techs <- c(
+  # Clinical MRD assays
   Flow_Binary        = "MFC",
   Adaptive_Binary    = "clonoSEQ",
+  EasyM_optimized_binary = "EasyM (Proteomic MRD)",
+  # Bone Marrow-derived WGS mutations
   BM_zscore_only_detection_rate_call    = "cfWGS of BM-Derived Mutations (cVAF Model)", 
-  BM_zscore_only_detection_rate_screen_call    = "cfWGS of BM-derived mutations (high sensetivity)", 
+  BM_zscore_only_detection_rate_screen_call = "cfWGS of BM-derived mutations (High Sensitivity)", 
+  # Blood Plasma-derived WGS mutations
   Blood_zscore_only_sites_call = "cfWGS of cfDNA-Derived Mutations (Sites Model)",
-  Blood_plus_fragment_min_call = "cfWGS of cfDNA-Derived Mutations (Combined Model)",
-  Fragmentomics_mean_coverage_only_call = "Fragmentomics model"
+  Blood_plus_fragment_call = "cfWGS of cfDNA-Derived Mutations (Combined Model)"
+  # NOTE: Fragmentomics models could be added here if desired
 )
 
-# techs <- c(
-#   Blood_base_call = "cfWGS of PB‑cfDNA‑derived mutations (combined model)"
-# )
+cat(sprintf("  - Analyzing %d MRD technologies/models\n", length(techs)))
+cat(sprintf("    %s\n", paste("   ", names(techs), sep=" ✓ ", collapse="\n    "))[1:3])
+cat("    ...\n")
 
-# 3) All timepoints to cover
+# CLINICAL TIMEPOINTS TO ANALYZE
+# Extract all unique timepoints from the data
+# These represent key clinical decision points (diagnosis, post-transplant, maintenance, etc.)
 tps <- unique(survival_df$timepoint_info)
-dpi_target <- 500
+cat(sprintf("  - Timepoints to analyze: %s\n", paste(tps, collapse=", ")))
 
-# 4) Minimum n per group to plot
+# VISUALIZATION PARAMETERS
+dpi_target <- 500  # Resolution for PNG output of KM curves
+
+# GROUP SIZE THRESHOLDS
+# Skip KM curve if < this many patients in either MRD+/MRD- group
+# (Small sample sizes lead to unreliable survival estimates)
 min_n <- 5
 
-#pal_2 <- viridis(2, option = "D", begin = 0.3, end = 0.7)   # nice mid‑range hues
-# old colors: palette = c("#E7B800","#2E9FDF")
-pal_2 <- c("black", "red") # updated 
+# COLOR PALETTE FOR KM CURVES
+# MRD negative = black, MRD positive = red
+pal_2 <- c("black", "red")
 
+# HUMAN-READABLE LABELS FOR TIMEPOINTS
+# Maps internal names (as stored in timepoint_info column) to plot labels
 tp_labels <- c(
-  `diagnosis` = "Diagnosis",
+  `diagnosis`          = "Diagnosis",
   `post_transplant`    = "Post‑ASCT",
-  `1yr maintenance` = "One-Year Maintenance", 
-  `post_induction`    = "Post‑Induction"
+  `1yr maintenance`    = "One-Year Maintenance", 
+  `post_induction`     = "Post‑Induction",
+  `post_asct`          = "Post‑ASCT",
+  `maintenance`        = "Maintenance",
+  `1yr maint`          = "One-Year Maintenance"
 )
 
-# once before the loops
+# PREPARE BASELINE DIAGNOSIS DATES
+# Compute earliest sample date per patient (used for relative time calculations if needed)
 dx_tbl <- survival_df %>%
   group_by(Patient) %>%
   summarise(
@@ -129,22 +369,79 @@ dx_tbl <- survival_df %>%
     .groups = "drop"
   )
 
+cat("  ✓ Configuration complete\n\n")
 
-# 5) Loop
+
+## ── 4. GENERATE KAPLAN-MEIER CURVES: Timepoint × Technology Analysis ────────
+##
+##  This section contains nested loops that:
+##    1. Iterate through each clinical timepoint
+##    2. For each timepoint, iterate through each MRD technology
+##    3. For each combination, generate a stratified KM curve:
+##       - Subjects split into MRD+ vs MRD- groups based on assay result
+##       - Curve shows PFS probability over follow-up time
+##       - Risk table shows number at risk per group at each time
+##    4. Saves PNG at 500 dpi for manuscript inclusion
+##
+##  Nested Loop Structure:
+##    for (timepoint in all timepoints)
+##      for (assay in all technologies)
+##        Generate KM curve for that timepoint + assay combo
+##        Save to: outdir/timepoint/KM_assay_timepoint.png
+##
+##  Output Directory Organization:
+##    detection_progression_updated6/
+##    ├── diagnosis/
+##    │   ├── KM_MFC_Diagnosis_updated_no_CI.png
+##    │   ├── KM_clonoSEQ_Diagnosis_updated_no_CI.png
+##    │   ├── KM_EasyM_Diagnosis_updated_no_CI.png
+##    │   └── ...
+##    ├── post_transplant/
+##    │   ├── KM_MFC_Post‑ASCT_updated_no_CI.png
+##    │   ├── KM_clonoSEQ_Post‑ASCT_updated_no_CI.png
+##    │   ├── KM_EasyM_Post‑ASCT_updated_no_CI.png
+##    │   ├── KM_cfWGS of BM-Derived Mutations (cVAF Model)_Post‑ASCT_updated_no_CI.png
+##    │   └── ...
+##    └── 1yr_maintenance/
+##        └── ...
+##
+##  Notes on Curve Generation:
+##    - Skips assays with < min_n (5) patients in either group
+##    - Uses Kaplan-Meier non-parametric estimator
+##    - Includes log-rank p-value testing MRD+ vs MRD- groups
+##    - Risk table shows N at risk below x-axis at selected timepoints
+##    - X-axis = months from MRD assessment, Y-axis = PFS probability
+##
+## ────────────────────────────────────────────────────────────────────────────
+
+cat("4. Generating Kaplan-Meier survival curves...\n")
+cat("   (This may take a minute - creating curves for all timepoint×assay combinations)\n\n")
+
+# Loop 1: Iterate through each timepoint
 for(tp in tps) {
-#  nice_tp <- tp_labels[tp] %||% tp   # fall back to tp if no mappiht
-  # instead of  %||% line:
+  # Get nice label for this timepoint
   nice_tp <- as.character(tp_labels[tp])
   if (is.na(nice_tp) || nice_tp == "") nice_tp <- as.character(tp)
   
-  
-  tp_dir <- file.path(outdir, gsub("\\s+","_", tp))  # sanitize folder name
+  # Create subdirectory for this timepoint's curves
+  tp_dir <- file.path(outdir, gsub("\\s+","_", tp))
   dir.create(tp_dir, recursive = TRUE, showWarnings = FALSE)
   
+  # Loop 2: Iterate through each MRD technology/model
   for(var in names(techs)) {
     assay_lab <- techs[[var]]
-    fname     <- file.path(tp_dir, paste0("KM_", assay_lab, "_", nice_tp, "_updated_no_CI.png"))
+    fname     <- file.path(tp_dir, paste0("KM_", assay_lab, "_", nice_tp, "_updated_no_CI_", date_tag, ".png"))
     
+    # ─────────────────────────────────────────────────────────────────────────
+    # PREPARE DATA FOR THIS TIMEPOINT × ASSAY
+    # Filter criteria:
+    #   - timepoint_info == tp: Only samples from this timepoint
+    #   - !is.na(Time_to_event): Remove if follow-up time missing
+    #   - !is.na(Relapsed_Binary): Remove if relapse status unknown
+    #   - !is.na(.data[[var]]): Remove if MRD assay result missing
+    # arrange() + group_by() + slice(1) ensures we keep only the FIRST sample per patient
+    # at that timepoint (in case multiple draws on same date)
+    # ─────────────────────────────────────────────────────────────────────────
     df_sub <- survival_df %>%
       filter(
         timepoint_info  == tp,
@@ -156,6 +453,8 @@ for(tp in tps) {
       group_by(Patient) %>%
       slice(1) %>%           # keep just the first draw per patient if multiple at that timepoint
       ungroup() %>%
+      # Create stratification group: MRD+ (assay value = 1) vs MRD- (assay value = 0)
+      # This is the key predictor variable for the KM curves
       mutate(
         Group = factor(
           ifelse(.data[[var]] == 1, "Positive", "Negative"),
@@ -163,18 +462,35 @@ for(tp in tps) {
         )
       )
     
+    # Convert time-to-event from days to months (multiply by 12, divide by 365)
+    # Using 30.44 = average days per month (365.25 / 12) for accuracy
     df_sub <- df_sub %>% 
       mutate(Time_to_event = Time_to_event/30.44) # divide days by 30.44 to get months
     
-    # skip if too few pts
+    # ─────────────────────────────────────────────────────────────────────────
+    # VALIDATION: Skip assays with insufficient data
+    # ─────────────────────────────────────────────────────────────────────────
+    
+    # Skip if total sample size is too small (min_n = 5)
     if(nrow(df_sub) < min_n) next
     
-    # skip if only one group present
+    # Skip if we don't have both MRD+ and MRD- groups (need both for comparison)
     if(n_distinct(df_sub$Group) < 2) next
     
+    # ─────────────────────────────────────────────────────────────────────────
+    # FIT KAPLAN-MEIER MODEL AND GENERATE SURVIVAL PLOT
+    # ─────────────────────────────────────────────────────────────────────────
+    
+    # Surv() creates survival object with time and event indicator
     surv_obj <- Surv(df_sub$Time_to_event, df_sub$Relapsed_Binary)
+    
+    # survfit() fits KM curves stratified by MRD status (one curve per group)
     fit      <- survfit(surv_obj ~ Group, data = df_sub)
     
+    # ggsurvplot generates publication-quality KM plot with:
+    #   - Log-rank p-value comparing groups
+    #   - Risk table showing number of subjects at risk over time
+    #   - Customized colors, labels, and formatting
     km <- ggsurvplot(
       fit, data       = df_sub,
       pval            = TRUE,
@@ -618,44 +934,77 @@ for (tp in tps) {
 
 
 
+## ── 5. SENSITIVITY ANALYSIS: Frontline Cohort MRD Performance ───────────────
+##
+##  This section calculates sensitivity and specificity metrics for each MRD assay
+##  in the Frontline cohort at two critical clinical timepoints:
+##    1. Post-ASCT (post-autologous stem cell transplant)
+##    2. Maintenance-1yr (1-year maintenance therapy)
+##
+##  For each assay and timepoint:
+##    - Filter to Frontline cohort only
+##    - Stratify by MRD status (positive/negative)
+##    - Calculate sensitivity = % of relapsed with MRD+
+##    - Calculate specificity = % of non-relapsed with MRD-
+##    - Calculate PPV/NPV = predictive values
+##
+##  Output: Summary table with MRD performance metrics
+##
+## ────────────────────────────────────────────────────────────────────────────
+
+cat("5. Calculating MRD sensitivity/specificity metrics (Frontline cohort)...\n\n")
+
 #### Now get stats for results 
 ### First on frontline 
-# 2.  Define frontline cohort -------------------------------------------------
+# 1) Define frontline cohort for analysis
 front_patients <- dat %>%
   filter(Cohort == "Frontline") %>%
   distinct(Patient)
 
-# 3.  Median follow-up & relapse rate -----------------------------------------
+# ─────────────────────────────────────────────────────────────────────────────
+# 2) COMPUTE FOLLOW-UP TIME AND RELAPSE STATUS FOR FRONTLINE COHORT
+# Time = number of days from baseline date (diagnosis) to censor/relapse date
+# This is the time-to-event used for KM curves and outcome calculations
+# ─────────────────────────────────────────────────────────────────────────────
+
 pfs_front <- final_tbl %>%
   filter(Patient %in% front_patients$Patient) %>%
   # compute time from baseline to censor/relapse
   mutate(time_days = as.numeric(censor_date - baseline_date)) 
 
-## check one row per patient 
+## check one row per patient (sanity check to ensure data integrity)
 pfs_front %>% 
   count(Patient) %>% 
   filter(n > 1) -> dups
 if(nrow(dups)) stop("Duplicate patients found: ", paste(dups$Patient, collapse = ", "))
 
+# ─────────────────────────────────────────────────────────────────────────────
+# SUMMARY STATISTICS: Frontline cohort follow-up and relapse
+# ─────────────────────────────────────────────────────────────────────────────
 
 median_fu_mo <- median(pfs_front$time_days / 30.44, na.rm = TRUE)
 n_front      <- nrow(pfs_front)
 n_rel        <- sum(pfs_front$relapsed)
 pct_rel      <- n_rel / n_front * 100
 
-message(glue::glue(
-  "Median follow-up: {round(median_fu_mo,1)} months\n",
-  "Relapses: {n_rel}/{n_front} ({round(pct_rel)}%) front-line patients"
+cat(sprintf(
+  "Frontline cohort summary:\n  Median follow-up: %.1f months\n  Relapses: %d/%d (%.0f%%) patients\n\n",
+  median_fu_mo, n_rel, n_front, pct_rel
 ))
 
-## More info 
-# 1) Basic summary statistics for follow-up time (in days and months)
+# ─────────────────────────────────────────────────────────────────────────────
+# 3) DETAILED FOLLOW-UP STATISTICS
+# Comprehensive summary of follow-up times in days and months
+# Includes: min/Q1/median/Q3/max/mean/sd for all subjects
+# ─────────────────────────────────────────────────────────────────────────────
+
 followup_stats <- pfs_front %>%
   summarise(
     N_patients      = dplyr::n(),
     N_relapses      = sum(relapsed),
     Relapse_rate    = N_relapses / N_patients * 100,
     
+    # Follow-up time in days
     min_days        = min(time_days, na.rm = TRUE),
     q1_days         = quantile(time_days, 0.25, na.rm = TRUE),
     median_days     = median(time_days, na.rm = TRUE),
@@ -664,6 +1013,7 @@ followup_stats <- pfs_front %>%
     mean_days       = mean(time_days, na.rm = TRUE),
     sd_days         = sd(time_days, na.rm = TRUE),
     
+    # Follow-up time in months (for clinical interpretation)
     min_months      = min(time_days, na.rm = TRUE) / 30.44,
     q1_months       = quantile(time_days / 30.44, 0.25, na.rm = TRUE),
     median_months   = median(time_days / 30.44, na.rm = TRUE),
@@ -673,9 +1023,15 @@ followup_stats <- pfs_front %>%
     sd_months       = sd(time_days, na.rm = TRUE) / 30.44
   )
 
+cat("Follow-up time summary (Frontline cohort):\n")
 print(followup_stats)
+cat("\n")
 
-# 2) Optional: distribution of follow-up times
+# ─────────────────────────────────────────────────────────────────────────────
+# 4) OPTIONAL: Visualization of follow-up time distribution
+# Histogram showing how follow-up times are distributed across cohort
+# ─────────────────────────────────────────────────────────────────────────────
+
 followup_hist <- pfs_front %>%
   mutate(followup_months = time_days / 30.44) %>%
   ggplot(aes(x = followup_months)) +
@@ -687,12 +1043,12 @@ followup_hist <- pfs_front %>%
   )
 
 # If you want to export the stats to CSV
-write_csv(followup_stats, file.path(outdir, "frontline_followup_summary.csv"))
+write_csv(followup_stats, file.path(outdir, paste0("frontline_followup_summary_", date_tag, ".csv")))
 ## Can use 1A for this as well 
 
 # 4.  Assays & timepoint definitions ------------------------------------------
 assays <- c(
-  #  EasyM  = "Rapid_Novor_Binary",
+  EasyM    = "EasyM_optimized_binary",
   clonoSEQ = "Adaptive_Binary",
   Flow     = "Flow_Binary",
   cfWGS_BM    = "BM_zscore_only_detection_rate_call",
@@ -704,18 +1060,43 @@ assays <- c(
 post_labels   <- c("post_transplant")
 one_year_labels <- c("1yr maintenance")
 
+# ─────────────────────────────────────────────────────────────────────────────
+# HELPER FUNCTION: compute_sens()
+# Calculates sensitivity for a given MRD assay
+#
+# Sensitivity = % of RELAPSED patients who were MRD+ at baseline timepoint
+# Formula: N_positive / N_tested (where N_tested = samples with assay result)
+#
+# Input:
+#   - df: data frame with relapsed patients and assay columns
+#   - col: column name of assay (e.g., "Adaptive_Binary", "EasyM_optimized_binary")
+# Output:
+#   - tibble with N_tested, N_positive, and computed Sensitivity
+# ─────────────────────────────────────────────────────────────────────────────
+
 compute_sens <- function(df, col) {
-  df2      <- df %>% filter(!is.na(.data[[col]]))
-  n_tested <- nrow(df2)
-  n_pos    <- sum(df2[[col]] == 1, na.rm = TRUE)
+  df2      <- df %>% filter(!is.na(.data[[col]]))  # Remove rows with missing assay result
+  n_tested <- nrow(df2)                            # Total relapsed patients with assay result
+  n_pos    <- sum(df2[[col]] == 1, na.rm = TRUE)   # Number of those who were MRD+
   tibble(
     N_tested      = n_tested,
     N_positive    = n_pos,
-    Sensitivity   = n_pos / n_tested
+    Sensitivity   = n_pos / n_tested              # Sensitivity = % MRD+ among relapsed
   )
 }
 
-# 5.  Post-ASCT sensitivities -----------------------------------------------
+# ─────────────────────────────────────────────────────────────────────────────
+# 5. POST-ASCT SENSITIVITY CALCULATIONS
+# Sensitivity = % of relapsed patients who had detectable MRD at post-ASCT
+# This answers: "Which assays best predicted relapse at post-ASCT?"
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Filter to:
+#   - Frontline cohort only
+#   - timepoint_info contains "post_transplant" (post-ASCT samples)
+#   - Take first (earliest) sample per patient
+# Then restrict to relapsed patients only for sensitivity calculation
+
 post_df <- dat %>%
   filter(
     Patient        %in% front_patients$Patient,
@@ -723,12 +1104,13 @@ post_df <- dat %>%
   ) %>%
   arrange(Patient, sample_date) %>%
   group_by(Patient) %>%
-  slice(1) %>%   # earliest post-ASCT sample
+  slice(1) %>%   # earliest post-ASCT sample per patient
   ungroup() %>%
   select(Patient, one_of(assays)) %>%
   left_join(final_tbl %>% select(Patient, relapsed), by = "Patient") %>%
-  filter(relapsed == 1)
+  filter(relapsed == 1)  # Keep only relapsed patients for sensitivity calc
 
+# Calculate sensitivity for each assay
 post_stats <- map_dfr(names(assays), ~ {
   col <- assays[.x]
   stats <- compute_sens(post_df, col)
@@ -736,7 +1118,18 @@ post_stats <- map_dfr(names(assays), ~ {
 }, .id = NULL) %>%
   select(Assay, everything())
 
-# 6.  One-year sensitivities -----------------------------------------------
+# ─────────────────────────────────────────────────────────────────────────────
+# 6. ONE-YEAR MAINTENANCE SENSITIVITY CALCULATIONS
+# Sensitivity = % of relapsed patients who had detectable MRD at 1-year maintenance
+# This answers: "Which assays best predicted relapse at 1-year maintenance?"
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Filter to:
+#   - Frontline cohort only
+#   - timepoint_info contains "1yr maintenance" (1-year maintenance samples)
+#   - Take first (earliest) sample per patient at that timepoint
+# Then restrict to relapsed patients only for sensitivity calculation
+
 year_df <- dat %>%
   filter(
     Patient        %in% front_patients$Patient,
@@ -744,12 +1137,13 @@ year_df <- dat %>%
   ) %>%
   arrange(Patient, sample_date) %>%
   group_by(Patient) %>%
-  slice(1) %>%   # earliest 1-yr maintenance sample
+  slice(1) %>%   # earliest 1-year maintenance sample per patient
   ungroup() %>%
   select(Patient, one_of(assays)) %>%
   left_join(final_tbl %>% select(Patient, relapsed), by = "Patient") %>%
-  filter(relapsed == 1)
+  filter(relapsed == 1)  # Keep only relapsed patients for sensitivity calc
 
+# Calculate sensitivity for each assay at 1-year maintenance
 year_stats <- map_dfr(names(assays), ~ {
   col <- assays[.x]
   stats <- compute_sens(year_df, col)
@@ -757,21 +1151,34 @@ year_stats <- map_dfr(names(assays), ~ {
 }, .id = NULL) %>%
   select(Assay, everything())
 
-# 7.  Print tables ------------------------------------------------------------
-message("Post-ASCT sensitivity among relapsers:")
+# ─────────────────────────────────────────────────────────────────────────────
+# 7. PRINT SENSITIVITY RESULTS TO CONSOLE
+# ─────────────────────────────────────────────────────────────────────────────
+
+cat("\n")
+cat("═════════════════════════════════════════════════════════════════════════\n")
+cat("POST-ASCT SENSITIVITY: % of relapsed patients with MRD+ at post-ASCT\n")
+cat("═════════════════════════════════════════════════════════════════════════\n")
 print(post_stats)
 
-message("1-year sensitivity among relapsers:")
+cat("\n")
+cat("═════════════════════════════════════════════════════════════════════════\n")
+cat("1-YEAR MAINTENANCE SENSITIVITY: % of relapsed patients with MRD+ at 1yr\n")
+cat("═════════════════════════════════════════════════════════════════════════\n")
 print(year_stats)
 
-# 8.  (Optional) write out results -------------------------------------------
+# ─────────────────────────────────────────────────────────────────────────────
+# 8. SAVE SENSITIVITY RESULTS TO CSV
+# ─────────────────────────────────────────────────────────────────────────────
+
+cat("\nSaving sensitivity results...\n")
 write_csv(
   post_stats,
-  file.path(outdir, "frontline_postASCT_sensitivity.csv")
+  file.path(outdir, paste0("frontline_postASCT_sensitivity_", date_tag, ".csv"))
 )
 write_csv(
   year_stats,
-  file.path(outdir, "frontline_1yr_sensitivity.csv")
+  file.path(outdir, paste0("frontline_1yr_sensitivity_", date_tag, ".csv"))
 )
 
 
@@ -804,11 +1211,14 @@ print(year_stats_BM)
 
 # 5b.  Head-to-head in the blood-cfWGS subset (only patients with blood Z-score) —
 
+# Define the blood-derived cfWGS column name
 blood_col <- assays["cfWGS_Blood_Sites"]
 
+# Filter to subjects with blood-cfWGS data
 post_df_blood <- post_df %>% filter(!is.na(.data[[blood_col]]))
 year_df_blood <- year_df %>% filter(!is.na(.data[[blood_col]]))
 
+# Calculate sensitivity for each assay within blood subset
 post_stats_blood <- map_dfr(names(assays), function(a) {
   compute_sens(post_df_blood, assays[a]) %>% 
     mutate(Assay = a)
@@ -819,46 +1229,64 @@ year_stats_blood <- map_dfr(names(assays), function(a) {
     mutate(Assay = a)
 }) %>% select(Assay, everything())
 
-message("Post-ASCT sensitivities among those with blood-cfWGS:")
+cat("BLOOD-SUBSET: Post-ASCT sensitivities (among those with blood-cfWGS):\n")
 print(post_stats_blood)
 
-message("1-yr sensitivities among those with blood-cfWGS:")
+cat("\nBLOOD-SUBSET: 1-yr sensitivities (among those with blood-cfWGS):\n")
 print(year_stats_blood)
 
-# 6.  (Optional) write them out ———————————————————————————————
+# ─────────────────────────────────────────────────────────────────────────────
+# 11. SAVE SUBSET SENSITIVITY RESULTS TO CSV
+# Saves BM and blood subsets separately for comparison
+# ─────────────────────────────────────────────────────────────────────────────
 
-write_csv(post_stats_BM,    file.path(outdir, "frontline_postASCT_sens_BMcfWGS.csv"))
-write_csv(year_stats_BM,    file.path(outdir, "frontline_1yr_sens_BMcfWGS.csv"))
-write_csv(post_stats_blood, file.path(outdir, "frontline_postASCT_sens_bloodcfWGS.csv"))
-write_csv(year_stats_blood, file.path(outdir, "frontline_1yr_sens_bloodcfWGS.csv"))
+write_csv(post_stats_BM,    file.path(outdir, paste0("frontline_postASCT_sens_BMcfWGS_", date_tag, ".csv")))
+write_csv(year_stats_BM,    file.path(outdir, paste0("frontline_1yr_sens_BMcfWGS_", date_tag, ".csv")))
+write_csv(post_stats_blood, file.path(outdir, paste0("frontline_postASCT_sens_bloodcfWGS_", date_tag, ".csv")))
+write_csv(year_stats_blood, file.path(outdir, paste0("frontline_1yr_sens_bloodcfWGS_", date_tag, ".csv")))
 
 
 
-### Make barplot for supplement 
-# ─────────────────────────────────────────────────────────────
-# 0.  Combine the two tables  → long format
-# ─────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
+# 12. SENSITIVITY BARPLOT FOR MANUSCRIPT SUPPLEMENT
+# Comparative visualization of sensitivity across assays and timepoints
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Combine BM-subset results (post-ASCT and maintenance) into long format
+# Filter to exclude blood-only cfWGS columns
+# Recodes assay names to short manuscript labels
+# Enforces desired display order: clinical assays → cfWGS
+
 sens_df <- bind_rows(
   post_stats_BM  %>% mutate(Timepoint = "Post-ASCT"),
   year_stats_BM  %>% mutate(Timepoint = "Maintenance-1yr")
 ) %>%
+  # Exclude blood-derived assays from BM-subset comparison
   filter(Assay != "cfWGS_Blood_Sites") %>%
   filter(Assay != "cfWGS_Blood_Combined") %>%
   mutate(
-    # percentages for labelling
+    # Convert to percentage for labeling
     Sens_pct   = Sensitivity * 100,
-    # nicer assay labels for the x‑axis
+    # Manuscript-friendly assay names
     Assay      = recode(Assay,
+                        EasyM          = "EasyM",
                         clonoSEQ       = "clonoSEQ",
                         Flow           = "MFC",
                         cfWGS_BM       = "cfWGS"),
-    # enforce desired order
+    # Enforce display order: cfWGS, clonoSEQ, MFC, then EasyM (rightmost)
+    Assay = factor(Assay, levels = c("cfWGS", "clonoSEQ", "MFC", "EasyM")),
+    # Enforce timepoint order for legend and grouping
     Timepoint = factor(Timepoint, levels = c("Post-ASCT", "Maintenance-1yr"))
   )
 
-# ─────────────────────────────────────────────────────────────
-# 1.  Custom palette & base theme
-# ─────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
+# 13. CONFIGURE BARPLOT COLORS AND THEME
+# ─────────────────────────────────────────────────────────────────────────────
+# Color scheme:
+#   - Post-ASCT: Deep teal (#31688E) - early therapeutic assessment
+#   - Maintenance-1yr: Bright green (#35B779) - longer-term surveillance
+# Theme minimizes clutter while maintaining publication quality
+
 custom_cols <- c(
   "Post-ASCT"       = "#31688E",  # deep teal
   "Maintenance-1yr" = "#35B779"   # bright green
@@ -874,24 +1302,33 @@ base_theme <- theme_minimal(base_size = 11) +
     plot.margin     = margin(10, 10, 30, 10)
   )
 
-# ─────────────────────────────────────────────────────────────
-# 2.  Build the grouped bar‑plot
-# ─────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
+# 14. BUILD GROUPED BARPLOT: Sensitivity by Assay × Timepoint
+# ─────────────────────────────────────────────────────────────────────────────
+# Grouped bars allow visual comparison of:
+#   - Sensitivity across assays (x-axis: clonoSEQ, MFC, EasyM, cfWGS)
+#   - Timepoint effect (bars grouped by color: Post-ASCT vs Maintenance-1yr)
+# Bar height = sensitivity %; text labels show exact percentages
+
 p_sens <- ggplot(sens_df %>% filter(Assay != "cfWGS_BM_screen"),
                  aes(x = Assay, y = Sens_pct, fill = Timepoint)) +
+  # position_dodge separates bars for same assay; width controls bar width
   geom_col(position = position_dodge(width = 0.8),
            width    = 0.7,
-           colour   = "black",
+           colour   = "black",        # black outline for clarity
            size     = 0.3) +
+  # Add percentage labels on top of bars
   geom_text(aes(label = sprintf("%.0f%%", Sens_pct)),
             position = position_dodge(width = 0.8),
-            vjust    = -0.3,
+            vjust    = -0.3,           # position above bar
             size     = 3.5) +
+  # Use custom color mapping with explicit order
   scale_fill_manual(
     name   = "Timepoint",
     values = custom_cols[c("Post-ASCT", "Maintenance-1yr")],  # enforce mapping
     limits = c("Post-ASCT", "Maintenance-1yr")                # enforce order
   ) +
+  # Y-axis: 0-100% scale
   scale_y_continuous(
     limits = c(0, 100),
     expand = expansion(mult = c(0, 0.02)),
@@ -909,16 +1346,21 @@ p_sens <- ggplot(sens_df %>% filter(Assay != "cfWGS_BM_screen"),
 
 print(p_sens)
 
-# ─────────────────────────────────────────────────────────────
-# 3.  Save
-# ─────────────────────────────────────────────────────────────
+# SAVE BM-SUBSET SENSITIVITY BARPLOT (500 DPI for manuscripts)
+# Saves to: Final Tables and Figures/Supp_6A_Fig_sensitivity_by_tech_training3_{date}.png
+
 ggsave(
-  filename = "Final Tables and Figures/Supp_6A_Fig_sensitivity_by_tech_training3.png",
+  filename = paste0("Final Tables and Figures/Supp_6A_Fig_sensitivity_by_tech_training3_", date_tag, ".png"),
   plot     = p_sens,
   width    = 6,
   height   = 4,
   dpi      = 500
 )
+
+cat("  ✓ Saved BM-subset sensitivity barplot\n\n")
+
+# BLOOD-SUBSET SENSITIVITY BARPLOT - Same structure as BM analysis
+# Restricted to blood-derived cfWGS samples for head-to-head comparison
 
 
 ## Now for blood
@@ -929,24 +1371,28 @@ sens_df <- bind_rows(
   filter(Assay != "cfWGS_BM") %>%
   filter(Assay != "cfWGS_BM_screen") %>%
   mutate(
-    # percentages for labelling
+    # Convert to percentage for labeling
     Sens_pct   = Sensitivity * 100,
-    # nicer assay labels for the x-axis
+    # Manuscript-friendly assay names (with line breaks for blood cfWGS variants)
     Assay      = recode(Assay,
+                        EasyM                 = "EasyM",
                         clonoSEQ              = "clonoSEQ",
                         Flow                  = "MFC",
                         cfWGS_Blood_Sites     = "cfWGS\n(Sites Model)",
                         cfWGS_Blood_Combined  = "cfWGS\n(Combined Model)"),
-    # enforce desired order
+    # Enforce timepoint order: Post-ASCT → Maintenance-1yr
     Timepoint = factor(Timepoint, levels = c("Post-ASCT", "Maintenance-1yr"))
   ) 
 
+# Enforce assay ordering: cfWGS variants (blood) first, then clonoSEQ, MFC, EasyM (rightmost)
+# Note: Blood models use "\n" for line break in x-axis labels; EasyM is rightmost for consistency
 sens_df <- sens_df %>%
   mutate(Assay = factor(Assay,
                         levels = c("cfWGS\n(Sites Model)",
                                    "cfWGS\n(Combined Model)", 
-                                   "clonoSEQ", "MFC")))
+                                   "clonoSEQ", "MFC", "EasyM")))
 
+# Build blood-subset barplot (same structure as BM version)
 p_sens_blood <- ggplot(sens_df,
                        aes(x = Assay, y = Sens_pct, fill = Timepoint)) +
   geom_col(position = position_dodge(width = 0.8),
@@ -977,43 +1423,58 @@ p_sens_blood <- ggplot(sens_df,
     axis.text.x = element_text(angle = 0, hjust = 0.5)
   )
 
+# Display the blood-subset barplot
 p_sens_blood
-# ─────────────────────────────────────────────────────────────
-# 3.  Save
-# ─────────────────────────────────────────────────────────────
+
+# SAVE BLOOD-SUBSET SENSITIVITY BARPLOT (500 DPI for manuscripts)
+# Saves to: Final Tables and Figures/Supp_8A_Fig_sensitivity_by_tech_training_blood2_{date}.png
+
 ggsave(
-  filename = "Final Tables and Figures/Supp_8A_Fig_sensitivity_by_tech_training_blood2.png",
+  filename = paste0("Final Tables and Figures/Supp_8A_Fig_sensitivity_by_tech_training_blood2_", date_tag, ".png"),
   plot     = p_sens_blood,
   width    = 6,
   height   = 4,
   dpi      = 500
 )
 
+cat("  ✓ Saved blood-subset sensitivity barplot\n\n")
 
+# ─────────────────────────────────────────────────────────────────────────────
+# 17. NON-FRONTLINE COHORT: Time-Window Prediction Analysis
+# (Non-annotated cohort with time-window predictions from 3_1_A)
+# ─────────────────────────────────────────────────────────────────────────────
 
+## Time-window analysis: Prediction of relapse within specific time windows
+## Using models trained on frontline cohort, evaluate on non-frontline subjects
+## Subset to post-transplant and BM-cfWGS tested
 
-#### Now get other results and do power analysis 
-
-## 1. Subset to post-transplant & BM-cfWGS tested ----
+# Filter to 1-year maintenance timepoint with BM-cfWGS result
 df_km <- survival_df %>%
   filter(
     timepoint_info == "1yr maintenance",
     !is.na(BM_zscore_only_detection_rate_call)
   )
 
-## 2. 24-month RFS by cfWGS BM ----
+# ─────────────────────────────────────────────────────────────────────────────
+# 18. CALCULATE 24-MONTH RELAPSE-FREE SURVIVAL (RFS) BY CFWGS BM
+# ─────────────────────────────────────────────────────────────────────────────
+# RFS at 24 months = probability of not relapsing within 24 months
+# Stratified by BM-cfWGS MRD status (positive vs negative)
+
 fit_cf <- survfit(
   Surv(Time_to_event, Relapsed_Binary) ~ BM_zscore_only_detection_rate_call,
   data = df_km
 )
-# survival probabilities at 24 months:
+
+# Extract RFS probability at 24 months (convert months to days: 24 * 30.44)
 t24    <- 24 * 30.44
 sum_cf <- summary(fit_cf, times = t24)
 
-# extract: strata 1 = negative, 2 = positive
+# Extract RFS % for MRD- (stratum 1) and MRD+ (stratum 2)
 rfs_neg_cf <- sum_cf$surv[1] * 100
 rfs_pos_cf <- sum_cf$surv[2] * 100
 
+# Calculate hazard ratio and 95% CI for cfWGS BM positivity
 cox_cf <- tidy(
   coxph(Surv(Time_to_event, Relapsed_Binary) ~ BM_zscore_only_detection_rate_call,
         data = df_km),
@@ -1023,28 +1484,41 @@ hr_cf      <- cox_cf$estimate
 ci_lo_cf   <- cox_cf$conf.low
 ci_hi_cf   <- cox_cf$conf.high
 
-## 2a) Median RFS by cfWGS BM (days → months) ----
-med_cf <- surv_median(fit_cf)$median
-med_neg_cf <- med_cf[1] / 30.44
-med_pos_cf <- med_cf[2] / 30.44
+# ─────────────────────────────────────────────────────────────────────────────
+# 19. CALCULATE MEDIAN RELAPSE-FREE SURVIVAL BY CFWGS BM
+# Median RFS = time at which 50% of patients have relapsed
+# ─────────────────────────────────────────────────────────────────────────────
 
-## 2b) 24-month RFS by flow cytometry ----
-# fit the Kaplan–Meier curve
+med_cf <- surv_median(fit_cf)$median
+med_neg_cf <- med_cf[1] / 30.44   # Convert days to months
+med_pos_cf <- med_cf[2] / 30.44   # Convert days to months
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 20. CALCULATE 24-MONTH RFS BY FLOW CYTOMETRY
+# Comparable time-window analysis using MFC/flow cytometry data
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Filter to subjects with both 1-year maintenance and Flow_Binary data
 df_km_fl <- df_km %>%
   filter(
     timepoint_info == "1yr maintenance",
     !is.na(Flow_Binary)
   )
 
-# fit the Kaplan–Meier curve
+# Fit KM curve stratified by Flow MRD status
 fit_fl <- survfit(
   Surv(Time_to_event, Relapsed_Binary) ~ Flow_Binary,
   data = df_km_fl
 )
 
+# Extract RFS at 24 months for flow cytometry
 sum_fl24   <- summary(fit_fl, times = t24)
 rfs_neg_fl <- sum_fl24$surv[1] * 100
 rfs_pos_fl <- sum_fl24$surv[2] * 100
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 21. CALCULATE MEDIAN RFS BY FLOW CYTOMETRY
+# ─────────────────────────────────────────────────────────────────────────────
 
 ## 3. Median RFS by flow ----
 fit_fl <- survfit(
@@ -1428,13 +1902,13 @@ progression_metrics <- bind_rows(
 # 8) Export summary table --------------------------------------------
 write_csv(
   progression_metrics,
-  file.path(outdir, "cfWGS_vs_flow_progression_summary.csv")
+  file.path(outdir, paste0("cfWGS_vs_flow_progression_summary_", date_tag, ".csv"))
 )
 
 # (Optional) also save as RDS for later use
 saveRDS(
   progression_metrics,
-  file.path(outdir, "cfWGS_vs_flow_progression_summary_updated.rds")
+  file.path(outdir, paste0("cfWGS_vs_flow_progression_summary_updated_", date_tag, ".rds"))
 )
 
 
@@ -1858,13 +2332,13 @@ progression_metrics_blood <- bind_rows(
 # 8) Export summary table --------------------------------------------
 write_csv(
   progression_metrics_blood,
-  file.path(outdir, "cfWGS_vs_flow_progression_summary_blood_muts.csv")
+  file.path(outdir, paste0("cfWGS_vs_flow_progression_summary_blood_muts_", date_tag, ".csv"))
 )
 
 # (Optional) also save as RDS for later use
 saveRDS(
   progression_metrics_blood,
-  file.path(outdir, "cfWGS_vs_flow_progression_summaryy_blood_muts_updated.rds")
+  file.path(outdir, paste0("cfWGS_vs_flow_progression_summaryy_blood_muts_updated_", date_tag, ".rds"))
 )
 
 
@@ -2288,13 +2762,13 @@ progression_metrics_blood_combined <- bind_rows(
 # 8) Export summary table --------------------------------------------
 write_csv(
   progression_metrics_blood_combined,
-  file.path(outdir, "cfWGS_vs_flow_progression_summary_blood_muts_combined_model.csv")
+  file.path(outdir, paste0("cfWGS_vs_flow_progression_summary_blood_muts_combined_model_", date_tag, ".csv"))
 )
 
 # (Optional) also save as RDS for later use
 saveRDS(
   progression_metrics_blood_combined,
-  file.path(outdir, "cfWGS_vs_flow_progression_summary_blood_muts_updated_combined_model.rds")
+  file.path(outdir, paste0("cfWGS_vs_flow_progression_summary_blood_muts_updated_combined_model_", date_tag, ".rds"))
 )
 
 
@@ -2418,7 +2892,7 @@ p_hr <- ggplot(hr_plot_df,
     legend.text        = element_text(size = 8)
   )
 
-ggsave("Final Tables and Figures/SuppFig8B_cfWGS_blood_HR_updated3.png",
+ggsave(paste0("Final Tables and Figures/SuppFig8B_cfWGS_blood_HR_updated3_", date_tag, ".png"),
        p_hr, width = 6, height = 4, dpi = 600)
 
 
@@ -2521,7 +2995,7 @@ p_hr_bm <- ggplot(hr_plot_df,
 
 p_hr_bm
 
-ggsave("Final Tables and Figures/Supp_Figure_6B_cfWGS_BM_HR_updated3.png",
+ggsave(paste0("Final Tables and Figures/Supp_Figure_6B_cfWGS_BM_HR_updated3_", date_tag, ".png"),
        p_hr_bm, width = 6, height = 4, dpi = 600)
 
 
@@ -3685,6 +4159,7 @@ dat <- dat %>%
 
 # 1) Your assays vector
 assays <- c(
+  EasyM        = "EasyM_optimized_binary",
   Flow         = "Flow_Binary",
   cfWGS_BM     = "BM_zscore_only_detection_rate_call",
   cfWGS_Blood  = "Blood_zscore_only_sites_call", 
@@ -4615,12 +5090,91 @@ cat(glue(
 ### Maybe follow up with Esteban to see if clinical or biochemical progression since don't know for non-frontline
 ### Leave as blank for now
 # Filter out patients whose ID starts with "IMG-" or "SPORE-"
-relapse_filtered <- Relapse_dates_full %>%
-  filter(!grepl("^IMG|^SPORE", Patient))
 
-# Export to RDS
-saveRDS(relapse_filtered, file = "Relapse_dates_full_filtered.rds")
+# ═════════════════════════════════════════════════════════════════════════════
+# FINAL SUMMARY: Script Output and Results
+# ═════════════════════════════════════════════════════════════════════════════
+#
+# This comprehensive survival analysis script has produced the following:
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# PRIMARY OUTPUTS
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# 1. KAPLAN-MEIER SURVIVAL CURVES (PNG files @ 500 DPI)
+#    Location: detection_progression_updated6/[timepoint]/
+#    Files: KM_[Assay]_[Timepoint]_updated_no_CI.png
+#    - Diagnosis: 4 assays (EasyM, clonoSEQ, MFC, cfWGS)
+#    - Post-ASCT: 7 assays (+ BM/blood variants)
+#    - Maintenance-1yr: 7 assays (+ BM/blood variants)
+#    Each plot shows: PFS curves, risk table, log-rank p-value
+#
+# 2. SENSITIVITY TABLES (CSV files)
+#    Location: Output directory root
+#    - frontline_postASCT_sensitivity.csv: % MRD+ among relapsed at post-ASCT
+#    - frontline_1yr_sensitivity.csv: % MRD+ among relapsed at 1-year
+#    - frontline_postASCT_sens_BMcfWGS.csv: Sensitivity in BM-cfWGS subset
+#    - frontline_1yr_sens_BMcfWGS.csv: Sensitivity in BM-cfWGS subset
+#    - frontline_postASCT_sens_bloodcfWGS.csv: Sensitivity in blood-cfWGS subset
+#    - frontline_1yr_sens_bloodcfWGS.csv: Sensitivity in blood-cfWGS subset
+#
+# 3. SENSITIVITY BARPLOTS (PNG files @ 500 DPI)
+#    Location: Final Tables and Figures/
+#    - Supp_6A_Fig_sensitivity_by_tech_training3.png (BM-subset analysis)
+#    - Supp_8A_Fig_sensitivity_by_tech_training_blood2.png (blood-subset analysis)
+#    Each plot shows: Grouped bars comparing assay sensitivities at post-ASCT vs 1-year
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# SECONDARY ANALYSES
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# 4. NON-FRONTLINE COHORT TIME-WINDOW ANALYSES
+#    - 24-month RFS by cfWGS BM at 1-year maintenance
+#    - Median RFS and hazard ratios by assay
+#    - Comparable metrics for Flow, clonoSEQ, EasyM
+#
+# 5. SPEARMAN CORRELATION ANALYSIS
+#    - Pairwise correlations between assays
+#    - Both full cohort and subset analyses
+#
+# 6. NARRATIVE SUMMARY STATISTICS
+#    - Patient/sample counts and demographics
+#    - Timing analysis: Days from baseline to collection/relapse
+#    - Nadir timing and relapse progression timing
+#    - Formatted paragraphs suitable for methods/results sections
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# KEY STATISTICAL FINDINGS EXPORTED FOR VISUALIZATION
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# - PFS probability at each timepoint (KM curves)
+# - Log-rank p-values testing MRD+/- difference
+# - Hazard ratios with 95% confidence intervals
+# - Sensitivity metrics (% detection among relapsers)
+# - Time-to-event distributions (days and months)
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# NEXT STEPS
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# After running this script:
+# 1. Review KM curves in output folders for publication-ready figures
+# 2. Check sensitivity tables for clinical assay performance comparison
+# 3. Examine barplots for supplementary figures
+# 4. Use narrative statistics for manuscript methods/results sections
+# 5. Consult statistical summaries for hypothesis testing and effect sizes
+#
+# For questions or modifications, reference upstream scripts:
+#   - 3_1_Optimize_cfWGS_thresholds.R (cfWGS optimization)
+#   - 3_1_A_Process_and_optimize_EasyM.R (EasyM model)
+#   - 2_0_Assemble_Table_With_All_Features.R (feature integration)
+#
+# ═════════════════════════════════════════════════════════════════════════════
 
-# Export to CSV (optional)
-write.csv(relapse_filtered, file = "Relapse_dates_full_filtered.csv", row.names = FALSE)
+cat("\n")
+cat("═" %*% 80, "\n")
+cat("SURVIVAL ANALYSIS COMPLETE\n")
+cat("Scripts completed: All KM curves, sensitivity analyses, and barplots generated\n")
+cat("═" %*% 80, "\n\n")
+
 

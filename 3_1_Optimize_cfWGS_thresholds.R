@@ -5251,7 +5251,7 @@ roc_plot <- ggplot(roc_df, aes(x = fpr, y = tpr, colour = combo)) +
     x      = "False-positive rate (1 − specificity)",
     y      = "True-positive rate (sensitivity)",
     colour = NULL,              # no title above the legend
-    title  = "Pooled Outer‑Fold ROC Curve on\nBlood-Derived Features (nested 5×5 CV)"
+    title  = "Pooled Outer‑Fold ROC Curve on\ncfDNA-Derived Features (nested 5×5 CV)"
   ) +
   theme_bw(14) +
   theme(
@@ -5296,7 +5296,7 @@ perf_plot <- ggplot(perf_df, aes(x = sens_mean, y = spec_mean, colour = combo)) 
   labs(
     x     = "Mean sensitivity (CV)",
     y     = "Mean specificity (CV)",
-    title = "Fold‑Wise Sensitivity & Specificity for\nBlood-Derived Features (mean ± SD)"
+    title = "Fold‑Wise Sensitivity & Specificity for\ncfDNA-Derived Features (mean ± SD)"
   ) +
   # reuse the Okabe-Ito palette
   # scale_colour_manual(
@@ -5337,7 +5337,7 @@ combined_plot <- roc_plot + perf_plot + plot_layout(ncol = 2, widths = c(1,1))
 
 # ── 4) Export ───────────────────────────────────────────────────────────────
 ggsave(
-  filename = "Final Tables and Figures/Fig_5A_updated_combined_ROC_and_performance_nested_folds_blood_features_updated2.png",
+  filename = "Final Tables and Figures/Fig_5A_updated_combined_ROC_and_performance_nested_folds_blood_features_updated3.png",
   plot     = combined_plot,
   width    = 12,
   height   = 6,
@@ -5345,7 +5345,7 @@ ggsave(
 )
 
 ggsave(
-  filename = "Final Tables and Figures/Performance_nested_folds_blood_updated2_only_performance.png",
+  filename = "Final Tables and Figures/Performance_nested_folds_blood_updated2_only_performance2.png",
   plot     = perf_plot_with_legend,
   width    = 6,
   height   = 6,
@@ -5353,7 +5353,7 @@ ggsave(
 )
 
 ggsave(
-  filename = "Final Tables and Figures/ROC_plot_folds_blood_updated2.png",
+  filename = "Final Tables and Figures/ROC_plot_folds_blood_updated3.png",
   plot     = roc_plot,
   width    = 6,
   height   = 6,

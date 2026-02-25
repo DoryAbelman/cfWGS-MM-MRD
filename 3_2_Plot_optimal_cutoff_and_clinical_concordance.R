@@ -358,7 +358,7 @@ non_tbl <- dat %>%
       Technology,
       Flow_Binary         = "MFC",
       Adaptive_Binary     = "clonoSEQ",
-      BM_zscore_only_detection_rate_call = "cfWGS" 
+      BM_zscore_only_detection_rate_call = "cfWGS"
   )
   )
 
@@ -697,7 +697,7 @@ p_pos_by_tech <- ggplot(combo_tbl,
   geom_text(aes(label = sprintf("%d%%", round(pos_rate * 100))),
             position = position_dodge(width = 0.8),
             vjust    = -0.3,
-            size     = 3.5,
+            size     = 2.5,
             family   = "sans") +
   
   # ③ manual fill so it matches your other panels
@@ -711,13 +711,13 @@ p_pos_by_tech <- ggplot(combo_tbl,
   facet_wrap(~ Cohort, nrow = 1, scales = "free_x") +
   scale_y_continuous(
     labels = scales::percent_format(scale = 1),
-    expand = expansion(mult = c(0, 0.02)),
+    expand = expansion(mult = c(0, 0.1)),
     limits = c(0, 100)
   ) +
   
   # ⑤ titles
   labs(
-    title = "MRD Positivity by Technology (BM-informed mutation lists)",
+    title = "MRD Positivity by Technology (BM-Derived mutation lists)",
     x     = "Technology",
     y     = "Positivity Rate"
   ) +
@@ -733,12 +733,13 @@ p_pos_by_tech <- ggplot(combo_tbl,
     legend.position = "top"
   )
 
+## Used in manuscript
 # 4) Save
 ggsave(
-  filename = file.path(OUTPUT_DIR_FIGURES, "Fig_4I_BM_positivity_by_tech_facet6.png"),
+  filename = file.path(OUTPUT_DIR_FIGURES, "Fig_4I_BM_positivity_by_tech_facet7.png"),
   plot     = p_pos_by_tech,
-  width    = 6.5,    # wider to accommodate two facets
-  height   = 3.85,
+  width    = 7.5,    # wider to accommodate two facets
+  height   = 4.5,
   dpi      = 500
 )
 
@@ -973,7 +974,9 @@ combo_tbl <- combo_tbl %>%
                            "cfWGS (screen)",
                            "cfWGS (confirm)",
                            "clonoSEQ",
-                           "MFC"
+                           "MFC",
+                           "EasyM (opt)",
+                           "EasyM (any)"
                          ))
     
   )
@@ -1033,7 +1036,7 @@ p_pos_by_tech <- ggplot(combo_tbl,
   geom_text(aes(label = sprintf("%d%%", round(pos_rate * 100))),
             position = position_dodge(width = 0.8),
             vjust    = -0.3,
-            size     = 3,
+            size     = 2.5,
             family   = "sans") +
   
   # ③ manual fill so it matches your other panels
@@ -1073,8 +1076,8 @@ p_pos_by_tech <- ggplot(combo_tbl,
 ggsave(
   filename = file.path(OUTPUT_DIR_FIGURES, "Fig_5I_Blood_positivity_by_tech_facet_updated6.png"),
   plot     = p_pos_by_tech,
-  width    = 6.5,    # wider to accommodate two facets
-  height   = 4,
+  width    = 7.5,    # wider to accommodate two facets
+  height   = 4.5,
   dpi      = 500
 )
 
@@ -3060,6 +3063,233 @@ ggsave("Final Tables and Figures/Fig4K_cfWGS_vs_MFC_clonoSEQ_clean_BM_muts_updat
 
 
 # ===========================================================================
+# SECTION 3B: SCATTER PLOTS WITH EASYМ ADDED AS THIRD COLUMN (BM-DERIVED)
+# ===========================================================================
+# Extended version of the scatter plot with EasyM as additional comparator column
+
+# Load EasyM data and merge into dat
+cat("\n=== Loading EasyM data for scatter plots ===\n")
+EasyM_data_file <- file.path(OUTPUT_DIR_EASYМ, "EasyM_all_samples_with_optimized_calls.csv")
+
+if (file.exists(EasyM_data_file)) {
+  EasyM_dat <- readr::read_csv(EasyM_data_file, show_col_types = FALSE)
+  
+  # Create a clean working copy of dat with EasyM merged
+  # First, remove any existing EasyM_value columns from dat to avoid .x/.y suffixes
+  dat_prep <- dat %>%
+    select(-starts_with("EasyM_value"))
+  
+  dat_with_easym <- dat_prep %>%
+    left_join(
+      EasyM_dat %>%
+        select(Patient, Timepoint, EasyM_value) %>%
+        distinct(Patient, Timepoint, .keep_all = TRUE),
+      by = c("Patient" = "Patient", "Timepoint" = "Timepoint"),
+      relationship = "many-to-one"
+    )
+  
+  cat(sprintf("✓ EasyM data merged: %d rows with EasyM_value\n", 
+              sum(!is.na(dat_with_easym$EasyM_value))))
+} else {
+  warning("EasyM data file not found - EasyM columns will be empty")
+  # If EasyM file missing, just create column as all NA
+  dat_with_easym <- dat %>%
+    select(-starts_with("EasyM_value")) %>%
+    mutate(EasyM_value = NA_real_)
+}
+
+# Load EasyM thresholds by timepoint (for reference lines)
+easyM_thresholds <- readr::read_csv(
+  file.path(OUTPUT_DIR_EASYМ, "EasyM_threshold_values_by_timepoint.csv"),
+  show_col_types = FALSE
+)
+
+# Build plot data with EasyM as additional comparator (BM-derived mutations)
+plot_df_with_easym <- bind_rows(
+  # Original clonoSEQ and MFC data - convert Comparator to character first
+  plot_df2 %>%
+    mutate(Comparator = as.character(Comparator)) %>%
+    select(Patient, Sample_Code, landmark_timepoint, Comparator, 
+           x_plot, y_plot, relapse_cat, Num_days_to_closest_relapse),
+  # Add EasyM comparator rows (using dat_with_easym which has EasyM data merged)
+  dat_with_easym %>%
+    mutate(Flow_pct_cells = Flow_pct_cells/100) %>%
+    filter(
+      Cohort == "Frontline",
+      !is.na(BM_zscore_only_detection_rate_call),
+      !is.na(landmark_tp),
+      !is.na(EasyM_value)
+    ) %>%
+    mutate(
+      Comparator = "EasyM",
+      x_val = EasyM_value,
+      # Cap EasyM at 100% (1.0) and set minimum floor for plotting
+      x_plot = pmin(pmax(EasyM_value, 1e-6), 1.0),  # Cap EasyM at 100% (1.0)
+      y_plot = if_else(BM_zscore_only_detection_rate_prob <= 1e-5, 
+                       1e-5, BM_zscore_only_detection_rate_prob),
+      landmark_tp = str_replace_all(landmark_tp, hyphen_rx, "-") |> trimws(),
+      landmark_timepoint = factor(landmark_tp, levels = c("Post-ASCT", "Maintenance-1yr")),
+      relapse_cat = if_else(
+        Num_days_to_closest_relapse <= 365,
+        "Relapsed ≤365 d",
+        "No relapse ≤365 d",
+        missing = "No relapse ≤365 d"
+      ),
+      relapse_cat = factor(relapse_cat, levels = c("Relapsed ≤365 d", "No relapse ≤365 d"))
+    ) %>%
+    select(Patient, Sample_Code, landmark_timepoint, Comparator, 
+           x_plot, y_plot, relapse_cat, Num_days_to_closest_relapse)
+)
+
+# Set Comparator factor order: clonoSEQ, MFC, EasyM (so EasyM appears on the right)
+# AND ensure landmark_timepoint factor has correct order: Post-ASCT before Maintenance-1yr
+plot_df_with_easym <- plot_df_with_easym %>%
+  mutate(
+    # First trim any whitespace
+    Comparator = str_trim(as.character(Comparator)),
+    # Then set factor with explicit levels
+    Comparator = factor(Comparator, levels = c("clonoSEQ", "MFC", "EasyM"), ordered = FALSE),
+    # Ensure landmark_timepoint factor has correct level order
+    landmark_timepoint = factor(landmark_timepoint, levels = c("Post-ASCT", "Maintenance-1yr"))
+  )
+
+# Calculate correlations for all three comparators
+corr_df_with_easym <- plot_df_with_easym %>%
+  group_by(landmark_timepoint, Comparator) %>%
+  summarize(
+    rho = cor(x_plot, y_plot, method = "spearman", use = "complete.obs"),
+    p   = cor.test(x_plot, y_plot, method = "spearman")$p.value,
+    .groups = "drop"
+  ) %>%
+  mutate(
+    label = sprintf("ρ = %.2f\np = %.2f", rho, p),
+    x = 0.035,
+    y = 0.99,
+    # CRITICAL: Ensure Comparator has same factor levels as plot data
+    Comparator = factor(Comparator, levels = c("clonoSEQ", "MFC", "EasyM"))
+  )
+
+# Map EasyM thresholds by timepoint for reference lines
+# Timepoint codes: 05 = Post-ASCT (Post-Transplant), 07 = Maintenance-1yr (1-Year Maintenance)
+easyM_threshold_lines <- easyM_thresholds %>%
+  filter(Timepoint %in% c("05", "07")) %>%
+  mutate(
+    landmark_timepoint = case_when(
+      Timepoint == "05" ~ "Post-ASCT",
+      Timepoint == "07" ~ "Maintenance-1yr",
+      TRUE ~ NA_character_
+    ),
+    # Convert percentage (0-100 scale) to proportion (0-1 scale) for plotting
+    xintercept = Threshold_raw_percent / 100,
+    Comparator = "EasyM",
+    # CRITICAL: Ensure Comparator is a factor with correct levels
+    Comparator = factor(Comparator, levels = c("clonoSEQ", "MFC", "EasyM"))
+  ) %>%
+  select(landmark_timepoint, Comparator, xintercept)
+
+# FORCE landmark_timepoint factor ordering right before plot
+plot_df_with_easym <- plot_df_with_easym %>%
+  mutate(landmark_timepoint = factor(landmark_timepoint, levels = c("Post-ASCT", "Maintenance-1yr")))
+
+corr_df_with_easym <- corr_df_with_easym %>%
+  mutate(landmark_timepoint = factor(landmark_timepoint, levels = c("Post-ASCT", "Maintenance-1yr")))
+
+easyM_threshold_lines <- easyM_threshold_lines %>%
+  mutate(landmark_timepoint = factor(landmark_timepoint, levels = c("Post-ASCT", "Maintenance-1yr")))
+
+# Build plot with EasyM column added
+p_scatter_with_easym_bm <- ggplot(plot_df_with_easym,
+                                   aes(x = x_plot, y = y_plot,
+                                       fill = relapse_cat)) +
+  # Reference lines for thresholds
+  geom_hline(yintercept = 0.4215524, linetype = "dashed", colour = "grey80") +
+  # cfWGS threshold (horizontal line) - only for clonoSEQ and MFC, NOT for EasyM
+  geom_vline(aes(xintercept = xintercept), linetype = "dashed", colour = "grey80",
+             data = data.frame(
+               landmark_timepoint = factor(rep(c("Post-ASCT", "Maintenance-1yr"), 2),
+                                          levels = c("Post-ASCT", "Maintenance-1yr")),
+               Comparator = factor(c("clonoSEQ", "clonoSEQ", "MFC", "MFC"), 
+                                   levels = c("clonoSEQ", "MFC", "EasyM")),
+               xintercept = lod_clonoMF
+             )) +
+  # EasyM thresholds (per timepoint)
+  geom_vline(aes(xintercept = xintercept), linetype = "dashed", colour = "grey80",
+             data = easyM_threshold_lines) +
+  
+  # Points
+  geom_point(shape = 21, size = 2, alpha = 0.9, colour = "black") +
+  
+  # Colors for relapse status
+  scale_fill_manual(
+    name = "Relapse ≤1 year",
+    values = c(
+      "Relapsed ≤365 d"   = "red",
+      "No relapse ≤365 d" = "black"
+    )
+  ) +
+  
+  # Log scale for X axis with independent scales per comparator
+  scale_x_log10(
+    breaks = c(1e-6, 1e-5, 1e-4, 1e-3, 1e-2, 1e-1, 1),
+    labels = c("Not detected", "0.001%", "0.01%", "0.1%", "1%", "10%", "100%"),
+    expand = expansion(mult = c(0.05, 0.05))
+  ) +
+  scale_y_continuous(
+    limits = c(0.12, 1),
+    breaks = seq(0, 1, by = 0.2),
+    labels = scales::percent_format(accuracy = 1)
+  ) +
+  
+  # Facet: rows = timepoint, cols = comparator
+  facet_grid(rows = vars(landmark_timepoint),
+             cols = vars(Comparator),
+             drop = FALSE,
+             as.table = TRUE) +
+  
+  # Annotations
+  geom_text(
+    data = corr_df_with_easym,
+    aes(x = x, y = y, label = label),
+    hjust = 0, vjust = 1, size = 2.5,
+    inherit.aes = FALSE
+  ) +
+  
+  # Labels
+  labs(title = "cfWGS of BM-Derived Mutations MRD\nProbability vs. Clinical Assays and EasyM",
+       x = "Comparator MRD level",
+       y = "cfWGS Model Probability") +
+  
+  # Theme
+  theme_bw(base_size = 11) +
+  theme(
+    panel.border = element_rect(colour = "black", fill = NA, size = 0.5),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    strip.background = element_rect(fill = "white", colour = "black"),
+    strip.text = element_text(face = "bold"),
+    axis.title = element_text(size = 11),
+    axis.text.x = element_text(angle = 30, hjust = 1),
+    plot.title = element_text(face = "bold", hjust = 0.5),
+    legend.position = "right",
+    legend.title = element_text(face = "bold", size = 9),
+    legend.text = element_text(size = 8)
+  )
+
+p_scatter_with_easym_bm
+
+# Save
+ggsave("Final Tables and Figures/Fig4K_cfWGS_vs_MFC_clonoSEQ_EasyM_BM_muts_updated5.png",
+       p_scatter_with_easym_bm,
+       width = 8.5, height = 5, dpi = 600)
+
+# Export source data
+readr::write_csv(
+  plot_df_with_easym %>% mutate(Figure = "Fig4K_cfWGS_vs_clinical_assays_EasyM_BM"),
+  file.path(outdir_source_data, "Fig4K_cfWGS_vs_clinical_assays_EasyM_BM_source_data.csv")
+)
+
+
+# ===========================================================================
 # SECTION 4: CROSS-PLATFORM CONCORDANCE VISUALIZATIONS
 # ===========================================================================
 # Generate scatter plots comparing EasyM residual M-protein to cfWGS probabilities
@@ -3409,6 +3639,235 @@ p_scatter_simple_blood
 ggsave("Final Tables and Figures/Fig5K_cfWGS_vs_MFC_clonoSEQ_clean_Blood_muts_updated3.png",
        p_scatter_simple_blood,
        width  = 6.5, height = 5, dpi = 600)
+
+
+# ===========================================================================
+# SECTION 3C: SCATTER PLOTS WITH EASYМ ADDED AS THIRD COLUMN (BLOOD-DERIVED)
+# ===========================================================================
+# Extended version of the blood scatter plot with EasyM as additional comparator column
+
+# Ensure EasyM data is available (use dat_with_easym from Section 3B if available)
+if (!exists("dat_with_easym")) {
+  cat("\n=== Loading EasyM data for blood scatter plots ===\n")
+  EasyM_data_file <- file.path(OUTPUT_DIR_EASYМ, "EasyM_all_samples_with_optimized_calls.csv")
+  
+  if (file.exists(EasyM_data_file)) {
+    EasyM_dat <- readr::read_csv(EasyM_data_file, show_col_types = FALSE)
+    
+    # First, remove any existing EasyM_value columns from dat to avoid .x/.y suffixes
+    dat_prep <- dat %>%
+      select(-starts_with("EasyM_value"))
+    
+    dat_with_easym <- dat_prep %>%
+      left_join(
+        EasyM_dat %>%
+          select(Patient, Timepoint, EasyM_value) %>%
+          distinct(Patient, Timepoint, .keep_all = TRUE),
+        by = c("Patient" = "Patient", "Timepoint" = "Timepoint"),
+        relationship = "many-to-one"
+      )
+    
+    cat(sprintf("✓ EasyM data merged: %d rows with EasyM_value\n", 
+                sum(!is.na(dat_with_easym$EasyM_value))))
+  } else {
+    warning("EasyM data file not found - EasyM columns will be empty")
+    # If EasyM file missing, just create column as all NA
+    dat_with_easym <- dat %>%
+      select(-starts_with("EasyM_value")) %>%
+      mutate(EasyM_value = NA_real_)
+  }
+}
+
+# Build plot data with EasyM as additional comparator (blood-derived mutations)
+# Note: Blood-specific LOD threshold
+lod_blood <- 1e-5
+
+# Map EasyM thresholds by timepoint for reference lines (same as BM section)
+easyM_threshold_lines_blood <- easyM_thresholds %>%
+  filter(Timepoint %in% c("05", "07")) %>%
+  mutate(
+    landmark_timepoint = case_when(
+      Timepoint == "05" ~ "Post-ASCT",
+      Timepoint == "07" ~ "Maintenance-1yr",
+      TRUE ~ NA_character_
+    ),
+    # Convert percentage (0-100 scale) to proportion (0-1 scale) for plotting
+    xintercept = Threshold_raw_percent / 100,
+    Comparator = "EasyM",
+    # CRITICAL: Ensure Comparator is a factor with correct levels
+    Comparator = factor(Comparator, levels = c("clonoSEQ", "MFC", "EasyM"))
+  ) %>%
+  select(landmark_timepoint, Comparator, xintercept)
+
+plot_df_blood_with_easym <- bind_rows(
+  # Original clonoSEQ and MFC data - convert Comparator to character first
+  plot_df2 %>%
+    mutate(Comparator = as.character(Comparator)) %>%
+    select(Patient, Sample_Code, landmark_timepoint, Comparator,
+           x_plot, y_plot, relapse_cat, Num_days_to_closest_relapse),
+  # Add EasyM comparator rows (using dat_with_easym which has EasyM data merged)
+  dat_with_easym %>%
+    mutate(Flow_pct_cells = Flow_pct_cells/100) %>%
+    filter(
+      Cohort == "Frontline",
+      !is.na(Blood_zscore_only_sites_call),
+      !is.na(landmark_tp),
+      !is.na(EasyM_value)
+    ) %>%
+    mutate(
+      Comparator = "EasyM",
+      x_val = EasyM_value,
+      # Cap EasyM at 100% (1.0) and set minimum floor for plotting
+      x_plot = pmin(pmax(EasyM_value, 1e-6), 1.0),
+      y_plot = if_else(Blood_zscore_only_sites_prob <= 1e-5,
+                       1e-5, Blood_zscore_only_sites_prob),
+      landmark_tp = str_replace_all(landmark_tp, hyphen_rx, "-") |> trimws(),
+      landmark_timepoint = factor(landmark_tp, levels = c("Post-ASCT", "Maintenance-1yr")),
+      relapse_cat = if_else(
+        Num_days_to_closest_relapse <= 365,
+        "Relapsed ≤365 d",
+        "No relapse ≤365 d",
+        missing = "No relapse ≤365 d"
+      ),
+      relapse_cat = factor(relapse_cat, levels = c("Relapsed ≤365 d", "No relapse ≤365 d"))
+    ) %>%
+    select(Patient, Sample_Code, landmark_timepoint, Comparator,
+           x_plot, y_plot, relapse_cat, Num_days_to_closest_relapse)
+)
+
+# Set Comparator factor order: clonoSEQ, MFC, EasyM (so EasyM appears on the right)
+# AND ensure landmark_timepoint factor has correct order: Post-ASCT before Maintenance-1yr
+plot_df_blood_with_easym <- plot_df_blood_with_easym %>%
+  mutate(
+    # First trim any whitespace
+    Comparator = str_trim(as.character(Comparator)),
+    # Then set factor with explicit levels
+    Comparator = factor(Comparator, levels = c("clonoSEQ", "MFC", "EasyM"), ordered = FALSE),
+    # Ensure landmark_timepoint factor has correct level order
+    landmark_timepoint = factor(landmark_timepoint, levels = c("Post-ASCT", "Maintenance-1yr"))
+  )
+
+# Calculate correlations for blood with EasyM
+corr_df_blood_with_easym <- plot_df_blood_with_easym %>%
+  group_by(landmark_timepoint, Comparator) %>%
+  summarize(
+    rho = cor(x_plot, y_plot, method = "spearman", use = "complete.obs"),
+    p   = cor.test(x_plot, y_plot, method = "spearman")$p.value,
+    .groups = "drop"
+  ) %>%
+  mutate(
+    label = sprintf("ρ = %.2f\np = %.2f", rho, p),
+    x = 0.035,
+    y = 0.99,
+    # CRITICAL: Ensure Comparator has same factor levels as plot data
+    Comparator = factor(Comparator, levels = c("clonoSEQ", "MFC", "EasyM"))
+  )
+
+# FORCE landmark_timepoint factor ordering right before plot
+plot_df_blood_with_easym <- plot_df_blood_with_easym %>%
+  mutate(landmark_timepoint = factor(landmark_timepoint, levels = c("Post-ASCT", "Maintenance-1yr")))
+
+corr_df_blood_with_easym <- corr_df_blood_with_easym %>%
+  mutate(landmark_timepoint = factor(landmark_timepoint, levels = c("Post-ASCT", "Maintenance-1yr")))
+
+easyM_threshold_lines_blood <- easyM_threshold_lines_blood %>%
+  mutate(landmark_timepoint = factor(landmark_timepoint, levels = c("Post-ASCT", "Maintenance-1yr")))
+
+# Build plot with EasyM column added (blood-derived mutations)
+p_scatter_with_easym_blood <- ggplot(plot_df_blood_with_easym,
+                                      aes(x = x_plot, y = y_plot,
+                                          fill = relapse_cat)) +
+  # Reference lines for thresholds
+  geom_hline(yintercept = 0.4215524, linetype = "dashed", colour = "grey80") +
+  # Blood cfWGS threshold (horizontal line) - only for clonoSEQ and MFC, NOT for EasyM
+  geom_vline(
+    data = data.frame(
+      landmark_timepoint = factor(rep(c("Post-ASCT", "Maintenance-1yr"), 2),
+                                  levels = c("Post-ASCT", "Maintenance-1yr")),
+      Comparator = factor(c("clonoSEQ", "clonoSEQ", "MFC", "MFC"),
+                          levels = c("clonoSEQ", "MFC", "EasyM")),
+      xintercept = lod_blood
+    ),
+    aes(xintercept = xintercept),
+    linetype = "dashed", colour = "grey80"
+  ) +
+  # EasyM thresholds (per timepoint)
+  geom_vline(
+    data = easyM_threshold_lines_blood,
+    aes(xintercept = xintercept),
+    linetype = "dashed", colour = "grey80"
+  ) +
+
+  # Points
+  geom_point(shape = 21, size = 2, alpha = 0.9, colour = "black") +
+
+  # Colors for relapse status
+  scale_fill_manual(
+    name = "Relapse ≤1 year",
+    values = c(
+      "Relapsed ≤365 d"   = "red",
+      "No relapse ≤365 d" = "black"
+    )
+  ) +
+
+  # Log scale for X axis with independent scales per comparator
+  scale_x_log10(
+    breaks = c(1e-6, 1e-5, 1e-4, 1e-3, 1e-2, 1e-1, 1),
+    labels = c("Not detected", "0.001%", "0.01%", "0.1%", "1%", "10%", "100%"),
+    expand = expansion(mult = c(0.05, 0.05))
+  ) +
+  scale_y_continuous(
+    limits = c(0.12, 1),
+    breaks = seq(0, 1, by = 0.2),
+    labels = scales::percent_format(accuracy = 1)
+  ) +
+
+  # Facet: rows = timepoint, cols = comparator
+  facet_grid(rows = vars(landmark_timepoint),
+             cols = vars(Comparator),
+             as.table = TRUE) +
+
+  # Annotations
+  geom_text(
+    data = corr_df_blood_with_easym,
+    aes(x = x, y = y, label = label),
+    hjust = 0, vjust = 1, size = 2.5,
+    inherit.aes = FALSE
+  ) +
+
+  # Labels
+  labs(title = "cfWGS of cfDNA-Derived Mutations MRD\nProbability vs. Clinical Assays and EasyM",
+       x = "Comparator MRD level",
+       y = "cfWGS Model Probability") +
+
+  # Theme
+  theme_bw(base_size = 11) +
+  theme(
+    panel.border = element_rect(colour = "black", fill = NA, size = 0.5),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    strip.background = element_rect(fill = "white", colour = "black"),
+    strip.text = element_text(face = "bold"),
+    axis.title = element_text(size = 11),
+    axis.text.x = element_text(angle = 30, hjust = 1),
+    plot.title = element_text(face = "bold", hjust = 0.5),
+    legend.position = "right",
+    legend.title = element_text(face = "bold", size = 9),
+    legend.text = element_text(size = 8)
+  )
+
+p_scatter_with_easym_blood
+
+# Save
+ggsave("Final Tables and Figures/Fig5K_cfWGS_vs_MFC_clonoSEQ_EasyM_Blood_muts_updated5.png",
+       p_scatter_with_easym_blood,
+       width = 8.5, height = 5, dpi = 600)
+
+# Export source data
+readr::write_csv(
+  plot_df_blood_with_easym %>% mutate(Figure = "Fig5K_cfWGS_vs_clinical_assays_EasyM_blood"),
+  file.path(outdir_source_data, "Fig5K_cfWGS_vs_clinical_assays_EasyM_blood_source_data.csv")
+)
 
 
 #### EasyM vs Blood model probability  ────────────────────────────────────────
