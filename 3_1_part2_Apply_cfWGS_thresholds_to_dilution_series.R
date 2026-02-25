@@ -13,6 +13,8 @@ library(stringr)
 library(broom)       # tidying model outputs
 library(patchwork)   # optional – for combining plots, if needed
 library(viridis)
+library(ggplot2)
+library(scales)
 
 # ── 1. FILE PATHS ───────────────────────────────────────────────────────────
 PATH_MODEL_LIST       <- "~/Documents/Thesis_work/R/M4/Projects/High_risk_MM_baselinbe_relapse_marrow/Output_tables_2025/selected_combo_models_2025-09-17.rds"
@@ -116,11 +118,15 @@ apply_selected <- function(dat, models, thresholds, positive_class = "pos") {
   out <- dat            # start with your full data.frame
   n   <- nrow(dat)
   
-  # Check that models and thresholds align
-  if (!all(names(models) %in% names(thresholds))) {
-    stop("Model names and threshold names do not match!")
-  }
+  # Check that models and thresholds have at least some overlap
   common <- intersect(names(models), names(thresholds))
+  if (length(common) == 0) {
+    stop("Model names and threshold names have no overlap!")
+  }
+  if (!all(names(models) %in% names(thresholds))) {
+    warning("Some model names not in thresholds – scoring only the ",
+            length(common), " matching combos.")
+  }
   
   for (cmb in common) {
     fit <- models[[cmb]]
@@ -210,11 +216,21 @@ feature_cols <- c(
   "Fragmentomics_mean_coverage_only_prob"
 )
 
+available_feature_cols <- intersect(feature_cols, names(dilution_df))
+missing_feature_cols   <- setdiff(feature_cols, names(dilution_df))
+if (length(missing_feature_cols) > 0) {
+  message("Skipping missing feature columns in correlation screen: ",
+          paste(missing_feature_cols, collapse = ", "))
+}
+if (length(available_feature_cols) == 0) {
+  stop("No candidate feature columns found in dilution_df.")
+}
+
 ## ----------------------------------------------------------------------
 ## 2.  Long‑format data frame & correlation screen  ---------------------
 ## ----------------------------------------------------------------------
 plot_df <- dilution_df %>%
-  select(LOD, all_of(feature_cols)) %>%
+  select(LOD, all_of(available_feature_cols)) %>%
   pivot_longer(-LOD, names_to = "feature", values_to = "value") %>%
   filter(!is.na(value))
 
@@ -1559,7 +1575,7 @@ p_blood <- ggplot(plot_df_blood, aes(x = LOD, y = value)) +
   geom_smooth(method = "lm", se = FALSE, size = 0.7) +
   facet_wrap(~ feature,
              scales = "free_y",
-             labeller = as_labeller(facet_labels_blood)) +
+             labeller = as_labeller(facet_labels_fragmentomics)) +
   geom_text(
     data = annot_df,
     aes(x = Inf, y = Inf, label = label),
@@ -1597,7 +1613,7 @@ p_blood_spearman_actual <- ggplot(plot_df_blood, aes(x = LOD, y = value)) +
   geom_smooth(method = "lm", se = FALSE, size = 0.7) +
   facet_wrap(~ feature,
              scales   = "free_y",
-             labeller = as_labeller(facet_labels_blood)) +
+             labeller = as_labeller(facet_labels_fragmentomics)) +
   geom_text(
     data    = annot_spear,
     aes(x = Inf, y = Inf, label = label),
@@ -1628,3 +1644,611 @@ ggsave(
 ## Export dilution df as supplementary table 
 write_csv(dilution_df, file.path(OUTPUT_DIR, "Supp_Table_7_dilution_series_scored_updated3.csv"))
 write_csv(dilution_df, file.path(OUTPUT_DIR_TABLES, "Supp_Table_7_dilution_series_scored_updated2.csv"))
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# REVIEWER RESPONSE  –  Healthy-control overlay for dilution-series figures
+# Date added: 2026-02-25
+#
+# Adds healthy-control points (gray) and median reference lines (dotted) to
+# the THREE feature panels (cVAF, cVAF Z-score, Prop. Sites Detected Z-score)
+# in both the BM and Blood combined figures.
+# Manuscript mapping:
+#   - BM mutation figure = Extended Data 5D (formerly Fig 4G)
+#   - Blood mutation figure = Extended Data 7D (formerly Fig 5G)
+# Model-probability panels are left unchanged.
+# New figures are saved with a "_withHealthy_20260225" suffix.
+# ══════════════════════════════════════════════════════════════════════════════
+
+message("\n═══ Building dilution figures WITH healthy-control overlay ═══\n")
+
+# ── A. Load healthy-control MRDetect reference ──────────────────────────────
+PATH_HEALTHY_REF <- file.path(
+  dirname(PATH_DILUTION_PROCESSED_MRDetect),
+  "cfWGS_Winter2025All_MRDetect_with_Zscore_Sep2025.rds"
+)
+
+if (!file.exists(PATH_HEALTHY_REF)) {
+  # try alternative
+  PATH_HEALTHY_REF <- file.path(
+    dirname(PATH_DILUTION_PROCESSED_MRDetect),
+    "All_detection_rates_baseline_and_controls_Feb2026.rds"
+  )
+}
+stopifnot(
+  "Healthy-control MRDetect RDS not found – check PATH_HEALTHY_REF" =
+    file.exists(PATH_HEALTHY_REF)
+)
+
+all_mrdetect_ref <- readRDS(PATH_HEALTHY_REF)
+
+# Identify dilution-series patient(s) and filter matching healthy controls
+dilution_patient <- unique(dilution_df$Patient)
+message("Dilution patient(s): ", paste(dilution_patient, collapse = ", "))
+
+healthy_ref <- all_mrdetect_ref %>%
+  filter(Study == "CHARM_healthy",
+         Patient %in% dilution_patient,
+         Timepoint %in% c("01"))  # Match dilution series timepoint
+if ("Filter_source" %in% names(healthy_ref)) {
+  healthy_ref <- healthy_ref %>% filter(Filter_source == "STR_encode")
+}
+
+message("Healthy-control rows for dilution patient(s): ", nrow(healthy_ref))
+
+# ── B. Synthetic x position for healthy controls ───────────────────────────
+#    Placed at 35 % of the minimum dilution LOD → appears to the far right
+#    on the reversed-log x-axis
+min_lod <- min(dilution_df$LOD, na.rm = TRUE)
+hc_x    <- min_lod * 0.35
+message("Healthy-control synthetic x position: ", signif(hc_x, 3))
+
+# ── C. Helper: reshape healthy-control rows into long format ────────────────
+make_hc_long <- function(hc_df, mut_source,
+                         rename_map = list()) {
+  # rename_map: list(new_name = "old_col_name")
+  out <- hc_df %>%
+    filter(Mut_source == mut_source) %>%
+    transmute(!!!rename_map) %>%
+    pivot_longer(everything(), names_to = "feature", values_to = "value") %>%
+    mutate(LOD = hc_x, group = "Healthy control") %>%
+    filter(!is.na(value))
+  out
+}
+
+# ── D. BM arm healthy controls ─────────────────────────────────────────────
+hc_bm_long <- make_hc_long(
+  healthy_ref, "BM_cells",
+  rename_map = list(
+    detect_rate_BM            = sym("detection_rate"),
+    zscore_BM                 = sym("sites_rate_zscore_charm"),
+    z_score_detection_rate_BM = sym("detection_rate_zscore_reads_checked_charm")
+  )
+)
+
+hc_bm_medians <- hc_bm_long %>%
+  group_by(feature) %>%
+  summarise(median_val = median(value, na.rm = TRUE), .groups = "drop")
+message("BM healthy-control points: ", nrow(hc_bm_long),
+        " (", length(unique(hc_bm_long$feature)), " features)")
+
+# ── E. Blood arm healthy controls ──────────────────────────────────────────
+hc_blood_long <- make_hc_long(
+  healthy_ref, "Blood",
+  rename_map = list(
+    detect_rate_blood            = sym("detection_rate"),
+    zscore_blood                 = sym("sites_rate_zscore_charm"),
+    z_score_detection_rate_blood = sym("detection_rate_zscore_reads_checked_charm")
+  )
+)
+
+hc_blood_medians <- hc_blood_long %>%
+  group_by(feature) %>%
+  summarise(median_val = median(value, na.rm = TRUE), .groups = "drop")
+message("Blood healthy-control points: ", nrow(hc_blood_long),
+        " (", length(unique(hc_blood_long$feature)), " features)")
+
+# ── F. HC label annotation data frames (one row per feature) ──────────────
+#    These are placed inside each feature panel at the top of the HC cluster
+hc_label_bm <- tibble(
+  feature = c("detect_rate_BM", "zscore_BM", "z_score_detection_rate_BM"),
+  x       = hc_x
+)
+hc_label_blood <- tibble(
+  feature = c("detect_rate_blood", "zscore_blood", "z_score_detection_rate_blood"),
+  x       = hc_x
+)
+
+# ── Stage A: custom x-axis label function ─────────────────────────────────
+# Returns "HC" at the hc_x break; label_number(suffix="%") everywhere else.
+# Because hc_x is explicitly included in breaks, the label function receives
+# exactly that numeric value for the HC tick — the relative tolerance guard
+# handles any floating-point noise.
+pct_with_hc <- function(x) {
+  out <- label_number(suffix = "%")(x)
+  out[abs(x - hc_x) < hc_x * 0.001] <- "HC"
+  out
+}
+
+# Breaks for feature panels: extend existing major_breaks with hc_x so that
+# a proper tick — labelled "HC" — appears at the healthy-control position.
+breaks_with_hc <- sort(c(major_breaks, hc_x))
+
+# Extend minor_breaks to cover the HC region (needed for annotation_logticks)
+xr_hc_ext  <- range(c(xr, hc_x))
+decades_hc <- -10:10
+minor_ext  <- rep(1:9, times = length(decades_hc)) *
+                10^rep(decades_hc, each = 9)
+minor_ext  <- minor_ext[
+  minor_ext >= xr_hc_ext[1] & minor_ext <= xr_hc_ext[2]]
+
+# In-panel top-right anchor for correlation text on reversed-log x-axis.
+# (right side is near the HC location)
+corr_x_right <- hc_x * 1.25
+
+# ── G. Source-data export directory for Extended Data figures ───────────────
+SOURCE_DATA_DIR <- file.path(OUTPUT_DIR_TABLES, "Source_Data_Extended_Data")
+if (!dir.exists(SOURCE_DATA_DIR)) dir.create(SOURCE_DATA_DIR, recursive = TRUE)
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# BM COMBINED FIGURE  (Fig 4G with healthy controls)
+# ════════════════════════════════════════════════════════════════════════════
+
+# -- Facet labels for BM feature panels --
+facet_labels_bm_hc <- c(
+  detect_rate_BM            = "Cumulative VAF (cVAF)",
+  z_score_detection_rate_BM = "cVAF Z\u2011Score",
+  zscore_BM                 = "Prop. Sites Detected Z-score",
+  BM_base_zscore_prob                 = "Combined Model\nProbability",
+  BM_zscore_only_detection_rate_prob  = "BM cVAF model prob."
+)
+
+# -- Re-derive BM dilution long data (feature panels only) --
+bm_feat_names <- c("detect_rate_BM", "zscore_BM", "z_score_detection_rate_BM")
+
+bm_dil_long <- dilution_df %>%
+  select(LOD, all_of(bm_feat_names)) %>%
+  pivot_longer(-LOD, names_to = "feature", values_to = "value") %>%
+  mutate(group = "Dilution")
+
+# Spearman on dilution data only
+corr_bm_sp_hc <- bm_dil_long %>%
+  group_by(feature) %>%
+  summarise(
+    rho = cor(value, LOD, method = "spearman"),
+    p   = cor.test(value, LOD, method = "spearman")$p.value,
+    .groups = "drop"
+  ) %>%
+  mutate(
+    p_text = if_else(p < 0.01, "p < 0.01", sprintf("p = %.2f", p)),
+    label  = paste0(sprintf("\u03C1 = %.2f", rho), "\n", p_text)
+  )
+
+# Combine dilution + healthy
+bm_feat_with_hc <- bind_rows(bm_dil_long, hc_bm_long)
+
+# -- Build BM feature panel --
+p_bm_feat_hc <- ggplot(bm_feat_with_hc, aes(x = LOD, y = value)) +
+  # Healthy-control median dotted line
+  geom_hline(
+    data     = hc_bm_medians,
+    aes(yintercept = median_val),
+    linetype = "dotted", color = "gray50", linewidth = 0.5
+  ) +
+  # Dilution points (black)
+  geom_point(
+    data  = bm_feat_with_hc %>% filter(group == "Dilution"),
+    color = "black", size = 2, alpha = 0.8
+  ) +
+  # Healthy-control points (gray)
+  geom_point(
+    data  = bm_feat_with_hc %>% filter(group == "Healthy control"),
+    color = "gray60", size = 1.5, alpha = 0.6
+  ) +
+  facet_wrap(
+    ~ feature, scales = "free_y",
+    labeller = as_labeller(facet_labels_bm_hc)
+  ) +
+  # Correlation annotation – top-right, kept inside panel to avoid clipping
+  geom_text(
+    data    = corr_bm_sp_hc,
+    aes(x = corr_x_right, y = Inf, label = label),
+    hjust = 1, vjust = 1.1, size = 3, inherit.aes = FALSE
+  ) +
+  scale_x_continuous(
+    trans        = compose_trans("log10", "reverse"),
+    breaks       = breaks_with_hc,
+    minor_breaks = minor_ext,
+    labels       = pct_with_hc
+  ) +
+  annotation_logticks(sides = "b", base = 10) +
+  coord_cartesian(clip = "off") +
+  scale_y_continuous() +
+  labs(x = "Log tumour fraction (%)", y = "Feature value") +
+  theme_classic(base_size = 10) +
+  theme(
+    strip.text   = element_text(face = "bold"),
+    panel.border = element_rect(color = "black", fill = NA),
+    axis.ticks   = element_line(color = "black"),
+    plot.margin  = margin(t = 5, r = 5, b = 20, l = 5)
+  )
+
+# -- Re-derive BM probability panel (unchanged from original) --
+bm_prob_feats <- c("BM_zscore_only_detection_rate_prob", "BM_base_zscore_prob")
+bm_thresholds <- tibble(
+  feature = bm_prob_feats,
+  thr     = c(
+    bm_obj$thresholds["BM_zscore_only_detection_rate"],
+    bm_obj$thresholds["BM_base_zscore"]
+  )
+)
+
+bm_dil_all_long <- dilution_df %>%
+  select(LOD, all_of(c(bm_feat_names, bm_prob_feats))) %>%
+  pivot_longer(-LOD, names_to = "feature", values_to = "value")
+
+bm_prob_df <- bm_dil_all_long %>%
+  filter(feature %in% bm_prob_feats) %>%
+  left_join(bm_thresholds, by = "feature") %>%
+  mutate(call = if_else(value > thr, "Positive", "Negative"))
+
+# -- Export source data for Extended Data 5D (BM mutation figure) --
+bm_source_feature_points <- bm_feat_with_hc %>%
+  mutate(
+    figure_id    = "Extended_Data_5D",
+    figure_label = "BM mutation features",
+    panel_type   = "Feature"
+  ) %>%
+  select(figure_id, figure_label, panel_type, feature, group, LOD, value)
+
+bm_source_hc_medians <- hc_bm_medians %>%
+  mutate(
+    figure_id    = "Extended_Data_5D",
+    figure_label = "BM mutation features",
+    panel_type   = "Feature",
+    group        = "Healthy control"
+  ) %>%
+  select(figure_id, figure_label, panel_type, feature, group, median_val)
+
+bm_source_correlations <- corr_bm_sp_hc %>%
+  mutate(
+    figure_id    = "Extended_Data_5D",
+    figure_label = "BM mutation features",
+    panel_type   = "Feature"
+  ) %>%
+  select(figure_id, figure_label, panel_type, feature, rho, p, p_text, label)
+
+bm_source_probability_points <- bm_prob_df %>%
+  mutate(
+    figure_id    = "Extended_Data_5D",
+    figure_label = "BM mutation features",
+    panel_type   = "Probability"
+  ) %>%
+  select(figure_id, figure_label, panel_type, feature, LOD, value, thr, call)
+
+bm_source_probability_thresholds <- bm_thresholds %>%
+  mutate(
+    figure_id    = "Extended_Data_5D",
+    figure_label = "BM mutation features",
+    panel_type   = "Probability"
+  ) %>%
+  select(figure_id, figure_label, panel_type, feature, thr)
+
+write_csv(
+  bm_source_feature_points,
+  file.path(SOURCE_DATA_DIR, "SourceData_ExtendedData5D_BM_feature_points_20260225.csv")
+)
+write_csv(
+  bm_source_hc_medians,
+  file.path(SOURCE_DATA_DIR, "SourceData_ExtendedData5D_BM_hc_medians_20260225.csv")
+)
+write_csv(
+  bm_source_correlations,
+  file.path(SOURCE_DATA_DIR, "SourceData_ExtendedData5D_BM_correlations_20260225.csv")
+)
+write_csv(
+  bm_source_probability_points,
+  file.path(SOURCE_DATA_DIR, "SourceData_ExtendedData5D_BM_probability_points_20260225.csv")
+)
+write_csv(
+  bm_source_probability_thresholds,
+  file.path(SOURCE_DATA_DIR, "SourceData_ExtendedData5D_BM_probability_thresholds_20260225.csv")
+)
+message("Exported source data: Extended Data 5D (BM)")
+
+p_bm_prob_hc <- ggplot(bm_prob_df, aes(x = LOD, y = value, color = call)) +
+  geom_hline(
+    data     = bm_thresholds,
+    aes(yintercept = thr),
+    linetype = "dashed", color = "gray40"
+  ) +
+  geom_point(size = 2, alpha = 0.8) +
+  facet_wrap(
+    ~ feature, scales = "free_y",
+    labeller = as_labeller(facet_labels_bm_hc)
+  ) +
+  scale_x_continuous(
+    trans        = compose_trans("log10", "reverse"),
+    breaks       = major_breaks,
+    minor_breaks = minor_breaks,
+    labels       = label_number(suffix = "%")
+  ) +
+  annotation_logticks(sides = "b", base = 10) +
+  scale_color_manual(
+    values = c(Positive = "forestgreen", Negative = "gray60"),
+    na.value = "black"
+  ) +
+  labs(x = "Log tumour fraction (%)", y = "Model probability", color = "Call") +
+  theme_classic(base_size = 10) +
+  theme(
+    strip.text   = element_text(face = "bold"),
+    panel.border = element_rect(color = "black", fill = NA),
+    axis.ticks   = element_line(color = "black")
+  )
+
+# -- Combine BM panels --
+combined_bm_hc <- p_bm_feat_hc + p_bm_prob_hc +
+  plot_layout(nrow = 1, widths = c(3, 2)) +
+  plot_annotation(
+    title = "Correlation of cfDNA Feature Values with Tumor Fraction in a Controlled Dilution Series",
+    theme = theme(
+      plot.title      = element_text(hjust = 0.5, face = "bold", size = 14),
+      plot.margin     = margin(5, 5, 5, 5),
+      plot.background = element_rect(fill = "white", colour = NA)
+    )
+  ) &
+  theme(
+    panel.border = element_rect(colour = "black", fill = NA),
+    strip.text   = element_text(face = "bold")
+  )
+
+ggsave(
+  filename = file.path(OUTPUT_DIR_FIGURES,
+                        "Fig4G_LOD_combined_HCaxis_v2_20260225.png"),
+  plot     = combined_bm_hc,
+  width    = 12, height = 4.2, dpi = 600
+)
+message("Saved: Fig4G_LOD_combined_HCaxis_v2_20260225.png")
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# BLOOD COMBINED FIGURE  (Fig 5G with healthy controls)
+# ════════════════════════════════════════════════════════════════════════════
+
+# -- Facet labels for Blood panels --
+facet_labels_blood_hc <- c(
+  detect_rate_blood            = "Cumulative VAF (cVAF)",
+  z_score_detection_rate_blood = "cVAF Z-score",
+  zscore_blood                 = "Prop. Sites Detected Z-score",
+  Blood_plus_fragment_prob     = "Combined Model\nProbability",
+  Blood_zscore_only_sites_prob = "Blood sites model prob."
+)
+
+# -- Re-derive Blood dilution long data (feature panels only) --
+blood_feat_names <- c("detect_rate_blood", "zscore_blood",
+                      "z_score_detection_rate_blood")
+
+blood_dil_long <- dilution_df %>%
+  select(LOD, all_of(blood_feat_names)) %>%
+  pivot_longer(-LOD, names_to = "feature", values_to = "value") %>%
+  mutate(group = "Dilution")
+
+# Spearman on dilution data only
+corr_blood_sp_hc <- blood_dil_long %>%
+  group_by(feature) %>%
+  summarise(
+    rho = cor(value, LOD, method = "spearman"),
+    p   = cor.test(value, LOD, method = "spearman")$p.value,
+    .groups = "drop"
+  ) %>%
+  mutate(
+    p_text = if_else(p < 0.01, "p < 0.01", sprintf("p = %.2f", p)),
+    label  = paste0(sprintf("\u03C1 = %.2f", rho), "\n", p_text)
+  )
+
+# Combine dilution + healthy
+blood_feat_with_hc <- bind_rows(blood_dil_long, hc_blood_long)
+
+# -- Build Blood feature panel --
+p_blood_feat_hc <- ggplot(blood_feat_with_hc, aes(x = LOD, y = value)) +
+  # Healthy-control median dotted line
+  geom_hline(
+    data     = hc_blood_medians,
+    aes(yintercept = median_val),
+    linetype = "dotted", color = "gray50", linewidth = 0.5
+  ) +
+  # Dilution points (black)
+  geom_point(
+    data  = blood_feat_with_hc %>% filter(group == "Dilution"),
+    color = "black", size = 2, alpha = 0.8
+  ) +
+  # Healthy-control points (gray)
+  geom_point(
+    data  = blood_feat_with_hc %>% filter(group == "Healthy control"),
+    color = "gray60", size = 1.5, alpha = 0.6
+  ) +
+  facet_wrap(
+    ~ feature, scales = "free_y",
+    labeller = as_labeller(facet_labels_blood_hc)
+  ) +
+  # Correlation annotation – top-right, kept inside panel to avoid clipping
+  geom_text(
+    data    = corr_blood_sp_hc,
+    aes(x = corr_x_right, y = Inf, label = label),
+    hjust = 0.75, vjust = 1.1, size = 3, inherit.aes = FALSE
+  ) +
+  scale_x_continuous(
+    trans        = compose_trans("log10", "reverse"),
+    breaks       = breaks_with_hc,
+    minor_breaks = minor_ext,
+    labels       = pct_with_hc
+  ) +
+  annotation_logticks(sides = "b", base = 10) +
+  coord_cartesian(clip = "off") +
+  scale_y_continuous() +
+  labs(x = "Log tumour fraction (%)", y = "Feature value") +
+  theme_classic(base_size = 10) +
+  theme(
+    strip.text   = element_text(face = "bold"),
+    panel.border = element_rect(color = "black", fill = NA),
+    axis.ticks   = element_line(color = "black"),
+    plot.margin  = margin(t = 5, r = 5, b = 20, l = 5)
+  )
+
+# -- Re-derive Blood probability panel with confirmatory zone (unchanged) --
+blood_prob_feats <- c("Blood_plus_fragment_prob", "Blood_zscore_only_sites_prob")
+blood_thresholds <- tibble(
+  feature = blood_prob_feats,
+  thr     = c(
+    blood_obj$thresholds["Blood_plus_fragment"],
+    blood_obj$thresholds["Blood_zscore_only_sites"]
+  )
+)
+
+blood_dil_all_long <- dilution_df %>%
+  select(LOD, all_of(c(blood_feat_names, blood_prob_feats))) %>%
+  pivot_longer(-LOD, names_to = "feature", values_to = "value")
+
+blood_prob_df <- blood_dil_all_long %>%
+  filter(feature %in% blood_prob_feats) %>%
+  left_join(blood_thresholds, by = "feature") %>%
+  mutate(
+    call = case_when(
+      feature == "Blood_zscore_only_sites_prob" & value >= thr                ~ "Positive",
+      feature == "Blood_zscore_only_sites_prob" & value >= 0.380 & value < thr ~ "Confirmatory",
+      feature == "Blood_zscore_only_sites_prob"                               ~ "Negative",
+      value >= thr ~ "Positive",
+      TRUE         ~ "Negative"
+    ),
+    call = factor(call, levels = c("Negative", "Confirmatory", "Positive"))
+  )
+
+# -- Export source data for Extended Data 7D (Blood mutation figure) --
+blood_source_feature_points <- blood_feat_with_hc %>%
+  mutate(
+    figure_id    = "Extended_Data_7D",
+    figure_label = "Blood mutation features",
+    panel_type   = "Feature"
+  ) %>%
+  select(figure_id, figure_label, panel_type, feature, group, LOD, value)
+
+blood_source_hc_medians <- hc_blood_medians %>%
+  mutate(
+    figure_id    = "Extended_Data_7D",
+    figure_label = "Blood mutation features",
+    panel_type   = "Feature",
+    group        = "Healthy control"
+  ) %>%
+  select(figure_id, figure_label, panel_type, feature, group, median_val)
+
+blood_source_correlations <- corr_blood_sp_hc %>%
+  mutate(
+    figure_id    = "Extended_Data_7D",
+    figure_label = "Blood mutation features",
+    panel_type   = "Feature"
+  ) %>%
+  select(figure_id, figure_label, panel_type, feature, rho, p, p_text, label)
+
+blood_source_probability_points <- blood_prob_df %>%
+  mutate(
+    figure_id    = "Extended_Data_7D",
+    figure_label = "Blood mutation features",
+    panel_type   = "Probability"
+  ) %>%
+  select(figure_id, figure_label, panel_type, feature, LOD, value, thr, call)
+
+blood_source_probability_thresholds <- blood_thresholds %>%
+  mutate(
+    figure_id    = "Extended_Data_7D",
+    figure_label = "Blood mutation features",
+    panel_type   = "Probability"
+  ) %>%
+  select(figure_id, figure_label, panel_type, feature, thr)
+
+write_csv(
+  blood_source_feature_points,
+  file.path(SOURCE_DATA_DIR, "SourceData_ExtendedData7D_Blood_feature_points_20260225.csv")
+)
+write_csv(
+  blood_source_hc_medians,
+  file.path(SOURCE_DATA_DIR, "SourceData_ExtendedData7D_Blood_hc_medians_20260225.csv")
+)
+write_csv(
+  blood_source_correlations,
+  file.path(SOURCE_DATA_DIR, "SourceData_ExtendedData7D_Blood_correlations_20260225.csv")
+)
+write_csv(
+  blood_source_probability_points,
+  file.path(SOURCE_DATA_DIR, "SourceData_ExtendedData7D_Blood_probability_points_20260225.csv")
+)
+write_csv(
+  blood_source_probability_thresholds,
+  file.path(SOURCE_DATA_DIR, "SourceData_ExtendedData7D_Blood_probability_thresholds_20260225.csv")
+)
+message("Exported source data: Extended Data 7D (Blood)")
+
+p_blood_prob_hc <- ggplot(blood_prob_df, aes(x = LOD, y = value, color = call)) +
+  geom_hline(
+    data     = blood_thresholds,
+    aes(yintercept = thr),
+    linetype = "dashed", color = "gray40"
+  ) +
+  geom_hline(
+    data = data.frame(feature = "Blood_zscore_only_sites_prob", thr = 0.380),
+    aes(yintercept = thr),
+    linetype = "dashed", color = "steelblue"
+  ) +
+  geom_point(size = 2, alpha = 0.8) +
+  facet_wrap(
+    ~ feature, scales = "free_y",
+    labeller = as_labeller(facet_labels_blood_hc)
+  ) +
+  scale_x_continuous(
+    trans        = compose_trans("log10", "reverse"),
+    breaks       = major_breaks,
+    minor_breaks = minor_breaks,
+    labels       = label_number(suffix = "%")
+  ) +
+  annotation_logticks(sides = "b", base = 10) +
+  scale_color_manual(
+    name   = "Call",
+    values = c(Negative     = "gray60",
+               Confirmatory = "steelblue",
+               Positive     = "forestgreen")
+  ) +
+  labs(x = "Log tumour fraction (%)", y = "Model probability", color = "Call") +
+  theme_classic(base_size = 10) +
+  theme(
+    strip.text   = element_text(face = "bold"),
+    panel.border = element_rect(color = "black", fill = NA),
+    axis.ticks   = element_line(color = "black"),
+    legend.position = "right"
+  )
+
+# -- Combine Blood panels --
+combined_blood_hc <- p_blood_feat_hc + p_blood_prob_hc +
+  plot_layout(nrow = 1, widths = c(3, 2)) +
+  plot_annotation(
+    title = "Correlation of cfDNA Feature Values with Tumor Fraction in a Controlled Dilution Series",
+    theme = theme(
+      plot.title      = element_text(hjust = 0.5, face = "bold", size = 14),
+      plot.margin     = margin(5, 5, 5, 5),
+      plot.background = element_rect(fill = "white", colour = NA)
+    )
+  ) &
+  theme(
+    panel.border = element_rect(colour = "black", fill = NA),
+    strip.text   = element_text(face = "bold")
+  )
+
+ggsave(
+  filename = file.path(OUTPUT_DIR_FIGURES,
+                        "Fig5G_LOD_combined_HCaxis_v2_20260225.png"),
+  plot     = combined_blood_hc,
+  width    = 12, height = 4.2, dpi = 600
+)
+message("Saved: Fig5G_LOD_combined_HCaxis_v2_20260225.png")
+
+message("\n═══ Done: healthy-control overlays saved ═══\n")
+

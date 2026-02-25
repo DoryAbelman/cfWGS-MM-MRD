@@ -79,6 +79,10 @@ dat_rds       <- "Output_tables_2025/all_patients_with_BM_and_blood_calls_update
 outdir <- "Output_tables_2025/detection_progression_updated6"
 dir.create(outdir, showWarnings = FALSE, recursive = TRUE)
 
+# SOURCE DATA DIRECTORY: Stores figure source data for manuscript submission
+outdir_source_data <- "Output_tables_2025/Source_data"
+dir.create(outdir_source_data, showWarnings = FALSE, recursive = TRUE)
+
 # ═════════════════════════════════════════════════════════════════════════════
 # FILE VERSIONING: Prevents overwriting previous results
 # ═════════════════════════════════════════════════════════════════════════════
@@ -90,6 +94,34 @@ dir.create(outdir, showWarnings = FALSE, recursive = TRUE)
 # ═════════════════════════════════════════════════════════════════════════════
 
 date_tag <- format(Sys.Date(), "%Y-%m-%d")
+
+# ═════════════════════════════════════════════════════════════════════════════
+# SOURCE DATA EXPORTS: Figure source data for manuscript
+# ═════════════════════════════════════════════════════════════════════════════
+# All figure source data saved to: Output_tables_2025/Source_data/
+#
+# KEY EXPORTS (exported immediately after data frame creation):
+#   • Supp_6A_BM_sensitivity_barplot_source_data_YYYY-MM-DD.csv
+#     └─ Source: sens_df_bm (BM subset sensitivity by assay × timepoint)
+#
+#   • Supp_8A_blood_sensitivity_barplot_source_data_YYYY-MM-DD.csv
+#     └─ Source: sens_df_blood (Blood subset sensitivity by assay × timepoint)
+#
+#   • SuppFig8B_blood_HR_plot_source_data_YYYY-MM-DD.csv
+#     └─ Source: hr_plot_df_blood (Blood-derived HR by landmark × assay)
+#
+#   • Supp_Figure_6B_BM_HR_plot_source_data_YYYY-MM-DD.csv
+#     └─ Source: hr_plot_df_bm (BM-derived HR by landmark × assay)
+#
+# ADDITIONAL EXPORTS (analytical summaries):
+#   • frontline_followup_summary_YYYY-MM-DD.csv (see line ~1046)
+#   • frontline_postASCT_sensitivity_YYYY-MM-DD.csv (see line ~1175)
+#   • frontline_1yr_sensitivity_YYYY-MM-DD.csv
+#   • All progression metrics CSVs (see lines ~1900, 2330, 2763)
+#
+# NOTE: KM curve source data = filtered survival_df for each assay/timepoint
+#       (generated dynamically in loop; not exported separately)
+# ═════════════════════════════════════════════════════════════════════════════
 
 cat("\n", strrep("═", 80), "\n")
 cat("SURVIVAL ANALYSIS: Frontline Cohort\n")
@@ -1257,27 +1289,37 @@ write_csv(year_stats_blood, file.path(outdir, paste0("frontline_1yr_sens_bloodcf
 # Recodes assay names to short manuscript labels
 # Enforces desired display order: clinical assays → cfWGS
 
-sens_df <- bind_rows(
+sens_df_bm <- bind_rows(
   post_stats_BM  %>% mutate(Timepoint = "Post-ASCT"),
   year_stats_BM  %>% mutate(Timepoint = "Maintenance-1yr")
 ) %>%
-  # Exclude blood-derived assays from BM-subset comparison
+  # Exclude blood-derived assays and screening variant from BM-subset comparison
   filter(Assay != "cfWGS_Blood_Sites") %>%
   filter(Assay != "cfWGS_Blood_Combined") %>%
+  filter(Assay != "cfWGS_BM_screen") %>%
   mutate(
     # Convert to percentage for labeling
     Sens_pct   = Sensitivity * 100,
     # Manuscript-friendly assay names
     Assay      = recode(Assay,
-                        EasyM          = "EasyM",
+                        EasyM          = "EasyM (Opt)",
                         clonoSEQ       = "clonoSEQ",
                         Flow           = "MFC",
                         cfWGS_BM       = "cfWGS"),
-    # Enforce display order: cfWGS, clonoSEQ, MFC, then EasyM (rightmost)
-    Assay = factor(Assay, levels = c("cfWGS", "clonoSEQ", "MFC", "EasyM")),
+    # Enforce display order: cfWGS, clonoSEQ, MFC, then EasyM (Opt) rightmost
+    Assay = factor(Assay, levels = c("cfWGS", "clonoSEQ", "MFC", "EasyM (Opt)")),
     # Enforce timepoint order for legend and grouping
     Timepoint = factor(Timepoint, levels = c("Post-ASCT", "Maintenance-1yr"))
   )
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SOURCE DATA EXPORT: Supp_6A (BM sensitivity barplot)
+# ─────────────────────────────────────────────────────────────────────────────
+write_csv(
+  sens_df_bm,
+  file.path(outdir_source_data, paste0("Supp_6A_BM_sensitivity_barplot_source_data_", date_tag, ".csv"))
+)
+cat("  ✓ Exported source data: Supp_6A (BM sensitivity)\n")
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 13. CONFIGURE BARPLOT COLORS AND THEME
@@ -1310,7 +1352,7 @@ base_theme <- theme_minimal(base_size = 11) +
 #   - Timepoint effect (bars grouped by color: Post-ASCT vs Maintenance-1yr)
 # Bar height = sensitivity %; text labels show exact percentages
 
-p_sens <- ggplot(sens_df %>% filter(Assay != "cfWGS_BM_screen"),
+p_sens <- ggplot(sens_df_bm,
                  aes(x = Assay, y = Sens_pct, fill = Timepoint)) +
   # position_dodge separates bars for same assay; width controls bar width
   geom_col(position = position_dodge(width = 0.8),
@@ -1341,7 +1383,7 @@ p_sens <- ggplot(sens_df %>% filter(Assay != "cfWGS_BM_screen"),
   ) +
   base_theme +
   theme(
-    axis.text.x = element_text(angle = 0, hjust = 1)
+    axis.text.x = element_text(angle = 0, hjust = 0.5, vjust = 0.5)
   )
 
 print(p_sens)
@@ -1364,7 +1406,7 @@ cat("  ✓ Saved BM-subset sensitivity barplot\n\n")
 
 
 ## Now for blood
-sens_df <- bind_rows(
+sens_df_blood <- bind_rows(
   post_stats_blood  %>% mutate(Timepoint = "Post-ASCT"),
   year_stats_blood  %>% mutate(Timepoint = "Maintenance-1yr")
 ) %>%
@@ -1375,7 +1417,7 @@ sens_df <- bind_rows(
     Sens_pct   = Sensitivity * 100,
     # Manuscript-friendly assay names (with line breaks for blood cfWGS variants)
     Assay      = recode(Assay,
-                        EasyM                 = "EasyM",
+                        EasyM                 = "EasyM (Opt)",
                         clonoSEQ              = "clonoSEQ",
                         Flow                  = "MFC",
                         cfWGS_Blood_Sites     = "cfWGS\n(Sites Model)",
@@ -1384,16 +1426,25 @@ sens_df <- bind_rows(
     Timepoint = factor(Timepoint, levels = c("Post-ASCT", "Maintenance-1yr"))
   ) 
 
-# Enforce assay ordering: cfWGS variants (blood) first, then clonoSEQ, MFC, EasyM (rightmost)
-# Note: Blood models use "\n" for line break in x-axis labels; EasyM is rightmost for consistency
-sens_df <- sens_df %>%
+# Enforce assay ordering: cfWGS variants (blood) first, then clonoSEQ, MFC, EasyM (Opt) rightmost
+# Note: Blood models use "\n" for line break in x-axis labels; EasyM (Opt) is rightmost for consistency
+sens_df_blood <- sens_df_blood %>%
   mutate(Assay = factor(Assay,
                         levels = c("cfWGS\n(Sites Model)",
                                    "cfWGS\n(Combined Model)", 
-                                   "clonoSEQ", "MFC", "EasyM")))
+                                   "clonoSEQ", "MFC", "EasyM (Opt)")))
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SOURCE DATA EXPORT: Supp_8A (Blood sensitivity barplot)
+# ─────────────────────────────────────────────────────────────────────────────
+write_csv(
+  sens_df_blood,
+  file.path(outdir_source_data, paste0("Supp_8A_blood_sensitivity_barplot_source_data_", date_tag, ".csv"))
+)
+cat("  ✓ Exported source data: Supp_8A (Blood sensitivity)\n")
 
 # Build blood-subset barplot (same structure as BM version)
-p_sens_blood <- ggplot(sens_df,
+p_sens_blood <- ggplot(sens_df_blood,
                        aes(x = Assay, y = Sens_pct, fill = Timepoint)) +
   geom_col(position = position_dodge(width = 0.8),
            width    = 0.7,
@@ -1420,7 +1471,7 @@ p_sens_blood <- ggplot(sens_df,
   ) +
   base_theme +
   theme(
-    axis.text.x = element_text(angle = 0, hjust = 0.5)
+    axis.text.x = element_text(angle = 0, hjust = 0.5, vjust = 0.5)
   )
 
 # Display the blood-subset barplot
@@ -1575,6 +1626,43 @@ hr_clonoSEQ      <- cox_clonoSEQ$estimate
 ci_lo_clonoSEQ   <- cox_clonoSEQ$conf.low
 ci_hi_clonoSEQ   <- cox_clonoSEQ$conf.high
 
+
+## check EasyM (Proteomic MRD)
+# Filter to subjects with EasyM data at 1-year maintenance
+df_km_easym <- df_km %>%
+  filter(
+    timepoint_info == "1yr maintenance",
+    !is.na(EasyM_optimized_binary)
+  )
+
+# fit the Kaplan–Meier curve
+fit_easym <- survfit(
+  Surv(Time_to_event, Relapsed_Binary) ~ EasyM_optimized_binary,
+  data = df_km_easym
+)
+
+sum_easym24   <- summary(fit_easym, times = t24)
+rfs_neg_easym <- sum_easym24$surv[1] * 100
+rfs_pos_easym <- sum_easym24$surv[2] * 100
+
+## Median RFS by EasyM ----
+fit_easym <- survfit(
+  Surv(Time_to_event, Relapsed_Binary) ~ EasyM_optimized_binary,
+  data = df_km_easym
+)
+med_easym <- surv_median(fit_easym)$median      # vector of two values
+med_neg_easym <- med_easym[1] / 30.44           # convert days→months
+med_pos_easym <- med_easym[2] / 30.44
+
+cox_easym <- tidy(
+  coxph(Surv(Time_to_event, Relapsed_Binary) ~ EasyM_optimized_binary,
+        data = df_km_easym),
+  exponentiate = TRUE, conf.int = TRUE
+)
+hr_easym      <- cox_easym$estimate
+ci_lo_easym   <- cox_easym$conf.low
+ci_hi_easym   <- cox_easym$conf.high
+
 ## 4. Spearman correlations ----
 # replace with your actual probability column:
 prob_var <- "BM_zscore_only_detection_rate_prob"  
@@ -1613,6 +1701,11 @@ n_MFC <- df_km %>%
 
 n_clonoSEQ <- df_km %>%
   filter(!is.na(Adaptive_Binary)) %>%
+  distinct(Patient) %>%
+  nrow()
+
+n_easym <- df_km %>%
+  filter(!is.na(EasyM_optimized_binary)) %>%
   distinct(Patient) %>%
   nrow()
 
@@ -1660,9 +1753,16 @@ metrics_1yr <- tibble(
   RFS24_seq_pos  = rfs_pos_clonoSEQ,
   MedRFS_seq_neg = med_neg_clonoSEQ,
   MedRFS_seq_pos = med_pos_clonoSEQ,
+  RFS24_em_neg   = rfs_neg_easym,
+  RFS24_em_pos   = rfs_pos_easym,
+  MedRFS_em_neg  = med_neg_easym,
+  MedRFS_em_pos  = med_pos_easym,
   HR_seq         = hr_clonoSEQ,
   CI_low_seq     = ci_lo_clonoSEQ,
   CI_high_seq    = ci_hi_clonoSEQ,
+  HR_em          = hr_easym,
+  CI_low_em      = ci_lo_easym,
+  CI_high_em     = ci_hi_easym,
   HR_cf          = hr_cf,
   CI_low_cf      = ci_lo_cf,
   CI_high_cf     = ci_hi_cf,
@@ -1677,7 +1777,8 @@ metrics_1yr <- tibble(
   Power_HR2_pct  = pw2 * 100,
   N_cfWGS        = n_cfWGS,
   N_MFC          = n_MFC,
-  N_clonoSEQ     = n_clonoSEQ
+  N_clonoSEQ     = n_clonoSEQ,
+  N_easym        = n_easym
 )
 
 
@@ -1790,6 +1891,43 @@ ci_lo_clonoSEQ   <- cox_clonoSEQ$conf.low
 ci_hi_clonoSEQ   <- cox_clonoSEQ$conf.high
 
 
+## check EasyM (Proteomic MRD)
+# Filter to subjects with EasyM data at post-transplant
+df_km_easym <- df_km %>%
+  filter(
+    timepoint_info == "post_transplant",
+    !is.na(EasyM_optimized_binary)
+  )
+
+# fit the Kaplan–Meier curve
+fit_easym <- survfit(
+  Surv(Time_to_event, Relapsed_Binary) ~ EasyM_optimized_binary,
+  data = df_km_easym
+)
+
+sum_easym24   <- summary(fit_easym, times = t24)
+rfs_neg_easym <- sum_easym24$surv[1] * 100
+rfs_pos_easym <- sum_easym24$surv[2] * 100
+
+## Median RFS by EasyM ----
+fit_easym <- survfit(
+  Surv(Time_to_event, Relapsed_Binary) ~ EasyM_optimized_binary,
+  data = df_km_easym
+)
+med_easym <- surv_median(fit_easym)$median      # vector of two values
+med_neg_easym <- med_easym[1] / 30.44           # convert days→months
+med_pos_easym <- med_easym[2] / 30.44
+
+cox_easym <- tidy(
+  coxph(Surv(Time_to_event, Relapsed_Binary) ~ EasyM_optimized_binary,
+        data = df_km_easym),
+  exponentiate = TRUE, conf.int = TRUE
+)
+hr_easym      <- cox_easym$estimate
+ci_lo_easym   <- cox_easym$conf.low
+ci_hi_easym   <- cox_easym$conf.high
+
+
 
 ## 4. Spearman correlations ----
 # replace with your actual probability column:
@@ -1832,6 +1970,11 @@ n_clonoSEQ <- df_km %>%
   distinct(Patient) %>%
   nrow()
 
+n_easym <- df_km %>%
+  filter(!is.na(EasyM_optimized_binary)) %>%
+  distinct(Patient) %>%
+  nrow()
+
 ## 6. Draft paragraph ----
 paragraph <- glue(
   "At post-transplant, BM-cfWGS (n={n_cfWGS}) MRD-negative patients had ",
@@ -1870,6 +2013,10 @@ metrics_post_transplant <- tibble(
   RFS24_seq_pos  = rfs_pos_clonoSEQ,
   MedRFS_seq_neg = med_neg_clonoSEQ,
   MedRFS_seq_pos = med_pos_clonoSEQ,
+  RFS24_em_neg   = rfs_neg_easym,
+  RFS24_em_pos   = rfs_pos_easym,
+  MedRFS_em_neg  = med_neg_easym,
+  MedRFS_em_pos  = med_pos_easym,
   HR_cf          = hr_cf,
   CI_low_cf      = ci_lo_cf,
   CI_high_cf     = ci_hi_cf,
@@ -1879,6 +2026,9 @@ metrics_post_transplant <- tibble(
   HR_seq         = hr_clonoSEQ,
   CI_low_seq     = ci_lo_clonoSEQ,
   CI_high_seq    = ci_hi_clonoSEQ,
+  HR_em          = hr_easym,
+  CI_low_em      = ci_lo_easym,
+  CI_high_em     = ci_hi_easym,
   Spearman_prob  = rho1,
   Spearman_flow  = rho2,
   Events         = d,
@@ -1887,7 +2037,8 @@ metrics_post_transplant <- tibble(
   Power_HR2_pct  = pw2 * 100,
   N_cfWGS        = n_cfWGS,
   N_MFC          = n_MFC,
-  N_clonoSEQ     = n_clonoSEQ
+  N_clonoSEQ     = n_clonoSEQ,
+  N_easym        = n_easym
 )
 
 metrics_1yr <- metrics_1yr %>%
@@ -2019,6 +2170,37 @@ hr_clonoSEQ      <- cox_clonoSEQ$estimate
 ci_lo_clonoSEQ   <- cox_clonoSEQ$conf.low
 ci_hi_clonoSEQ   <- cox_clonoSEQ$conf.high
 
+## 3b. Assess EasyM (Proteomic MRD) ----
+# Filter patients with EasyM data available
+df_km_easym <- df_km %>%
+  filter(!is.na(EasyM_optimized_binary))
+
+# Kaplan-Meier curve for EasyM
+fit_easym <- survfit(
+  Surv(Time_to_event, Relapsed_Binary) ~ EasyM_optimized_binary,
+  data = df_km_easym
+)
+
+# 24-month RFS by EasyM
+sum_easym24 <- summary(fit_easym, times = t24)
+rfs_neg_easym <- sum_easym24$surv[1] * 100
+rfs_pos_easym <- sum_easym24$surv[2] * 100
+
+# Median RFS by EasyM (days → months)
+med_easym <- surv_median(fit_easym)$median
+med_neg_easym <- med_easym[1] / 30.44
+med_pos_easym <- med_easym[2] / 30.44
+
+# Cox regression for EasyM hazard ratio
+cox_easym <- tidy(
+  coxph(Surv(Time_to_event, Relapsed_Binary) ~ EasyM_optimized_binary,
+        data = df_km),
+  exponentiate = TRUE, conf.int = TRUE
+)
+hr_easym     <- cox_easym$estimate
+ci_lo_easym  <- cox_easym$conf.low
+ci_hi_easym  <- cox_easym$conf.high
+
 ## 4. Spearman correlations ----
 # replace with your actual probability column:
 prob_var <- "Blood_zscore_only_sites_prob"  
@@ -2055,6 +2237,10 @@ n_MFC_blood <- df_km %>%
 
 n_clonoSEQ_blood <- df_km %>%
   filter(!is.na(Adaptive_Binary)) %>%
+  distinct(Patient) %>% nrow()
+
+n_easym_blood <- df_km %>%
+  filter(!is.na(EasyM_optimized_binary)) %>%
   distinct(Patient) %>% nrow()
 
 ## Blood paragraph with Ns (and NR-safe medians)
@@ -2100,6 +2286,10 @@ metrics_1yr <- tibble(
   RFS24_seq_pos  = rfs_pos_clonoSEQ,
   MedRFS_seq_neg = med_neg_clonoSEQ,
   MedRFS_seq_pos = med_pos_clonoSEQ,
+  RFS24_em_neg   = rfs_neg_easym,
+  RFS24_em_pos   = rfs_pos_easym,
+  MedRFS_em_neg  = med_neg_easym,
+  MedRFS_em_pos  = med_pos_easym,
   HR_seq         = hr_clonoSEQ,
   CI_low_seq     = ci_lo_clonoSEQ,
   CI_high_seq    = ci_hi_clonoSEQ,
@@ -2109,6 +2299,9 @@ metrics_1yr <- tibble(
   HR_fl          = hr_fl,
   CI_low_fl      = ci_lo_fl,
   CI_high_fl     = ci_hi_fl,
+  HR_em          = hr_easym,
+  CI_low_em      = ci_lo_easym,
+  CI_high_em     = ci_hi_easym,
   Spearman_prob  = rho1,
   Spearman_flow  = rho2,
   Events         = d,
@@ -2117,7 +2310,8 @@ metrics_1yr <- tibble(
   Power_HR2_pct  = pw2 * 100,
   N_cfWGS        = n_cfWGS_blood,
   N_MFC          = n_MFC_blood,
-  N_clonoSEQ     = n_clonoSEQ_blood
+  N_clonoSEQ     = n_clonoSEQ_blood,
+  N_easym        = n_easym_blood
 )
 
 
@@ -2226,6 +2420,37 @@ hr_clonoSEQ      <- cox_clonoSEQ$estimate
 ci_lo_clonoSEQ   <- cox_clonoSEQ$conf.low
 ci_hi_clonoSEQ   <- cox_clonoSEQ$conf.high
 
+## 3b. Assess EasyM (Proteomic MRD) ----
+# Filter patients with EasyM data available
+df_km_easym <- df_km %>%
+  filter(!is.na(EasyM_optimized_binary))
+
+# Kaplan-Meier curve for EasyM
+fit_easym <- survfit(
+  Surv(Time_to_event, Relapsed_Binary) ~ EasyM_optimized_binary,
+  data = df_km_easym
+)
+
+# 24-month RFS by EasyM
+sum_easym24 <- summary(fit_easym, times = t24)
+rfs_neg_easym <- sum_easym24$surv[1] * 100
+rfs_pos_easym <- sum_easym24$surv[2] * 100
+
+# Median RFS by EasyM (days → months)
+med_easym <- surv_median(fit_easym)$median
+med_neg_easym <- med_easym[1] / 30.44
+med_pos_easym <- med_easym[2] / 30.44
+
+# Cox regression for EasyM hazard ratio
+cox_easym <- tidy(
+  coxph(Surv(Time_to_event, Relapsed_Binary) ~ EasyM_optimized_binary,
+        data = df_km),
+  exponentiate = TRUE, conf.int = TRUE
+)
+hr_easym     <- cox_easym$estimate
+ci_lo_easym  <- cox_easym$conf.low
+ci_hi_easym  <- cox_easym$conf.high
+
 ## 4. Spearman correlations ----
 # replace with your actual probability column:
 prob_var <- "Blood_zscore_only_sites_prob"  
@@ -2264,6 +2489,10 @@ n_clonoSEQ_blood <- df_km %>%
   filter(!is.na(Adaptive_Binary)) %>%
   distinct(Patient) %>% nrow()
 
+n_easym_blood <- df_km %>%
+  filter(!is.na(EasyM_optimized_binary)) %>%
+  distinct(Patient) %>% nrow()
+
 ## 6. Draft paragraph ----
 paragraph <- glue(
   "At post-transplant, Blood-cfWGS MRD-negative patients had ",
@@ -2300,6 +2529,10 @@ metrics_post_transplant <- tibble(
   RFS24_seq_pos  = rfs_pos_clonoSEQ,
   MedRFS_seq_neg = med_neg_clonoSEQ,
   MedRFS_seq_pos = med_pos_clonoSEQ,
+  RFS24_em_neg   = rfs_neg_easym,
+  RFS24_em_pos   = rfs_pos_easym,
+  MedRFS_em_neg  = med_neg_easym,
+  MedRFS_em_pos  = med_pos_easym,
   HR_seq         = hr_clonoSEQ,
   CI_low_seq     = ci_lo_clonoSEQ,
   CI_high_seq    = ci_hi_clonoSEQ,
@@ -2309,6 +2542,9 @@ metrics_post_transplant <- tibble(
   HR_fl          = hr_fl,
   CI_low_fl      = ci_lo_fl,
   CI_high_fl     = ci_hi_fl,
+  HR_em          = hr_easym,
+  CI_low_em      = ci_lo_easym,
+  CI_high_em     = ci_hi_easym,
   Spearman_prob  = rho1,
   Spearman_flow  = rho2,
   Events         = d,
@@ -2317,7 +2553,8 @@ metrics_post_transplant <- tibble(
   Power_HR2_pct  = pw2 * 100,
   N_cfWGS        = n_cfWGS_blood,
   N_MFC          = n_MFC_blood,
-  N_clonoSEQ     = n_clonoSEQ_blood
+  N_clonoSEQ     = n_clonoSEQ_blood,
+  N_easym        = n_easym_blood
 )
 
 metrics_1yr <- metrics_1yr %>%
@@ -2782,21 +3019,25 @@ saveRDS(
 
 ### Make HR figure 
 # 1. reshape into long format
-hr_plot_df <- progression_metrics_blood %>%
+hr_plot_df_blood <- progression_metrics_blood %>%
   select(Landmark,
          HR_cf,   CI_low_cf,   CI_high_cf,
          HR_fl,   CI_low_fl,   CI_high_fl,
-         HR_seq,   CI_low_seq,   CI_high_seq) %>%
+         HR_seq,   CI_low_seq,   CI_high_seq,
+         HR_em,   CI_low_em,   CI_high_em) %>%
   pivot_longer(
     cols      = -Landmark,
     names_to  = c(".value", "Assay"),
-    names_pattern = "(HR|CI_low|CI_high)_(cf|fl|seq)"
+    names_pattern = "(HR|CI_low|CI_high)_(cf|fl|seq|em)"
   ) %>%
   mutate(
     Assay = recode(Assay,
                    cf = "cfWGS (Sites Model)",
                    fl = "MFC",
-                   seq = "clonoSEQ"),
+                   seq = "clonoSEQ",
+                   em = "EasyM (Opt)"),
+    Assay = factor(Assay,
+                   levels = c("cfWGS (Sites Model)", "clonoSEQ", "MFC", "EasyM (Opt)")),
     Landmark = factor(Landmark,
                       levels = c("post_transplant", "1yr_maintenance"),
                       labels = c("Post‑ASCT", "Maintenance-1yr"))
@@ -2813,16 +3054,29 @@ hr_plot_df_combined <- progression_metrics_blood_combined %>%
   ) %>%
   mutate(
     Assay = "cfWGS (Combined Model)",
+    Assay = factor(Assay,
+                   levels = c("cfWGS (Sites Model)", "cfWGS (Combined Model)", "clonoSEQ", "MFC", "EasyM (Opt)")),
     Landmark = factor(Landmark,
                       levels = c("post_transplant", "1yr_maintenance"),
                       labels = c("Post‑ASCT", "Maintenance-1yr"))
   )
 
 
-# bind together
-hr_plot_df <- bind_rows(hr_plot_df, hr_plot_df_combined)
+# bind together Sites + Combined models
+hr_plot_df_blood <- bind_rows(hr_plot_df_blood, hr_plot_df_combined) %>%
+  mutate(Assay = factor(Assay,
+                        levels = c("cfWGS (Sites Model)", "cfWGS (Combined Model)", "clonoSEQ", "MFC", "EasyM (Opt)")))
 
-p_hr <- ggplot(hr_plot_df,
+# ─────────────────────────────────────────────────────────────────────────────
+# SOURCE DATA EXPORT: SuppFig8B (Blood HR plot)
+# ─────────────────────────────────────────────────────────────────────────────
+write_csv(
+  hr_plot_df_blood,
+  file.path(outdir_source_data, paste0("SuppFig8B_blood_HR_plot_source_data_", date_tag, ".csv"))
+)
+cat("  ✓ Exported source data: SuppFig8B (Blood HR)\n")
+
+p_hr <- ggplot(hr_plot_df_blood,
                aes(x = HR, y = fct_rev(Landmark), colour = Assay)) +
   # reference line
   geom_vline(xintercept = 1, linetype = "dashed") +
@@ -2844,18 +3098,17 @@ p_hr <- ggplot(hr_plot_df,
   scale_x_continuous(
     "Hazard ratio (log scale)",
     trans        = "log10",
-    limits       = c(0.05, 34),   # extend upper limit
-    breaks       = c(0.05, 0.1, 0.25, 0.5, 1, 2, 4, 8, 16, 32),
+    limits       = c(0.05, 50),
+    breaks       = c(0.1, 0.5, 1, 2, 5, 10, 20, 50),
     minor_breaks = c(
-      0.06, 0.08,      # between 0.05 & 0.1
-      0.15, 0.2,       # between 0.1 & 0.25
-      0.3, 0.4,        # between 0.25 & 0.5
-      0.6, 0.8,        # between 0.5 & 1
-      1.5,             # between 1 & 2
-      3, 6,            # between 2 & 4 & 8
-      12, 24           # new minor breaks between 8–16 and 16–32
+      0.05, 0.06, 0.08,           # between 0.05 & 0.1
+      0.15, 0.2, 0.3, 0.4,        # between 0.1 & 0.5
+      0.6, 0.8,                   # between 0.5 & 1
+      1.5, 3,                      # between 1 & 5
+      6, 8,                        # between 5 & 10
+      15, 30                       # between 10 & 50
     ),
-    labels = label_number(accuracy = .01)
+    labels = label_number(accuracy = .1)
   )+
   annotation_logticks(
     sides  = "b",
@@ -2869,8 +3122,8 @@ p_hr <- ggplot(hr_plot_df,
     values = c("cfWGS (Sites Model)" = "#35608DFF",
                "cfWGS (Combined Model)" = "#440154FF",
                "MFC"   = "#43BF71FF",
-               "clonoSEQ"= "#E69F00FF"   # orange for clonoSEQ
-    )
+               "clonoSEQ"= "#E69F00FF",   # orange for clonoSEQ
+               "EasyM (Opt)" = "#D81B60FF")  # magenta for EasyM
   ) +
   
   labs(
@@ -2898,27 +3151,40 @@ ggsave(paste0("Final Tables and Figures/SuppFig8B_cfWGS_blood_HR_updated3_", dat
 
 
 ### Now for BM derived muts
-hr_plot_df <- progression_metrics %>%
+hr_plot_df_bm <- progression_metrics %>%
   select(Landmark,
          HR_cf,   CI_low_cf,   CI_high_cf,
          HR_fl,   CI_low_fl,   CI_high_fl,
-         HR_seq,   CI_low_seq,   CI_high_seq) %>%
+         HR_seq,   CI_low_seq,   CI_high_seq,
+         HR_em,   CI_low_em,   CI_high_em) %>%
   pivot_longer(
     cols      = -Landmark,
     names_to  = c(".value", "Assay"),
-    names_pattern = "(HR|CI_low|CI_high)_(cf|fl|seq)"
+    names_pattern = "(HR|CI_low|CI_high)_(cf|fl|seq|em)"
   ) %>%
   mutate(
     Assay = recode(Assay,
                    cf = "cfWGS",
                    fl = "MFC",
-                   seq = "clonoSEQ"),
+                   seq = "clonoSEQ",
+                   em = "EasyM (Opt)"),
+    Assay = factor(Assay,
+                   levels = c("cfWGS", "clonoSEQ", "MFC", "EasyM (Opt)")),
     Landmark = factor(Landmark,
                       levels = c("post_transplant", "1yr_maintenance"),
                       labels = c("Post‑ASCT", "Maintenance-1yr"))
   )
 
-p_hr_bm <- ggplot(hr_plot_df,
+# ─────────────────────────────────────────────────────────────────────────────
+# SOURCE DATA EXPORT: Supp_Figure_6B (BM HR plot)
+# ─────────────────────────────────────────────────────────────────────────────
+write_csv(
+  hr_plot_df_bm,
+  file.path(outdir_source_data, paste0("Supp_Figure_6B_BM_HR_plot_source_data_", date_tag, ".csv"))
+)
+cat("  ✓ Exported source data: Supp_Figure_6B (BM HR)\n")
+
+p_hr_bm <- ggplot(hr_plot_df_bm,
                   aes(x = HR, y = fct_rev(Landmark), colour = Assay)) +
   # reference line
   geom_vline(xintercept = 1, linetype = "dashed") +
@@ -2939,8 +3205,8 @@ p_hr_bm <- ggplot(hr_plot_df,
   # log scale axis
   scale_x_log10(
     "Hazard ratio (log scale)",
-    limits       = c(0.19, 200),           # now starts at 0.2
-    breaks       = c(0.2, 0.5, 1, 2, 5, 10, 20, 50, 100, 200),
+    limits       = c(0.19, 250),           # extended to 250 to accommodate ~220 CI
+    breaks       = c(0.2, 0.5, 1, 2, 5, 10, 20, 50, 100, 200, 250),
     minor_breaks = c(
       0.25, 0.3, 0.4, 0.6, 0.8,    # between 0.2 & 1
       1.5,           # between 1 & 2
@@ -2971,7 +3237,8 @@ p_hr_bm <- ggplot(hr_plot_df,
     name   = NULL,
     values = c("cfWGS" = "#35608DFF",
                "MFC"   = "#43BF71FF",
-               "clonoSEQ"= "#E69F00FF")   # orange for clonoSEQ
+               "clonoSEQ"= "#E69F00FF",   # orange for clonoSEQ
+               "EasyM (Opt)" = "#D81B60FF")    # magenta/pink for EasyM
   ) +
   
   labs(
