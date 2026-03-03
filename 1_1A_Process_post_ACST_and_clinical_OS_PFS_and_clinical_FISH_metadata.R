@@ -382,7 +382,7 @@ extract_dates <- function(x) {
 df <- read_excel(
   path  = "Clinical data/IMMAGINE/Cleaned transplant dates just dates.xlsx",
   sheet = 1, 
-  na    = c("", "—", "-", "NA")
+  na    = c("", "-", "-", "NA")
 )
 
 # 3) pivot to long, clean names, split multi‑dates, parse into Date class

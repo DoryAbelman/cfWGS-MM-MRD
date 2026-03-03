@@ -1737,7 +1737,7 @@ print(avg_jaccard_cna)
 
 #### Now get global concordance
 #### Manuscript number reporting from here
-#— helper to call concordance == 1 as “yes” ------------------
+#- helper to call concordance == 1 as “yes” ------------------
 is_conc <- function(x) x == 1
 
 # 1) MUTATIONS ------------------------------------------------
@@ -1976,31 +1976,31 @@ combined_data_heatmap_blood_subset %>%
 outdir <- "Output_tables_2025_updated"
 if (!dir.exists(outdir)) dir.create(outdir, recursive = TRUE)
 
-# — 1) Long-form tables
+# - 1) Long-form tables
 write_csv(BM_long_all,      file.path(outdir, "BM_long_all.csv"))
 write_csv(blood_long_all,   file.path(outdir, "blood_long_all.csv"))
 
-# — 2) Full merged per-sample metrics
+# - 2) Full merged per-sample metrics
 write_rds(merged_mut,       file.path(outdir, "merged_mut.rds"))
 write_rds(merged_trans,     file.path(outdir, "merged_trans.rds"))
 write_rds(merged_CNA,       file.path(outdir, "merged_CNA.rds"))
 
-# — 3) Cohort×TF×timepoint summaries
+# - 3) Cohort×TF×timepoint summaries
 write_csv(mutation_summary, file.path(outdir, "mutation_summary.csv"))
 write_csv(trans_summary,    file.path(outdir, "trans_summary.csv"))
 write_csv(CNA_summary,      file.path(outdir, "CNA_summary.csv"))
 
-# — 4) Global concordance by cohort
+# - 4) Global concordance by cohort
 write_csv(mut_conc_cohort,  file.path(outdir, "mutation_concordance_by_cohort.csv"))
 write_csv(trans_conc_cohort,file.path(outdir, "translocation_concordance_by_cohort.csv"))
 write_csv(cna_conc_cohort,  file.path(outdir, "CNA_concordance_by_cohort.csv"))
 
-# — 5) Stratified concordance by cfDNA TF (>5%)
+# - 5) Stratified concordance by cfDNA TF (>5%)
 write_csv(mut_conc_tf,      file.path(outdir, "mutation_concordance_by_TF.csv"))
 write_csv(trans_conc_tf,    file.path(outdir, "translocation_concordance_by_TF.csv"))
 write_csv(cna_conc_tf,      file.path(outdir, "CNA_concordance_by_TF.csv"))
 
-# — 6) Fisher test results
+# - 6) Fisher test results
 fisher_results <- tibble(
   Class      = c("Mutations","Translocations","CNAs"),
   p_value    = c(mut_fish_test$p.value,
@@ -2012,7 +2012,7 @@ fisher_results <- tibble(
 )
 write_csv(fisher_results,  file.path(outdir, "fisher_by_feature.csv"))
 
-# — 7) Tumour-fraction metrics by cohort
+# - 7) Tumour-fraction metrics by cohort
 tf_stats <- combined_data_heatmap_blood_subset %>%
   group_by(cohort) %>%
   summarize(

@@ -72,7 +72,7 @@ clean_sample <- function(x) {
 
 
 ### 1.  DEFINE PATHS  ###########################################################
-# DILUTION SERIES vs. MAIN COHORT — KEY DIFFERENCES:
+# DILUTION SERIES vs. MAIN COHORT - KEY DIFFERENCES:
 # Unlike 1_7A / 1_7B (which process clinical patient plasma samples across
 # multiple timepoints), this script processes *in-vitro* dilution-series
 # samples: MM patient plasma spiked into healthy donor plasma at known
@@ -206,7 +206,7 @@ scores.per.site  <- list()
 
 # stats.data for the dilution series is SIMPLIFIED relative to 1_7A:
 # only Cohort-level fold-change and p-value columns are retained
-# (Coverage.fc/p, Midpoint.fc/p, Amplitude.fc/p — tumour vs. healthy).
+# (Coverage.fc/p, Midpoint.fc/p, Amplitude.fc/p - tumour vs. healthy).
 # The 1_7A columns PR.*, PS.*, response.p, and trial.p are omitted because
 # there are no clinical subgroups (baseline / maintenance / trial arm)
 # within the dilution series.
@@ -265,7 +265,7 @@ for (site in all.sites) {
   metrics.per.site[[site]]$Midpoint.normalized <-
     (metrics.per.site[[site]]$Midpoint.Coverage - metrics.per.site[[site]]$Mean.Coverage) + 1
   
-  # Z-scores vs. PON: same formula as 1_7A — z = (x - mean_PON) / sd_PON.
+  # Z-scores vs. PON: same formula as 1_7A - z = (x - mean_PON) / sd_PON.
   # Reference vector y is the subset of values belonging to pon.samples,
   # i.e. the TGL49 healthy-control bank, not the dilution series samples.
   score.data <- data.frame(
@@ -328,7 +328,7 @@ results.data <- merge(
 # Identical ±10 % HBC threshold strategy as in 1_7A: max/min healthy z-score
 # inflated by 10 % defines the normal boundary. The SAME TGL49 healthy-control
 # panel is used here, so thresholds are directly comparable to main-cohort
-# calls—allowing dilution-series sensitivity to be interpreted on the same
+# calls-allowing dilution-series sensitivity to be interpreted on the same
 # scale as clinical patient results.
 thresholds.up <- aggregate(
   results.data[grep("TGL49", results.data$Sample), grep("Zscore", colnames(results.data))],

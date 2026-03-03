@@ -617,8 +617,8 @@ results <- imap(combos, function(preds, label) {
     c("youden","sens>=0.9","spec>=0.9"),
     ~ eval_at(roc_oof, oof$obs, oof[[positive_class]], .x) %>%
       mutate(
-        combo = label,    # <— the feature-combo name
-        mode  = .y,       # <— which thresholding mode
+        combo = label,    # <- the feature-combo name
+        mode  = .y,       # <- which thresholding mode
         .before = 1
       )
   )
@@ -634,7 +634,7 @@ results <- imap(combos, function(preds, label) {
     c("youden","sens>=0.9","spec>=0.9"),
     ~ eval_at(roc_hold, hold_cc$MRD_truth, probs_hold, .x) %>%
       mutate(
-        combo = label,    # <— again, the feature-combo name
+        combo = label,    # <- again, the feature-combo name
         mode  = .y,
         .before = 1
       )
@@ -4133,7 +4133,7 @@ roc_dfs <- imap(models_list,
 
 roc_df  <- bind_rows(roc_dfs)
 
-# DO NOT reorder by validation AUC — lock to training order
+# DO NOT reorder by validation AUC - lock to training order
 roc_df$combo <- factor(roc_df$combo, levels = combo_levels_chr_BM)
 
 auc_tbl <- roc_df %>% distinct(combo, auc)
@@ -5609,7 +5609,7 @@ roc_df  <- bind_rows(roc_dfs)
 roc_df <- bind_rows(roc_dfs) %>%
   filter(!grepl("^Fragmentomics_", combo))
 
-# DO NOT reorder by validation AUC — lock to training order
+# DO NOT reorder by validation AUC - lock to training order
 roc_df$combo <- factor(roc_df$combo, levels = combo_levels_chr_blood)
 
 auc_tbl <- roc_df %>% distinct(combo, auc)
@@ -6232,7 +6232,7 @@ roc_dfs <- imap(models_list,
 
 roc_df  <- bind_rows(roc_dfs)
 
-# DO NOT reorder by validation AUC — lock to training order
+# DO NOT reorder by validation AUC - lock to training order
 roc_df$combo <- factor(roc_df$combo, levels = combo_levels_chr)
 
 auc_tbl <- roc_df %>% distinct(combo, auc)

@@ -1157,7 +1157,7 @@ format_p <- function(p) {
   }
 }
 
-# 1. Figure 2D — Boxplots of baseline BM vs cfDNA mutation counts
+# 1. Figure 2D - Boxplots of baseline BM vs cfDNA mutation counts
 plot_df <- dat_base %>%
   select(cohort, BM_Mutation_Count, Blood_Mutation_Count) %>%
   pivot_longer(
@@ -1280,7 +1280,7 @@ p2 <- ggplot(plot_df, aes(cohort, WGS_Tumor_Fraction_Blood_plasma_cfDNA, fill = 
 ggsave("Final Tables and Figures/Baseline_concordance/Figure2B_boxplot_with_bracket_tumor_fraction.png", p2, width = 4, height = 4, dpi = 600)
 
 
-# 2. Figure 2E — BM vs cfDNA mutation counts scatter
+# 2. Figure 2E - BM vs cfDNA mutation counts scatter
 rho_test <- cor.test(dat_base$BM_Mutation_Count,
                      dat_base$Blood_Mutation_Count,
                      method = "spearman")
@@ -1310,7 +1310,7 @@ p2 <- ggplot(dat_base, aes(BM_Mutation_Count, Blood_Mutation_Count, color = coho
 ggsave("Figure2B_scatter_BM_vs_cfDNA.png", p2, width = 4, height = 4, dpi = 500)
 
 
-# 3. Figure 2F — cfDNA mutation count vs ichorCNA tumour fraction
+# 3. Figure 2F - cfDNA mutation count vs ichorCNA tumour fraction
 tf_test <- cor.test(dat_base$Blood_Mutation_Count,
                     dat_base$WGS_Tumor_Fraction_Blood_plasma_cfDNA,
                     method = "spearman")
@@ -1341,7 +1341,7 @@ p3 <- ggplot(dat_base,
 ggsave("Figure2C_scatter_tf.png", p3, width = 4, height = 4, dpi = 500)
 
 
-# 4. Figure 2G — cfDNA mutation count vs fragment-size score (FS)
+# 4. Figure 2G - cfDNA mutation count vs fragment-size score (FS)
 fs_test <- cor.test(dat_base$Blood_Mutation_Count,
                     dat_base$FS, method = "spearman")
 rho_fs <- round(fs_test$estimate, 2)
@@ -1371,7 +1371,7 @@ p4 <- ggplot(dat_base,
 ggsave("Figure2D_scatter_FS.png", p4, width = 4, height = 4, dpi = 500)
 
 
-# 5. Figure 2H — cfDNA mutation count vs serum albumin
+# 5. Figure 2H - cfDNA mutation count vs serum albumin
 alb_test <- cor.test(dat_base$Blood_Mutation_Count,
                      dat_base$Albumin, method = "spearman")
 rho_alb <- round(alb_test$estimate, 2)

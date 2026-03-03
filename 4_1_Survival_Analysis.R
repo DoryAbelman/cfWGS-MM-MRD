@@ -1215,9 +1215,9 @@ write_csv(
 
 
 #### Now do seperately only amongst patients who got a cfWGS test - seperate for BM and blood 
-# —— after you’ve built `post_df` and `year_df` as before… ——————————————
+# -- after you’ve built `post_df` and `year_df` as before… --------------
 
-# 5a.  Head-to-head in the BM-cfWGS subset (only patients with BM Z-score) ———
+# 5a.  Head-to-head in the BM-cfWGS subset (only patients with BM Z-score) ---
 
 # define the BM-cfWGS column name
 bm_col <- assays["cfWGS_BM"]
@@ -1241,7 +1241,7 @@ print(post_stats_BM)
 message("1-yr sensitivities among those with BM-cfWGS:")
 print(year_stats_BM)
 
-# 5b.  Head-to-head in the blood-cfWGS subset (only patients with blood Z-score) —
+# 5b.  Head-to-head in the blood-cfWGS subset (only patients with blood Z-score) -
 
 # Define the blood-derived cfWGS column name
 blood_col <- assays["cfWGS_Blood_Sites"]

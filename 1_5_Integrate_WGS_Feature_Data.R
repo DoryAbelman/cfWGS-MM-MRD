@@ -393,7 +393,7 @@ temp_qc_blood <- maf_subset_blood@data %>%
     # your new fields
     Mutation_cDNA, Mutation_Genomic, Mutation_Type,
     
-    #—and now everything else for downstream QC
+    #-and now everything else for downstream QC
     everything()
   ) %>%
   distinct()
@@ -444,7 +444,7 @@ temp_qc_bm <- maf_subset@data %>%
     # your new fields
     Mutation_cDNA, Mutation_Genomic, Mutation_Type,
     
-    #—and now everything else for downstream QC
+    #-and now everything else for downstream QC
     everything()
   ) %>%
   distinct()

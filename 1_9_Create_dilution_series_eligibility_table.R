@@ -57,7 +57,7 @@ if (!dir.exists(output_dir)) {
 #       background "noise floor" that exists even in true negatives.
 #
 #     • not_sig_above_hc: a Boolean flag. TRUE means this sample's signal is
-#       NOT significantly elevated above healthy controls — i.e., it looks like
+#       NOT significantly elevated above healthy controls - i.e., it looks like
 #       background. We use z-score < 2 as the criterion when available;
 #       otherwise fall back to raw_rate <= mean_hc + 2*SD.
 #       This flag is key for identifying genuine MRD-negative timepoints.
@@ -183,7 +183,7 @@ eligible_pairs <- high_df_top %>%
 #   to achieve a series of TARGET tumor fractions spanning 6 orders of magnitude:
 #   10^-1 (10%) down to 10^-6 (0.0001%).
 #
-#   KEY INSIGHT: the tumor-low sample is not perfectly zero — it has a small
+#   KEY INSIGHT: the tumor-low sample is not perfectly zero - it has a small
 #   residual detection rate (the background). If we ignore this and treat the
 #   tumor-low sample as a pure zero, our target fractions will be off.
 #   Instead we model the mixture explicitly:
@@ -273,7 +273,7 @@ if (nrow(eligible_pairs) > 0) {
 }
 
 # ──────────────────────────────────────────────────────────────────────────────
-# STEP 7: Identify the "gold standard" subset — patients whose pairs span
+# STEP 7: Identify the "gold standard" subset - patients whose pairs span
 #         far enough to feasibly reach the 10^-6 (0.0001%) target level
 #
 #   Reaching 10^-6 requires both:

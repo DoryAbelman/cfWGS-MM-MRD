@@ -393,7 +393,7 @@ relevant_myeloma_genes <- c(
 )
 
 ## First filter pass
-# Four-tier confidence filter — rationale for each tier:
+# Four-tier confidence filter - rationale for each tier:
 #
 #   TIER 1 (Mappability_Issue != "none" AND score >= 100):
 #     The breakpoint overlaps a low-mappability region (repetitive elements,

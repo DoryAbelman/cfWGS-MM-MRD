@@ -1026,7 +1026,7 @@ frag_small <- frag %>%
   )
 
 frag_small <- frag_small %>% filter(!is.na(Patient))
-# 2) If you only want one row per Patient/Date/Sample_Code—drop any duplicates
+# 2) If you only want one row per Patient/Date/Sample_Code-drop any duplicates
 # 2) Collapse duplicates by averaging all numeric columns
 frag_small_unique <- frag_small %>%
   group_by(Patient, Date) %>%
@@ -1666,7 +1666,7 @@ dup_keys <- joined_clean2 %>%
   filter(str_detect(Sample_Code, "-NA$")) %>%
   distinct(Patient, timepoint_info)
 
-# 2) For those groups, coalesce the two rows into one—
+# 2) For those groups, coalesce the two rows into one-
 #    preferring any value coming from the non-“-NA” Sample_Code row
 collapsed <- joined_clean2 %>%
   semi_join(dup_keys, by = c("Patient","timepoint_info")) %>%
@@ -1997,7 +1997,7 @@ tmp <- lab_summary %>%
   print(n = Inf)
 
 # 4) Quick pairwise scatter/diag plot to catch weird units
-#    This will be heavy if you have many samples—consider sampling 100 pts if slow.
+#    This will be heavy if you have many samples-consider sampling 100 pts if slow.
 library(GGally)
 filled_df %>%
   select(all_of(lab_vars)) %>%

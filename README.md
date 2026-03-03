@@ -2,7 +2,8 @@
 
 Analysis code for **Abelman et al. (2025)**: *"Cell-free DNA Whole Genome Sequencing for Non-Invasive MRD Detection in Multiple Myeloma"*.
 
-The pipeline is a series of numbered R scripts. Each script reads the outputs of the previous step — run them in order.  
+The pipeline is a series of numbered R scripts. Each script reads the outputs of the previous step - run them in order.  
+
 **Raw data files are not included in this repository** (see [Data availability](#data-availability) below).
 
 ---
@@ -28,13 +29,13 @@ source("helpers.R")
 
 Scripts are numbered to indicate execution order. Run them sequentially from a working directory set to the project root.
 
-### Stage 0 — Cohort selection
+### Stage 0 - Cohort selection
 
 | Script | Purpose | Key inputs | Key outputs |
 |--------|---------|------------|-------------|
 | `0_1_select_additional_samples_for_cohort_expansion.R` | Identifies patients with a sample collected within ±30 days of diagnosis; classifies all samples as Baseline / MRD / Treatment. | IMMAGINE patient ID mapping and sample inventory Excel files (`Clinical data/IMMAGINE/`). | Sample eligibility classification table. |
 
-### Stage 1 — Data processing
+### Stage 1 - Data processing
 
 | Script | Purpose | Key inputs | Key outputs |
 |--------|---------|------------|-------------|
@@ -55,7 +56,7 @@ Scripts are numbered to indicate execution order. Run them sequentially from a w
 | `1_8A_Process_Cumulative_VAFs_for_dilution_series.R` | Identical processing pipeline to `1_8`, applied to the dilution-series MRDetect outputs. | MRDetect CSV files for dilution-series samples. | `cfWGS_Winter2025Dilution_series_with_zscore.rds` |
 | `1_9_Create_dilution_series_eligibility_table.R` | Identify eligible patient pairs for the experimental dilution series: one "tumor-high" (≥0.5% detection rate) and one "tumor-low" (≤0.05% AND z-score < 2 vs healthy controls) timepoint per patient. Computes physical mixing fractions for target tumor fractions 10⁻¹ to 10⁻⁶. | `cfWGS_MRDetect_BM_data_updated_Feb2026.csv` (from step 1.8). | `eligible_dilution_pairs_Feb2026.csv`, `dilution_plan_raw_Feb2026.csv`, `dilution_plan_diff_vs_hc_Feb2026.csv` |
 
-### Stage 2 — Summary statistics and baseline figures
+### Stage 2 - Summary statistics and baseline figures
 
 | Script | Purpose | Key inputs | Key outputs |
 |--------|---------|------------|-------------|
@@ -66,7 +67,7 @@ Scripts are numbered to indicate execution order. Run them sequentially from a w
 | `2_3_Feature_Concordance_And_Mutation_Counts.R` | Compute FISH–WGS concordance; summarise baseline mutation counts by cohort; scatterplots of mutation burden vs. tumour fraction. | Master feature table, cohort assignments, mutation export RDS. | Concordance tables (CSV/XLSX), concordance and mutation-count figures. |
 | `2_4_Longitudinal_features_analysis.R` | Summarise how MRD features change over time; generate spaghetti and violin plots of longitudinal cfWGS measurements. | Master feature table, cohort assignments. | Longitudinal comparison CSVs and figures. |
 
-### Stage 3 — Model training, threshold optimisation, and validation
+### Stage 3 - Model training, threshold optimisation, and validation
 
 | Script | Purpose | Key inputs | Key outputs |
 |--------|---------|------------|-------------|
@@ -76,7 +77,7 @@ Scripts are numbered to indicate execution order. Run them sequentially from a w
 | `3_2_Plot_optimal_cutoff_and_clinical_concordance.R` | Generate publication figures using the tumour-informed cfWGS model: ROC curves, density plots, waterfall plots, calibration, decision-curve analysis, and contingency tables. | `all_patients_with_BM_and_blood_calls_updated*.rds`, threshold table. | Main manuscript figure panels (PNG, 300 dpi). |
 | `3_3_Plot_optimal_cutoff_tumor_naive_calls_and_clinical_concordance.R` | Same figure set as `3_2` but for the **tumour-naïve** (z-score only, no patient-specific mutation sites) blood cfDNA model. | `all_patients_with_BM_and_blood_calls_updated2.rds`, threshold table. | Tumour-naïve figure panels (PNG). |
 
-### Stage 4 — Clinical outcome analyses
+### Stage 4 - Clinical outcome analyses
 
 | Script | Purpose | Key inputs | Key outputs |
 |--------|---------|------------|-------------|
@@ -148,9 +149,9 @@ To reproduce the analysis, request the de-identified data from the study authors
 
 The pipeline produces:
 
-- **CSV / XLSX tables** — cleaned metadata, mutation counts, MRD feature matrices, concordance statistics, sensitivity/specificity tables (written to `Output_tables_2025/`)
-- **PDF / PNG figures** — all manuscript and supplementary figures (written to `Final Tables and Figures/`)
-- **RDS objects** — intermediate R data objects passed between scripts
+- **CSV / XLSX tables** - cleaned metadata, mutation counts, MRD feature matrices, concordance statistics, sensitivity/specificity tables (written to `Output_tables_2025/`)
+- **PDF / PNG figures** - all manuscript and supplementary figures (written to `Final Tables and Figures/`)
+- **RDS objects** - intermediate R data objects passed between scripts
 
 ---
 

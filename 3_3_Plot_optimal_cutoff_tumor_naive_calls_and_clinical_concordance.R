@@ -1271,7 +1271,7 @@ pD2 <- ggplot(df_roc, aes(x = fpr, y = tpr, color = method)) +
 # 4.  Render & save updated panel --------------------------------------------
 fig_panel2 <- (pA | pB2) / (pC | pD2) +
   plot_annotation(
-    title = "cfWGS MRD scoring — blood & BM combined",
+    title = "cfWGS MRD scoring - blood & BM combined",
     theme = theme(plot.title = element_text(size = 14, face = "bold"))
   )
 

@@ -1797,7 +1797,7 @@ hc_label_blood <- tibble(
 # ── Stage A: custom x-axis label function ─────────────────────────────────
 # Returns "HC" at the hc_x break; label_number(suffix="%") everywhere else.
 # Because hc_x is explicitly included in breaks, the label function receives
-# exactly that numeric value for the HC tick — the relative tolerance guard
+# exactly that numeric value for the HC tick - the relative tolerance guard
 # handles any floating-point noise.
 pct_with_hc <- function(x) {
   out <- label_number(suffix = "%")(x)
@@ -1806,7 +1806,7 @@ pct_with_hc <- function(x) {
 }
 
 # Breaks for feature panels: extend existing major_breaks with hc_x so that
-# a proper tick — labelled "HC" — appears at the healthy-control position.
+# a proper tick - labelled "HC" - appears at the healthy-control position.
 breaks_with_hc <- sort(c(major_breaks, hc_x))
 
 # Extend minor_breaks to cover the HC region (needed for annotation_logticks)

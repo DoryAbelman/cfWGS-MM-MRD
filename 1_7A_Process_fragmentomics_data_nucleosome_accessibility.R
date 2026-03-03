@@ -191,7 +191,7 @@ for (site in all.sites) {
     Sample            = valid.samples,
     Site              = rep(site, length(valid.samples)),
     # Mean.Coverage: average cfDNA coverage across the entire ±500 bp window
-    # around the regulatory site centre — a global accessibility signal.
+    # around the regulatory site centre - a global accessibility signal.
     Mean.Coverage     = colMeans(gc.distances[, valid.samples, drop = FALSE]),
     # Midpoint.Coverage: average coverage restricted to the five positions
     # nearest the site centre (±30 bp). This captures the nucleosome-free

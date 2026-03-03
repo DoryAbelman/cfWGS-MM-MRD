@@ -14,7 +14,7 @@
 #  
 # Usage       :  
 #   Rscript 1_2_Part2_Get_Mutation_Overlap.R  
-#   — or —  
+#   - or -  
 #   source("1_2_Part2_Get_Mutation_Overlap.R")  
 #  
 # Dependencies:  
