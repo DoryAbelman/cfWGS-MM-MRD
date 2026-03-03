@@ -62,6 +62,14 @@ metada_df_mutation_comparison <- read_csv("combined_clinical_data_updated_April2
   )
 
 # Load CNA, translocation, and tumor fraction data
+# cna_data_ichorCNA.rds  - arm-level binary calls from 1_4_Process_CNA_Data.R
+# cna_data_from_sequenza - arm-level calls from 1_4A using the Sequenza CNV caller;
+#   Sequenza provides more accurate purity/ploidy estimates
+#   and takes precedence over ichorCNA when both callers processed the same BAM.
+# translocation_data     - Ig translocation binary flags from 1_3
+# tumor_fraction_cfWGS   - ichorCNA-estimated plasma tumor fraction per BAM;
+#   used in the Evidence_of_Disease classifier and as a continuous feature
+#   in downstream models (2_0, 3_1, 4_1)
 cna_data           <- readRDS(file.path(export_dir, "cna_data_ichorCNA.rds"))
 cna_data_sequenza <- readRDS(file.path(export_dir, "cna_data_from_sequenza_400_updated.rds"))
 translocation_data <- readRDS(file.path(export_dir, "translocation_data_cytoband_updated.rds"))
@@ -76,12 +84,19 @@ maf_object_bm    <- read.maf("combined_maf_temp_bm_May2025.maf")
 #saveRDS(CNA_translocation, "CNA_translocation_original_Feb2025.rds")
 
 # 1) Rename Sequenza ID to Sample so downstream stays consistent
+# Sequenza (1_4A) stores the sample identifier in Bam_clean_tmp rather
+# than Sample because it derives from a different pipeline input file.
+# Renaming here ensures it joins correctly on the 'Sample' key used
+# throughout all downstream scripts (1_5 onward).
 cna_seq_renamed <- cna_data_sequenza %>% select(-Sample) %>%
   rename(Sample = Bam_clean_tmp) %>%
   # align columns to legacy CNA table if needed
   select(any_of(names(cna_data)))
 
 # 2) Drop legacy rows that are present in Sequenza
+# Where both callers processed the same BAM, Sequenza calls take
+# precedence; the ichorCNA row is dropped to prevent duplicate Sample
+# keys in the merged CNA table. Samples unique to ichorCNA (cfDNA cases) are retained via bind_rows.
 overlap_samples <- intersect(cna_data$Sample, cna_seq_renamed$Sample)
 
 cna_legacy_filtered <- cna_data %>%
@@ -111,6 +126,13 @@ CNA_translocation <- left_join(CNA_translocation,
                                by = c("Sample" = "Bam_clean_tmp"))
 
 ## Add the tumor fraction info 
+# Tumor_Fraction is the ichorCNA estimate of the fraction of cfDNA
+# molecules derived from tumor. A single BAM may appear multiple times
+# in tumor_fraction if it was run with different ichorCNA parameter sets
+# (e.g. centromere-masked vs full-genome). Taking the maximum recovers
+# the most sensitive purity estimate and avoids under-calling disease.
+# Tumor_Fraction drives Evidence_of_Disease Tier 3 and is used as a
+# continuous predictor in 4_1_Survival_Analysis.R.
 # Keep only the max Tumor_Fraction for each Bam in tumor_fraction
 tumor_fraction_max <- tumor_fraction %>%
   group_by(Bam) %>%
@@ -163,6 +185,10 @@ FISH_CNA_combined <- left_join(FISH_CNA_combined,
                                by = c("Sample" = "Bam"))
 
 # Now recalculate the lables 
+# Extended loss_labels includes LOSS and CNLOH (vs. only HETD/HOMD in
+# 1_4_Process_CNA_Data.R) to capture copy-neutral LOH events reported
+# by Sequenza. CNLOH at del1p/del17p is clinically equivalent to a
+# heterozygous deletion for MM high-risk stratification.
 gain_labels <- c("GAIN","AMP","HLAMP")
 loss_labels <- c("HOMD","HETD","LOSS","CNLOH")
 
@@ -200,6 +226,14 @@ samples_with_na_barcode <- CNA_translocation %>%
 
 
 ##### Extract mutation data for specified genes
+# These 30 recurrently mutated genes constitute the MM-specific panel
+# used for somatic mutation detection. Selection criteria:
+#   (a) established high-risk markers: TP53, RB1, ATM;
+#   (b) MAPK pathway drivers (most common class in relapsed MM): KRAS, NRAS, BRAF;
+#   (c) Ig translocation partner genes: CCND1, FGFR3, MMSET, MYC, BCL2;
+#   (d) RNA stability / NF-kB regulators frequently acquired at relapse.
+# Limiting subsetMaf to this panel speeds processing and ensures only
+# clinically interpretable mutations inform the Evidence_of_Disease flag.
 myeloma_genes <- c(
   "TP53",    # ~10-15%; high-risk MM
   "KRAS",    # ~20-25%; MAPK/ERK pathway
@@ -239,9 +273,14 @@ maf_subset <- subsetMaf(maf = maf_object_bm, genes = myeloma_genes, includeSyn =
 maf_subset_blood <- subsetMaf(maf = maf_object_blood, genes = myeloma_genes, includeSyn = FALSE)
 
 
-# Bone‐marrow
+# Bone-marrow
+# filter(t_depth > 10): removes variant calls backed by fewer than 10
+# total reads at the locus. At 1x WGS coverage many loci have shallow
+# support; this threshold ensures only robustly supported calls are
+# retained, reducing false positives while preserving sensitivity
+# across tumor-enriched BM samples (median depth ~30x post-dedup).
 temp_bm <- maf_subset@data %>%
-  filter(t_depth > 10) %>%                           # only well‐supported calls
+  filter(t_depth > 10) %>%                           # only well-supported calls
   mutate(
     Sample          = sub("\\.bam$", "", Bam),       # drop .bam
     Mutation_cDNA   = paste0(Hugo_Symbol, ":", HGVSc),
@@ -250,6 +289,12 @@ temp_bm <- maf_subset@data %>%
                             Reference_Allele,
                             Tumor_Seq_Allele2,
                             sep = "_"),
+    # Mutation_Type: simplified 4-class encoding used in the Evidence_of_Disease
+    # logic and in manuscript oncoprint (Figure 2).
+    #   Truncating  - nonsense or frameshift (almost always loss-of-function)
+    #   Missense    - single amino-acid substitution or in-frame indel
+    #   Splice_Site - affects canonical donor/acceptor; typically loss-of-function
+    #   Other       - UTR, intronic, silent; excluded from most downstream analyses
     Mutation_Type   = case_when(
       Variant_Classification %in% c("Nonsense_Mutation",
                                     "Frame_Shift_Del",
@@ -411,6 +456,15 @@ write.table(mutation_export2, file = file.path(export_dir, "mutation_export_upda
 
 
 # Step 1: Create a helper table with required mutation information
+# mutation_summary collapses all per-variant rows into one row per
+# Tumor_Sample_Barcode with four summary fields:
+#   Mut_identified  - "Y"/"N" presence flag used in Evidence_of_Disease
+#   Mut_genes       - comma-separated list of affected myeloma panel genes
+#   Mut_highest_VAF - max VAF across mutations in that sample;
+#     used as a continuous disease-burden proxy, especially for cfDNA
+#     samples where ichorCNA TF may be near zero but a truncal clone
+#     mutation is detectable at >5% VAF (Evidence_of_Disease Tier 2)
+#   Mut_type        - comma-separated mutation category string
 # Filter mutations with t_depth > 10 (all meet this criteria anyway)
 filtered_mutations <- mutation_export  %>%
   filter(t_depth > 10)
@@ -441,6 +495,12 @@ All_feature_data <- All_feature_data %>%
 All_feature_data <- All_feature_data %>% select(-Bam_File)
 
 ### Version 1 - higher stringency 
+# Original Evidence_of_Disease definition (pre-Sep 2025):
+#   BM:    TF > 10% OR canonical Ig translocation OR mutation VAF > 10%
+#   cfDNA: TF > 5%  OR canonical Ig translocation OR mutation VAF > 10%
+# Superseded by Version 2 (below) which adds a lower-VAF cfDNA tier
+# and a moderate-TF + cytogenetics tier. Preserved here for reference
+# and used in compute_old_evidence() comparison function further below.
 # Add the Evidence_of_Disease column based on the specified conditions
 All_feature_data <- All_feature_data %>%
   mutate(
@@ -460,6 +520,18 @@ All_feature_data <- All_feature_data %>%
   )
 
 ## Version 2 - less stringency on the cfDNA cases, used in final version
+# Four-tier Evidence_of_Disease classifier (final version for manuscript):
+#   Tier 1: Canonical Ig translocation OR high-VAF mutation (>=10%) --
+#     tissue-independent; strong evidence regardless of tumor fraction.
+#   Tier 2: cfDNA-specific; detects disease via somatic SNV even when
+#     ichorCNA TF < 5%; 5% VAF chosen as ~2x the analytical noise floor
+#     at 1x WGS depth for cfDNA.
+#   Tier 3: TF threshold differs by matrix: BM >=10% (plasma cells make
+#     up a large fraction of BM cells) vs. cfDNA >=4.5% (tumor DNA is
+#     diluted in total circulating cell-free DNA).
+#   Tier 4: Low-TF cfDNA (3-4.5%) is accepted as evidence when at least
+#     one cytogenetic alteration (HRD or del1p/amp1q/del17p) corroborates
+#     disease, reducing false negatives at the detection limit of cfWGS.
 # Add the Evidence_of_Disease column based on the specified conditions
 All_feature_data <- All_feature_data %>%
   mutate(
@@ -484,6 +556,12 @@ All_feature_data <- All_feature_data %>%
   )
 
 to_logical_bin <- function(x) {
+  # Coerces heterogeneous CNA/translocation columns to logical (TRUE/FALSE).
+  # These columns arrive as character ("1","0"), integer, or logical depending
+  # on which input file they came from (ichorCNA vs Sequenza vs translocation
+  # calling). Uniform logical type prevents subtle comparison failures in the
+  # case_when Evidence_of_Disease tiers (e.g. character "1" != integer 1).
+  # NA values are treated as FALSE (no evidence of alteration assumed).
   if (is.logical(x)) return(replace_na(x, FALSE))
   if (is.numeric(x)) return(replace_na(x > 0, FALSE))
   if (is.character(x)) return(replace_na(x %in% c("1","TRUE","T","Yes","Y"), FALSE))
@@ -535,6 +613,13 @@ All_feature_data_logical <- All_feature_data %>%
   )
 
 ## Set evidence of disease to cases that did show translocations we were just not certain of them
+# iGV_verified is a manually curated spreadsheet where IGV screenshots
+# of borderline Ig translocation calls (low read support, single-end
+# evidence, etc.) were reviewed by a second reader (Suzanne Trudel).
+# Samples with Looks_real > 0.7 (reviewer confidence >70%) are promoted
+# to Evidence_of_Disease = 1 even if they failed all automated thresholds.
+# This manual override resolves ~5-10 ambiguous cfDNA cases at the
+# detection limit and is documented in the supplementary methods.
 iGV_verified <- read_excel("Jan2025_exported_data/Ig_caller_df_cfWGS_filtered_aggressive2_iGV_check.xlsm")
 tmp <- iGV_verified %>% 
   filter(Looks_real > 0.7) %>% 
@@ -624,6 +709,18 @@ print(comparison)
 
 
 ## Export this 
+# All_feature_data_logical is the primary output of this script and the
+# central input table for all downstream analysis scripts:
+#   2_0_Assemble_Table_With_All_Features.R - builds the final analytical table
+#   3_1_Optimize_cfWGS_thresholds.R        - threshold/ROC optimization
+#   4_1_Survival_Analysis.R                - OS/PFS modelling
+# Key columns:
+#   Sample, Patient, Timepoint, Sample_type
+#   del1p, amp1q, del13q, del17p, hyperdiploid   (binary CNA flags)
+#   IGH_MAF, IGH_CCND1, IGH_MYC, IGH_FGFR3      (binary translocation flags)
+#   Tumor_Fraction                               (ichorCNA continuous estimate)
+#   Mut_identified, Mut_genes, Mut_highest_VAF   (mutation summary)
+#   Evidence_of_Disease                          (composite 0/1 classifier)
 # Save All_feature_data as an RDS file
 saveRDS(All_feature_data_logical, file = file.path(export_dir, "All_feature_data_Sep2025_updated2.rds"))
 

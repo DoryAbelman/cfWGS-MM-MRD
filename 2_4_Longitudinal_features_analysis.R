@@ -73,6 +73,15 @@ cfDNA_good_pts <- Good_pts %>%
 
 
 # Filter dat to rows with evidence of disease
+# EVIDENCE-OF-DISEASE MASKING:
+# Patients without conclusive WGS evidence of disease at baseline may have
+# spurious "low" MRD readings because they lacked detectable disease to begin
+# with (rather than achieving true MRD negativity). To avoid confounding,
+# BM assay features are set to NA for patients who did NOT have WGS evidence of
+# disease in the BM at baseline (BM_good_pts), and blood assay features are set
+# to NA for patients without cfDNA evidence (cfDNA_good_pts). This ensures
+# longitudinal comparisons reflect genuine treatment response rather than
+# uninformative noise from patients below the WGS detection threshold.
 bm_feats    <- c("zscore_BM", "z_score_detection_rate_BM", "detect_rate_BM", "sites_rate_BM")
 blood_feats <- c("zscore_blood", "z_score_detection_rate_blood", "detect_rate_blood", "sites_rate_blood")
 

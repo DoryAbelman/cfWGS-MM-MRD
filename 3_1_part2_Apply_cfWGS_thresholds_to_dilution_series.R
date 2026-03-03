@@ -1,7 +1,42 @@
-# ---------------------------------------------------------------------------
-# Script:   score_dilution_series_cfWGS.R
-# Purpose:  Apply the previously optimised cfWGS MRD classifier to the dilution series
-# ---------------------------------------------------------------------------
+# ==============================================================================
+# 3_1_part2_Apply_cfWGS_thresholds_to_dilution_series.R
+#
+# Purpose:
+#   Apply the trained cfWGS MRD classifiers (logistic regression models and
+#   optimal probability thresholds saved by 3_1_Optimize_cfWGS_thresholds.R)
+#   to the experimental dilution series samples in order to establish the
+#   analytical limit of detection (LOD) for each assay component.
+#
+#   For each dilution level the script:
+#     1. Joins fragmentomics and MRDetect z-score features.
+#     2. Generates predicted probabilities using the saved combo models.
+#     3. Applies trained thresholds to produce binary MRD calls.
+#     4. Plots detection rate vs tumour fraction (LOD curves).
+#     5. Exports source-data CSVs for each LOD figure.
+#
+# Inputs:
+#   - Output_tables_2025/selected_combo_models_<date>.rds   (trained glmnet models)
+#   - Output_tables_2025/selected_combo_thresholds_<date>.rds
+#   - Results_Fragmentomics/Dilution_series/
+#       key_fragmentomics_info_dilution_series.rds
+#   - MRDetect_output_winter_2025/Processed_R_outputs/
+#       cfWGS_Winter2025Dilution_series_May2025_with_zscore.rds
+#   - Fragmentomics_data/Dilution_series/Metadata_dilution_series.csv
+#   - Fragmentomics_data/Dilution_series/tumor_fraction_dilution_series.txt
+#
+# Outputs:
+#   - Dilution_Series_Scoring_2025/  (scored tables per dilution level)
+#   - Output_figures_2025/FigX_LOD_*.png
+#   - Output_tables_2025/Source_data_LOD_*.csv
+#
+# Dependencies:
+#   dplyr, tidyr, Matrix, readr, glmnet, pROC, stringr, broom,
+#   patchwork, viridis, ggplot2, scales
+#   Must be run AFTER 3_1_Optimize_cfWGS_thresholds.R
+#
+# Author:    Dory Abelman
+# Last update: September 2025
+# ==============================================================================
 
 library(dplyr)
 library(tidyr)
@@ -1854,7 +1889,7 @@ p_bm_feat_hc <- ggplot(bm_feat_with_hc, aes(x = LOD, y = value)) +
   geom_text(
     data    = corr_bm_sp_hc,
     aes(x = corr_x_right, y = Inf, label = label),
-    hjust = 1, vjust = 1.1, size = 3, inherit.aes = FALSE
+    hjust = 0.8, vjust = 1.1, size = 3, inherit.aes = FALSE
   ) +
   scale_x_continuous(
     trans        = compose_trans("log10", "reverse"),

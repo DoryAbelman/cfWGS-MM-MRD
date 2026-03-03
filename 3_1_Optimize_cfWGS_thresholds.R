@@ -176,11 +176,33 @@ dat_mrd <- dat %>%
 
 # create train and test df - train on frontline, apply on hold out df
 # frontline = training set, everything else = hold‑out
+# DESIGN RATIONALE: Frontline patients are used as the TRAINING set because
+# they have the largest number of matched BM/cfDNA time-points and represent
+# the primary clinical scenario the assay targets (post-ASCT MRD assessment).
+# Non-frontline patients are reserved as an independent HOLD-OUT set to test
+# whether the thresholds generalise beyond the training cohort; they were NOT
+# used to tune any hyperparameter in the model.
+# DESIGN RATIONALE: Frontline patients form the TRAINING set because they have
+# the largest number of matched BM/cfDNA time-points and represent the primary
+# clinical scenario the assay targets (post-ASCT MRD monitoring). Non-frontline
+# patients are held out as an independent TEST set to verify that thresholds
+# generalise beyond the training cohort; they were never used to tune any model
+# hyperparameter.
 train_df <- dat_mrd %>% filter(Cohort == "Frontline")
 hold_df  <- dat_mrd %>% filter(Cohort == "Non-frontline")
 
 
-# 2.  Helper: build sparse X & y ---------------------------------------------
+# ──────────────────────────────────────────────────────────────────────────────
+# 2.  Helper: build sparse X & y
+# DESIGN NOTE: The model matrix is converted to a sparse dgCMatrix before
+# passing to glmnet. This matters because:
+#   - The feature matrix can have >1000 columns after one-hot encoding
+#   - Many patients have NA for some assay features (e.g. not all have
+#     fragmentomics), making the effective rows sparse
+#   - Sparse format saves memory and speeds up glmnet's coordinate descent
+# The intercept column (column 1) is always dropped because glmnet adds its
+# own intercept internally.
+# ──────────────────────────────────────────────────────────────────────────────
 make_sparse_xy <- function(df, predictors) {
   mm <- model.matrix(
     reformulate(predictors, response = "MRD_truth"),

@@ -3560,6 +3560,9 @@ p_scatter_simple_blood <- ggplot(plot_df2,
                                  aes(x = x_plot, y = y_plot,
                                      fill   = relapse_cat)) +  
   # LOD reference lines
+  # 0.5166693 is the Youden's J optimal probability threshold for the blood combo
+  # model (maximises sensitivity + specificity simultaneously). Derived from the
+  # ROC analysis in 3_1_Optimize_cfWGS_thresholds.R and stored in selected_thr.
   geom_hline(yintercept = 0.5166693,   linetype = "dashed", colour = "grey80") + # youden threshold of the used model
   geom_vline(xintercept = lod_clonoMF, linetype = "dashed", colour = "grey80") +
   

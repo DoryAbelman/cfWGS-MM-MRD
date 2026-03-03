@@ -1,17 +1,38 @@
+# ==============================================================================
 # 2_2_Baseline_demographics_by_WGS_heatmap_updated.R
-# ------------------------------------------------------------
-# Generate Figure 1: Integrated alteration heatmaps
-# – Overlaid bone-marrow (upper triangles) vs plasma cfDNA (lower triangles)
-# – Samples split by clinical cohort (Frontline induction-transplant vs Non-frontline)
-# – Sorted by tumour fraction and paired status, annotated with:
-#     • cfDNA tumour fraction (points)
-#     • BM & blood mutation counts (continuous colour bar)
-#     • FISH positivity (★)
-# – Rows split into Mutations, CNAs, Translocations
-# – Saves individual BM, blood and combined overlay heatmaps + underlying data
-# - Calculates concordance of different features between BM and cfDNA
-# Author: Dory Abelman · Last edit: 2025-05-26
-# ------------------------------------------------------------
+#
+# Purpose:
+#   Generate Figure 1 (manuscript): Integrated genomic alteration heatmaps
+#   overlaying bone-marrow WGS (upper triangle) vs plasma cfDNA WGS (lower
+#   triangle) for all baseline samples. Also calculates concordance of mutations,
+#   CNAs, and translocations between compartments.
+#
+#   Heatmap tiles show:
+#     - Upper triangle: BM WGS alteration detected (y/n)
+#     - Lower triangle: blood cfDNA WGS alteration detected (y/n)
+#   Samples are split by cohort (Frontline vs Non-frontline), sorted by tumour
+#   fraction, and annotated with FISH positivity stars and mutation count bars.
+#   Rows are grouped into Mutations / CNAs / Translocations.
+#
+# Inputs:
+#   - combined_clinical_data_updated_April2025.csv   (clinical metadata)
+#   - cohort_assignment_table_updated.rds             (cohort labels)
+#   - Jan2025_exported_data/All_feature_data_Sep2025_updated2.rds
+#   - Data from 1_2, 1_3, 1_4 (mutation, translocation, CNA RDS files)
+#
+# Outputs:
+#   - Final Tables and Figures/Fig1_BM_heatmap.pdf
+#   - Final Tables and Figures/Fig1_Blood_heatmap.pdf
+#   - Final Tables and Figures/Fig1_Combined_overlay_heatmap.pdf
+#   - Output_tables_2025/BM_blood_concordance_stats.csv
+#
+# Dependencies:
+#   maftools, dplyr, tidyr, ComplexHeatmap, circlize, purrr,
+#   stringr, readr, grid, ggplot2
+#
+# Author:    Dory Abelman
+# Last edit: 2025-05-26
+# ==============================================================================
 
 
 # Load required libraries
@@ -1093,7 +1114,13 @@ overlay_ht <- Heatmap(
   column_names_gp  = gpar(fontsize=8, fontface="bold"),
   top_annotation   = top_ha,
   cell_fun = function(j, i, x, y, width, height, fill) {
-    # draw BM / cfDNA triangles
+    # Each heatmap cell is split diagonally into two triangles:
+    #   UPPER-LEFT triangle  → BM WGS call (col_bm)
+    #   LOWER-RIGHT triangle → cfDNA WGS call (col_cf)
+    # The diagonal splits from the top-left corner to the bottom-right corner.
+    # First grid.polygon: vertices at (left,top), (right,top), (left,bottom) = upper-left.
+    # Second grid.polygon: vertices at (right,bottom), (right,top), (left,bottom) = lower-right.
+    # This makes it visually easy to compare BM vs cfDNA detection for each alteration.
     col_bm <- value_to_col(bm_mat[i,j])
     col_cf <- value_to_col(cfDNA_mat[i,j])
     grid.polygon(
@@ -1231,6 +1258,8 @@ overlay_ht_2 <- Heatmap(
   cell_fun = function(j, i, x, y, width, height, fill) {
     
     ## draw BM / cfDNA halves ---------------------------------
+    ## UPPER-LEFT triangle  = BM WGS call; LOWER-RIGHT triangle = cfDNA call.
+    ## See first cell_fun above for full geometry explanation.
     grid.polygon(
       x = unit.c(x - width*0.5, x + width*0.5, x - width*0.5),
       y = unit.c(y + height*0.5, y + height*0.5, y - height*0.5),

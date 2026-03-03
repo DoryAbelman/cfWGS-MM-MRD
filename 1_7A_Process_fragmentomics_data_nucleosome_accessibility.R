@@ -1,7 +1,3 @@
-source("setup_packages.R")
-source("config.R")
-source("helpers.R")
-
 # ──────────────────────────────────────────────────────────────────────────────
 # 1_7A_Process_fragmentomics_data_nucleosome_accessibility.R
 #
@@ -37,6 +33,13 @@ source("helpers.R")
 
 
 ### PREPARE SESSION ################################################################################
+library(BoutrosLab.plotting.general)
+library(GeneCycle)
+library(pracma)
+library(dplyr)
+library(readr)
+library(stringr)
+library(data.table)
 
 source('session.functions.R')
 
@@ -52,6 +55,12 @@ if (!dir.exists(out.dir)) {
 combined_clinical_data_updated <- read_csv("combined_clinical_data_updated_April2025.csv")
 
 ### READ NUCLEOSOME-ACCESSIBILITY DISTANCE FILES ####################################################
+# GRIFFIN outputs one "nucleosome_accessibility_distances.tsv" per sample.
+# Each row is a genomic Position (bp offset from site centre, e.g. -500 to +500),
+# and the value column "Coverage" is the normalised cfDNA read depth at that offset.
+# Together these rows form the nucleosome-accessibility coverage profile around
+# each regulatory site; a dip at position 0 with flanking peaks indicates an
+# accessible (nucleosome-depleted) region, as seen in myeloma-specific DARs.
 results.files <- list.files(path = input.dir,
                             pattern = "nucleosome_accessibility_distances.tsv",
                             full.names = TRUE)
@@ -116,6 +125,11 @@ all.sites   <- unique(cfWGS.data$site_name)
 
 
 ### UTILITY FUNCTIONS ##############################################################################
+# calculate.zscore: standard z-score of a single value x relative to reference
+# vector y (the PON/healthy-control distribution for this site & metric).
+# Formula: z = (x - mean_PON) / sd_PON
+# A positive z means the sample is MORE accessible than healthy controls;
+# for tumour-enriched DARs this should be elevated in MM plasma samples.
 calculate.zscore <- function(x, y) {
   (x - mean(y)) / sd(y)
 }
@@ -176,18 +190,34 @@ for (site in all.sites) {
   metrics.per.site[[site]] <- data.frame(
     Sample            = valid.samples,
     Site              = rep(site, length(valid.samples)),
+    # Mean.Coverage: average cfDNA coverage across the entire ±500 bp window
+    # around the regulatory site centre — a global accessibility signal.
     Mean.Coverage     = colMeans(gc.distances[, valid.samples, drop = FALSE]),
+    # Midpoint.Coverage: average coverage restricted to the five positions
+    # nearest the site centre (±30 bp). This captures the nucleosome-free
+    # region signal most directly relevant to chromatin accessibility.
     Midpoint.Coverage = colMeans(
       gc.distances[gc.distances$Position %in% c(-30, -15, 0, 15, 30), valid.samples, drop = FALSE]
     ),
     Midpoint.normalized = NA,
+    # Amplitude: peak power from a periodogram of the coverage profile.
+    # A high amplitude reflects the periodic nucleosome phasing pattern
+    # (typically ~200 bp repeat) flanking an accessible site.
     Amplitude         = apply(GeneCycle::periodogram(gc.distances[, valid.samples, drop = FALSE])[["spec"]], 2, max)
   )
   
+  # Midpoint.normalized: centre-relative accessibility score.
+  # Subtracts global mean coverage so that values > 1 indicate the site centre
+  # is MORE covered (more accessible) than the average flanking background.
+  # Adding 1 keeps the scale positive and interpretable as a ratio around unity.
   metrics.per.site[[site]]$Midpoint.normalized <-
     (metrics.per.site[[site]]$Midpoint.Coverage - metrics.per.site[[site]]$Mean.Coverage) + 1
   
-  # z-scores vs. PON
+  # Z-scores for each metric: each sample's metric value is standardised
+  # relative to the PON (healthy-control) distribution for this site.
+  # Reference vector y is restricted to pon.samples, so tumour samples
+  # are scored against the healthy baseline (not against themselves).
+  # Positive z → more open chromatin than healthy; negative → less open.
   score.data <- data.frame(
     Sample        = valid.samples,
     Site          = rep(site, length(valid.samples)),
@@ -216,6 +246,9 @@ for (site in all.sites) {
   scores.per.site[[site]] <- score.data
   
   # group comparisons (fold-change & p-value)
+  # Fold-change direction: group2 / group1 = tumour / healthy.
+  # FC > 1 means the metric is elevated in tumour (open chromatin in MM);
+  # FC < 1 means it is depleted relative to healthy controls.
   mdata <- metrics.per.site[[site]]
   # tumour vs. healthy
   idx_pon   <- which(mdata$Sample %in% pon.samples)
@@ -266,6 +299,9 @@ for (site in all.sites) {
 
 
 ### ADJUST P-VALUES (FDR) ############################################################################
+# Benjamini-Hochberg FDR correction applied across all genomic sites
+# for each comparison type (Cohort, Baseline/PR, Maintenance/PS, Response,
+# Trial). Corrects for the number of regulatory sites tested in parallel.
 fdr.data <- data.frame(
   Cohort.Cov.fdr   = p.adjust(stats.data$Coverage.p,    "fdr"),
   Cohort.Mid.fdr   = p.adjust(stats.data$Midpoint.p,    "fdr"),
@@ -289,6 +325,11 @@ results.data <- merge(
 )
 
 # Derive HBC-based thresholds (±10% of max/min z-score among healthy samples)
+# Strategy: take the maximum (or minimum) z-score observed across all
+# healthy controls (TGL49 samples), then inflate by 10 % as a buffer.
+# This defines the outer boundary of "normal" accessibility variation;
+# tumour samples exceeding these bounds are flagged as aberrant.
+# The 10 % buffer reduces false positives from healthy-control outliers.
 thresholds.up <- aggregate(
   results.data[grep("TGL49", results.data$Sample), grep("Zscore", colnames(results.data))],
   by = list(Site = results.data[grep("TGL49", results.data$Sample), ]$Site),
@@ -309,7 +350,11 @@ stats.data$Coverage.threshold  <- thresholds.up$Zscore.Coverage
 stats.data$Midpoint.threshold  <- thresholds.up$Zscore.Midpoint
 stats.data$Amplitude.threshold <- thresholds.up$Zscore.Amplitude
 
-# For sites where fold-change<0, use “down” threshold instead:
+# Directionality correction: if the tumour fold-change is NEGATIVE (metric
+# is lower in tumour than in healthy controls), the relevant extreme is the
+# minimum healthy z-score (thresholds.down) rather than the maximum.
+# This ensures the binary flag always tests in the direction of the
+# observed tumour-vs-healthy difference for each site.
 neg.fc <- which(stats.data$Coverage.fc < 0)
 if (length(neg.fc)) {
   stats.data$Coverage.threshold[neg.fc] <-
@@ -357,7 +402,11 @@ write_tsv(stats.data,
 
 
 ### EXPORT “MM_DARs_chromatin_activation_data.csv” ################################################
-# Filter only the “MM_DARs_chromatin_activation” site from results.data
+# MM_DARs_chromatin_activation: a curated set of Differentially Accessible
+# Regions (DARs) identified from ATAC-seq in multiple myeloma vs. normal
+# plasma cells. Coverage at these sites in cfDNA reflects MM chromatin
+# activity and is the primary GRIFFIN-based MRD feature used in this study.
+# This export feeds directly into scripts 1_7B and 2_0.
 MM_DARs_data <- results.data %>%
   filter(Site == "MM_DARs_chromatin_activation") %>%
   select(

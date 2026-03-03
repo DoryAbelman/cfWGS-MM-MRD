@@ -1,30 +1,40 @@
 # =============================================================================
-# Script: 3_3_Plot_optimal_cutoff_tumor_naive_calls_and_clinical_concordance.R
+# 3_3_Plot_optimal_cutoff_tumor_naive_calls_and_clinical_concordance.R
 # Project:  cfWGS MRD detection (M4 / SPORE / IMMAGINE)
 # Author:   Dory Abelman
-# Date:     May 28, 2025
+# Date:     May 2025
 #
 # Purpose:
-#   1. Read the processed dataset produced by `optimize_cfWGS_thresholds.R`
-#      (contains *_prob and *_call columns plus selected threshold table).
-#   2. Generate all publication‑quality visualisations:
-#        • Density plots and smoothed ROC curves for BM and blood models
-#        • Dual‑threshold blood panels
-#        • Calibration curves
-#        • Decision‑curve analysis
-#        • Water‑fall and longitudinal (“spaghetti”) plots
-#   3. Build and save contingency tables (gt images) for BM and blood rules.
-#   4. Save all figures (PNG, 300–500 dpi) to the `Output_tables_2025/` folder.
+#   TUMOR-NAIVE analysis - parallel to 3_2 but using the z-score-only blood
+#   cfDNA model that does NOT require patient-matched tumour DNA. Reads the
+#   processed dataset produced by 3_1_Optimize_cfWGS_thresholds.R and generates
+#   publication-quality figures and concordance tables for the tumor-naive
+#   calling strategy.
 #
-# Inputs  (produced by the analysis script):
-#   • Output_tables_2025/all_patients_with_BM_and_blood_calls.rds
-#   • Output_tables_2025/STable_selected_thresholds.csv
+#   Specifically:
+#     1. Reads the scored dataset (predicted probabilities + binary calls).
+#     2. Generates density plots, ROC curves, dual-threshold blood panels,
+#        calibration curves, decision-curve analysis, waterfall and
+#        longitudinal spaghetti plots for the tumor-naive scenario.
+#     3. Builds and saves contingency tables (gt images).
+#     4. Saves all figures (PNG, 300-500 dpi) to Output_figures_2025/.
+#
+# Inputs:
+#   - Output_tables_2025/all_patients_with_BM_and_blood_calls_updated2.rds
+#       (z-score-only tumor-naive calls; output of 3_1_Optimize_cfWGS_thresholds.R)
+#   - Output_tables_2025/selected_combo_thresholds_<date>.rds
 #
 # Outputs:
-#   • FigX_cfWGS_MRD_Panel.png
-#   • FigX_cfWGS_MRD_BloodDualThresholds.png
-#   • FigX_Calibration*.png, FigX_DecisionCurve*.png, …
-#   • tbl_*_contingency.png (gt images)
+#   - Output_figures_2025/Fig3_3_TumorNaive_MRD_Panel.png
+#   - Output_figures_2025/Fig3_3_TumorNaive_BloodDualThresholds.png
+#   - Output_figures_2025/Fig3_3_Calibration*.png
+#   - Output_figures_2025/tbl_TumorNaive_*_contingency.png
+#   - Output_tables_2025/Source_data_3_3_*.csv
+#
+# Dependencies:
+#   dplyr, tidyr, ggplot2, pROC, patchwork, janitor, gt, glue,
+#   rmda, lubridate, scales
+#   Must be run AFTER 3_1_Optimize_cfWGS_thresholds.R
 #
 # =============================================================================
 
@@ -54,6 +64,14 @@ selected_thr    <- readRDS(PATH_THRESHOLD_LIST)
 
 
 #### Rescore based on new established limit in the dilution serires 
+# RESCORING NOTE: The dilution series LOD analysis (script 3_1_part2) established
+# that the tumor-naive blood z-score model achieves reliable detection above
+# ~1:200 dilution. The probability threshold of 0.457 was derived from that
+# dilution series: it corresponds to the model probability at the lowest
+# experimentally detectable dilution fraction, calibrated to maximise sensitivity
+# while maintaining a specificity consistent with the dilution series floor.
+# This replaces the CV-optimised probability from 3_1 for the purpose of
+# reporting the final tumor-naive blood call in the manuscript.
 dat <- dat %>%
   mutate(
     Blood_zscore_only_sites_call_rescored = if_else(

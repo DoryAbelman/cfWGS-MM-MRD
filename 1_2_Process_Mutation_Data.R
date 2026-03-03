@@ -68,6 +68,10 @@ library(purrr)
 
 
 ### Define the mutation gene list (used for both BM and blood)
+# This curated list covers the most frequently mutated or translocated genes in
+# multiple myeloma based on published literature (e.g. CoMMpass, NDMM WGS studies).
+# It is used downstream to subset the MAF for heatmap visualisation (script 2_2_)
+# and for enrichment testing. Add genes here if the cohort warrants expansion.
 myeloma_genes <- c(
   "TP53",    # ~10-15%; high-risk MM
   "KRAS",    # ~20-25%; MAPK/ERK pathway
@@ -108,9 +112,15 @@ myeloma_genes <- c(
 maf_directory <- "~/OneDrive - University of Toronto/Project data/cfWGS project data/MAF files/BM/"
 
 # List all MAF files in the directory
-maf_files <- list.files(maf_directory, pattern = "\\.maf$", full.names = TRUE)
+maf_files <- list.files(maf_directory, pattern = "\.maf$", full.names = TRUE)
 
-# Read each MAF file into a dataframe and correct column types
+# Read each MAF file (BM) into a dataframe and correct column types.
+# Each MAF begins with meta-comment lines prefixed "#"; comment="#" skips them so
+# the first non-comment row becomes the column-header row.  Explicit col_types are
+# required because numeric count columns (t_alt_count, t_ref_count, t_depth, etc.)
+# can be guessed as character when early rows carry "."/NA placeholders.  All
+# population-frequency columns (gnomAD_*, ExAC_*) are forced to col_double() to
+# prevent parsing errors from scientific-notation allele frequencies.
 dfs <- lapply(maf_files, function(file) {
   df <- read_tsv(file, comment = "#", col_types = cols(
     Hugo_Symbol = col_character(),
@@ -252,12 +262,17 @@ dfs <- lapply(maf_files, function(file) {
 
 # Combine all dataframes into one
 combined_maf <- bind_rows(dfs)
-rm(dfs)
+rm(dfs)  # Free memory; dfs can be several hundred MB for large cohorts
 
 # Load in the patient info 
 metada_df_mutation_comparison <- read_csv("combined_clinical_data_updated_April2025.csv")
 
 # Add a Tumor_Sample_Barcode column to metada_df_mutation_comparison
+# The BAM filename (e.g. TFRIM4_0001_Bm_P_WG_FZ-01.filter.deduped.recalibrated.bam)
+# is trimmed to match the Tumor_Sample_Barcode field written by the variant caller.
+# Step 1: strip sequencing-platform suffixes (_PG / _WG are pipeline artefacts).
+# Step 2: strip processing suffixes (.filter*, .ded*, .recalibrate*) to recover
+#         the bare sample barcode used as the join key in the MAF files.
 metada_df_mutation_comparison <- metada_df_mutation_comparison %>%
   mutate(Tumor_Sample_Barcode = Bam %>%
            # Remove _PG or _WG
@@ -266,6 +281,10 @@ metada_df_mutation_comparison <- metada_df_mutation_comparison %>%
            str_replace_all("\\.filter.*|\\.ded.*|\\.recalibrate.*", ""))
 
 # Add VAF column
+# Formula: VAF = alternate-allele read count / total tumor read depth.
+# Note: t_depth is also provided in the MAF but may differ from (t_ref+t_alt)
+# when indel realignment or soft-clips are counted differently by the caller.
+# Using t_ref_count + t_alt_count is more robust for low-depth cfDNA samples.
 combined_maf <- combined_maf %>%
   mutate(VAF = t_alt_count / (t_ref_count + t_alt_count))
 
@@ -274,18 +293,34 @@ combined_maf <- combined_maf %>%
   mutate(Bam = paste0(Tumor_Sample_Barcode, ".filter.deduped.recalibrated.bam"))
 
 # Modify the specific Tumor_Sample_Barcode in combined_maf with error
+# Patient TFRIM4_0189 had an incorrectly truncated barcode written by the variant
+# caller (missing the '-01-O-DNA' aliquot suffix).  This one-line patch corrects
+# the join key so it matches the metadata table.  If a new sample has a similar
+# issue, add an analogous ifelse() here before the left_join below.
 combined_maf <- combined_maf %>%
   mutate(Tumor_Sample_Barcode = ifelse(Tumor_Sample_Barcode == "TFRIM4_0189_Bm_P_ZC-02", 
                                        paste0(Tumor_Sample_Barcode, "-01-O-DNA"), 
                                        Tumor_Sample_Barcode))
 
 # Join with the metadata dataframe
+# Key: Tumor_Sample_Barcode (MAF) == Tumor_Sample_Barcode (metadata, derived above).
+# A left_join keeps ALL variants; unmatched rows get NA metadata columns.
+# Downstream, rows with is.na(timepoint_info) indicate samples not yet in the
+# clinical spreadsheet - these should be investigated before final analysis.
+# The Bam column is dropped from combined_maf first to avoid a duplicate column
+# conflict because metada_df_mutation_comparison also carries a Bam column.
 combined_maf <- left_join(combined_maf %>% select(-Bam), metada_df_mutation_comparison, by = "Tumor_Sample_Barcode")
 
 
 ## First filter to just diagnosis 
+# Retain only timepoints relevant for WGS-tumour-informed cfDNA analysis.
+# "Diagnosis" and "Baseline" are pre-treatment BM samples used to define the
+# patient-specific somatic variant panel.  "Relapse" and "Progression" are
+# included because matched BM biopsies at relapse are a primary study endpoint.
+# Follow-up blood samples have their own object (combined_maf_blood) and are
+# filtered to matching timepoints later.
 combined_maf_bm_dx <- combined_maf %>% filter(timepoint_info %in% c("Diagnosis", "Baseline", "Relapse", "Progression"))
-rm(combined_maf)
+rm(combined_maf)  # Drop the unfiltered BM MAF to free memory before loading blood data
 
 
 
@@ -296,9 +331,12 @@ rm(combined_maf)
 maf_directory <- "~/OneDrive - University of Toronto/Project data/cfWGS project data/MAF files/Blood/"
 
 # List all MAF files in the directory
-maf_files <- list.files(maf_directory, pattern = "\\.maf$", full.names = TRUE)
+maf_files <- list.files(maf_directory, pattern = "\.maf$", full.names = TRUE)
 
-# Read each MAF file into a dataframe and correct column types
+# Read each PB cfDNA MAF file into a dataframe using identical col_types as the
+# BM block above.  The Blood/ directory contains plasma cfDNA samples only;
+# see Sample_type guard later in this script that drops any non-plasma rows that
+# may have been placed in this folder by mistake.
 dfs <- lapply(maf_files, function(file) {
   df <- read_tsv(file, comment = "#", col_types = cols(
     Hugo_Symbol = col_character(),
@@ -453,6 +491,11 @@ combined_maf_blood <- combined_maf_blood %>%
 combined_maf_blood <- left_join(combined_maf_blood, metada_df_mutation_comparison, by = "Tumor_Sample_Barcode")
 
 # Filter rows where timepoint_info is NA and get unique Tumor_Sample_Barcode values
+# Any barcode printed here failed to match the metadata spreadsheet.
+# Common causes: (a) the BAM filename stripping regex above did not cover a new
+# naming convention, (b) the sample was sequenced but not yet entered in the
+# clinical CSV, or (c) a true typo in either the MAF or the spreadsheet.
+# Resolve these before running downstream scripts that require complete joins.
 unique_barcodes_na_timepoint <- combined_maf_blood %>%
   dplyr::filter(is.na(timepoint_info)) %>%
   distinct(Tumor_Sample_Barcode)
@@ -500,6 +543,10 @@ mean_vaf_per_patient <- combined_maf_bm_dx %>%
   summarize(mean_vaf = mean(VAF, na.rm = TRUE))
 
 # Step 2: Reorder the patients based on the mean VAF
+# Converting Patient to an ordered factor makes ggridges stack samples from
+# lowest mean VAF (top) to highest (bottom), providing a visual quality-control
+# check: patients with tumour-purity issues or failed sequencing will cluster
+# at the low-VAF end and can be flagged for exclusion.
 combined_maf_bm_dx <- combined_maf_bm_dx %>%
   filter(timepoint_info %in% c("Diagnosis", "Baseline", "Progression"))   %>%
   filter(!is.na(VAF)) %>%
@@ -527,6 +574,10 @@ ggsave("Vaf_plot_BM_cell_dx_ordered_updated_4.png", plot = vaf_plot, width = 6, 
 
 
 # Blood samples
+# Two-step guard: (1) restrict to timepoints with matching BM comparators;
+# (2) retain only cfDNA plasma samples.  The blood MAF directory may contain
+# buffy-coat germline BAMs or other non-plasma types that must be excluded here
+# to avoid contaminating cfDNA VAF distributions with germline allele fractions.
 combined_maf_blood <- combined_maf_blood %>% dplyr::filter(timepoint_info %in% c("Diagnosis", "Baseline", "Progression", "Relapse")) %>% dplyr::filter(Sample_type == "Blood_plasma_cfDNA")
 vaf_plot <- ggplot(combined_maf_blood %>% dplyr::filter(!is.na(VAF)) %>% dplyr::filter(timepoint_info %in% c("Diagnosis", "Baseline")), aes(x = VAF, y = Patient)) +
   geom_density_ridges(scale = 2) +
@@ -579,6 +630,11 @@ ggsave("Vaf_plot_blood_dx_ordered_updated_4.png", plot = vaf_plot, width = 6, he
 filtered_data <- combined_maf_bm_dx[combined_maf_bm_dx$t_depth >= 1, ]
 
 # Create the histogram with ggplot2
+# t_depth is the total read depth at each variant locus in the tumour BAM.
+# BM samples should cluster around 30-40x (WGS design); outliers above 200x
+# often indicate misaligned repeat regions and the xlim(1,200) below truncates
+# these for visual clarity.  If any sample has a median t_depth < 10x, flag it
+# for QC before inclusion in downstream mutation-overlap analysis (script 1_2_Part2_).
 histogram <- ggplot(combined_maf_bm_dx, aes(x = t_depth)) +
   geom_histogram(binwidth = 1, fill = "steelblue", color = "black", alpha = 0.7) +
   labs(title = "Histogram of t_depth values in BM",
@@ -626,6 +682,12 @@ write.table(as.data.frame(combined_maf_bm_dx), "combined_maf_temp_bm_Jan2025.maf
 #### Below here is optional
 
 # Read the MAF file using read.maf
+# maftools::read.maf() requires a standard MAF on disk; the round-trip via
+# write.table() above serialises the annotated combined_maf_blood/bm_dx to the
+# correct tab-separated format.  maf_object_* enables maftools visualisation
+# functions (oncoplot, mafSummary, etc.) used in script 2_2_ and optional
+# downstream plots. subsetMaf() below draws on maf_object_bm to extract only
+# variants in myeloma_genes for heatmap construction.
 maf_object_blood <- read.maf(maf = "combined_maf_temp_blood_Jan2025.maf")
 maf_object_bm <- read.maf(maf = "combined_maf_temp_bm_Jan2025.maf")
 
@@ -634,7 +696,9 @@ maf_subset <- subsetMaf(maf = maf_object_bm, genes = myeloma_genes, includeSyn =
 mutation_data <- maf_subset@data %>%
   select(Tumor_Sample_Barcode, Hugo_Symbol, Variant_Classification) %>%
   mutate(Mutation_Type = case_when(
+    # Truncating: loss-of-function nonsense or frameshift - highest clinical priority
     Variant_Classification %in% c("Nonsense_Mutation", "Frame_Shift_Del", "Frame_Shift_Ins") ~ "Truncating",
+    # Missense / in-frame: potentially activating or dominant-negative
     Variant_Classification %in% c("Missense_Mutation", "In_Frame_Del", "In_Frame_Ins") ~ "Missense",
     Variant_Classification == "Splice_Site" ~ "Splice_Site",
     TRUE ~ "Other"

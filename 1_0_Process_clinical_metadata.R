@@ -109,6 +109,13 @@ spore_data <- spore_data %>%
   )
 
 ##  4.2  Sort by Patient & date to compute “Timepoint” (≥14 days → new timepoint)
+# RATIONALE: SPORE samples do not carry pre-assigned timepoint codes like M4.
+# New timepoints are inferred: if a subsequent sample was collected >14 days
+# after the prior one it is treated as a new clinical visit. 14 days was chosen
+# as the minimum expected inter-visit gap; samples within the same 14-day window
+# (e.g. same-day BM + blood draws) receive the same timepoint number. A shorter
+# gap would over-split same-visit aliquots; a longer gap would merge distinct
+# clinical assessments.
 spore_data <- spore_data %>%
   arrange(Patient, Date_of_sample_collection) %>%
   group_by(Patient) %>%
@@ -151,6 +158,16 @@ combined_clinical_data <- bind_rows(spore_data, clinical_data) %>%
 
 
 # ─── 7.  Annotate M4 timepoint_info (diagnosis, post_induction, etc.) ──────────
+# M4 study protocol uses numeric codes to label each planned visit:
+#   "01" = At diagnosis / pre-treatment (Timepoint_01_Prior_TX in the labs table)
+#   "03" = After induction chemotherapy (post-induction BM / blood)
+#   "05" = After autologous stem-cell transplant (post-ASCT)
+#   "07" = ~1-year maintenance (the primary MRD assessment timepoint)
+#   "08" = ~1.5-year maintenance  (see section 10 below for extended timepoints)
+#   "09" = ~2-year maintenance
+#   "R-" = Relapse / progression (visit triggered by clinical events, not protocol)
+# These codes originate from the M4 study and are hard-coded in
+# the TFRIM4 processing log; they should not change unless the protocol is amended.
 combined_clinical_data <- combined_clinical_data %>%
   mutate(
     timepoint_info = case_when(

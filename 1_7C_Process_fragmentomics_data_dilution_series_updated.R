@@ -53,10 +53,14 @@ get.foldchange.p <- function(i, group1.idx, group2.idx) {
   return(c(fc = fc, p = test$p.value))
 }
 
-# Clean sample names exactly as in your main scripts:
-#  • Replace “_Blood_plasma_cfDNA” → “-P”
-#  • Swap “_” → “-” for non-SPORE
-#  • Swap “IMG” → “MyP”
+# clean_sample: standardises cfWGS sample identifiers to the common
+# project format used across all scripts. Three transformations applied:
+#  1. Strip Illumina pipeline suffix "_Blood_plasma_cfDNA", replace with "-P"
+#  2. Replace underscores with hyphens for M4/IMG-cohort sample IDs
+#     (SPORE IDs already use hyphens and are left unchanged)
+#  3. Rename "IMG" prefix to "MyP" to match clinical database naming.
+# This function is replicated from 1_7A/B to keep the dilution script
+# self-contained and reproducible without importing helpers.
 clean_sample <- function(x) {
   x %>%
     str_replace("_Blood_plasma_cfDNA$", "-P") %>%
@@ -68,6 +72,16 @@ clean_sample <- function(x) {
 
 
 ### 1.  DEFINE PATHS  ###########################################################
+# DILUTION SERIES vs. MAIN COHORT — KEY DIFFERENCES:
+# Unlike 1_7A / 1_7B (which process clinical patient plasma samples across
+# multiple timepoints), this script processes *in-vitro* dilution-series
+# samples: MM patient plasma spiked into healthy donor plasma at known
+# tumour-fraction steps.
+# Purpose: establish analytical sensitivity for each fragmentomics feature
+# (GRIFFIN z-scores, FS, Proportion.Short) as a function of tumour fraction.
+# The metadata file contains a "LOD" (limit-of-detection) column rather than
+# clinical timepoint labels; no PR/PS/response/trial group comparisons are run.
+#
 # Point these to your *dilution-series* folders:
 
 # 1a) Nucleosome-accessibility input (cfWGS for dilution series)
@@ -142,6 +156,11 @@ pon.data <- pon.data %>%
   )
 
 # 3h) Build sample lists
+# NOTE: unlike 1_7A, there are no clinical subgroups (baseline / maintenance /
+# M4 / SPORE) here. All dilution-series samples are treated as a single
+# "tumour" group compared against the same CHARM TGL49 healthy-control PON.
+# The relevant grouping variable for sensitivity analysis is the known
+# tumour fraction (from Metadata_dilution_series.csv, "LOD" column).
 all.tumour.samples <- unique(cfWGS.data$Sample)
 all.pon.samples    <- setdiff(unique(pon.data$Sample), "TGL49_0267_Pb_U_PE_428") # remove duplicate longitudinal
 all.samples        <- c(all.tumour.samples, all.pon.samples)
@@ -185,6 +204,12 @@ pon.data        <- pon.data[, common_columns, drop = FALSE]
 metrics.per.site <- list()
 scores.per.site  <- list()
 
+# stats.data for the dilution series is SIMPLIFIED relative to 1_7A:
+# only Cohort-level fold-change and p-value columns are retained
+# (Coverage.fc/p, Midpoint.fc/p, Amplitude.fc/p — tumour vs. healthy).
+# The 1_7A columns PR.*, PS.*, response.p, and trial.p are omitted because
+# there are no clinical subgroups (baseline / maintenance / trial arm)
+# within the dilution series.
 stats.data <- data.frame(
   Site            = unique(cfWGS.data[, c("site_name", "site_type")]     )$site_name,
   Type            = unique(cfWGS.data[, c("site_name", "site_type")]     )$site_type,
@@ -234,10 +259,15 @@ for (site in all.sites) {
     Amplitude         = apply(GeneCycle::periodogram(gc.distances[, valid.samples, drop = FALSE])[["spec"]], 2, max)
   )
   
+  # Midpoint.normalized = (Midpoint.Coverage - Mean.Coverage) + 1
+  # Centres the near-dyad coverage on the global mean so that 1.0 = average
+  # background; > 1.0 indicates elevated accessibility at the site centre.
   metrics.per.site[[site]]$Midpoint.normalized <-
     (metrics.per.site[[site]]$Midpoint.Coverage - metrics.per.site[[site]]$Mean.Coverage) + 1
   
-  # z-scores vs. PON
+  # Z-scores vs. PON: same formula as 1_7A — z = (x - mean_PON) / sd_PON.
+  # Reference vector y is the subset of values belonging to pon.samples,
+  # i.e. the TGL49 healthy-control bank, not the dilution series samples.
   score.data <- data.frame(
     Sample        = valid.samples,
     Site          = rep(site, length(valid.samples)),
@@ -295,7 +325,11 @@ results.data <- merge(
   all = TRUE
 )
 
-# Derive HBC-based thresholds (±10% of max/min z-score among healthy samples)
+# Identical ±10 % HBC threshold strategy as in 1_7A: max/min healthy z-score
+# inflated by 10 % defines the normal boundary. The SAME TGL49 healthy-control
+# panel is used here, so thresholds are directly comparable to main-cohort
+# calls—allowing dilution-series sensitivity to be interpreted on the same
+# scale as clinical patient results.
 thresholds.up <- aggregate(
   results.data[grep("TGL49", results.data$Sample), grep("Zscore", colnames(results.data))],
   by = list(Site = results.data[grep("TGL49", results.data$Sample), ]$Site),
@@ -365,7 +399,11 @@ write_tsv(stats.data,
           file.path(out.dir, "Griffin/griffin_per_site_stats_dilution.tsv"))
 
 
-### 8.  EXTRACT “MM_DARs_chromatin_activation” SITE + ATTACH CLINICAL KEYS #######
+### 8.  EXTRACT “MM_DARs_chromatin_activation” SITE + ATTACH CLINICAL KEYS ######## Filters to the single MM-DAR site of interest, then re-attaches columns
+# from Metadata_dilution_series.csv. Key dilution-specific column:
+#   LOD ("limit of detection") = the known input tumour fraction (%) for
+#   this dilution step, used downstream to plot feature detectability vs.
+#   tumour content and to define the analytical sensitivity threshold.
 mm_dars_small <- results.data %>%
   filter(Site == "MM_DARs_chromatin_activation") %>%
   # re-attach Bam, Patient, Date_of_sample_collection from clinical.csv
@@ -417,7 +455,16 @@ if (file.exists(meta.csv)) {
 }
 
 
-### 11. MERGE EVERYTHING INTO ONE “KEY” TABLE  ##################################
+### 11. MERGE EVERYTHING INTO ONE “KEY” TABLE  ################################### Final output table assembles all three fragmentomics features per dilution
+# sample in a single row:
+#   • GRIFFIN MM-DARs metrics (Mean.Coverage, Midpoint.normalized, Amplitude,
+#     Zscore.Coverage/Midpoint/Amplitude, Threshold flags)
+#   • Proportion.Short   (short-fragment ratio from insert_size_summary.tsv)
+#   • FS                 (CHARM Fragment Score from fragment_scores.tsv)
+# Plus clinical keys: Bam, Patient, Sample_ID, LOD (tumour fraction).
+# This feeds directly into script 1_9 for dilution-series eligibility tables
+# and script 3_1_part2 for sensitivity analysis.
+
 key_frag_dilution <- mm_dars_small %>%
   dplyr::select(-Site) %>%
   # now join insert-size and FS

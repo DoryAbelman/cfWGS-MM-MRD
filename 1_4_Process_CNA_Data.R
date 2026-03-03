@@ -1,5 +1,5 @@
 # =============================================================================
-# Script: process_cna_seg_files.R
+# Script: 1_4_Process_CNA_Data.R
 #
 # Description:
 #   This script imports, harmonizes, and summarizes copy-number segment (SEG)
@@ -40,7 +40,7 @@
 #   library(GenomicRanges)
 #
 # Usage:
-#   source("process_cna_seg_files.R")
+#   source("1_4_Process_CNA_Data.R")
 #   # creates combined_seg_data and myeloma_CNA_matrix_with_HRD in working dir
 #
 # Author: Dory Abelman
@@ -75,6 +75,11 @@ metada_df_mutation_comparison <- metada_df_mutation_comparison %>%
 
 
 #### Now get the ichorCNA data loaded 
+# ichorCNA writes one *.cna.seg file per sample containing genome-wide
+# copy-number segments. Each row is a contiguous segment with a
+# Corrected_Call label (GAIN/AMP/HETD/HOMD/NEUT) derived from the
+# ichorCNA HMM after correcting for GC bias, mappability, and the
+# estimated tumor fraction in that sample.
 # Set the directory containing the SEG files
 seg_dir <- "Oct 2024 data/Ichor_CNA"
 
@@ -94,6 +99,13 @@ for (file in seg_files) {
   sample_name <- gsub(".cna.seg$", "", basename(file))
   
   # Extract the relevant columns: chr, start, end, and the exact Corrected_Call column
+  # Corrected_Call encodes the ichorCNA segment state after tumor-fraction
+  # correction. Possible values (uppercased later):
+  #   NEUT  = copy-neutral (2 copies in diploid);
+  #   GAIN  = single-copy gain (3 copies); AMP = high-level gain (>=4);
+  #   HLAMP = focal high-level amplification (>=6+);
+  #   HETD  = heterozygous deletion (1 copy); HOMD = homozygous deletion (0).
+  #   LOSS / CNLOH may appear in Sequenza-derived segments.
   seg_corrected_call <- seg_data %>%
     dplyr::select(chr, start, end, Corrected_Call = matches("Corrected_Call$"))
   
@@ -106,9 +118,20 @@ for (file in seg_files) {
 
 
 # Combine all the data into one dataframe by chr, start, and end
+# A full_join (rather than inner/left) is used so that every unique
+# genomic segment present in ANY sample is retained. Samples that
+# lack a particular segment will receive NA for that segment's call;
+# NA values are treated as copy-neutral (NEUT) in downstream binary
+# calling steps. Rows: genome-wide segments; Columns: one per sample.
 combined_seg_data <- purrr::reduce(seg_data_list, full_join, by = c("chr", "start", "end"))
 
 ## Add the arm info to the directory 
+# Cytoband definitions (cb_frame) supply hg38 chromosomal band
+# coordinates. The arm label (e.g. "1p", "13q") is synthesised by
+# stripping the "chr" prefix and appending the first character of the
+# UCSC band name ("p" or "q"). This arm label is then assigned to
+# each ichorCNA segment by genomic overlap, enabling arm-level
+# summarisation downstream.
 cb_frame_arm <- cb_frame %>%
   mutate(arm = paste0(gsub("chr", "", chr), substr(band, 1, 1))) %>%
   dplyr::select(chr, start, end, arm)  # Select only chr, start, end, and
@@ -164,16 +187,35 @@ cytoband_txt       <- "cytoband.txt"  # fallback if cb_frame_rds is NULL
 
 
 ## ---- Tunables & label maps ----
+# pad_bp: ichorCNA segments do not always extend to the exact cytogenomic
+#   band boundaries annotated for FISH probes. ±150 kb padding allows
+#   segments that end just outside a probe band to still be matched.
+# min_bp: a 1 kb minimum overlap prevents false matches from rounding
+#   at segment endpoints.
+# max_nearest_bp: ichorCNA may leave gaps (e.g. centromere, low-mappability
+#   regions). If no segment overlaps a FISH probe window, the nearest
+#   segment within 10 Mb is used as a fallback; beyond that distance the
+#   probe is left uncalled (NA).
 pad_bp  <- 150000L  # ±150 kb padding around band windows
 min_bp  <- 1000L    # require >= 1 kb overlap to count
 max_nearest_bp  <- 10e6L     # allow nearest-segment fallback within 10 Mb 
 
 # FISH feature mapping by arm label in fish table
+# These four chromosomal loci are the canonical high-risk FISH panel in MM:
+#   del1p (1p32 CDKN2C/FAF1 locus) – adverse prognosis;
+#   amp1q (1q21 CKS1B locus)       – adverse prognosis;
+#   del17p (17p13 TP53 locus)       – highest-risk feature;
+#   del13q (13q14 RB1 locus)        – high-risk, frequently monosomal.
 feature_map <- c("1p" = "del1p", "1q" = "amp1q", "17p" = "del17p", "13q" = "del13q")
 # Direction map for binning
+# amp1q requires a gain event; all others are defined by copy loss.
 dir_map     <- c(amp1q = "gain", del1p = "loss", del13q = "loss", del17p = "loss")
 
 # Call label sets
+# Gain labels: GAIN (3 copies), AMP (>=4), HLAMP (focal >=6+);
+#   all count as amplification for amp1q scoring.
+# Loss labels: HETD (1 copy) and HOMD (0 copies);
+#   LOSS and CNLOH added for Sequenza-derived calls (see 1_4A).
 gain_labels <- c("GAIN", "AMP", "HLAMP")
 loss_labels <- c("HOMD", "HETD")
 
@@ -326,8 +368,12 @@ hits_df_cyto <- tibble::tibble(
 ) %>%
   dplyr::filter(ovl >= min_bp)
 
-# --- Fallback: nearest segment per probe when no overlaps made it, since ichorCNA skips problematic regions of the genome
-# distanceToNearest returns the *closest* segment (ties broken arbitrarily), with distance in bp.
+# --- Fallback: nearest segment per probe when no overlaps made it, since ichorCNA skips problematic regions of the genome# ichorCNA uses 1 Mb bins; centromeric regions, segmental duplications,
+# and low-mappability windows may be entirely absent from the seg file.
+# When a FISH probe window has no overlapping segment, distanceToNearest
+# finds the closest segment in bp. Only segments within max_nearest_bp
+# (10 Mb) are used; probes beyond that threshold remain NA so that
+# centromere-proximal probes are not assigned calls from the wrong arm.# distanceToNearest returns the *closest* segment (ties broken arbitrarily), with distance in bp.
 nearest_hits <- GenomicRanges::distanceToNearest(probe_gr_cyto, seg_gr, ignore.strand = TRUE)
 
 nearest_df <- tibble::tibble(
@@ -359,6 +405,13 @@ final_calls_mat_cyto <- matrix(
   dimnames = list(NULL, samples)
 )
 
+# Severity-ranked label vectors: when multiple ichorCNA segments
+# overlap a FISH probe window, the call with the highest clinical
+# severity is chosen rather than the one with the greatest overlap.
+# For gains:  HLAMP > AMP > GAIN (focal/high-level takes precedence).
+# For losses: HOMD > HETD > LOSS > CNLOH (homozygous deletion is worst).
+# This ensures that focal high-risk events are not obscured by adjacent
+# neutral segments that happen to cover more base pairs.
 gain_priority <- c("HLAMP","AMP","GAIN")
 loss_priority <- c("HOMD","HETD","LOSS","CNLOH")
 
@@ -509,6 +562,12 @@ for (i in 1:nrow(myeloma_arms_df)) {
   }
   
   # Merge with results and assign 1 if proportion > 1/3
+  # The 33% threshold (>1/3 of arm segments altered) was chosen to
+  # balance sensitivity with specificity for WGS-based arm-level calls:
+  # ichorCNA segments the whole arm so even a partial arm alteration
+  # is biologically relevant, but >33% avoids calling small focal events
+  # as arm-level. This mirrors common cytogenetic reporting practice
+  # where >30% of interphase cells positive defines an abnormality.
   results <- left_join(results, sample_proportions, by = "Sample")
   results[[arm_name]] <- ifelse(results$ProportionAltered > 1/3, 1, 0)
   results <- results %>% select(-ProportionAltered)
@@ -570,12 +629,25 @@ for (i in 1:nrow(hyperdiploid_arms_df)) {
   }
   
   # Merge with the results table and assign gain indicator if >65% of segments are gained
+  # The 65% threshold for per-chromosome gain is intentionally permissive:
+  # in cfDNA at low tumor fractions ichorCNA may not call every bin as
+  # GAIN even on a truly trisomic chromosome. Requiring >65% (rather than
+  # >80%) improves sensitivity while a downstream requirement for >=5/8
+  # canonical HRD chromosomes provides specificity at the hyperdiploid
+  # phenotype level. Updated from 80% threshold per Suzanne's criteria.
   results <- left_join(results, sample_gains, by = "Sample")
   results[[hyperdiploid_arms_df$Chr[i]]] <- ifelse(results$ProportionGained > 0.65, 1, 0)
   results <- results %>% select(-ProportionGained)
 }
 
 # Mark a sample as hyperdiploid only if all eight hyperdiploid chromosomes have full gains
+# Hyperdiploid MM (HRD) is defined by gains of odd-numbered chromosomes
+# 3,5,7,9,11,15,19,21. Requiring >=5/8 (rather than all 8) reflects that
+# WGS may miss gains on individual chromosomes at low tumor fractions,
+# and matches the clinical definition used by Hanamura et al. (2006) and
+# the IMWG (gains of >=3 of the 8 canonical chromosomes, with >=5 here
+# chosen for cfDNA specificity). Intermediate values (3-4) are treated
+# as not HRD to reduce false positives in cfDNA samples.
 results <- results %>%
   mutate(
     hyperdiploid = if_else(
@@ -588,6 +660,14 @@ myeloma_CNA_matrix_with_HRD <- results
 
 
 # Prepare CNA data
+# Final output columns:
+#   Sample       – BAM basename (without .bam) matching Bam_clean_tmp in metadata
+#   del1p        – 1 if >33% of chr1p arm segments show loss (HETD/HOMD)
+#   amp1q        – 1 if >33% of chr1q arm segments show gain (GAIN/AMP/HLAMP)
+#   del13q       – 1 if >33% of chr13q arm segments show loss
+#   del17p       – 1 if >33% of chr17p arm segments show loss
+#   hyperdiploid – 1 if >=5/8 canonical HRD chromosomes show >65% gain
+# Consumed by: 1_5_Integrate_WGS_Feature_Data.R (cna_data_ichorCNA.rds)
 # We'll select relevant columns and set Sample as row names
 cna_data <- myeloma_CNA_matrix_with_HRD %>%
   dplyr::select(Sample, del1p, amp1q, del13q, del17p, hyperdiploid) %>%
@@ -605,6 +685,12 @@ if (!dir.exists(export_dir)) {
 }
 
 # Exporting dataframes as RDS files
+# cna_data_ichorCNA.rds  – compact binary arm-level call table; read in
+#   1_5_Integrate_WGS_Feature_Data.R as the ichorCNA-derived CNA layer
+#   before merging with Sequenza calls (1_4A output). The RDS format
+#   preserves column types exactly and loads ~10× faster than the TSV.
+# cna_data_backup.txt    – includes the intermediate per-chromosome
+#   hyperdiploid_* columns useful for QC; not loaded by downstream scripts.
 saveRDS(cna_data, file = file.path(export_dir, "cna_data_ichorCNA.rds"))
 
 # Exporting dataframes as text files

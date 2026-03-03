@@ -98,7 +98,16 @@ cfWGS_res_filtered <- data.frame()
 for(f in cfWGS_res_filtered_f){
   
   lns <- readLines(f)
+  # Keep only lines describing a translocation event; other event types
+  # (Deletion, Insertion, Inversion) reported by Ig_caller are discarded here
+  # because this study focuses exclusively on IGH/IGL/IGK translocations.
   lns <- subset(lns, grepl("Translocation",lns))
+  # Normalise the raw Ig_caller output into a tab-delimited form readable by
+  # read.table().  Each gsub() step covers one formatting convention:
+  #   gsub 1: strip square brackets wrapping breakpoint coordinates.
+  #   gsub 2: replace ";chr" (second breakpoint separator) with a tab so each
+  #           breakpoint becomes its own field.
+  #   gsub 3-5: split "chr:pos strand" into two tab-separated fields.
   lns <-  gsub("\\[|\\]", "", lns)
   lns <-  gsub(";chr", "\tchr", lns)
   lns <-  gsub(" - ", "\t", lns)
@@ -108,6 +117,11 @@ for(f in cfWGS_res_filtered_f){
   if(length(lns)>0){
     tmp_res <- read.table(text = lns)
     
+    # Columns 5,6,7,8 = breakpoint1, breakpoint1_strand, breakpoint2,
+    # breakpoint2_strand; cols 9,10 = gene1, gene2; col 12 = IGCaller_Score;
+    # col 15 = Mappability_Issue.  These positions are fixed by the Ig_caller
+    # v2 output format; if the pipeline version changes, verify the column
+    # order by inspecting a raw *_filtered.tsv before running this script.
     tmp_res <- tmp_res[,c(5,6,7,8,9,10,12,15)]
     colnames(tmp_res) <- c("breakpoint1", "breakpoint1_strand", 
                            "breakpoint2", "breakpoint2_strand",
@@ -118,6 +132,12 @@ for(f in cfWGS_res_filtered_f){
     tmp_res$Sample <- gsub(".sorted_indelrealigned.all.unique.dcs.sorted_output_filtered.tsv","",basename(f))
     
     ## output mavis compatible input
+    # The MAVIS block below constructs a structural-variant input table for the
+    # MAVIS validation and annotation pipeline.  The write.table() call is
+    # commented out because MAVIS validation was not performed in this instance. The
+    # mavis_input data.frame is retained for reference if re-validation is needed.
+    # Odd-indexed elements of sep_breakpoint* are chromosomes; even-indexed are
+    # positions (strsplit produces chr, pos alternately across all rows at once).
     sep_breakpoint1 <- unlist(strsplit(tmp_res$breakpoint1,":"))
     sep_breakpoint2 <- unlist(strsplit(tmp_res$breakpoint2,":"))
     
@@ -164,6 +184,11 @@ cfWGS_res_filtered$break2_cytoband <- NA
 saveRDS(cfWGS_res_filtered, "Oct_2024_Ig_caller_MM_translocations_all.rds")
 
 ## Filter to MM translocations
+# First-pass chromosome-pair filter: retains any event involving chr14 paired
+# with chr4, chr6, chr8, chr11, chr16, or chr20, regardless of gene annotation.
+# This is intentionally broad; score/mappability filters and gene-level rules
+# below will further prioritise calls.  Both orientations (break1/break2 order)
+# are checked because Ig_caller does not guarantee a canonical strand order.
 cfWGS_res_filtered <- cfWGS_res_filtered %>%
   mutate(Potential_MM_translocation = ifelse(
     (break1_chromosome == "chr11" & break2_chromosome == "chr14") |  # t(11;14)
@@ -185,12 +210,23 @@ cfWGS_res_filtered <- cfWGS_res_filtered %>%
   filter(Potential_MM_translocation == 1)
 
 # and remove rows where IGCaller_Score <= 20 when Mappability_Issue is not "none"
+# Rationale: a low-confidence score (<= 20) combined with a mappability warning
+# indicates the breakpoint overlaps a repetitive or low-complexity region and
+# the call is unreliable.  Rows with no mappability issue are retained at this
+# step because even low-scoring calls in clean regions will be re-evaluated by
+# the gene-level and ENCODE-blacklist filters applied later in the script.
 cfWGS_res_filtered <- cfWGS_res_filtered %>%
   filter(!(IGCaller_Score <= 20 & Mappability_Issue != "none"))
 
 library(pbapply)  # For progress bar
 
 # Function to match cytobands for each breakpoint - much faster than original 
+# match_cytoband_fast() performs a vectorised filter on the cytoband reference
+# table (hg38 cytoBand.txt from UCSC) instead of looping over every row.
+# It returns a combined string e.g. "chr14q32.33" used downstream to identify
+# the IGH locus and canonical MM translocation partner bands.
+# pbapply::pbsapply() wraps the row-wise apply with a progress bar so long
+# batches (>500 calls) don't appear to hang.
 match_cytoband_fast <- function(chromosome, position_start, cb_frame) {
   # Vectorized filtering of the cytoband dataframe
   matched_cb <- cb_frame %>%
@@ -221,6 +257,12 @@ saveRDS(cfWGS_res_filtered, "Oct_2024_Ig_caller_MM_translocations_with_cytoband.
 
 cfWGS_res_filtered$Recurrent_TRA <- "No"
 
+# Flag events where one breakpoint is chr14q32.33 (the IGH locus) and the
+# other is one of the three most common MM partner cytobands:
+#   11q13 -> CCND1 (t(11;14))
+#   4p16  -> FGFR3/NSD2 (t(4;14))
+#   16q23 -> MAF (t(14;16))
+# Both orientations (break1 vs break2 being the IGH side) are checked.
 cfWGS_res_filtered$Recurrent_TRA[grepl("11q13|4p16|16q23",
                                        cfWGS_res_filtered$break1_cytoband) &
                                    cfWGS_res_filtered$break2_cytoband == "chr14q32.33"] <- "Yes"
@@ -247,6 +289,12 @@ Ig_caller_df_cfWGS_filtered$break1_cytoband <- ifelse(is.na(Ig_caller_df_cfWGS_f
 Ig_caller_df_cfWGS_filtered$Translocation <- paste(Ig_caller_df_cfWGS_filtered$break1_cytoband, Ig_caller_df_cfWGS_filtered$break2_cytoband, sep = "_")
 
 # Then sort it 
+# Alphabetically sorting the two cytoband components ("chr11q13.3" and
+# "chr14q32.33" -> stored as "chr11q13.3_chr14q32.33") normalises the
+# translocation string regardless of which breakpoint the caller places first.
+# This canonical form is then matched against the myeloma_translocations list
+# defined below.  Without this step, the same event can appear twice under
+# different orientations and fail the %in% lookup.
 # Function to sort the elements in the translocation string
 sort_translocation <- function(translocation) {
   parts <- strsplit(translocation, "_")[[1]]
@@ -261,6 +309,11 @@ Ig_caller_df_cfWGS_filtered$Sorted_translocation <- apply(Ig_caller_df_cfWGS_fil
 # Now see if a myeloma translocation was found 
 
 ## These are the most common
+# This list defines the eight canonical myeloma IGH translocations at cytoband
+# resolution after sort_translocation() normalisation.  Each entry maps to the
+# established WHO/IMWG cytogenetic subgroup.  Calls matching this list are
+# labelled Common_MM_translocation == 1 and carry a lower score threshold in
+# the aggressive filter below, reflecting greater prior probability of being real.
 myeloma_translocations <- c(
   "chr11q13.3_chr14q32.33",  # t(11;14) involving CCND1 and IGH
   "chr14q32.33_chr16q23.2",  # t(14;16) involving MAF and IGH
@@ -339,7 +392,28 @@ relevant_myeloma_genes <- c(
   "BCL2", "BCL9"  # BCL2-related translocations
 )
 
-## First filter pass 
+## First filter pass
+# Four-tier confidence filter — rationale for each tier:
+#
+#   TIER 1 (Mappability_Issue != "none" AND score >= 100):
+#     The breakpoint overlaps a low-mappability region (repetitive elements,
+#     segmental duplications, etc.), so Ig_caller is less reliable.  The stricter
+#     score threshold (100) compensates: only high-confidence calls are kept.
+#
+#   TIER 2 (Mappability_Issue == "none" AND score >= 50):
+#     Both breakpoints are in uniquely mappable regions.  The standard threshold
+#     (50) is applied; lower scores in clean regions still carry meaningful FP risk.
+#
+#   TIER 3 (Common_MM_translocation == 1 AND score > 15):
+#     Canonical MM translocations (t(11;14), t(4;14), t(14;16), t(14;20), t(6;14),
+#     t(8;14)) have very high prior probability of being real.  A lenient threshold
+#     (> 15) is used here to ensure clinically relevant events are not missed when
+#     sequencing depth is low.  These must still survive the ENCODE-blacklist filter.
+#
+#   TIER 4 (Other_gene %in% relevant_myeloma_genes):
+#     If Ig_caller names a known MM driver (NSD2, CCND1, MAF, MAFB, etc.) as the
+#     partner, retain regardless of score so established fusions are never silently
+#     dropped by a numeric threshold.
 Ig_caller_df_cfWGS_filtered <- Ig_caller_df_cfWGS_filtered %>%
   filter(
     # Keep if there is a mappability issue and score is at least 100
@@ -354,6 +428,12 @@ Ig_caller_df_cfWGS_filtered <- Ig_caller_df_cfWGS_filtered %>%
   filter(Potential_MM_translocation == 1 | Other_gene %in% relevant_myeloma_genes)
 
 ## Now remove encode blacklist 
+# GRanges-based overlap removal: any call where either breakpoint falls within
+# an ENCODE blacklist region (repetitive, high-signal, or assembly artefact
+# regions in hg38-blacklist.v2.bed) is removed.  Both breakpoints are tested
+# independently; if either overlaps the blacklist the entire row is discarded
+# (all_overlap_indices is the union of both queryHits vectors).  The 'encode'
+# subset is kept separately for audit purposes.
 bed_file_encode <- read_tsv("hg38-blacklist.v2.bed")
 colnames(bed_file_encode) <- c("chrom", "start", "stop", "description")
 
@@ -391,7 +471,7 @@ all_overlap_indices <- unique(c(overlap_indices1, overlap_indices2))
 
 # Use the combined indices to filter the data frame - to remove entries that overlap
 Ig_caller_df_cfWGS_filtered_no_encode <- Ig_caller_df_cfWGS_filtered[-all_overlap_indices,]
-
+Ig_caller_df_cfWGS_filtered_encode <- Ig_caller_df_cfWGS_filtered[all_overlap_indices,]
 ## Plot some characteristics of genes affected by more than one patient 
 
 # Get number of patients 
@@ -543,6 +623,11 @@ dev.off()
 ## More agressive filtering 
 
 # Filter out rows where Other_gene starts with "LOC" or "LINC" since likely artifact unless very high score
+# Uncharacterised loci (LOC*) and long intergenic non-coding RNAs (LINC*) are
+# disproportionately detected by Ig_caller in low-complexity genomic regions.
+# Applying a strict score threshold (> 200) retains only those with strong
+# split-read/discordant-pair evidence, reducing false-positive burden before
+# the final patient-frequency filter.
 Ig_caller_df_cfWGS_filtered_aggressive <- Ig_caller_df_cfWGS_filtered_aggressive %>%
   filter(!(grepl("^LOC|^LINC", Other_gene) & IGCaller_Score <= 200))
 
@@ -583,6 +668,11 @@ key_myeloma_genes <- c(
 )
 
 # Group by IG_gene and Other_gene and count the number of distinct patients with each combination
+# Calls found in > 2 patients (and not involving a key myeloma gene with
+# Common_MM_translocation == 1) are flagged as probable pan-cohort artefacts
+# (e.g. recurrent mapping artefacts at immunoglobulin gene cluster boundaries).
+# Key myeloma genes are always retained regardless of patient count because
+# their high prevalence in MM is biologically expected, not technical noise.
 Ig_caller_df_cfWGS_filtered_aggressive <- Ig_caller_df_cfWGS_filtered_aggressive %>%
   group_by(IG_gene, Other_gene) %>%
   mutate(patient_count = n_distinct(Patient)) %>%  # Count distinct patients per gene combination
@@ -898,3 +988,79 @@ write.table(
   row.names = FALSE,
   quote = FALSE
 )
+
+### Check back what was iGV verified 
+# After automated filtering, each candidate common MM translocation at a
+# diagnosis/baseline timepoint was manually reviewed in IGV using the mini-BAM
+# files generated by the IGV_screenshotter BED workflow above.  Results were
+# recorded in the xlsm column 'Looks_real' (1 = confirmed junction reads visible;
+# 0 = artefact or insufficient coverage).  Only Looks_real == 1 calls are used
+# for the final translocation_data_cytoband export consumed by script 1_5_.
+iGV_verified <- read_excel("Jan2025_exported_data/Ig_caller_df_cfWGS_filtered_aggressive2_iGV_check.xlsm")
+iGV_verified <- iGV_verified %>% filter(Looks_real == 1)
+
+## Filter to what checked 
+translocation_matrix_cytoband <- iGV_verified %>%
+  filter(Common_MM_translocation == 1) %>%  # Filter rows with common MM translocations
+  group_by(Bam_File) %>%  # Group by Bam_File to handle duplicates
+  slice_max(order_by = IGCaller_Score, n = 1, with_ties = FALSE) %>%  # Keep only the row with the highest score
+  ungroup() %>%
+  dplyr::select(Bam_File, Patient, Timepoint, Sample_type, Sample_ID, timepoint_info, Sorted_translocation) %>%  # Select relevant columns
+  distinct() %>%  # Remove duplicates
+  # Collapse specific IGH subtypes into general "IGH" in the Sorted_translocation column
+  mutate(Sorted_translocation = ifelse(grepl("^IGH", Sorted_translocation), sub("_.*", "", Sorted_translocation), Sorted_translocation)) %>%
+  pivot_wider(
+    names_from = Sorted_translocation,  # Create columns for each translocation type
+    values_from = Sorted_translocation,  # Use the same column to create 1/0
+    values_fn = list(Sorted_translocation = ~1),  # Set to 1 where translocation exists
+    values_fill = 0  # Fill with 0 where translocation doesn't exist
+  )
+
+
+# Helper: add column if missing
+add_col_if_missing <- function(df, colname, default = NA_integer_) {
+  if (!colname %in% colnames(df)) {
+    df[[colname]] <- default
+  }
+  df
+}
+
+cyto_cols <- c(
+  "chr11q13.2_chr14q32.33",
+  "chr11q13.3_chr14q32.33",
+  "chr14q32.33_chr4p16.3",
+  "chr14q32.33_chr16q23.2",
+  "chr14q32.33_chr8q24.21"
+)
+
+# Add all needed columns if missing
+for (col in cyto_cols) {
+  translocation_matrix_cytoband <- add_col_if_missing(translocation_matrix_cytoband, col)
+}
+
+
+translocation_data_cytoband <- translocation_matrix_cytoband %>%
+  # first, create IGH_CCND1 by coalescing the two possible 11q13 bands
+  mutate(
+    IGH_CCND1 = coalesce(
+      .data[["chr11q13.2_chr14q32.33"]],
+      .data[["chr11q13.3_chr14q32.33"]]
+    )
+  ) %>%
+  # now pick off and rename all four
+  transmute(
+    Bam_File = Bam_File,
+    Sample      = gsub(".bam$", "", Bam_File),        # drop “.bam”
+    IGH_CCND1,                                     
+    IGH_FGFR3 = `chr14q32.33_chr4p16.3`,
+    IGH_MAF   = `chr14q32.33_chr16q23.2`,
+    IGH_MYC   = `chr14q32.33_chr8q24.21`
+  )
+
+
+# Exporting dataframes as RDS files
+saveRDS(translocation_data_cytoband, file = file.path(export_dir, "translocation_data_cytoband_updated.rds"))
+
+# Exporting dataframes as text files
+write.table(translocation_data_cytoband, file = file.path(export_dir, "translocation_data_cytoband_updated.txt"), sep = "\t", row.names = FALSE, quote = FALSE)
+

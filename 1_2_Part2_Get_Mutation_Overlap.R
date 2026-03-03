@@ -59,6 +59,11 @@ df_bm <- readRDS("combined_maf_bm_dx.rds")
 df_blood <- readRDS("combined_maf_blood_all_muts_updated.rds")
 
 ## Remove rsids to match new filtering 
+# Variants with an rsID ("rs...") in the dbSNP column are registered polymorphisms
+# (common germline variants). These should not be in somatic MAF files, but low-depth
+# WGS or aggressive variant callers occasionally include them as false positives.
+# Removing them here ensures the BM/cfDNA overlap analysis reflects only somatic
+# tumour mutations and stays consistent with the filtered VCFs used by MRDetect.
 # filter out all rows with an RSID
 df_blood <- df_blood %>%
   filter(is.na(dbSNP_RS) | dbSNP_RS == "" | dbSNP_RS == "." |
@@ -76,6 +81,13 @@ rm(df_blood)
 
 ## Venn diagram between mutations at diagnosis 
 # Create unique identifiers for each mutation
+# Two ID fields are built:
+#   Unique_ID_patient = chr:start:end:ref:alt:Patient  -> used to COMPARE BM vs cfDNA
+#     within the same patient (the Venn diagram is per-patient, so Patient is part of key).
+#   Mutation_ID       = chr:start:end:ref:alt         -> used to ask whether the exact
+#     same somatic variant appears in any sample regardless of patient (cross-patient dedup).
+# Using coordinates + alleles (not gene name) ensures indistinguishable multimappers
+# or allele-specific variants are treated separately.
 combined_maf <- combined_maf %>%
   mutate(
     Unique_ID_patient = paste(Chromosome, Start_Position, End_Position, Reference_Allele, Tumor_Seq_Allele2, Patient, sep = ":"),

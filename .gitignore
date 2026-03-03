@@ -1,5 +1,21 @@
+# macOS metadata
 .DS_Store
 
+# R session artefacts
 .Rhistory
 .RData
 .Rproj.user/
+
+# Editor backup files
+*.bak
+
+# Python virtual environment (used only by VS Code tooling, not analysis code)
+.venv/
+
+# Subdirectories that contain archived/exploratory/temporary content.
+# Only the numbered scripts and helper files at the repo root are tracked.
+Other/
+Tmp/
+figures/
+Scripts prior to rerunning ML model/
+For targetted panel MS/

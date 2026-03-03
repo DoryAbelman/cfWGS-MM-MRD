@@ -1,6 +1,30 @@
 # =============================================================================
-# Script: 2_1_Part2_Cohort_Swim_Plot.R
-# Purpose: Build cohort swim plot of treatment timelines
+# 2_1_Part2_Cohort_Swim_Plot.R
+#
+# Purpose:
+#   Build a cohort swim plot showing treatment timelines
+#   (induction, transplant, maintenance, progression/relapse) for all patients
+#   across the M4, SPORE, and IMMAGINE cohorts. Each row is one patient;
+#   horizontal bars represent treatment lines and vertical markers indicate
+#   key clinical events (e.g. ASCT, relapse). Saved as a high-resolution PNG
+#   for manuscript Figure 1 / supplementary.
+#
+# Inputs:
+#   - Clinical data/SPORE/tidy_treatments.csv
+#   - M4_CMRG_Data/M4_COHORT_CHEMOTHERAPY.xlsx
+#   - Clinical data/IMMAGINE/Cleaned_IMMAGINE_chemotherapy.csv
+#   - combined_clinical_data_updated_April2025.csv  (for relapse/event dates)
+#   - cohort_assignment_table_updated.rds            (M4/SPORE/IMMAGINE label)
+#
+# Outputs:
+#   - Final Tables and Figures/Cohort_swim_plot.png (or PDF)
+#
+# Dependencies:
+#   tidyverse, readxl, lubridate, patchwork, forcats, purrr
+#   Must be run after 2_1_Clinical_Demographics_Table.R
+#
+# Author:    Dory Abelman
+# Last update: May 2025
 # =============================================================================
 #### Now make swim plot 
 

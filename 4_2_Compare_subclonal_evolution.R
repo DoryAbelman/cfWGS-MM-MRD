@@ -1,7 +1,29 @@
 ###############################################################################
 # 4_2_Compare_subclonal_evolution.R
-# Copy-number–based assessment of emergent subclones in longitudinal
-# cfDNA WGS MRD samples (30-40×).  Produces per-patient plots + emergent-CNA table + sentences for MS
+#
+# Purpose:
+#   Copy-number-based assessment of emergent subclonal CNA events between
+#   paired baseline and relapse cfDNA WGS samples (30-40x). Identifies CNAs
+#   present at relapse but absent (or sub-threshold) at baseline, generating
+#   per-patient longitudinal CNA plots, an emergent-event summary table, and
+#   plain-language sentences for the manuscript Results section.
+#
+# Inputs:
+#   - Jan2025_exported_data/All_feature_data_August2025.rds
+#       (integrated feature table; output of 2_0)
+#   - cohort_assignment_table_updated.rds
+#       (M4/SPORE/IMMAGINE cohort labels for patient filtering)
+#
+# Outputs:
+#   - Subclonal_evolution_plots.pdf  (per-patient CNA track plots)
+#   - Emergent_CNA_events.csv        (one row per emergent CNA event)
+#   - Printed text: auto-generated manuscript sentences (stdout)
+#
+# Dependencies:
+#   tidyverse, lubridate
+#
+# Author:    Dory Abelman
+# Last update: August 2025
 ###############################################################################
 
 ## ---- 0. USER SETTINGS -------------------------------------------------------
@@ -58,6 +80,14 @@ cfDNA_df <- cfDNA_df %>%
   ungroup()
 
 ## ---- 6. Emergent CNA table --------------------------------------------------
+# DEFINITION: An "emergent" CNA is one that is ABSENT (0) at baseline and
+# PRESENT (1) at relapse.  The delta is computed per-patient as
+#   relapse_value - baseline_value.
+# A delta of +1 therefore captures 0->1 (newly acquired), whereas:
+#   delta of  0 = no change (present at both or absent at both)
+#   delta of -1 = lost at relapse (present at baseline, absent at relapse)
+# Only delta == 1 events are retained as "Emergent" and written to CSV.
+# NOTE: event_cols are binary (0/1) flags produced by 1_4_Process_CNA_Data.R.
 emergent_tbl <- cfDNA_df %>%
   arrange(Patient, Sample_Date) %>%
   group_by(Patient) %>%

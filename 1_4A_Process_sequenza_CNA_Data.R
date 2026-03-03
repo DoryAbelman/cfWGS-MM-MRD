@@ -1,5 +1,5 @@
 # =============================================================================
-# Script: process_sequenza_cna_seg_files.R
+# Script: 1_4A_Process_sequenza_CNA_Data.R
 #
 # Description:
 #   End-to-end arm-level CNA caller for Sequenza segments with **ploidy-aware**
@@ -61,7 +61,7 @@
 #   library(GenomicRanges)
 #
 # Usage:
-#   source("process_sequenza_cna_seg_files.R")
+#   source("1_4A_Process_sequenza_CNA_Data.R")
 #   # Produces: combined_seg_data, sample_ploidy, results, cna_data, and exports
 #
 # Author: Dory Abelman

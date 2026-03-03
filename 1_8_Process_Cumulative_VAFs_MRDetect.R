@@ -154,6 +154,15 @@ colnames(all_files) <- gsub("\\.", "_", colnames(all_files))
 #    (only needed if you used an older parser version that mis-assigned these)
 # ──────────────────────────────────────────────────────────────────────────────
 
+# WHY THIS EXISTS: An earlier version of the MRDetect output parser assigned
+# these three count columns in the wrong order (sites_detected and reads_detected
+# were swapped relative to their column headers). This block corrects that.
+# Key definitions after the swap:
+#   sites_detected  = number of patient-specific mutant sites with at least one read
+#   reads_detected  = number of individual reads carrying a somatic mutation
+#   total_reads     = total reads inspected at those sites (denominator for detection_rate)
+# If CSV files came from the corrected parser, these reassignments are not used.
+
 # Temporarily store each column
 temp_sites <- all_files$sites_detected
 temp_reads <- all_files$reads_detected
@@ -174,7 +183,15 @@ rm(temp_sites, temp_reads, temp_total)
 
 # ──────────────────────────────────────────────────────────────────────────────
 # 7) Annotate each row with ‘Study’ based on BAM prefix
-# ──────────────────────────────────────────────────────────────────────────────
+# ──────────────────────────────────────────────────────────────────────────────# BAM file naming conventions used to identify cohort:
+#   TFRI...  = M4 cohor)
+#   MY...    = MyP cohort 
+#   EGA...   = Landau et al. external validation cohort (from EGA repository)
+#   HCCCFD.. = HCC patients used as non-MM cancer controls
+#   HCC-...  = HCC healthy donors used as cancer-free controls
+#   TGL...   = CHARM healthy donors (TGL49 panel; PRIMARY HEALTHY CONTROL POPULATION
+#              used for z-score normalization throughout this analysis)
+#   SPORE... = SPORE cohort (secondary MM cohort)
 all_files <- all_files %>%
   mutate(
     Study = case_when(
@@ -254,6 +271,13 @@ Merged_MRDetect %>%
 # ──────────────────────────────────────────────────────────────────────────────
 # 10) Classify matched vs. unmatched plasma; force CHARM_healthy→cfDNA
 # ──────────────────────────────────────────────────────────────────────────────
+# MRDetect runs each cfDNA sample (BAM) against the VCF from one patient's
+# bone-marrow mutations. That VCF is the "patient" the sample is being tested against.
+#   Matched_plasma   = BAM and VCF come from the SAME patient (the true signal)
+#   Unmatched_plasma = BAM and VCF come from DIFFERENT patients
+#                      (used as cross-patient negative controls)
+# All CHARM_healthy donors are always run against a patient's VCF, so their
+# Sample_type_Bam field is set to Blood_plasma_cfDNA here.
 Merged_MRDetect <- Merged_MRDetect %>%
   mutate(
     plotting_type       = if_else(Patient_Bam == Patient, "Matched_plasma", "Unmatched_plasma"),
@@ -274,6 +298,17 @@ Merged_MRDetect_cfDNA <- Merged_MRDetect %>%
 # ──────────────────────────────────────────────────────────────────────────────
 Merged_MRDetect$VCF_factor <- factor(Merged_MRDetect$VCF, levels = unique(Merged_MRDetect$VCF))
 
+# Z-SCORE NORMALIZATION STRATEGY:
+# For each patient VCF (VCF_factor), we compute a healthy-control reference
+# distribution using CHARM_healthy donors run against that same VCF.
+# This is very important: each patient has a different mutation set (different VCF),
+# so the background noise level differs per patient. By grouping on VCF_factor,
+# we get a VCF-specific mean and SD for healthy controls, ensuring that the
+# z-score for a patient sample is relative to healthy donors tested against
+# that exact same set of patient mutations.
+#   z = (patient_rate - mean_HC_rate) / sd_HC_rate
+# High z-score (>>2) → detection rate significantly above healthy-control noise,
+# suggesting true circulating tumor DNA.
 zscore_lookup <- Merged_MRDetect %>%
   filter(Study == "CHARM_healthy") %>%
   select(VCF_factor, Mut_source, Filter_source,
@@ -436,6 +471,16 @@ df <- df %>%
   summarise(across(all_of(num_cols), mean, na.rm = TRUE), .groups = "drop")
 
 # 3) Recompute MRD status & cumulative VAF
+# Mrd_by_WGS threshold of 4.5 z-scores: sites_rate_zscore_charm measures how many
+# standard deviations above the CHARM healthy-control mean this sample's
+# site-detection rate falls. A z-score > 4.5 was chosen as a conservative positive
+# threshold to maximize specificity at this screening step. The final model-based
+# probability thresholds in script 3_1 are more precisely optimized to the
+# frontline training data and should be used for clinical calls.
+#
+# Cumulative_VAF: the mutation detection rate (reads_detected / reads_checked)
+# for MRD-positive samples only; set to 0 for negatives. This is the primary
+# quantitative cfDNA feature passed to downstream analysis scripts.
 df <- df %>%
   mutate(
     Mrd_by_WGS    = if_else(sites_rate_zscore_charm > 4.5, "Positive", "Negative"),

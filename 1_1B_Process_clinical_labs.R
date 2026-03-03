@@ -2,17 +2,22 @@
 # 1_1B_Process_clinical_labs.R
 #
 # Purpose:
-#   • Generate cohort-level summaries and visualizations for cfWGS MRD analyses.
+#   Compile and clean laboratory measurements (CBC, serum immunofixation,
+#   staging markers) for patients in the M4 cohort. Produces a master clinical
+#   labs table that feeds into the demographics summary (script 2_1).
 #
 # Inputs:
-#   • "M4_COHORT_DEMO.xlsx", "M4_COHORT_CHEMOTHERAPY.xlsx",
-#     "M4_COHORT_BONE_MARROW_BIOPSY.xlsx", "M4_COHORT_STAGING.xlsx"
+#   • "M4_COHORT_DEMO.xlsx"               - patient demographics
+#   • "M4_COHORT_CHEMOTHERAPY.xlsx"        - treatment history
+#   • "M4_COHORT_BONE_MARROW_BIOPSY.xlsx" - BM biopsy data
+#   • "M4_COHORT_STAGING.xlsx"             - ISS/R-ISS staging
+#   (all under M4_CMRG_Data/)
 #
 # Outputs:
-#   • Master clinical labs table 
+#   • Master clinical labs table (used downstream in 2_1 demographics)
 #
 # Author:    Dory Abelman
-# Date:      5 May 2025
+# Date:      May 2025
 # ==============================================================================
 
 # Load only the packages actually used below

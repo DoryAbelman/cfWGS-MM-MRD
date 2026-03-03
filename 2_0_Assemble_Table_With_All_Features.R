@@ -1,17 +1,37 @@
 # ==============================================================================
-# 2_Assemble_Table_With_All_Features
+# 2_0_Assemble_Table_With_All_Features.R
 #
 # Description:
-#   Loads MRD assay results (flow‐cytometry, adaptive counts, Rapid Novor, PET),
-#   clinical metadata (M4, SPORE, IMMAGINE), relapse dates, fragmentomics metrics,
-#   WGS‐derived tumor fractions & structural features, and mutation count tables.
-#   Cleans and harmonizes all inputs by Patient + Timepoint (deduplicating,
-#   coalescing NAs, fixing sample codes), computes derived MRD flags, and merges
-#   everything into one comprehensive table.  Finally, writes out CSV and RDS
-#   versions for downstream analyses and figure generation.
+#   Loads MRD assay results (flow-cytometry, Adaptive MRD counts, Rapid Novor
+#   proteomic MRD, PET), clinical metadata (M4, SPORE, IMMAGINE cohorts),
+#   relapse dates, fragmentomics metrics, WGS-derived tumour fractions &
+#   structural features, and mutation count tables. Cleans and harmonises all
+#   inputs by Patient + Timepoint (deduplicating, coalescing NAs, fixing sample
+#   codes), computes derived MRD flags, and merges everything into one
+#   comprehensive table. Writes CSV and RDS versions for downstream analyses.
+#
+# Inputs:
+#   - Jan2025_exported_data/All_feature_data_Sep2025_updated2.rds
+#   - M4_MRD_filtered.txt                           (lab MRD data)
+#   - MRDetect_output_winter_2025/Processed_R_outputs/BM_muts_plots_baseline/
+#       cfWGS_MRDetect_BM_data_updated_Sep.csv
+#   - MRDetect_output_winter_2025/Processed_R_outputs/Blood_muts_plots_baseline/
+#       "cfWGS MRDetect Blood data updated Sep with all patients.csv"
+#   - Relapse_dates_M4_clean.csv
+#   - combined_clinical_data_updated_April2025.csv
+#   - Clinical data/SPORE/SPORE_pct_flow_extracted.xlsx
+#   - Clinical data/IMMAGINE/Extracted_clinical_MRD_data.xlsx  (sheet 3)
+#
+# Outputs:
+#   - Jan2025_exported_data/All_feature_data_Sep2025_updated2.rds  (refreshed)
+#   - Jan2025_exported_data/All_feature_data_Sep2025_updated2.csv
+#
+# Dependencies:
+#   tidyverse, readxl, gridExtra
+#   Requires config.R paths (wgs_results_dir, output_tables_dir)
 #
 # Author:    Dory Abelman
-# Last update: May 2025
+# Last update: September 2025
 # ==============================================================================
 
 
@@ -377,6 +397,11 @@ dups_by_pt <- tmp %>%
 
 
 # Step 2: Full join with Rapid_Novor_consolidated to ensure all rows are included
+# A full_join (rather than left_join) is used here because Rapid Novor proteomic
+# MRD may have been run on some patients/timepoints that are not yet in the main
+# cfWGS_Clinical_MRD_filled table (e.g. later-enrolled IMMAGINE patients). A
+# left_join would silently drop those rows. Subsequent unique() call removes any
+# row-level duplicates introduced by the join.
 cfWGS_Clinical_MRD_filled <- tmp %>%
   full_join(
     Rapid_Novor_consolidated %>% 
@@ -462,6 +487,11 @@ cfWGS_Clinical_MRD_filled <- cfWGS_Clinical_MRD_filled %>%
     ),
     
     # Binary indicator for Adaptive: 1 if Mrd1E6 or Mrd1E5 is Positive, 0 if Negative, NA if missing
+    # Adaptive/clonoSEQ reports sensitivity at two thresholds:
+    #   Mrd1E6 = 10^-6 sensitivity (deepest; preferred for MRD-negativity calls)
+    #   Mrd1E5 = 10^-5 sensitivity (less deep; used as fallback when 1E6 is NA)
+    # Positive at EITHER level = MRD+.  "Indeterminate" at 1E6 + Negative at 1E5
+    # is treated as MRD- (per IMWG guidance on indeterminate clonoSEQ reads).
     Adaptive_Binary = case_when(
       (!is.na(Mrd1E6) & Mrd1E6 == "Positive") | (!is.na(Mrd1E5) & Mrd1E5 == "Positive") ~ 1,
       (!is.na(Mrd1E6) & Mrd1E6 == "Indeterminate") & (!is.na(Mrd1E5) & Mrd1E5 == "Negative") ~ 0,

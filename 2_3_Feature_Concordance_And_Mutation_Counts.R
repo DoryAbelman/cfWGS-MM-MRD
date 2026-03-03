@@ -46,6 +46,17 @@ file <- readRDS("Final_aggregate_table_cfWGS_features_with_clinical_and_demograp
 ##### PART 1: See concordance to FISH 
 ## 1.  PARAMETERS  ---------------------------------------------------
 ## ------------------------------------------------------------------
+# tf_cut: ctDNA tumor-fraction threshold separating "high-TF" samples (where
+# signal is reliably above the assay noise floor) from "low-TF" samples.
+# 0.05 (5%) was chosen empirically; concordance statistics are stratified by
+# this cutoff because detection sensitivity differs substantially between groups.
+# Adjust this value to re-examine sensitivity/specificity at other TF levels.
+# tf_cut: minimum ctDNA fraction (from MRDetect z-score → tumor fraction, or
+# ichorCNA) used to split samples into high-TF vs low-TF subgroups before
+# comparing concordance with bone-marrow assays.  0.05 was chosen because it
+# separates cases where ctDNA signal is reliably above the noise floor from
+# near-zero readings; change this value to shift the sensitivity/specificity
+# trade-off in the concordance analysis.
 tf_cut    <- 0.05            # ≥ 0.05 → “high TF”; change if needed
 baseline  <- c("Diagnosis","Baseline")   # recognise baseline labels
 

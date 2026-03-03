@@ -6,30 +6,29 @@
 # Last Updated: May 2025
 #
 # Purpose:
-#   1. Read all MRDetect CSV outputs.
-#   2. Annotate each record with source file, sample metadata, and z-scores
-#      based on CHARM_healthy controls.
-#   3. Filter to cfDNA timepoints (Diagnosis/Baseline/Progression) and export
-#      both raw and z-scored tables for downstream plotting.
+#   Identical MRDetect processing pipeline to 1_8_Process_Cumulative_VAFs_MRDetect.R
+#   but applied exclusively to the EXPERIMENTAL DILUTION SERIES samples rather than
+#   the main patient cohort. Reads MRDetect CSV outputs from the dilution series
+#   input directory, annotates records with z-scores relative to CHARM healthy
+#   controls, and exports processed tables for use in the LOD (limit-of-detection)
+#   analysis (script 3_1_part2).
 #
 # Dependencies:
 #   • readr, data.table, tidyverse (dplyr, tidyr, stringr), openxlsx
 #   • ggplot2, ggbreak, patchwork, scales, conflicted
 #
 # Input Files:
-#   • ../MRDetect_output_winter_2025/MRDetect_outputs/*.csv
-#   • ../combined_clinical_data_updated_April2025.csv
+#   • MRDetect_output_winter_2025/MRDetect_outputs/Dilution_series/*.csv
+#   • combined_clinical_data_updated_April2025.csv
 #
 # Output Directory (created if necessary):
 #   • MRDetect_output_winter_2025/Processed_R_outputs/
 #   • Writes:
-#       - cfWGS_Winter2025All_MRDetect_May2025.txt
-#       - cfWGS_Winter2025All_MRDetect_May2025.rds
-#       - cfWGS_Winter2025All_MRDetect_with_Zscore_May2025.txt
-#       - cfWGS_Winter2025All_MRDetect_with_Zscore_May2025.rds
+#       - cfWGS_Winter2025Dilution_series_May2025.rds
+#       - cfWGS_Winter2025Dilution_series_May2025_with_zscore.rds
 #
 # Usage:
-#   Rscript MRDetect_processing.R
+#   Rscript 1_8A_Process_Cumulative_VAFs_for_dilution_series.R
 # =============================================================================
 
 # ──────────────────────────────────────────────────────────────────────────────

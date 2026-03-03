@@ -1,3 +1,28 @@
+# =============================================================================
+# config.R
+# Project:  cfWGS MRD Detection in Multiple Myeloma
+# Author:   Dory Abelman
+#
+# Purpose:
+#   Central configuration file for the cfWGS-MM-MRD analysis pipeline.
+#   Contains two things:
+#     1. PACKAGE LIST  - complete list of every R package required by any
+#        numbered analysis script. Sourcing config.R (or setup_packages.R,
+#        which also references this list) ensures the full environment is
+#        loaded before running the pipeline.
+#     2. DIRECTORY PATHS - common path variables used throughout the scripts.
+#        Update the variables below to match your local environment before
+#        running any analysis script.
+#
+# Usage:
+#   source("config.R")   # called at the top of each numbered script
+#
+# Directory variables (update these for your system):
+#   clinical_data_dir  <- path to clinical metadata spreadsheets
+#   wgs_results_dir    <- path to WGS variant call, CNA, and fragmentomics files
+#   output_tables_dir  <- path where processed tables and figures are written
+# =============================================================================
+
 # Packages required across the analysis scripts.
 packages <- c(
   "BoutrosLab.plotting.general",
