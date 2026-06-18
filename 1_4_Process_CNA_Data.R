@@ -22,18 +22,43 @@
 #        – Flags segments as altered if “Corrected_Call” matches gain/loss labels
 #        – Computes the proportion of altered bins per sample
 #        – Sets a binary indicator (1 if >33% of that arm is altered)
-#     7. Adds hyperdiploidy status by checking full gains (>80%) across
-#        chromosomes 3,5,7,9,11,15,19,21
+#     7. Adds hyperdiploidy status by checking chromosome-level gains (>65%)
+#        across chromosomes 3,5,7,9,11,15,19,21 and requiring >=5/8 gains
 #     8. Outputs `myeloma_CNA_matrix_with_HRD`, a Sample × feature binary table
+#
+# Goal:
+#   Convert ichorCNA segment-level copy-number calls into compact sample-level
+#   CNA feature tables for downstream WGS feature integration, baseline genomic
+#   landscape summaries, BM-vs-cfDNA concordance analyses, FISH-vs-WGS
+#   concordance, and Supplementary Table 2 support.
+#
+# How to run:
+#   Rscript Scripts_2025/Final_Scripts/1_4_Process_CNA_Data.R
 #
 # Inputs:
 #   • seg_dir          = "Oct 2024 data/Ichor_CNA"          # ichorCNA *.seg files
 #   • cb_frame         = data frame of hg38 cytobands
+#   • combined_clinical_data_updated_April2025.csv
+#   • Clinical data/FISH probe locations.xlsx
+#   • cytoband.txt
 #
 # Outputs:
 #   • RDS: Oct_2024_combined_corrected_calls.rds
 #   • CSV: Oct_2024_combined_corrected_calls.csv
+#   • RDS/TXT: Jan2025_exported_data/FISH_probe_calls_bin_cytoband_ichorCNA.rds/.txt
+#   • RDS/TXT: Jan2025_exported_data/cna_data_ichorCNA.rds/.txt
+#   • TXT: Jan2025_exported_data/cna_data_backup.txt
 #   • R object: myeloma_CNA_matrix_with_HRD (binary arm-level matrix)
+#
+# Key assumptions and audit notes:
+#   • Arm-level del/gain calls use >1/3 of segments altered for del1p, amp1q,
+#     del13q, and del17p.
+#   • Hyperdiploidy uses >65% gained segments per canonical chromosome and
+#     calls a sample hyperdiploid when >=5/8 canonical chromosomes are gained.
+#   • FISH-probe calls use cytoband-derived probe windows with +/-150 kb padding
+#     and a nearest-segment fallback up to 10 Mb when no segment overlaps.
+#   • These thresholds are manuscript logic. Do not change them without
+#     explicit scientific review.
 #
 # Dependencies:
 #   library(tidyverse); library(purrr)
@@ -42,6 +67,11 @@
 # Usage:
 #   source("1_4_Process_CNA_Data.R")
 #   # creates combined_seg_data and myeloma_CNA_matrix_with_HRD in working dir
+#
+# Role in manuscript workflow:
+#   Upstream/intermediate processing script. It does not usually export a
+#   final assembled manuscript figure/table directly, but its outputs feed
+#   later manuscript source scripts. Processes ichorCNA CNA calls.
 #
 # Author: Dory Abelman
 # Date:   2025-05-26
@@ -171,7 +201,7 @@ combined_seg_data <- readRDS("Oct_2024_combined_corrected_calls.rds")
 
 
 
-## Now get FISH concordance with the specific probes
+## Build ichorCNA calls at clinical FISH probe loci
 # =====================================================================
 # Purpose: Recompute per-sample CNA calls at FISH probe cytobands
 #          using ichorCNA segments, independent of other scripts.
@@ -479,7 +509,10 @@ probe_calls_bin_cytoband <- probe_calls_long_cyto %>%
 # View head
 print(head(probe_calls_bin_cytoband, 10))
 
-## ---- Optional exports ----
+## ---- Export FISH-probe-level ichorCNA helper table ----
+# This helper table is used by downstream concordance logic. It is not itself a
+# final manuscript table, but it supports Extended Data Figure 2C and
+# Supplementary Table 2 through the later 2_3 concordance script.
 export_dir <- "Jan2025_exported_data"
 if (!dir.exists(export_dir)) dir.create(export_dir, recursive = TRUE)
 saveRDS(probe_calls_bin_cytoband, file = file.path(export_dir, "FISH_probe_calls_bin_cytoband_ichorCNA.rds"))
@@ -583,7 +616,7 @@ myeloma_CNA_matrix_with_HRD <- results
 ## Add hyperdiploid info:
 
 ## Edit based on Suzanne new criteria 
-## Define hyperdiploid chromosomes (full gains required for all eight)
+## Define canonical hyperdiploidy chromosomes
 myeloma_cna_HRD <- list(
   hyperdiploid_chr3  = list(chr = "3"),
   hyperdiploid_chr5  = list(chr = "5"),
@@ -602,7 +635,7 @@ hyperdiploid_arms_df <- data.frame(
   stringsAsFactors = FALSE
 )
 
-# Loop over hyperdiploid chromosomes and assess full gains (threshold > 90%)
+# Loop over hyperdiploid chromosomes and assess broad gains (threshold >65%)
 for (i in 1:nrow(hyperdiploid_arms_df)) {
   chr_value <- hyperdiploid_arms_df$chr[i]
   
@@ -640,7 +673,7 @@ for (i in 1:nrow(hyperdiploid_arms_df)) {
   results <- results %>% select(-ProportionGained)
 }
 
-# Mark a sample as hyperdiploid only if all eight hyperdiploid chromosomes have full gains
+# Mark a sample as hyperdiploid when >=5 canonical chromosomes are broadly gained
 # Hyperdiploid MM (HRD) is defined by gains of odd-numbered chromosomes
 # 3,5,7,9,11,15,19,21. Requiring >=5/8 (rather than all 8) reflects that
 # WGS may miss gains on individual chromosomes at low tumor fractions,
@@ -675,7 +708,8 @@ cna_data <- myeloma_CNA_matrix_with_HRD %>%
 
 cna_data_backup <- cna_data
 
-## Export the important tables 
+## Export final ichorCNA arm-level feature table
+# This is the main output consumed by 1_5_Integrate_WGS_Feature_Data.R.
 # Define the directory for export
 export_dir <- "Jan2025_exported_data"
 
@@ -696,4 +730,3 @@ saveRDS(cna_data, file = file.path(export_dir, "cna_data_ichorCNA.rds"))
 # Exporting dataframes as text files
 write.table(cna_data, file = file.path(export_dir, "cna_data_ichorCNA.txt"), sep = "\t", row.names = FALSE, quote = FALSE)
 write.table(cna_data_backup, file = file.path(export_dir, "cna_data_backup.txt"), sep = "\t", row.names = FALSE, quote = FALSE)
-

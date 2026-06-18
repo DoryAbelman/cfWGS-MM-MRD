@@ -23,12 +23,24 @@
 #   - Clinical data/IMMAGINE/Extracted_clinical_MRD_data.xlsx  (sheet 3)
 #
 # Outputs:
-#   - Jan2025_exported_data/All_feature_data_Sep2025_updated2.rds  (refreshed)
-#   - Jan2025_exported_data/All_feature_data_Sep2025_updated2.csv
+#   - cfWGS clinical MRD values with timepoint and dates updated August 2025.csv
+#   - Final_aggregate_table_cfWGS_features_with_clinical_and_demographics_updated.csv/.rds
+#   - Final_aggregate_table_cfWGS_features_with_clinical_and_demographics_updated2.csv/.rds
+#   - Final_aggregate_table_cfWGS_features_with_clinical_and_demographics_updated9.csv/.rds
+#   - baseline_high_quality_patients_updated.csv/.rds
 #
 # Dependencies:
 #   tidyverse, readxl, gridExtra
 #   Requires config.R paths (wgs_results_dir, output_tables_dir)
+#
+# How to run:
+#   Rscript Scripts_2025/Final_Scripts/2_0_Assemble_Table_With_All_Features.R
+#
+# Role in manuscript workflow:
+#   Upstream/intermediate processing script. It does not usually export a
+#   final assembled manuscript figure/table directly, but its outputs feed
+#   later manuscript source scripts. Assembles final aggregate
+#   feature/clinical table.
 #
 # Author:    Dory Abelman
 # Last update: September 2025
@@ -44,7 +56,10 @@ library(readxl)
 library(gridExtra)
 
 
-### Load in all data:
+### Load source tables
+# These inputs are produced by earlier scripts or exported from clinical/MRD
+# assay pipelines. This script expects to be run from the project root so that
+# all relative paths resolve correctly.
 All_feature_data <- readRDS("Jan2025_exported_data/All_feature_data_Sep2025_updated2.rds") 
 M4_MRD_filtered <- read_tsv("M4_MRD_filtered.txt") # The MRD data from labs
 
@@ -60,11 +75,10 @@ SPORE_MRD <- read_excel("Clinical data/SPORE/SPORE_pct_flow_extracted.xlsx") %>%
 IMMAGINE_MRD <- read_excel("Clinical data/IMMAGINE/Extracted_clinical_MRD_data.xlsx", sheet = 3)
 
 
-### Make a full MRD table 
-### Issue is M4 is by timepoint and others by date. Can do the others by date
-## and then try to merge all together with the combined clinical data 
-## or join in merged_table 
-## need to clearly indicate where everything is - ie all key clinical files being used
+### Build one clinical MRD table across M4, SPORE, and IMMAGINE
+# M4 clinical MRD is already timepoint-coded. SPORE and IMMAGINE clinical MRD
+# arrive by date, so they are first standardized to Patient/Date/Flow values and
+# later mapped back to timepoint using the clinical sample metadata.
 # Step 1: Clean and transform `% Cells` in table2
 table2 <- IMMAGINE_MRD %>%
   mutate(
@@ -266,7 +280,9 @@ cfWGS_Clinical_MRD_filled <- cfWGS_Clinical_MRD_filled %>%
   )
 
 
-### Add the new Rapid Novor data got from Aimee later 
+### Add updated Rapid Novor proteomic MRD values
+# These values supersede the earlier Rapid_Novor column when both are present.
+# Negative, Not Quantifiable, and NQ are treated as zero before reshaping.
 Rapid_Novor_update <- read_excel("Clinical data/M4/Updated Rapid Novor Data.xlsx")
 
 # Restructure the data
@@ -384,7 +400,7 @@ discrepancies <- Rapid_Novor_consolidated %>%
   )
 
 
-## Now add them to the original table and overwrite original since I think was errors 
+## Replace earlier Rapid Novor values with the curated updated table.
 # Step 1: Remove the Rapid_Novor and Rapid_Novor_Binary columns from cfWGS_Clinical_MRD_filled
 tmp <- cfWGS_Clinical_MRD_filled %>%
   select(-Rapid_Novor)
@@ -417,7 +433,8 @@ duplicate_rows <- cfWGS_Clinical_MRD_filled %>%
 
 
 
-### Add in the PET results
+### Add PET MRD status
+# PET is included as an additional binary clinical disease-status assay.
 PET_M4 <- read_excel("Clinical data/M4/PET_dataframe.xlsx")
 
 cfWGS_Clinical_MRD_filled <- cfWGS_Clinical_MRD_filled %>% 
@@ -529,7 +546,9 @@ cfWGS_Clinical_MRD_filled <- cfWGS_Clinical_MRD_filled %>%
     )
   )
 
-### Add cfWGS
+### Add cfWGS MRDetect MRD calls
+# The BM and blood MRDetect files are kept separate so downstream scripts can
+# compare matrix-specific cfWGS MRD performance.
 # --- 1. Make a “BM” lookup table -----------------------------
 tmp_bm <- MRD_cfWGS_BM %>% filter(timepoint_info %in% c("Baseline", "Diagnosis")) %>% filter(Sample_ID != "SPORE_0009_T3_BM_cells") %>% #have better baseline
   # the columns you care about)
@@ -706,7 +725,9 @@ dups %>%
 #    is.na(Sample_ID) | !str_detect(Sample_ID, "(_Blood_Buffy_coat|_BM_cells|-B$|-O$)")
 #  )
 
-### Add in additional dates for missing cases 
+### Fill missing collection dates from the M4 processing log
+# The processing log can contain duplicate dates for a sample. Where possible,
+# the date closest to the matching lab date is retained.
 M4_processing_log_dates <- read.csv("Exported_data_tables_clinical/M4_processing_log_dates.csv")
 
 M4_processing_log_dates <- M4_processing_log_dates %>%
@@ -928,10 +949,9 @@ write.csv(
 
 
 
-### Need to add relapse info  
-### After redo confirmation for IMG-098
-
-## Export relapse dates 
+### Add relapse/progression timing
+# Relapse is assigned when a sample date is within the supported relapse window
+# from the curated relapse-date table. These fields support later PFS analyses.
 
 Relapse_dates_full <- read_csv("Exported_data_tables_clinical/Relapse dates cfWGS updated2.csv") 
 
@@ -985,16 +1005,18 @@ cfWGS_Clinical_MRD_filled <- cfWGS_Clinical_MRD_filled %>%
 ### Now get the relapse date as the time since the baseline marrow and use this for the PFS plot
 
 
-### Export 
+### Export intermediate clinical MRD/date table
+# This checkpoint is useful for auditing date/timepoint mapping before the WGS,
+# fragmentomics, lab, and mutation-burden joins below.
 write.csv(cfWGS_Clinical_MRD_filled, file = "cfWGS clinical MRD values with timepoint and dates updated August 2025.csv", row.names = F)
 
 
 
 
-#### Updated May 2025 - now add lab values like free kappa, lambda, M-protein, ext, and use in the final classifier
-#### Also add the fragmentomicss info 
-
-#### First add in fragmentomics 
+#### Add fragmentomics metrics
+# Fragmentomics metrics are averaged at Patient/Date when duplicate rows exist.
+# These columns are retained as continuous covariates for downstream modeling
+# and correlation analyses.
 
 # 1) Read in your fragmentomics + cfWGS data
 ##### Ensure is correct with everything
@@ -1063,8 +1085,9 @@ cfWGS_Clinical_MRD_filled <- cfWGS_Clinical_MRD_filled %>%
 
 
 
-##### Next add other info like clinical data
-#### Clinical data 
+##### Add clinical/lab/FISH metadata
+# This master clinical table is generated by 1_1B and contributes baseline labs,
+# subtype, staging, and clinical FISH/cytogenetic variables.
 clinical_data_integrate <- read.csv("Clinical data/Master_clinical_data_table_all_projects_May2025_updated2.csv") ### Generated in 1_1B
 
 # make sure both date columns are Date class
@@ -1145,9 +1168,11 @@ dups <- cfWGS_Clinical_MRD_filled_final %>%
   ungroup()
 
 write.csv(dups, file = "duplicate_check.csv")
-### Now add in the tumor fraction, other things identified and CNA from WGS
+### Deduplicate before WGS feature joins
+# At this point multiple assay sources may describe the same patient/timepoint.
+# Rows with cfWGS z-scores are prioritized because those dates are used in the
+# downstream cfWGS analysis.
 
-### Dedup the table to have one row per patient-timepoint combo
 ## helper: coalesce down an arbitrary vector (character OR numeric)
 first_non_na <- function(x) {
   # treat "" and "-" as NA too
@@ -1188,7 +1213,9 @@ dups <- cfWGS_dedup %>%
 
 
 
-#### Now add info from all feature data 
+#### Add WGS features from 1_5
+# These columns include tumor fraction, arm-level CNA, IgH translocations,
+# mutation summaries, and the composite WGS evidence-of-disease flag.
 # 1. From your WGS feature table, select the key and all of the WGS columns you care about
 wgs_subset <- All_feature_data %>%
   select(
@@ -1424,7 +1451,10 @@ dups <- joined_clean %>%
 
 
 
-#### Now add in the mutation counts and response info 
+#### Add raw mutation-burden count tables
+# These count tables are not the myeloma-panel mutation summaries from 1_5.
+# They provide broad mutation burden used later for the relaxed blood evidence
+# helper flag.
 
 ## Load in the metadata and try to match to it 
 cfWGS_metadata <- read.csv("combined_clinical_data_updated_April2025.csv")
@@ -1553,7 +1583,9 @@ joined_consolidated <- joined_with_counts %>%
   )
 
 
-## Now have everything need to make plots
+## Export first aggregate checkpoint.
+# This checkpoint is retained for traceability; downstream scripts should use
+# the later `updated9` export unless they explicitly document otherwise.
 # Write to CSV (for Excel/sharing)
 write.csv(joined_consolidated, file = "Final_aggregate_table_cfWGS_features_with_clinical_and_demographics_updated.csv", row.names = FALSE)
 
@@ -1624,7 +1656,9 @@ joined_clean2 <- joined_filled2 %>%
   )
 
 
-## Now have everything need to make plots
+## Export second aggregate checkpoint after missing timepoint/date cleanup.
+# This checkpoint is retained for traceability; the final current table is
+# produced after missing tumor fraction and relaxed-evidence cleanup below.
 # Write to CSV (for Excel/sharing)
 write.csv(joined_clean2, file = "Final_aggregate_table_cfWGS_features_with_clinical_and_demographics_updated2.csv", row.names = FALSE)
 
@@ -1638,7 +1672,10 @@ patients_with_zscores <- joined_clean2 %>%
   distinct(Patient)
 
 
-### Add missing tumor fraction to table 
+### Add manually recovered missing tumor fractions
+# This helper table fills tumor-fraction values that were available from review
+# but missing after the automated joins. Existing non-missing TF values are not
+# overwritten.
 missing_tumor_fraction <- read.csv("Missing_tumor_fraction.csv")
 
 # 3) join back onto dat and fill your two WGS‐tumor‐fraction columns
@@ -1837,9 +1874,11 @@ filled_df <- filled_df %>%
   arrange(Patient, Timepoint)
 
 
-## Now have everything need to make plots
-
-## Make new rule - rescue patients with high mutation lists even though low ctDNA fraction at dx to bring in more patients 
+## Add relaxed blood evidence helper flag
+# This preserves the original data-derived rule: among baseline/diagnosis
+# samples, patients with WGS_Evidence_of_Disease_Blood_plasma_cfDNA == 0 can be
+# rescued when Blood_Mutation_Count is at or above the first quartile of the
+# mutation-count distribution among WGS evidence-positive blood samples.
 # Summaries by group
 summ_by_group <- function(df, count_col, evid_col) {
   df %>%
@@ -1894,14 +1933,17 @@ filled_df <- filled_df %>%
     )
   )
 
-# Write to CSV (for Excel/sharing)
+### Export final aggregate table for downstream manuscript scripts
+# This is the current final output of 2_0.
 write.csv(filled_df, file = "Final_aggregate_table_cfWGS_features_with_clinical_and_demographics_updated9.csv", row.names = FALSE)
 
 # Write to RDS (for loading back into R with full structure)
 saveRDS(filled_df, file = "Final_aggregate_table_cfWGS_features_with_clinical_and_demographics_updated9.rds")
 
 
-## See how many rescued 
+## Export baseline high-quality cohort helper table.
+# This table is used to audit which baseline patients have usable BM and/or
+# blood WGS evidence variables after applying the cohort assignment file.
 cohort_df <- readRDS("cohort_assignment_table_updated.rds")
 
 tmp <- left_join(filled_df, cohort_df) %>% 
@@ -1959,7 +2001,10 @@ filled_df %>%
 
 
 
-### Check labs are ok 
+### Optional lab QC summaries
+# These diagnostics are for manual review only. They do not create manuscript
+# figures or tables, and downstream scripts should not depend on the objects
+# created in this section.
 
 # 1) Define your “lab” columns
 lab_vars <- c(
@@ -1996,16 +2041,19 @@ tmp <- lab_summary %>%
   arrange(Lab) %>%
   print(n = Inf)
 
-# 4) Quick pairwise scatter/diag plot to catch weird units
-#    This will be heavy if you have many samples-consider sampling 100 pts if slow.
-library(GGally)
-filled_df %>%
-  select(all_of(lab_vars)) %>%
-  # drop raws with any NAs across labs
-  drop_na() %>%
-  # pick a sample if too big
-  slice_sample(n = min(200, dplyr::n())) %>%
-  ggpairs(title = "Lab Variables Pairwise Check")
+# 4) Quick pairwise scatter/diagnostic plot to catch unusual lab units.
+#    GGally is optional because this plot is not a manuscript output.
+if (requireNamespace("GGally", quietly = TRUE)) {
+  filled_df %>%
+    select(all_of(lab_vars)) %>%
+    # drop rows with any NAs across labs
+    drop_na() %>%
+    # keep the diagnostic plot light when many rows are available
+    slice_sample(n = min(200, dplyr::n())) %>%
+    GGally::ggpairs(title = "Lab Variables Pairwise Check")
+} else {
+  message("Skipping optional GGally lab QC plot because GGally is not installed.")
+}
 
 
 filled_df %>% 

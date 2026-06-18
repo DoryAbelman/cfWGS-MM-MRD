@@ -1,6 +1,15 @@
 # =============================================================================
 # 1_8A_Process_Cumulative_VAFs_for_dilution_series.R
 # Project:  cfWGS MRDetect (Winter 2025)
+# How to run:
+#   Rscript Scripts_2025/Final_Scripts/1_8A_Process_Cumulative_VAFs_for_dilution_series.R
+#
+# Role in manuscript workflow:
+#   Upstream/intermediate processing script. It does not usually export a
+#   final assembled manuscript figure/table directly, but its outputs feed
+#   later manuscript source scripts. Processes MRDetect outputs for
+#   dilution series.
+#
 # Author:   Dory Abelman
 # Date:     January 2025
 # Last Updated: May 2025

@@ -50,6 +50,28 @@
 ## ────────────────────────────────────────────────────────────────────────────
 
 # Required packages for survival analysis, visualization, and data wrangling
+# How to run:
+#   Rscript Scripts_2025/Final_Scripts/4_1_Survival_Analysis.R
+#
+# Role in manuscript workflow:
+#   Direct manuscript-output script. Mapped output(s): Figure_3 panel/sheet
+#   F; Figure_4 panel/sheet E; Extended_Data_Figure_6 panel/sheet A;
+#   Extended_Data_Figure_6 panel/sheet B; Extended_Data_Figure_6
+#   panel/sheet C; Extended_Data_Figure_6 panel/sheet D;
+#   Extended_Data_Figure_6 panel/sheet E; Extended_Data_Figure_6
+#   panel/sheet F; Extended_Data_Figure_6 panel/sheet G;
+#   Extended_Data_Figure_6 panel/sheet H; Extended_Data_Figure_6
+#   panel/sheet I; Extended_Data_Figure_6 panel/sheet J;
+#   Extended_Data_Figure_6 panel/sheet K; Extended_Data_Figure_8
+#   panel/sheet A; Extended_Data_Figure_8 panel/sheet B;
+#   Extended_Data_Figure_8 panel/sheet C; Extended_Data_Figure_8
+#   panel/sheet D; Extended_Data_Figure_8 panel/sheet
+#   unlabeled_bottom_left; Extended_Data_Figure_8 panel/sheet
+#   unlabeled_bottom_right; Supplementary_Table_9 panel/sheet all_sheets.
+#   Generates survival and relapse-detection figures/tables.
+#
+NA
+# Required packages for survival analysis, visualization, and data wrangling
 library(tidyverse)       # dplyr, ggplot2, tidyr
 library(lubridate)       # Date/time operations
 library(survival)        # Survival objects, survfit()

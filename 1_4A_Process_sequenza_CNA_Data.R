@@ -5,11 +5,19 @@
 #   End-to-end arm-level CNA caller for Sequenza segments with **ploidy-aware**
 #   labels and a realistic **hyperdiploidy** definition for myeloma.
 #
+# Goal:
+#   Convert Sequenza segment calls into ploidy-aware CNA feature tables that
+#   complement the ichorCNA outputs from 1_4. This script creates arm-level
+#   calls for del1p, amp1q, del13q, del17p, hyperdiploidy, FISH-probe-level
+#   Sequenza calls, cytoband-expanded FISH calls, and sample-level Sequenza
+#   purity/ploidy estimates.
+#
 #   What it does:
 #     1) Reads all Sequenza “*_segments.txt(.gz)” in `seg_dir`
 #        – Requires columns: chromosome, start.pos, end.pos, CNt, A, B
-#     2) Estimates per-sample baseline ploidy (rounded) from autosomes using a
-#        length-weighted mode of integer CNt; saves a ploidy table
+#     2) Reads Sequenza confints files for purity/ploidy and estimates a
+#        length-weighted autosomal CNt-mode fallback when confints ploidy is
+#        unavailable; saves ploidy/purity audit tables
 #     3) Converts each segment to a **baseline-aware categorical call**
 #        (LOSS / GAIN / HLAMP; plus HOMD/HETD; optional CNLOH at baseline with B=0)
 #     4) Merges all samples on (chr, start, end) into `combined_seg_data`
@@ -26,22 +34,44 @@
 #          of its length is GAIN/HLAMP
 #        – A sample is hyperdiploid if ≥ `k_trisomies` (default 5) of
 #          {3,5,7,9,11,15,19,21} are gained
-#     9) Exports:
+#     9) Calls clinical FISH-probe regions both from direct probe coordinates
+#        and cytoband-expanded windows for concordance/audit analyses
+#    10) Exports:
 #        – Combined per-segment calls: CSV/RDS
 #        – Per-sample ploidy estimates: CSV
 #        – Final Sample × feature matrix (`cna_data`) with
 #          {del1p, amp1q, del13q, del17p, hyperdiploid}: RDS/TXT
-#    10) Prints cohort-level frequencies for quick QC
+#        – FISH-style Sequenza call matrices: RDS/TXT
+#    11) Prints cohort-level frequencies for quick QC
+#
+# How to run:
+#   Rscript Scripts_2025/Final_Scripts/1_4A_Process_sequenza_CNA_Data.R
+#
+# Role in manuscript workflow:
+#   This is an upstream CNA-processing script. It does not directly export a
+#   mapped manuscript figure/table, but its outputs feed WGS feature integration,
+#   CNA/FISH concordance analyses, Supplementary Table 2, and downstream
+#   subclonal-evolution/supporting CNA summaries.
 #
 # Inputs:
 #   • seg_dir   = directory with Sequenza segment files (e.g., “…/All_Segments_400/”)
 #   • cb_frame  = hg19/hg38 cytobands data.frame with columns: chr, start, end, band
 #                 (chr names like “chr1”, “chr2”, …; script harmonizes to 1..22,X,Y)
+#   • Oct 2024 data/Sequenza/All_confints_400/*_confints_CP.txt
+#   • combined_clinical_data_updated_April2025.csv
+#   • Clinical data/FISH probe locations.xlsx
+#   • cytoband.txt / cytoBand.txt-compatible cytoband reference
 #
-# Outputs (example file names shown for γ=400 run, adjust to your run/date):
-#   • CSV/RDS:  "Sep_2025_combined_sequenza_calls_400.csv/.rds"
-#   • CSV:      "Sep_2025_sequenza_ploidy_estimates.csv"
-#   • RDS/TXT:  "Jan2025_exported_data/cna_data_from_sequenza_400.rds/.txt"
+# Outputs (γ=400 run):
+#   • CSV/RDS:  "Sep_2025_combined_sequenza_calls_400_updated.csv/.rds"
+#   • CSV:      "Sep_2025_FISH_probe_calls_400_updated.csv"
+#   • CSV:      "Sep_2025_sequenza_ploidy_estimates_updated.csv"
+#   • TXT:      "Jan2025_exported_data/sequenza_purity_ploidy_estimates.txt"
+#   • RDS/TXT:  "Jan2025_exported_data/cna_data_from_sequenza_400_updated.rds/.txt"
+#   • RDS/TXT:  "Jan2025_exported_data/FISH_data_from_sequenza_400_updated.rds/.txt"
+#   • RDS/TXT:  "Jan2025_exported_data/FISH_data_from_sequenza_400_by_cytoband_updated.rds/.txt"
+#   • RDS:      "Jan2025_exported_data/Sample_ploidy_from_sequenza_400.rds"
+#   • RDS/TXT:  "Jan2025_exported_data/cna_data_summary_400_updated.rds/.txt"
 #   • Console:  one-row tibble with cohort proportions for each feature
 #
 # Key parameters (tunable):
@@ -759,7 +789,9 @@ probe_calls_bin_cytoband <- probe_calls_long_cyto %>%
 # combined_seg_data %>% summarize(prop_assigned = mean(!is.na(arm)))
 # combined_seg_data %>% filter(is.na(arm)) %>% count(chr, sort = TRUE)
 
-# ---- save combined (optional)
+# ---- Save combined Sequenza segment and probe-call intermediates ----
+# These files support audit/reuse of the Sequenza layer; final manuscript-facing
+# feature integration consumes the cleaned exports written near the end.
 write.csv(combined_seg_data, "Sep_2025_combined_sequenza_calls_400_updated.csv", row.names = FALSE)
 saveRDS(combined_seg_data,  "Sep_2025_combined_sequenza_calls_400_updated.rds")
 
@@ -904,7 +936,7 @@ results <- results %>%
 
 myeloma_CNA_matrix_with_HRD <- results
 
-# ---- export final tables (same as before)
+# ---- Build final Sequenza arm-level CNA table ----
 cna_data <- myeloma_CNA_matrix_with_HRD %>%
   select(Sample, del1p, amp1q, del13q, del17p, hyperdiploid) %>%
   mutate(across(-Sample, as.character))
@@ -951,8 +983,9 @@ cna_data_merged <- cna_data_cleaned %>%
 message("✅ Merged CNA data with metadata: added Bam_clean_tmp column.")
 
 
-## ---- Export Results ----
-## The number in filenames corresponds to the gamma parameter used by Sequenza (γ=400)
+## ---- Export Sequenza CNA results ----
+## The number in filenames corresponds to the gamma parameter used by Sequenza (gamma = 400).
+## These are upstream helper files consumed by 1_5 and downstream concordance scripts.
 
 # Primary CNA matrix
 saveRDS(cna_data_merged, file = file.path(export_dir, "cna_data_from_sequenza_400_updated.rds"))
@@ -970,7 +1003,7 @@ write.table(cna_data_summary,
 message("✅ Export complete:")
 
 
-### Now do the same for FISH calls 
+### Export FISH-probe-level Sequenza calls based on direct hg38 coordinates
 FISH_data_cleaned <- probe_calls_bin %>%
   mutate(Sample = str_remove_all(Sample, "_PG|_WG"))
 
@@ -998,8 +1031,7 @@ write.table(FISH_data_cleaned,
             sep = "\t", row.names = FALSE, quote = FALSE)
 
 
-## Try again but by cytoband 
-### Now do the same for FISH calls 
+## Export FISH-probe-level Sequenza calls based on cytoband-expanded windows
 FISH_data_cleaned <- probe_calls_bin_cytoband %>%
   mutate(Sample = str_remove_all(Sample, "_PG|_WG"))
 
@@ -1027,9 +1059,7 @@ write.table(FISH_data_cleaned,
             sep = "\t", row.names = FALSE, quote = FALSE)
 
 
-## Lastly for ploidy 
-
-### Now do the same for FISH calls 
+## Export Sequenza purity/ploidy estimates joined to metadata
 sample_ploidy <- sample_ploidy %>%
   mutate(Sample = str_remove_all(Sample, "_PG|_WG"))
 
@@ -1059,16 +1089,23 @@ write.table(sample_ploidy,
 
 
 
-## Quick check
-fish_summary2 <- filled_df %>% ## this is generated in later script 
-  dplyr::select(Patient, DEL_17P, DEL_1P, AMP_1Q) %>%
-  dplyr::left_join(cohort_df, by = "Patient") %>%
-  dplyr::filter(!is.na(Cohort)) %>%
-  dplyr::filter(
-    DEL_17P == "Positive" |
-      DEL_1P  == "Positive" |
-      AMP_1Q  == "Positive"
-  )
-
-fish_summary2 <- fish_summary %>% 
-  left_join(FISH_data_cleaned)
+## Optional cross-check against downstream clinical/FISH summaries
+# `filled_df`, `cohort_df`, and `fish_summary` are created in later scripts or
+# interactive review sessions. Keep this block non-blocking so the command-line
+# CNA processing step can complete from a fresh R session.
+if (exists("filled_df") && exists("cohort_df") && exists("fish_summary")) {
+  fish_summary2 <- filled_df %>%
+    dplyr::select(Patient, DEL_17P, DEL_1P, AMP_1Q) %>%
+    dplyr::left_join(cohort_df, by = "Patient") %>%
+    dplyr::filter(!is.na(Cohort)) %>%
+    dplyr::filter(
+      DEL_17P == "Positive" |
+        DEL_1P  == "Positive" |
+        AMP_1Q  == "Positive"
+    )
+  
+  fish_summary2 <- fish_summary %>%
+    left_join(FISH_data_cleaned)
+} else {
+  message("Skipping optional FISH cross-check: filled_df, cohort_df, or fish_summary is not available in this session.")
+}

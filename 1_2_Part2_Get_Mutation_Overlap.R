@@ -42,6 +42,16 @@
 
 
 ### Load libraries 
+# How to run:
+#   Rscript Scripts_2025/Final_Scripts/1_2_Part2_Get_Mutation_Overlap.R
+#
+# Role in manuscript workflow:
+#   Direct manuscript-output script. Mapped output(s):
+#   Extended_Data_Figure_2 panel/sheet G. Computes BM/cfDNA mutation
+#   overlap and Venn outputs.
+#
+NA
+### Load libraries 
 library(maftools)
 library(dplyr)
 library(tidyr)
@@ -144,8 +154,10 @@ combined_maf <- combined_maf %>% filter(timepoint_info %in% c("Diagnosis", "Base
 ## Add cohort df 
 cohort_df <- readRDS("cohort_assignment_table_updated.rds")
 
-# find patients in cohort_df not in combined_maf
-missing_patients <- setdiff(combined_maf$Patient, combined_maf$Patient)
+# Find cohort-assigned patients with no baseline/diagnosis mutation rows after
+# the metadata join and timepoint filter. This is diagnostic only; it does not
+# change the plotted overlap data.
+missing_patients <- setdiff(cohort_df$Patient, combined_maf$Patient)
 
 if (length(missing_patients) == 0) {
   message("✔ All patients in cohort_df are represented in combined_maf.")
@@ -466,7 +478,9 @@ p_overlap <- ggplot(plot_df, aes(x = Percent_Overlap, y = Patient)) +
     legend.text       = element_text(size = 6)
   )
 
-# 4. Save for Figure 3C
+# 4. Save manuscript panel
+# Current manuscript assignment: Extended Data Figure 2G.
+# Historical filename: Fig3C_mutation_overlap_lollipop2_updated.png.
 ggsave(
   filename = file.path(outdir, "Fig3C_mutation_overlap_lollipop2_updated.png"),
   plot     = p_overlap,
@@ -476,7 +490,7 @@ ggsave(
 )
 
 
-# Export overlap_with_cohort table
+# Export source/helper tables for the overlap panel.
 write.csv(overlap_with_cohort, "mutation_overlap_with_cohort.csv", row.names = FALSE)
 # or TSV:
 # write.table(overlap_with_cohort, "overlap_with_cohort.tsv", sep = "\t", quote = FALSE, row.names = FALSE)

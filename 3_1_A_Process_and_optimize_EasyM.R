@@ -25,6 +25,17 @@
 ## ============================================================
 ## 0) Setup
 ## ============================================================
+# How to run:
+#   Rscript Scripts_2025/Final_Scripts/3_1_A_Process_and_optimize_EasyM.R
+#
+# Role in manuscript workflow:
+#   Upstream/intermediate processing script. It does not usually export a
+#   final assembled manuscript figure/table directly, but its outputs feed
+#   later manuscript source scripts. Processes EasyM/proteomic MRD
+#   thresholds and comparisons.
+#
+NA
+## ============================================================
 suppressPackageStartupMessages({
   library(tidyverse)
   library(survival)

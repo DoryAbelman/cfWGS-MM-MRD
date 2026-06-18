@@ -1,5 +1,16 @@
 # ===============================================================================
 # Script: 2_4_Longitudinal_features_analysis.R
+# How to run:
+#   Rscript Scripts_2025/Final_Scripts/2_4_Longitudinal_features_analysis.R
+#
+# Role in manuscript workflow:
+#   Direct manuscript-output script. Mapped output(s): Figure_2 panel/sheet
+#   A; Figure_2 panel/sheet B; Figure_2 panel/sheet C; Figure_2 panel/sheet
+#   D; Extended_Data_Figure_3 panel/sheet A; Extended_Data_Figure_3
+#   panel/sheet B; Extended_Data_Figure_3 panel/sheet C;
+#   Extended_Data_Figure_4 panel/sheet all. Generates longitudinal feature
+#   panels.
+#
 # Author: Dory Abelman
 # Date: 2025-06
 # Purpose:

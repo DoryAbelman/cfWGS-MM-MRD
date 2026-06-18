@@ -12,6 +12,15 @@
 #    • Export intermediary and final “combined_clinical_data_updated” master table along with
 #      derived tables: baseline dates, PFS_days, latest_dates_per_patient, patient_counts, BAM lists, etc.
 #
+# How to run:
+#   Rscript Scripts_2025/Final_Scripts/1_0_Process_clinical_metadata.R
+#
+# Role in manuscript workflow:
+#   Upstream/intermediate processing script. It does not usually export a
+#   final assembled manuscript figure/table directly, but its outputs feed
+#   later manuscript source scripts. Harmonises clinical metadata across
+#   cohorts.
+#
 #  Author:        Dory Abelman
 #  Last updated:  2025-06-06
 #
@@ -54,6 +63,31 @@ library(data.table)   # fast fread/fwrite if needed
 library(tidyverse)    # dplyr, tidyr, ggplot2, etc.
 library(lubridate)    # date parsing
 
+# Type-stable date normalization used before joins and patient-specific date
+# corrections. Some source spreadsheets provide R Date objects, some provide
+# POSIX datetimes, and some become numeric after mixed-column reshaping. Numeric
+# values above 30000 are treated as Excel serial dates; smaller numeric values
+# are treated as R Date offsets.
+normalize_clinical_date <- function(x) {
+  if (inherits(x, "Date")) return(x)
+  if (inherits(x, c("POSIXct", "POSIXlt"))) return(as.Date(x))
+
+  if (is.numeric(x)) {
+    out <- rep(as.Date(NA), length(x))
+    excel_serial <- !is.na(x) & x > 30000
+    r_serial <- !is.na(x) & !excel_serial
+    out[excel_serial] <- as.Date(x[excel_serial], origin = "1899-12-30")
+    out[r_serial] <- as.Date(x[r_serial], origin = "1970-01-01")
+    return(out)
+  }
+
+  parsed <- suppressWarnings(ymd(x))
+  still_missing <- is.na(parsed) & !is.na(x) & nzchar(as.character(x))
+  parsed[still_missing] <- suppressWarnings(mdy(x[still_missing]))
+  still_missing <- is.na(parsed) & !is.na(x) & nzchar(as.character(x))
+  parsed[still_missing] <- suppressWarnings(dmy(x[still_missing]))
+  as.Date(parsed)
+}
 
 # ─── 2.  Configuration & helper functions (optional) ───────────────────────────
 # [ Single place to change paths ]
@@ -75,6 +109,9 @@ library(lubridate)    # date parsing
 
 
 # ─── 3.  Load raw clinical files ────────────────────────────────────────────────
+# This block intentionally keeps each source file visible at the top of the
+# script. If a new clinical export is received, update the path here and rerun
+# from the command line before regenerating downstream figures/tables.
 ##  3.1  cf/WGS integrated metadata (M4, MyC etc.)
 clinical_data <- read_excel("cfWGS_MS_Integrated_Metadata.xlsx", sheet = 1)
 
@@ -274,7 +311,11 @@ combined_clinical_data_updated <- combined_clinical_data_updated %>%
 ## Fix IMG cases
 combined_clinical_data_updated <- combined_clinical_data_updated %>%
   mutate(
-    Date_of_sample_collection = ifelse(Patient == "IMG-181" & Timepoint == "T0", as.Date("2021-04-27"), Date_of_sample_collection),
+    Date_of_sample_collection = if_else(
+      Patient == "IMG-181" & Timepoint == "T0",
+      as.Date("2021-04-27"),
+      as.Date(Date_of_sample_collection)
+    ),
     timepoint_info = case_when(
       Patient == "IMG-181" & Timepoint == "T0" ~ "Diagnosis",
       Patient == "IMG-181" & Timepoint %in% c("T6", "T12", "T15") ~ "Maintenance",
@@ -283,7 +324,10 @@ combined_clinical_data_updated <- combined_clinical_data_updated %>%
     Timepoint = ifelse(Patient == "IMG-181" & Timepoint == "T6", "07", Timepoint)
   )
 
-# ─── 11.  Write out the first “combined_clinical_data” intermiate file ─────────
+# ─── 11.  Write out the first combined clinical-data intermediate ──────────────
+# This temporary checkpoint is useful for auditing timepoint harmonization before
+# later relapse, PFS, and patient-specific corrections are applied. It is not the
+# final clinical metadata table used by downstream manuscript scripts.
 write.csv(
   combined_clinical_data_updated,
   "combined_clinical_data_updated_tmp.csv",
@@ -292,6 +336,9 @@ write.csv(
 
 
 # ─── 12.  QC: get counts & write summary tables ────────────────────────────────
+# These counts are command-line QC outputs. They help detect unexpected shifts
+# when clinical exports change or new samples are added; they are not formatted
+# as manuscript tables.
 ##  12.1  Number of unique patients
 num_patients <- combined_clinical_data_updated %>%
   summarise(num_patients = n_distinct(Patient))
@@ -330,7 +377,9 @@ write.csv(samples_by_timepoint, "samples_by_timepoint.csv", row.names = FALSE)
 write.csv(samples_by_study, "samples_by_study.csv", row.names = FALSE)
 
 
-# ─── 13.  Make simple barplots (Sample_type, timepoint_info, Study) ─────────────
+# ─── 13.  Make simple QC barplots (Sample_type, timepoint_info, Study) ─────────
+# These plots are quick data-integrity checks for the clinical metadata build.
+# They are not mapped manuscript figure panels.
 output_dir <- "plots_Oct"
 dir.create(output_dir, showWarnings = FALSE)
 
@@ -526,7 +575,10 @@ combined_clinical_data_updated <- combined_clinical_data_updated %>%
     by = c("Patient", "Timepoint" = "Timepoint_Code")
   ) %>%
   mutate(
-    Date_of_sample_collection = coalesce(Date, Date_of_sample_collection)
+    Date_of_sample_collection = coalesce(
+      normalize_clinical_date(Date),
+      normalize_clinical_date(Date_of_sample_collection)
+    )
   ) %>%
   select(-Date)
 
@@ -592,7 +644,11 @@ combined_clinical_data_updated <- combined_clinical_data_updated %>%
       TRUE ~ Timepoint
     ),
     timepoint_info = ifelse(Bam %in% diagnosis_bam_values, "Diagnosis", timepoint_info),
-    Date_of_sample_collection = ifelse(Bam %in% c(diagnosis_bam_values, unknown_timepoint_bam), NA, Date_of_sample_collection)
+    Date_of_sample_collection = if_else(
+      Bam %in% c(diagnosis_bam_values, unknown_timepoint_bam),
+      as.Date(NA),
+      as.Date(Date_of_sample_collection)
+    )
   )
 
 ## Edit the IDs to match
@@ -604,7 +660,12 @@ combined_clinical_data_updated <- combined_clinical_data_updated %>%
 combined_clinical_data_updated <- combined_clinical_data_updated %>%
   left_join(M4_dates %>% select(Patient, Timepoint_Code, Date), 
             by = c("Patient", "Timepoint" = "Timepoint_Code")) %>%
-  mutate(Date_of_sample_collection = coalesce(Date, Date_of_sample_collection)) %>%
+  mutate(
+    Date_of_sample_collection = coalesce(
+      normalize_clinical_date(Date),
+      normalize_clinical_date(Date_of_sample_collection)
+    )
+  ) %>%
   select(-Date)  # Remove the Date column after updating
 
 ## If still NA, go off of labs
@@ -612,8 +673,13 @@ combined_clinical_data_updated <- combined_clinical_data_updated %>%
 combined_clinical_data_updated <- combined_clinical_data_updated %>%
   left_join(M4_Labs_earliest %>% dplyr::select(M4_id, Timepoint_Code, LAB_DATE),
             by = c("Patient" = "M4_id", "Timepoint" = "Timepoint_Code")) %>%
-  # Update Date_of_sample_collection only if it is NA, using LAB_DATE where available
-  mutate(Date_of_sample_collection = if_else(is.na(Date_of_sample_collection), LAB_DATE, Date_of_sample_collection)) %>%
+  # Update Date_of_sample_collection only if it is NA, using LAB_DATE where available.
+  # Coerce both branches to Date to avoid RStudio/session-dependent Date/datetime
+  # coercion when dplyr checks strict column types.
+  mutate(Date_of_sample_collection = coalesce(
+    normalize_clinical_date(Date_of_sample_collection),
+    normalize_clinical_date(LAB_DATE)
+  )) %>%
   # Drop the temporary LAB_DATE column added from the join
   select(-LAB_DATE) %>% 
   unique()
@@ -627,12 +693,14 @@ tmp <- M4_Labs_earliest %>%
 # Step 2: Identify new combinations in M4_Labs_earliest not present in M4_dates
 new_combinations <- tmp %>%
   rename(Date = LAB_DATE) %>%
+  mutate(Date = normalize_clinical_date(Date)) %>%
   select(SITE, Patient_Code, Timepoint_Code, Date) %>%
   anti_join(M4_dates %>% select(SITE, Patient_Code, Timepoint_Code), by = c("SITE", "Patient_Code", "Timepoint_Code"))
 
 # Step 3: Combine new combinations with M4_dates, prioritizing dates in M4_dates
 combined_dates <- M4_dates %>%
   select(SITE, Patient_Code, Timepoint_Code, Date) %>%
+  mutate(Date = normalize_clinical_date(Date)) %>%
   bind_rows(new_combinations)
 
 # Step 4: Calculate the date range for each patient
@@ -660,17 +728,22 @@ target_bam <- "TFRIM4_0181_Cf_P_PG_VA-07-05-P-DNA.filter.deduped.recalibrated.ba
 
 # Update Date_of_sample_collection, Timepoint, timepoint_info, and modify Sample_ID
 combined_clinical_data_updated <- combined_clinical_data_updated %>%
-  mutate(Date_of_sample_collection = as.Date(Date_of_sample_collection, origin = "1970-01-01"))
+  mutate(Date_of_sample_collection = normalize_clinical_date(Date_of_sample_collection))
 
 combined_clinical_data_updated <- combined_clinical_data_updated %>%
   mutate(
-    Date_of_sample_collection = ifelse(Bam == target_bam, as.Date("2021-01-01", format = "%Y-%m-%d"), Date_of_sample_collection),
+    Date_of_sample_collection = if_else(
+      Bam == target_bam,
+      as.Date("2021-01-01", format = "%Y-%m-%d"),
+      as.Date(Date_of_sample_collection)
+    ),
     Timepoint = ifelse(Bam == target_bam, "R-", Timepoint),
     timepoint_info = ifelse(Bam == target_bam, "Relapse", timepoint_info),
     Sample_ID = ifelse(Bam == target_bam, gsub("05-P", "R-P", Sample_ID), Sample_ID)
   )
 
 combined_clinical_data_updated$Date_of_sample_collection <- as.Date(combined_clinical_data_updated$Date_of_sample_collection)
+combined_clinical_data_updated$Date_of_sample_collection <- normalize_clinical_date(combined_clinical_data_updated$Date_of_sample_collection)
 
 
 ## 17.6 Correct IMG cases
@@ -873,7 +946,12 @@ Time_to_relapse2 <- test %>%
 ## Now add this back 
 tmp <- combined_clinical_data_updated
 combined_clinical_data_updated <- combined_clinical_data_updated %>% 
-  dplyr::select(-Num_days_to_closest_relapse, -Relapsed, -Num_days_to_closest_relapse_absolute, -Num_days_to_closest_relapse_non_absolute) %>%
+  dplyr::select(-any_of(c(
+    "Num_days_to_closest_relapse",
+    "Relapsed",
+    "Num_days_to_closest_relapse_absolute",
+    "Num_days_to_closest_relapse_non_absolute"
+  ))) %>%
   left_join(Time_to_relapse2)
 
 ## Add other timepoint_info
@@ -904,7 +982,10 @@ combined_clinical_data_updated <- combined_clinical_data_updated %>%
 baseline_BM_samples <- combined_clinical_data_updated %>%
   filter(Sample_type == "BM_cells", timepoint_info %in% c("Diagnosis", "Baseline"))
 
-## Export 
+baseline_with_relapse <- baseline_BM_samples
+
+## Export baseline BM relapse-timing helper table for downstream QC.
+dir.create("Oct2024_exported_data", showWarnings = FALSE, recursive = TRUE)
 write.csv(baseline_with_relapse, file = "Oct2024_exported_data/Days to relapse baseline BM cell samples updated.txt", row.names = F)
 
 combined_clinical_data_updated$Num_days_to_closest_relapse <- combined_clinical_data_updated$Num_days_to_closest_relapse_absolute
@@ -1389,7 +1470,10 @@ write.csv(bams_filtered_SPORE, "SPORE_bams.csv", row.names = FALSE)
 cat("Filtered BAM list exported to bams_with_IMG_patients.csv and SPORE_bams.csv\n")
 
 
-# ─── 21.  Final tweaks & write “combined_clinical_data_updated_April2025.csv” ──
+# ─── 21.  Final tweaks & write combined_clinical_data_updated_April2025.csv ────
+# This is the primary clinical-metadata output consumed by downstream scripts.
+# When adding new samples, regenerate this file before rerunning feature
+# integration, clinical-demographics tables, swim plots, and survival analyses.
 combined_clinical_data_updated <- combined_clinical_data_updated %>%
   mutate(timepoint_info = if_else(
     Patient == "SPORE_0007" & Date_of_sample_collection == as.Date("2019-08-21"),
@@ -1572,6 +1656,33 @@ write.csv(
 
 saveRDS(final_tbl, "Exported_data_tables_clinical/Censor_dates_per_patient_for_PFS.rds")
 
+final_tbl_for_update <- final_tbl %>%
+  rename(
+    baseline_date = Baseline_Date,
+    censor_date = Censor_date,
+    relapsed = Relapsed
+  ) %>%
+  arrange(Patient, baseline_date, censor_date) %>%
+  distinct(Patient, .keep_all = TRUE)
+
+max_date_or_na <- function(x) {
+  x <- x[!is.na(x)]
+  if (!length(x)) return(as.Date(NA))
+  max(x)
+}
+
+first_date_or_na <- function(x) {
+  x <- x[!is.na(x)]
+  if (!length(x)) return(as.Date(NA))
+  x[1]
+}
+
+max_integer_or_na <- function(x) {
+  x <- x[!is.na(x)]
+  if (!length(x)) return(NA_integer_)
+  as.integer(max(x))
+}
+
 
 ### Add updated dates from Sarah 
 censor_dates_updated <- read.csv("Clinical data/M4/Censore_dates_per_patient_for_PFS_just_M4 SB.csv")
@@ -1588,12 +1699,12 @@ censor_tbl <- censor_dates_updated %>% select(-CMRG.ID) %>%
 
 ## join to existing baseline dates
 final_like_tbl <- censor_tbl %>% 
-  left_join(final_tbl |> select(Patient, baseline_date), by = "Patient") %>% 
+  left_join(final_tbl_for_update |> select(Patient, baseline_date), by = "Patient") %>% 
   relocate(baseline_date, .after = Patient)              # keep column order
 
 # See difference 
 # 3. For Patients in both, show which fields differ
-diff_by_patient <- full_join(final_tbl,
+diff_by_patient <- full_join(final_tbl_for_update,
                              final_like_tbl,
                              by     = "Patient",
                              suffix = c(".final", ".new")) %>%
@@ -1605,8 +1716,14 @@ diff_by_patient <- full_join(final_tbl,
          censor_date.final,   censor_date.new,
          relapsed.final,      relapsed.new)
 
-
-view(diff_by_patient)
+# Command-line replacement for the original interactive RStudio inspection.
+# This table documents exactly which PFS/censor fields changed after applying
+# the manually curated Sarah B. update file.
+write.csv(
+  diff_by_patient,
+  "Exported_data_tables_clinical/PFS_censor_date_manual_update_differences.csv",
+  row.names = FALSE
+)
 
 ## Coalesce
 # 1. Drop EK-09 from the diff list
@@ -1624,9 +1741,16 @@ diff_update <- diff_by_patient_flt %>%
     baseline_date = baseline_date.final,
     censor_date,
     relapsed      = relapsed.new
+  ) %>%
+  group_by(Patient) %>%
+  summarise(
+    baseline_date = first_date_or_na(baseline_date),
+    censor_date = max_date_or_na(censor_date),
+    relapsed = max_integer_or_na(relapsed),
+    .groups = "drop"
   )
 
-final_tbl_updated <- final_tbl %>%
+final_tbl_updated <- final_tbl_for_update %>%
   rows_update(diff_update, by = "Patient")
 
 ## Now export 
@@ -1795,8 +1919,8 @@ diagnostic_baselines <- Baseline_dates_CMRG %>%
 
 # Inspect
 table(diagnostic_baselines$PURPOSE)
-# 2) Get the official baseline_date from your PFS table
-baseline_official <- final_tbl %>%
+# 2) Get the official baseline_date from the curated PFS table written above.
+baseline_official <- final_tbl_updated %>%
   select(Patient, baseline_date)
 
 # 3) Compute the difference
@@ -1845,15 +1969,15 @@ baseline_mismatch <- processing_baseline %>%
 # Inspect
 print(baseline_mismatch)
 
-# Export if desired
+# Export baseline-date mismatch QC tables for command-line review.
+outdir <- "Output_tables_2025/detection_progression"
+dir.create(outdir, recursive = TRUE, showWarnings = FALSE)
+
 write_csv(
   baseline_mismatch,
   file.path(outdir, "baseline_date_mismatches_both.csv")
 )
 # 4) Write out to CSV for reporting  
-outdir <- "Output_tables_2025/detection_progression"
-dir.create(outdir, recursive = TRUE, showWarnings = FALSE)
-
 write_csv(
   baseline_mismatch,
   file.path(outdir, "baseline_date_mismatches.csv")

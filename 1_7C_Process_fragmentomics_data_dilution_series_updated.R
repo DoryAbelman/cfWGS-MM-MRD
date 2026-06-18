@@ -22,6 +22,15 @@
 #   7. Write out a single CSV:
 #         Results_Fragmentomics/Dilution_series/key_fragmentomics_info_dilution_series.csv
 #
+# How to run:
+#   Rscript Scripts_2025/Final_Scripts/1_7C_Process_fragmentomics_data_dilution_series_updated.R
+#
+# Role in manuscript workflow:
+#   Upstream/intermediate processing script. It does not usually export a
+#   final assembled manuscript figure/table directly, but its outputs feed
+#   later manuscript source scripts. Processes dilution-series
+#   fragmentomics.
+#
 # Author:  Dory Abelman
 # Updated: 2025-06-06
 # ──────────────────────────────────────────────────────────────────────────────

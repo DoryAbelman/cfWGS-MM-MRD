@@ -12,6 +12,15 @@
 # progressed, and it records the number of days between baseline and
 # MRD samples relative to the associated diagnosis or MRD test dates.
 #
+# How to run:
+#   Rscript Scripts_2025/Final_Scripts/0_1_select_additional_samples_for_cohort_expansion.R
+#
+# Role in manuscript workflow:
+#   Upstream/intermediate processing script. It does not usually export a
+#   final assembled manuscript figure/table directly, but its outputs feed
+#   later manuscript source scripts. Identifies additional eligible samples
+#   and timepoint classes.
+#
 # Author: Dory Abelman
 # Date: 2026-02-05
 
@@ -24,9 +33,14 @@ suppressPackageStartupMessages({
   library(tidyr)     # for data tidying
 })
 
-#-------------------------------------------------------------------
-# 0. Load and process patient ID mapping and complete sample inventory
-#-------------------------------------------------------------------
+# ------------------------------------------------------------------------------
+# ## 0. Link sample inventory records to patient IDs
+#
+# The sample inventory uses study/event labels rather than always carrying a
+# clean patient ID. This block normalizes strings, joins inventory rows to the
+# ID mapping workbook, and writes unmatched values so they can be corrected
+# before adding new samples to the formal analysis cohort.
+# ------------------------------------------------------------------------------
 
 cat("\n========== LOADING PATIENT ID MAPPING AND SAMPLE INVENTORY ==========\n\n")
 
@@ -142,9 +156,10 @@ cat("  Total patients with samples:", nrow(patient_sample_summary), "\n\n")
 
 cat("========== ID MAPPING AND INVENTORY COMPLETE ==========\n\n")
 
-## Now work on getting the info of available samples for the comparison
-# Define the path to the Excel workbook.  The workbook must reside in
-# the working directory or you must adjust the path accordingly.
+## Now work on getting the info of available samples for the comparison.
+# This workbook contains the clinical date anchors used below. Keep this as an
+# explicit input so reviewers can see exactly which clinical export drives the
+# cohort-expansion tables.
 file_path <- "Clinical data/IMMAGINE/IMMAGINE  LIBERATE_MRD_withoutMRN_or_DOB_18Dec2025.xlsx"
 
 # Check if file exists, provide helpful error message if not
@@ -156,9 +171,13 @@ if (!file.exists(file_path)) {
   )
 }
 
-#-------------------------------------------------------------------
-# 1. Import data from each worksheet
-#-------------------------------------------------------------------
+# ------------------------------------------------------------------------------
+# ## 1. Import the clinical worksheets used for sample classification
+#
+# Each worksheet is read with explicit column types so dates stay as dates and
+# patient identifiers stay as text. This prevents accidental numeric conversion
+# of IDs and makes command-line runs more reproducible.
+# ------------------------------------------------------------------------------
 
 # Read diagnosis dates
 date_dx <- read_excel(
@@ -224,9 +243,14 @@ line_tx_raw <- read_excel(
   )
 )
 
-#-------------------------------------------------------------------
-# 2. Data preparation and cleaning
-#-------------------------------------------------------------------
+# ------------------------------------------------------------------------------
+# ## 2. Clean and merge clinical sample records with the full inventory
+#
+# The original clinical workbook and the separate inventory partially overlap.
+# Both sources are standardized to the same columns, combined, and de-duplicated
+# by patient/date/sample type. Any duplicates are exported for audit instead of
+# being silently ignored.
+# ------------------------------------------------------------------------------
 
 # Prepare diagnosis data
 date_dx_clean <- date_dx %>%
@@ -334,9 +358,12 @@ line_tx_clean <- line_tx_raw %>%
     start_date, end_date, PROGRESSION
   )
 
-#-------------------------------------------------------------------
-# 3. Summarize progression at the patient level
-#-------------------------------------------------------------------
+# ------------------------------------------------------------------------------
+# ## 3. Summarize progression at the patient level
+#
+# Progression status is used as descriptive context in the exported eligibility
+# tables. It is not used to decide whether a sample is eligible.
+# ------------------------------------------------------------------------------
 
 # Define a helper that interprets progression strings
 interpret_progression <- function(progression) {
@@ -362,9 +389,13 @@ progression_summary <- line_tx_clean %>%
   ) %>%
   ungroup()
 
-#-------------------------------------------------------------------
-# 4. Identify baseline samples (within ±30 days of diagnosis)
-#-------------------------------------------------------------------
+# ------------------------------------------------------------------------------
+# ## 4. Identify baseline samples
+#
+# Baseline eligibility is date-driven: any sample within +/- 30 days of the
+# documented diagnosis date is flagged. The later cohort filters restrict this
+# to bone marrow or peripheral blood samples.
+# ------------------------------------------------------------------------------
 
 samples_with_dx <- samples_clean %>%
   left_join(date_dx_clean, by = "PATIENT_ID") %>%
@@ -373,9 +404,14 @@ samples_with_dx <- samples_clean %>%
     baseline_flag = if_else(!is.na(days_from_diagnosis) & abs(days_from_diagnosis) <= 30, TRUE, FALSE)
   )
 
-#-------------------------------------------------------------------
-# 5. Identify MRD timepoint samples (within ±14 days of any MRD test)
-#-------------------------------------------------------------------
+# ------------------------------------------------------------------------------
+# ## 5. Identify MRD-timepoint samples
+#
+# MRD-timepoint samples are matched to the closest BM MRD collection date for
+# that patient. The +/- 14 day window is intentionally documented here because
+# it is a biologically and operationally important assumption for prospective
+# sample expansion.
+# ------------------------------------------------------------------------------
 
 # IMPORTANT: The MRD sheet contains only bone marrow (BM_COLLCTN_DATE).
 # Blood samples at MRD timepoints are identified by proximity to these BM dates.
@@ -428,9 +464,13 @@ if (nrow(mrd_clean) > 0) {
 samples_with_dx_mrd <- samples_with_dx %>%
   left_join(mrd_diffs, by = "sample_id")
 
-#-------------------------------------------------------------------
-# 6. Identify treatment samples (samples collected during any treatment line)
-#-------------------------------------------------------------------
+# ------------------------------------------------------------------------------
+# ## 6. Identify treatment samples
+#
+# Samples not classified as Baseline or MRD are marked as Treatment when their
+# collection date falls within an observed treatment-line interval. Remaining
+# samples are retained as Other for review rather than dropped.
+# ------------------------------------------------------------------------------
 
 if (nrow(line_tx_clean) > 0) {
   treatment_flags <- samples_with_dx_mrd %>%
@@ -471,9 +511,16 @@ samples_final <- samples_with_dx_mrd %>%
     days_from_mrd = if_else(sample_class == "MRD", nearest_mrd_diff, NA_real_)
   )
 
-#-------------------------------------------------------------------
-# 7. Define two cohorts based on MRD sample type requirements
-#-------------------------------------------------------------------
+# ------------------------------------------------------------------------------
+# ## 7. Define candidate expansion cohorts
+#
+# Two cohorts are exported:
+# - ANY_MRD: patients with a baseline BM/blood sample and any MRD-timepoint
+#   sample.
+# - BLOOD_MRD_ONLY: patients with a baseline BM/blood sample and at least one
+#   peripheral blood MRD-timepoint sample. This is the more relevant cohort for
+#   adding new blood-based test-cohort cases.
+# ------------------------------------------------------------------------------
 
 # Cohort 1: Baseline (BM or blood) + ANY MRD sample (BM or blood)
 eligible_patients_any_mrd <- samples_final %>%
@@ -517,9 +564,14 @@ eligible_samples_mrd_blood_only <- samples_final %>%
   filter(PATIENT_ID %in% eligible_patients_mrd_blood_only) %>%
   arrange(PATIENT_ID, sample_date, sample_class)
 
-#-------------------------------------------------------------------
-# 8. Diagnostic output - analyze blood MRD eligibility failures
-#-------------------------------------------------------------------
+# ------------------------------------------------------------------------------
+# ## 8. Diagnostic output for blood-MRD eligibility failures
+#
+# These diagnostics are intentionally verbose because this script is used to
+# find actionable sample-expansion opportunities. The exported table explains
+# whether each blood-MRD patient is already eligible or lacks an appropriate
+# baseline sample.
+# ------------------------------------------------------------------------------
 
 cat("\n===== DIAGNOSTIC REPORT: BLOOD MRD ELIGIBILITY ANALYSIS =====\n\n")
 
@@ -638,9 +690,14 @@ print(mrd_by_type)
 
 cat("\n===== END DIAGNOSTIC REPORT =====\n\n")
 
-#-------------------------------------------------------------------
-# 9. Output results for both cohorts
-#-------------------------------------------------------------------
+# ------------------------------------------------------------------------------
+# ## 9. Export eligible-sample tables
+#
+# These CSVs are the primary outputs of this script. They are review/operations
+# tables, not final manuscript tables. Downstream analysis scripts should only
+# incorporate new cases after the required WGS/fragmentomic/mutation/CNA inputs
+# have been generated for those samples.
+# ------------------------------------------------------------------------------
 
 # Cohort 1: Any MRD (BM or blood)
 final_output_any_mrd <- eligible_samples_any_mrd %>%
@@ -680,9 +737,13 @@ final_output_mrd_blood <- eligible_samples_mrd_blood_only %>%
 write.csv(final_output_mrd_blood, file = "eligible_samples_BLOOD_MRD_ONLY.csv", row.names = FALSE)
 cat("✓ Results written to 'eligible_samples_BLOOD_MRD_ONLY.csv'\n\n")
 
-#-------------------------------------------------------------------
-# Summary statistics for both cohorts
-#-------------------------------------------------------------------
+# ------------------------------------------------------------------------------
+# ## 10. Print cohort summary and expansion opportunities
+#
+# The console summary is designed for command-line review after the script
+# completes. It highlights how many blood-MRD patients are immediately eligible
+# and how many would require baseline sample acquisition.
+# ------------------------------------------------------------------------------
 
 cat("========== COHORT 1: ANY MRD (BM or Blood) ==========\n\n")
 cat("Total eligible patients:", n_distinct(final_output_any_mrd$PATIENT_ID), "\n")
@@ -811,4 +872,3 @@ if (length(multi_timepoint_patients) > 0) {
 cat("\n===== END DETAILED ANALYSIS =====\n\n")
 
 cat("\n✓ Script completed successfully!\n")
-

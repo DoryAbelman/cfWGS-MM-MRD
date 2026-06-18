@@ -1,6 +1,20 @@
 # =============================================================================
 # Script: 3_2_Plot_optimal_cutoff_and_clinical_concordance.R
 # Project:  cfWGS MRD detection (M4 / SPORE / IMMAGINE)
+# How to run:
+#   Rscript Scripts_2025/Final_Scripts/3_2_Plot_optimal_cutoff_and_clinical_concordance.R
+#
+# Role in manuscript workflow:
+#   Direct manuscript-output script. Mapped output(s): Figure_3 panel/sheet
+#   D; Figure_3 panel/sheet E; Figure_4 panel/sheet C; Figure_4 panel/sheet
+#   D; Extended_Data_Figure_5 panel/sheet E; Extended_Data_Figure_5
+#   panel/sheet F; Extended_Data_Figure_5 panel/sheet G;
+#   Extended_Data_Figure_7 panel/sheet F; Extended_Data_Figure_7
+#   panel/sheet G; Extended_Data_Figure_7 panel/sheet H;
+#   Supplementary_Table_8 panel/sheet all_sheets; Supplementary_Table_10
+#   panel/sheet all_sheets. Generates tumor-informed clinical concordance
+#   figures/tables.
+#
 # Author:   Dory Abelman
 # Date:     May 28, 2025
 # Updated Feb 2026
@@ -4070,4 +4084,45 @@ cat("     - Agreement metrics (percent, kappa)\n\n")
 
 cat("DATA INTEGRATION NOTES\n")
 cat("────────────────────────────────────────────────────────────────────────────\n")
-cat(sprintf("✓ cfWGS samples: n = %d rows\n", nrow(dat)))\ncat(sprintf("✓ EasyM samples merged: n = %d (%.1f%% matched)\n",\n                  sum(!is.na(dat$EasyM_value)),\n                  100 * sum(!is.na(dat$EasyM_value)) / nrow(dat)))\ncat(sprintf("  - Using optimized thresholds: %d\n",\n              sum(dat$threshold_method == \"optimized\", na.rm = TRUE)))\ncat(sprintf("  - Using clinician calls: %d\n",\n              sum(dat$threshold_method == \"clinician\", na.rm = TRUE)))\ncat(\"\\n\")\n\ncat(\"METHODOLOGY REMINDER\n\")\ncat(\"────────────────────────────────────────────────────────────────────────────\\n\")\ncat(\"EasyM calls use two approaches per timepoint:\\n\")\ncat(\"  • CLINICIAN: Original MRD+/- classifications from EasyM assay\\n\")\ncat(\"  • OPTIMIZED: Data-driven threshold (log-rank chi-square optimization)\\n\")\ncat(\"\\n\")\ncat(\"Primary timepoints with optimized thresholds:\\n\")\nif (!is.null(EasyM_thresholds) && nrow(EasyM_thresholds) > 0) {\n  for (i in 1:nrow(EasyM_thresholds)) {\n    row <- EasyM_thresholds[i, ]\n    tp <- row$Timepoint\n    cut <- row$opt_cut_raw\n    cat(sprintf(\"  • TP%s: Threshold = %.4f%%\\n\", tp, cut))\n  }\n} else {\n  cat(\"  (Threshold table not available)\\n\")\n}\ncat(\"\\n\")\n\ncat(\"NEXT STEPS\n\")\ncat(\"────────────────────────────────────────────────────────────────────────────\\n\")\ncat(\"→ Review scatter plots for concordance patterns between EasyM and cfWGS\\n\")\ncat(\"→ Check correlation strength and clinical outcome associations by timepoint\\n\")\ncat(\"→ Assess agreement metrics: clinician vs optimized threshold approaches\\n\")\ncat(\"→ Use positivity rate comparisons to contextualize detection sensitivities\\n\")\ncat(\"→ Prepare figures for manuscript and supplementary materials\\n\\n\")\n
+cat(sprintf("✓ cfWGS samples: n = %d rows\n", nrow(dat)))
+cat(sprintf(
+  "✓ EasyM samples merged: n = %d (%.1f%% matched)\n",
+  sum(!is.na(dat$EasyM_value)),
+  100 * sum(!is.na(dat$EasyM_value)) / nrow(dat)
+))
+cat(sprintf(
+  "  - Using optimized thresholds: %d\n",
+  sum(dat$threshold_method == "optimized", na.rm = TRUE)
+))
+cat(sprintf(
+  "  - Using clinician calls: %d\n",
+  sum(dat$threshold_method == "clinician", na.rm = TRUE)
+))
+cat("\n")
+
+cat("METHODOLOGY REMINDER\n")
+cat("────────────────────────────────────────────────────────────────────────────\n")
+cat("EasyM calls use two approaches per timepoint:\n")
+cat("  • CLINICIAN: Original MRD+/- classifications from EasyM assay\n")
+cat("  • OPTIMIZED: Data-driven threshold (log-rank chi-square optimization)\n")
+cat("\n")
+cat("Primary timepoints with optimized thresholds:\n")
+if (!is.null(EasyM_thresholds) && nrow(EasyM_thresholds) > 0) {
+  for (i in seq_len(nrow(EasyM_thresholds))) {
+    row <- EasyM_thresholds[i, ]
+    tp <- row$Timepoint
+    cut <- row$opt_cut_raw
+    cat(sprintf("  • TP%s: Threshold = %.4f%%\n", tp, cut))
+  }
+} else {
+  cat("  (Threshold table not available)\n")
+}
+cat("\n")
+
+cat("NEXT STEPS\n")
+cat("────────────────────────────────────────────────────────────────────────────\n")
+cat("→ Review scatter plots for concordance patterns between EasyM and cfWGS\n")
+cat("→ Check correlation strength and clinical outcome associations by timepoint\n")
+cat("→ Assess agreement metrics: clinician vs optimized threshold approaches\n")
+cat("→ Use positivity rate comparisons to contextualize detection sensitivities\n")
+cat("→ Prepare figures for manuscript and supplementary materials\n\n")

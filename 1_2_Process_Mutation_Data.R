@@ -10,7 +10,7 @@
 #     2. Read all BM‐MAF files from `maf_directory`, parse with `read_tsv()`, bind
 #        into `combined_maf`.
 #     3. Load clinical metadata from
-#        “combined_clinical_data_updated_Feb5_2025.csv” into
+#        “combined_clinical_data_updated_April2025.csv” into
 #        `metada_df_mutation_comparison` and join on `Tumor_Sample_Barcode`.
 #     4. Compute VAF (`t_alt_count/(t_ref_count+t_alt_count)`) and standardize
 #        sample IDs.
@@ -25,13 +25,19 @@
 #
 # Inputs:
 #   • maf_directory: path to “*.maf” BM and PB directories
-#   • combined_clinical_data_updated_Feb5_2025.csv
+#   • combined_clinical_data_updated_April2025.csv
 #
 # Outputs:
 #   • RDS: combined_maf_bm_all_muts.rds
 #   • RDS: combined_maf_bm_dx.rds
-#   • RDS: combined_maf_blood_all_muts.rds
+#   • RDS: combined_maf_blood_all_muts_updated.rds
 #   • Figures: VAF ridgeplots & t_depth histograms
+#
+# Role in manuscript workflow:
+#   Upstream mutation-processing script. The BM diagnosis/baseline MAF object
+#   defines patient-specific tumor-informed mutation panels, and the blood MAF
+#   object supports BM/cfDNA mutation overlap, mutation-count summaries, WGS
+#   feature integration, and downstream concordance analyses.
 #
 # Dependencies:
 #   library(maftools)
@@ -48,7 +54,10 @@
 #   library(circlize)        # if downstream heatmaps are created
 #
 # Usage:
-#   source("process_mutation_mafs.R")
+#   Rscript Scripts_2025/Final_Scripts/1_2_Process_Mutation_Data.R
+#
+# How to run:
+#   Rscript Scripts_2025/Final_Scripts/1_2_Process_Mutation_Data.R
 #
 # Author: Dory Abelman
 # Date:   2025-05-26
@@ -112,7 +121,7 @@ myeloma_genes <- c(
 maf_directory <- "~/OneDrive - University of Toronto/Project data/cfWGS project data/MAF files/BM/"
 
 # List all MAF files in the directory
-maf_files <- list.files(maf_directory, pattern = "\.maf$", full.names = TRUE)
+maf_files <- list.files(maf_directory, pattern = "\\.maf$", full.names = TRUE)
 
 # Read each MAF file (BM) into a dataframe and correct column types.
 # Each MAF begins with meta-comment lines prefixed "#"; comment="#" skips them so
@@ -311,6 +320,11 @@ combined_maf <- combined_maf %>%
 # conflict because metada_df_mutation_comparison also carries a Bam column.
 combined_maf <- left_join(combined_maf %>% select(-Bam), metada_df_mutation_comparison, by = "Tumor_Sample_Barcode")
 
+# Preserve the fully annotated BM mutation table before filtering. The object is
+# saved below as combined_maf_bm_all_muts.rds and is useful when downstream
+# analyses need all BM timepoints, not only diagnosis/baseline/relapse.
+combined_maf_bm_all_muts <- combined_maf
+
 
 ## First filter to just diagnosis 
 # Retain only timepoints relevant for WGS-tumour-informed cfDNA analysis.
@@ -320,7 +334,7 @@ combined_maf <- left_join(combined_maf %>% select(-Bam), metada_df_mutation_comp
 # Follow-up blood samples have their own object (combined_maf_blood) and are
 # filtered to matching timepoints later.
 combined_maf_bm_dx <- combined_maf %>% filter(timepoint_info %in% c("Diagnosis", "Baseline", "Relapse", "Progression"))
-rm(combined_maf)  # Drop the unfiltered BM MAF to free memory before loading blood data
+rm(combined_maf)  # Drop the duplicate BM object to free memory before loading blood data
 
 
 
@@ -331,7 +345,7 @@ rm(combined_maf)  # Drop the unfiltered BM MAF to free memory before loading blo
 maf_directory <- "~/OneDrive - University of Toronto/Project data/cfWGS project data/MAF files/Blood/"
 
 # List all MAF files in the directory
-maf_files <- list.files(maf_directory, pattern = "\.maf$", full.names = TRUE)
+maf_files <- list.files(maf_directory, pattern = "\\.maf$", full.names = TRUE)
 
 # Read each PB cfDNA MAF file into a dataframe using identical col_types as the
 # BM block above.  The Blood/ directory contains plasma cfDNA samples only;
@@ -508,7 +522,7 @@ saveRDS(combined_maf_blood, file = "combined_maf_blood_all_muts_updated.rds")
 
 # Save combined_maf_bm_dx as an RDS file
 saveRDS(combined_maf_bm_dx, file = "combined_maf_bm_dx.rds")
-saveRDS(combined_maf, file = "combined_maf_bm_all_muts.rds")
+saveRDS(combined_maf_bm_all_muts, file = "combined_maf_bm_all_muts.rds")
 
 
 
@@ -668,7 +682,7 @@ ggsave("Histogram_blood_muts.png", plot = histogram, width = 6, height = 6, dpi 
 
 
 ### Cleaning up 
-rm(combined_maf)
+if (exists("combined_maf")) rm(combined_maf)
 rm(blood_dx_maf)
 rm(vaf_plot)
 
@@ -721,5 +735,3 @@ mutation_matrix <- mutation_data %>%
       }
     })
   )
-
-

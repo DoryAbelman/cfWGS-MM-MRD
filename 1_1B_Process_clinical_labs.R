@@ -16,6 +16,15 @@
 # Outputs:
 #   • Master clinical labs table (used downstream in 2_1 demographics)
 #
+# How to run:
+#   Rscript Scripts_2025/Final_Scripts/1_1B_Process_clinical_labs.R
+#
+# Role in manuscript workflow:
+#   Upstream/intermediate processing script. It does not usually export a
+#   final assembled manuscript figure/table directly, but its outputs feed
+#   later manuscript source scripts. Processes clinical laboratory
+#   measurements.
+#
 # Author:    Dory Abelman
 # Date:      May 2025
 # ==============================================================================
@@ -28,13 +37,12 @@ library(fuzzyjoin)   # fuzzy / date-slack joins
 library(data.table)  # fast grouping & reshaping
 library(tidyverse)
 
-### Table 1: Clinical demographics 
-## Load in the DEMO_table 
-## Load in the chemo_table 
-## Then make and export a table 
+### Upstream clinical demographics fields used later by Table 1
+## This script creates the lab/staging/cytogenetic fields. The formatted Table 1
+## itself is created downstream in 2_1_Clinical_Demographics_Table.R.
 
-##### First just get all the clinical info into one big table - updated May 2025
-#### The first part of this script gets and processes the data for the M4 samples, SPORE and IMG are after
+##### First build the M4 clinical/lab table - updated May 2025
+#### SPORE and IMMAGINE are harmonized into this structure later in the script.
 
 # Set the path to your data folder
 data_path <- "M4_CMRG_Data/"
@@ -357,7 +365,10 @@ Translocations_FISH_all_tp <- best_match
 
 
 
-### Also add M-protein or other relevant things 
+### Add M-protein, free light chains, and other clinically relevant labs
+# These fields contribute to baseline clinical characterization and downstream
+# feature/correlation analyses. The selected lab list is intentionally explicit
+# so additions from new data exports can be reviewed.
 labs_file <- paste0(data_path, "M4_COHORT_LABS.xlsx")
 labs <- read_excel(labs_file)
 
@@ -465,7 +476,7 @@ labs <- labs %>%
   mutate(LAB_VALUE = as.numeric(LAB_VALUE_clean))  %>% 
   filter(!is.na(LAB_VALUE))
 
-## Transform 
+# Transform selected labs to one row per patient/timepoint where possible.
 # Transform the labs table to wide format with special handling for 0 vs non-zero
 labs_transformed <- labs %>%
   filter(LAB_NAME %in% relevant_labs) %>%
@@ -563,7 +574,10 @@ joined2 <- joined2 %>%
 
 Labs_all_timepoints <- joined2
 
-### Now get subtype 
+### Derive immunoglobulin/light-chain subtype from available lab values
+# These rules are deterministic heuristics based on the available quantitative
+# immunoglobulin and free-light-chain measurements. Ambiguous cases are retained
+# as Other or subtype-unknown rather than forced into a category.
 # Step 1: Filter Relevant Data for Immunoglobulin and Light Chains
 filtered_data <- labs %>%
   filter(grepl("Immunoglobulin Quantitation|free light chain", LAB_NAME)) %>%
@@ -870,7 +884,9 @@ clinical_consolidated <- clinical_consolidated %>%
 
 
 
-### Now load in for IMMAGINE and SPORE
+### Harmonize curated IMMAGINE and SPORE baseline clinical sheets
+# These curated sheets fill cross-cohort baseline clinical fields that are not
+# available in the M4 CMRG raw-workbook structure.
 clinical_data_IMMAGINE <- read_excel("Clinical data/IMMAGINE/Clinical data for IMG patients at diagnosis_filled_DA_edited.xlsx")
 clinical_data_SPORE <- read_excel("Clinical data/SPORE/Spore_baseline_clinical_demographics_DA_edited.xlsx")
 
@@ -1062,7 +1078,10 @@ clinical_consolidated <- clinical_consolidated %>%
 
 
 
-### Now add if there is any other IMMAGINE info for ex for labs
+### Add IMMAGINE FISH helper fields
+# This file is generated in 1_1A. Because 1_1A carries an audit warning for the
+# IMMAGINE FISH regex export, downstream analyses should treat these flags as
+# reviewable clinical annotations rather than immutable raw data.
 IMMAGINE_fish <- read.csv("Clinical data/Exported clinical data April 2025/IMMAGINE_fish_flags.csv")
 
 ## Get it to match same format
@@ -1158,5 +1177,7 @@ clinical_filled <- clinical_filled %>%
   select(-ends_with(".demo"))
 
 
-### Now export this 
+### Final export: cross-cohort master clinical/lab table
+# Downstream scripts use this table for clinical demographics, baseline
+# covariates, cytogenetic/FISH comparisons, and clinical-feature summaries.
 write.csv(clinical_filled, "Clinical data/Master_clinical_data_table_all_projects_May2025_updated2.csv", row.names = FALSE)

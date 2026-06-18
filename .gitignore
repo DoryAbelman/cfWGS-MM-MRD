@@ -19,3 +19,8 @@ Tmp/
 figures/
 Scripts prior to rerunning ML model/
 For targetted panel MS/
+.github/copilot-instructions.md
+pipeline_logs/20260617_144955/run_manifest.tsv
+/pipeline_logs
+/clean_pipeline/logs
+AGENTS.md

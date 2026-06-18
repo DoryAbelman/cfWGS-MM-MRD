@@ -23,6 +23,14 @@
 #   tidyverse, readxl, lubridate, patchwork, forcats, purrr
 #   Must be run after 2_1_Clinical_Demographics_Table.R
 #
+# How to run:
+#   Rscript Scripts_2025/Final_Scripts/2_1_Part2_Cohort_Swim_Plot.R
+#
+# Role in manuscript workflow:
+#   Direct manuscript-output script. Mapped output(s): Figure_1 panel/sheet
+#   A; Supplementary_Table_1 panel/sheet all. Generates cohort swim plot
+#   and events table.
+#
 # Author:    Dory Abelman
 # Last update: May 2025
 # =============================================================================
@@ -35,8 +43,13 @@ library(patchwork)
 library(forcats)
 library(purrr)
 
+### Load cohort assignments up front
+# The cohort table is needed both for early event-table filtering and for the
+# final Figure 1A annotation tracks.
+cohort_df <- readRDS("cohort_assignment_table_updated.rds")
+
 ## --------------------------
-## 1. Load all three sources
+## 1. Load primary treatment-event sources
 ## --------------------------
 
 # 1a. “tidy_treatments.csv” you already have
@@ -379,6 +392,22 @@ followup_events<- followup_events%>% mutate(start = as_date(start), end = as_dat
 # ─────────────────────────────────────────────────────────────────────────────
 # 3. Combine Everything & Check
 # ─────────────────────────────────────────────────────────────────────────────
+# Historical interactive versions sometimes had an `m4_progression` object in
+# memory. Define an empty compatible table here so a clean Rscript run does not
+# depend on workspace state; relapse/progression events are already represented
+# in `relapse_events`.
+if (!exists("m4_progression")) {
+  m4_progression <- tibble(
+    patient = character(),
+    event = character(),
+    start = as.Date(character()),
+    end = as.Date(character()),
+    details = character(),
+    Patient = character(),
+    Progression_date = as.Date(character())
+  )
+}
+
 all_events <- bind_rows(
   tt,
   m4_chemo,
@@ -442,7 +471,7 @@ all_events <- all_events %>%
 
 cohort_df <- readRDS("cohort_assignment_table_updated.rds")
 
-## Filter to in cohort df 
+## Filter to the manuscript cohort.
 all_events <- all_events %>% filter(patient %in% cohort_df$Patient)
 
 ## add end to be start if unsure 
@@ -451,7 +480,7 @@ all_events <- all_events %>%
     end = if_else(is.na(end), start, end)
   )
 
-all_events <- all_events %>% select(-Patient, -Progression_date)
+all_events <- all_events %>% select(-any_of(c("Patient", "Progression_date")))
 
 
 ### Add new info from Sarah and Esther 
@@ -558,8 +587,9 @@ all_events_updated <- all_events %>%
 
 
 all_events <- all_events_updated
-# Export all_events to CSV
-write_csv(all_events %>% select(-details_2), "Final Tables and Figures/Supp_Table_1_all_events_for_swim_plot_combined_updated.csv")
+# Export all_events to CSV. This is a full event-table checkpoint; the mapped
+# Supplementary Table 1 export below is the privacy-protected indexed version.
+write_csv(all_events %>% select(-any_of("details_2")), "Final Tables and Figures/Supp_Table_1_all_events_for_swim_plot_combined_updated.csv")
 
 # Export all_events to RDS
 saveRDS(all_events, "Final Tables and Figures/all_events_for_swim_plot_combined_updated2.rds")
@@ -582,7 +612,7 @@ all_events_updated <- all_events %>%
     NA_character_,
     details
   )) %>%
-  select(-New_ID, -details_2)                      # drop temp + details_2 col
+  select(-New_ID, -any_of("details_2"))            # drop temp + details_2 col if present
 
 # 3. Write to CSV
 write_csv(all_events_updated,
@@ -1846,6 +1876,7 @@ events_combined2 <- events_combined2 %>%
 xmax <- max(events_combined2$end_week_plot, na.rm=TRUE) * 1.05
 max_months <- ceiling(xmax * 7 / 30.44)  # if xmax is in weeks, convert to months
 month_breaks <- seq(0, max_months, by = 3)
+minor_breaks <- seq(0, max_months, by = 3)
 
 ## Consolidate Points
 events_combined2 <- events_combined2 %>%
@@ -1904,8 +1935,17 @@ dat_1yr <- dat %>%
   slice_head(n = 1) %>%   # just in case there are duplicates
   ungroup()
 
-# 2) Ensure every patient in your figure is represented (even if missing 1yr data)
-all_patients <- tibble(patient = unique(patient_order))
+# 2) Ensure every patient in the figure is represented, even if the patient has
+#    no 1-year maintenance MRD result. Earlier interactive runs sometimes left
+#    `patient_order` as a character vector, but clean command-line runs use the
+#    tibble created above. Normalize both forms here so the downstream join is
+#    deterministic and does not depend on RStudio session state.
+figure_patients <- if (is.data.frame(patient_order)) {
+  unique(as.character(patient_order$patient))
+} else {
+  unique(as.character(patient_order))
+}
+all_patients <- tibble(patient = figure_patients)
 dat_1yr <- all_patients %>%
   left_join(dat_1yr, by = "patient")
 
@@ -2157,7 +2197,7 @@ all_events_tmp <- all_events %>%
   mutate(patient = New_ID) %>%
   select(names(all_events))  # keep original column order
 
-write_csv(all_events_tmp %>% select(-details_2), "Final Tables and Figures/Supp_Table_1_all_events_for_swim_plot_combined_updated_with_new_IDs.csv")
+write_csv(all_events_tmp %>% select(-any_of("details_2")), "Final Tables and Figures/Supp_Table_1_all_events_for_swim_plot_combined_updated_with_new_IDs.csv")
 
 # Save as CSV
 write.csv(id_map,
@@ -2758,8 +2798,9 @@ print(p_symbols)
 
 
 
-#### Below here is testing 
-## Just legend - not used in final code
+#### Legend-only testing/export block
+# This block is not used to make the mapped Figure 1A component. It is retained
+# only as a helper for exporting standalone legends during manual assembly.
 # 1. Dummy data for chemo colours
 df_chemo <- data.frame(
   chemo_group = factor(names(chemo_cols), levels = names(chemo_cols)),
@@ -2810,25 +2851,21 @@ legend_plot <- ggplot() +
     legend.spacing.y = unit(0.3, "cm")
   )
 
-# 4. Extract the legend grob
-full_legend <- get_legend(legend_plot)
-
-# 5. (Optional) Draw to the current device
-grid.newpage()
-grid.draw(full_legend)
-
-# 6. Save it as its own file
-ggsave("swimplot_full_legend.png", full_legend,
-       width = 14, height = 2, dpi = 500)
-
-# 3. Draw the legend on a blank page (for interactive viewing)
-grid::grid.newpage()
-grid::grid.draw(full_legend)
-
-# 4. Save the legend alone to file
-ggsave("full_swimplot_legend.pdf", full_legend,
-       width = 8, height = 2, device = cairo_pdf)
-ggsave("full_swimplot_legend.png", full_legend,
-       width = 8, height = 2, dpi = 300)
-
-
+# 4. Extract/export the legend grob if cowplot is available.
+if (requireNamespace("cowplot", quietly = TRUE)) {
+  full_legend <- cowplot::get_legend(legend_plot)
+  
+  # Draw to the current device for interactive inspection.
+  grid::grid.newpage()
+  grid::grid.draw(full_legend)
+  
+  # Save standalone legend helpers.
+  ggsave("swimplot_full_legend.png", full_legend,
+         width = 14, height = 2, dpi = 500)
+  ggsave("full_swimplot_legend.pdf", full_legend,
+         width = 8, height = 2, device = cairo_pdf)
+  ggsave("full_swimplot_legend.png", full_legend,
+         width = 8, height = 2, dpi = 300)
+} else {
+  message("Skipping optional standalone swim-plot legend export because cowplot is not installed.")
+}

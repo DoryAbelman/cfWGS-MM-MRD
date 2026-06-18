@@ -2,7 +2,8 @@
 # 2_2_Baseline_demographics_by_WGS_heatmap_updated.R
 #
 # Purpose:
-#   Generate Figure 1 (manuscript): Integrated genomic alteration heatmaps
+#   Generate the baseline integrated genomic alteration heatmaps and feature
+#   catalog mapped to Extended Data Figure 1 / Supplementary Table 1A:
 #   overlaying bone-marrow WGS (upper triangle) vs plasma cfDNA WGS (lower
 #   triangle) for all baseline samples. Also calculates concordance of mutations,
 #   CNAs, and translocations between compartments.
@@ -21,14 +22,26 @@
 #   - Data from 1_2, 1_3, 1_4 (mutation, translocation, CNA RDS files)
 #
 # Outputs:
-#   - Final Tables and Figures/Fig1_BM_heatmap.pdf
-#   - Final Tables and Figures/Fig1_Blood_heatmap.pdf
-#   - Final Tables and Figures/Fig1_Combined_overlay_heatmap.pdf
-#   - Output_tables_2025/BM_blood_concordance_stats.csv
+#   - heatmap_matrix_BM_Sep2025.rds
+#   - heatmap_matrix_blood_Sep2025_updated.rds
+#   - combined_data_heatmap_BM_Sep2025.rds
+#   - combined_data_heatmap_blood_Sep2025_updated.rds
+#   - ordering_df_for_Figure_1.csv
+#   - output_tables/ and Output_tables_2025_updated/ feature catalogs,
+#     concordance summaries, discordant-sample tables, FISH-vs-WGS summaries,
+#     and VAF summary/source tables used downstream.
 #
 # Dependencies:
 #   maftools, dplyr, tidyr, ComplexHeatmap, circlize, purrr,
 #   stringr, readr, grid, ggplot2
+#
+# How to run:
+#   Rscript Scripts_2025/Final_Scripts/2_2_Baseline_demographics_by_WGS_heatmap_updated.R
+#
+# Role in manuscript workflow:
+#   Direct manuscript-output script. Mapped output(s):
+#   Extended_Data_Figure_1 panel/sheet all; Supplementary_Table_1A
+#   panel/sheet all. Generates baseline WGS heatmap and feature catalog.
 #
 # Author:    Dory Abelman
 # Last edit: 2025-05-26
@@ -45,6 +58,7 @@ library(purrr)
 library(stringr)
 library(readr)
 library(grid)
+library(ggplot2)
 
 
 ### Load data 
@@ -700,6 +714,26 @@ blood_filt <- blood_filt %>%
   left_join(metada_df_mutation_comparison %>% 
               select(Bam_clean_tmp, Bam),
             by = c("Tumor_Sample_Barcode" = "Bam_clean_tmp"))
+
+# Clean command-line runs can expose whether the MAF object already carried a
+# Bam-like column before this metadata join. If so, dplyr may suffix the joined
+# column (Bam.x/Bam.y), while interactive runs sometimes retained a plain Bam
+# column from the session. Normalize the IGV sample-name column explicitly.
+ensure_igv_bam_column <- function(dat) {
+  candidate_cols <- intersect(c("Bam", "Bam.y", "Bam.x", "Tumor_Sample_Barcode"), names(dat))
+  if (!length(candidate_cols)) {
+    stop("Cannot create IGV export: no Bam/Bam.x/Bam.y/Tumor_Sample_Barcode column is present.", call. = FALSE)
+  }
+  # Convert through data.frame because this object can be a data.table in clean
+  # Rscript runs, where dat[candidate_cols] is interpreted as a row join rather
+  # than column selection.
+  bam_values <- lapply(as.data.frame(dat)[candidate_cols], as.character)
+  dat$Bam <- Reduce(dplyr::coalesce, bam_values)
+  dat
+}
+
+bm_filt <- ensure_igv_bam_column(bm_filt)
+blood_filt <- ensure_igv_bam_column(blood_filt)
 
 # 5. select only the columns you need for IGV
 bm_for_igv <- bm_filt %>%
@@ -2139,7 +2173,9 @@ saveRDS(supp_concordance_summary,   out_rds)
 
 
 ####### Supplementary code
-### Below here is not used in main MS
+### NON-MANUSCRIPT SUPPORT ONLY:
+### The code below prints draft narrative paragraphs for manual review. It does
+### not create an active manuscript figure, table, or source-data file.
 
 # --- Step 8. Generate Summary Paragraphs -------------------------------------
 # Example paragraphs (you can further modify the text based on your desired style)
@@ -2929,5 +2965,3 @@ saveRDS(vaf_summary,   "Output_tables_2025_updated/MM_mutations_VAF_summary.rds"
 cat("========== VAF SUMMARY BY SAMPLE TYPE ==========\n")
 print(vaf_summary)
 cat("\n")
-
-

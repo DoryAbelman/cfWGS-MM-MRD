@@ -34,6 +34,16 @@
 #   patchwork, viridis, ggplot2, scales
 #   Must be run AFTER 3_1_Optimize_cfWGS_thresholds.R
 #
+# How to run:
+#   Rscript Scripts_2025/Final_Scripts/3_1_part2_Apply_cfWGS_thresholds_to_dilution_series.R
+#
+# Role in manuscript workflow:
+#   Direct manuscript-output script. Mapped output(s): Figure_3 panel/sheet
+#   C; Extended_Data_Figure_5 panel/sheet D; Extended_Data_Figure_7
+#   panel/sheet D; Supplementary_Table_7 panel/sheet Correlations;
+#   Supplementary_Table_7 panel/sheet Scored Data. Applies trained models
+#   to dilution-series data.
+#
 # Author:    Dory Abelman
 # Last update: September 2025
 # ==============================================================================

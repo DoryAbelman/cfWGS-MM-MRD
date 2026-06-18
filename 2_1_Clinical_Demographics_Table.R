@@ -19,12 +19,14 @@
 #   8. Export tables to Word and save cohort assignment as TXT/RDS
 #
 # Inputs:
-#   • RDS: Final_aggregate_table_cfWGS_features_with_clinical_and_demographics_updated3.rds
+#   • RDS: Final_aggregate_table_cfWGS_features_with_clinical_and_demographics_updated5.rds
+#   • CSV: Output_tables_2025/patient_cohort_assignment.csv
+#   • RDS: cohort_assignment_table_updated.rds
 #
 # Outputs:
-#   • Word: table1_categorical_updated_final.docx
+#   • Word: table1_clinical_categorical_updated_final_3.docx
 #   • Word: baseline_characteristics_updated.docx
-#   • TXT/RDS: cohort_assignment_table.{txt,rds}
+#   • Exploratory cohort/fragmentomics audit output printed to console
 #
 # Dependencies:
 #   library(tidyverse)
@@ -33,7 +35,14 @@
 #   library(flextable)
 #
 # Usage:
-#   source("2_1_Clinical_Demographics_Table.R")
+#   Rscript Scripts_2025/Final_Scripts/2_1_Clinical_Demographics_Table.R
+#
+# How to run:
+#   Rscript Scripts_2025/Final_Scripts/2_1_Clinical_Demographics_Table.R
+#
+# Role in manuscript workflow:
+#   Direct manuscript-output script. Mapped output(s): Table_1 panel/sheet
+#   all. Generates Table 1 source outputs.
 #
 # Author: Dory Abelman
 # Date:   2025-05-26
@@ -50,13 +59,18 @@ library(flextable)
 
 
 # -----------------------------------------------------------
-# 1.  DATA  
+# 1. Load baseline table inputs
 # -----------------------------------------------------------
-# Load data 
+# The Table 1 source table is intentionally generated from the same historical
+# aggregate RDS used by the original script. See the input-version note above
+# before replacing this with a newer aggregate table.
 dat <- readRDS("Final_aggregate_table_cfWGS_features_with_clinical_and_demographics_updated5.rds")
 
 
-### Get the list of qualifying samples 
+### Load the curated patient cohort list
+# `patient_cohort_assignment.csv` defines which patients enter Table 1 and the
+# cohort grouping shown as columns. The RDS cohort file is retained for the
+# exploratory audit block at the end of the script.
 # Define export directory
 export_dir <- "Output_tables_2025"
 
@@ -66,6 +80,9 @@ patient_cohort_tbl_csv <- read.csv(file.path(export_dir, "patient_cohort_assignm
 cohort_df <- readRDS("cohort_assignment_table_updated.rds")
 
 
+### Select baseline/diagnosis rows
+# Table 1 is a patient-level baseline table. This section keeps only baseline
+# or diagnosis rows and then resolves known duplicate baseline records.
 # 1. Subset to only Diagnosis or Baseline timepoints
 dat_tb <- dat %>%
   filter(timepoint_info %in% c("Diagnosis", "Baseline"))
@@ -140,7 +157,7 @@ if (nrow(dups)) {
 
 
 # -----------------------------------------------------------
-# 2.  DEFINE COHORTS  ------------
+# 2. Define cohorts for Table 1
 # -----------------------------------------------------------
 dat_base <- dat_base %>%
   left_join(patient_cohort_tbl_csv, by = "Patient")
@@ -154,7 +171,7 @@ dat_base <- dat_base %>%
 
 
 # -----------------------------------------------------------
-# 3.  VARIABLES TO SHOW IN TABLE 1 --------------------------
+# 3. Recode variables shown in Table 1
 # -----------------------------------------------------------
 # ------------------------- 2.1  Convert continuous vars to numeric
 # 1. Collapse Subtype
@@ -196,7 +213,9 @@ dat_base <- dat_base %>%
   mutate(across(all_of(vars_cat), as.factor)) %>%
   mutate(across(all_of(vars_cat), fct_drop))
 
-### Add the risk if it is NA 
+### Fill missing cytogenetic risk where FISH markers are sufficient
+# This does not overwrite an existing risk label. It only derives risk for rows
+# where Cytogenetic_Risk is missing and the high-risk FISH markers are present.
 dat_base <- dat_base %>%
   mutate(
     # 1. Calculate risk from FISH results
@@ -227,7 +246,7 @@ dat_base <- dat_base %>%
   select(-Cytogenetic_Risk_calc)   # drop the helper column if you like
 
 
-# 2. Build the categorical-only Table 1
+### Build and export categorical manuscript Table 1 source
 tbl1_cat <- dat_base %>%
   select(all_of(c(vars_cat, "cohort"))) %>%
   tbl_summary(
@@ -248,25 +267,20 @@ tbl1_cat <- dat_base %>%
   modify_header(label ~ "**Variable**") %>%
   bold_labels()
 
-# 3. (Optional) Export to Word
+# Export the scripted DOCX source. The final manuscript DOCX/PDF in the output
+# map appear to be edited/exported versions of this source table.
 tbl1_flex <- as_flex_table(tbl1_cat)
 doc <- read_docx() %>%
   body_add_flextable(tbl1_flex) %>%
   body_end_section_portrait()
 print(doc, target = "table1_clinical_categorical_updated_final_3.docx")
 
-# -----------------------------------------------------------
-# 6.  DONE!  -----------------------------------------------
-# -----------------------------------------------------------
-# The file 'baseline_characteristics.docx' is now in your working directory.
-# Open it in Word to fine‑tune column widths, font, or add footnotes.
-
-
-
-
-
-##### Below here is testing 
-### Removed most of these since didn't have info for them
+### Exploratory/legacy continuous Table 1 companion
+# This block is retained from the original script for traceability, but it is
+# not the mapped final manuscript Table 1. It writes
+# `baseline_characteristics_updated.docx` and should be treated as a helper or
+# sensitivity output unless the manuscript table mapping is intentionally
+# changed.
 # ------------------------- 2.1  Convert continuous vars to numeric
 vars_cont <- c(
   "AGE", "dFLC", "Albumin", "B2_micro", "Calcium",
@@ -323,18 +337,10 @@ print(doc, target = "baseline_characteristics_updated.docx")
 
 
 
-
-
-
-
-
-
-
-
-
-
-##### Below here is testing 
-#### Now see the total patients we have in general for fragmentomics part
+### Exploratory fragmentomics/clinical MRD audit
+# This is not used to make a manuscript figure or table. It lists possible
+# additional non-IMG/non-SPORE patients with fragmentomics plus clinical MRD
+# data who are not in the current cohort assignment file.
 
 # Define which columns count as “clinical MRD”
 clinical_mrd_cols <- c(

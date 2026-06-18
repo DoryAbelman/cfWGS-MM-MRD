@@ -1,6 +1,15 @@
 # =============================================================================
 # Create_dilution_series_eligibility_table.R
 # Project: cfWGS MRDetect (Winter 2025)
+# How to run:
+#   Rscript Scripts_2025/Final_Scripts/1_9_Create_dilution_series_eligibility_table.R
+#
+# Role in manuscript workflow:
+#   Upstream/intermediate processing script. It does not usually export a
+#   final assembled manuscript figure/table directly, but its outputs feed
+#   later manuscript source scripts. Creates dilution-series eligibility
+#   and dilution plan tables.
+#
 # Author: Dory Abelman
 # Date: February 2026
 #

@@ -17,16 +17,24 @@
 #     9. Save `mutation_export` and `All_feature_data` as RDS and TSV.
 #
 # Inputs:
-#   • combined_clinical_data_updated_Feb5_2025.csv
-#   • Jan2025_exported_data/cna_data.rds
-#   • Jan2025_exported_data/translocation_data.rds
+#   • combined_clinical_data_updated_April2025.csv
+#   • Jan2025_exported_data/cna_data_ichorCNA.rds
+#   • Jan2025_exported_data/cna_data_from_sequenza_400_updated.rds
+#   • Jan2025_exported_data/translocation_data_cytoband_updated.rds
 #   • Oct 2024 data/tumor_fraction_cfWGS.txt
 #   • combined_maf_temp_blood_Jan2025.maf
-#   • combined_maf_temp_bm_Jan2025.maf
+#   • combined_maf_temp_bm_May2025.maf
+#   • Jan2025_exported_data/FISH_data_from_sequenza_400_updated.rds
+#   • Jan2025_exported_data/FISH_probe_calls_bin_cytoband_ichorCNA.rds
 #
 # Outputs:
-#   • Jan2025_exported_data/mutation_export.rds/.txt
-#   • Jan2025_exported_data/All_feature_data_Feb2025.rds/.txt
+#   • Jan2025_exported_data/mutation_export_updated2.rds
+#   • Jan2025_exported_data/mutation_export_updated.txt
+#   • Jan2025_exported_data/mutation_export_updated_more_info2.rds
+#   • Jan2025_exported_data/mutation_export_updated_more_info.txt
+#   • Jan2025_exported_data/CNA_at_FISH_sites_combined.rds/.txt
+#   • Jan2025_exported_data/CNA_translocation_Sep2025_updated2.rds/.txt
+#   • Jan2025_exported_data/All_feature_data_Sep2025_updated2.rds/.txt
 #
 # Dependencies:
 #   library(dplyr)
@@ -38,6 +46,14 @@
 # Usage:
 #   source("1_5_Integrate_WGS_Feature_Data.R")
 #
+# How to run:
+#   Rscript Scripts_2025/Final_Scripts/1_5_Integrate_WGS_Feature_Data.R
+#
+# Role in manuscript workflow:
+#   Upstream/intermediate processing script. It does not usually export a
+#   final assembled manuscript figure/table directly, but its outputs feed
+#   later manuscript source scripts. Merges WGS-derived features.
+#
 # Author: Dory Abelman
 # Date:   2025-05-26
 # =============================================================================
@@ -47,12 +63,15 @@ library(dplyr)
 library(tidyr)
 library(readr)
 library(stringr)
+library(readxl)
 library(maftools)
 
 # Define export directory
 export_dir <- "Jan2025_exported_data"
 
-# Load clinical metadata
+# Load clinical metadata.
+# This table provides the patient, timepoint, sample type, and BAM identifiers
+# needed to connect genomic caller outputs back to the manuscript cohorts.
 metada_df_mutation_comparison <- read_csv("combined_clinical_data_updated_April2025.csv") %>%
   mutate(
     Tumor_Sample_Barcode = Bam %>%
@@ -61,7 +80,7 @@ metada_df_mutation_comparison <- read_csv("combined_clinical_data_updated_April2
     Bam_clean_tmp = str_remove(Bam, "\\.bam$")
   )
 
-# Load CNA, translocation, and tumor fraction data
+# Load CNA, translocation, tumor-fraction, and mutation inputs.
 # cna_data_ichorCNA.rds  - arm-level binary calls from 1_4_Process_CNA_Data.R
 # cna_data_from_sequenza - arm-level calls from 1_4A using the Sequenza CNV caller;
 #   Sequenza provides more accurate purity/ploidy estimates
@@ -75,12 +94,18 @@ cna_data_sequenza <- readRDS(file.path(export_dir, "cna_data_from_sequenza_400_u
 translocation_data <- readRDS(file.path(export_dir, "translocation_data_cytoband_updated.rds"))
 tumor_fraction     <- read_tsv("Oct 2024 data/tumor_fraction_cfWGS.txt")
 
-# Load mutation MAF objects
+# Load mutation MAF objects.
+# The blood MAF path is a historical OneDrive export path. For Code Ocean or a
+# clean GitHub checkout, this should eventually be made a project-relative input
+# or rebuilt by the upstream mutation-processing script.
 maf_object_blood <- read.maf("~/OneDrive - University of Toronto/Project data/cfWGS project data/R outputs/combined_maf_temp_blood_Jan2025.maf")
 maf_object_bm    <- read.maf("combined_maf_temp_bm_May2025.maf")
 
 
-### Process CNA and translocation data 
+### Integrate arm-level CNA and IgH translocation features
+# This section produces `CNA_translocation`, the genomic feature table before
+# mutation summaries are added. It is exported at the end because some
+# downstream checks use the CNA/translocation-only intermediate directly.
 #saveRDS(CNA_translocation, "CNA_translocation_original_Feb2025.rds")
 
 # 1) Rename Sequenza ID to Sample so downstream stays consistent
@@ -115,8 +140,9 @@ CNA_translocation <- full_join(cna_combined, translocation_data, by = "Sample")
 message("✅ Combined CNA rows: ", nrow(cna_combined),
         " | After translocation join: ", nrow(CNA_translocation))
 
-## Now join this with the metadata to ojoin with the and keep only the diagnosis ones
-# First, remove the '.bam' suffix from the 'Bam' column in 'metada_df_mutation_comparison'
+## Attach clinical/sample metadata to the CNA/translocation rows.
+# First, remove the '.bam' suffix from the 'Bam' column in
+# 'metada_df_mutation_comparison'.
 metada_df_mutation_comparison <- metada_df_mutation_comparison %>%
   mutate(Bam_clean_tmp = gsub(".bam$", "", Bam))  # Remove the '.bam' suffix
 
@@ -145,7 +171,10 @@ CNA_translocation <- left_join(CNA_translocation,
 
 
 
-### Now redo with the calls at the specific FISH sites 
+### Build the FISH-probe/cytoband CNA helper table
+# This repeats the Sequenza-over-ichor merge for calls at clinically relevant
+# probe/cytoband sites. The result is not the main All_feature_data table, but
+# it supports FISH concordance and copy-number helper analyses.
 
 # 1) Rename Sequenza ID to Sample so downstream stays consistent
 FISH_sequenza <- readRDS(file.path(export_dir, "FISH_data_from_sequenza_400_updated.rds"))
@@ -163,8 +192,9 @@ FISH_ichor_filtered <- FISH_ichor %>%
 # 3) Combine CNA calls (Sequenza takes precedence)
 FISH_CNA_combined <- bind_rows(FISH_ichor_filtered, FISH_sequenza)
 
-## Now join this with the metadata to ojoin with the and keep only the diagnosis ones
-# First, remove the '.bam' suffix from the 'Bam' column in 'metada_df_mutation_comparison'
+## Attach clinical/sample metadata to the probe-level CNA rows.
+# First, remove the '.bam' suffix from the 'Bam' column in
+# 'metada_df_mutation_comparison'.
 metada_df_mutation_comparison <- metada_df_mutation_comparison %>%
   mutate(Bam_clean_tmp = gsub(".bam$", "", Bam))  # Remove the '.bam' suffix
 
@@ -184,7 +214,7 @@ FISH_CNA_combined <- left_join(FISH_CNA_combined,
                                tumor_fraction_max, 
                                by = c("Sample" = "Bam"))
 
-# Now recalculate the lables 
+# Recalculate binary probe-level alteration labels.
 # Extended loss_labels includes LOSS and CNLOH (vs. only HETD/HOMD in
 # 1_4_Process_CNA_Data.R) to capture copy-neutral LOH events reported
 # by Sequenza. CNLOH at del1p/del17p is clinically equivalent to a
@@ -210,7 +240,7 @@ FISH_CNA_combined <- FISH_CNA_combined %>%
   )
 
 
-## Now export this 
+## Export the FISH-probe/cytoband CNA helper table.
 saveRDS(FISH_CNA_combined, file = file.path(export_dir, "CNA_at_FISH_sites_combined.rds"))
 write.table(FISH_CNA_combined,
             file = file.path(export_dir, "CNA_at_FISH_sites_combined.txt"),
@@ -268,7 +298,7 @@ myeloma_genes <- c(
 )
 
 
-## Combine mutation_data and mutation_data_blood and export 
+## Combine BM and blood mutation data and export the primary mutation table.
 maf_subset <- subsetMaf(maf = maf_object_bm, genes = myeloma_genes, includeSyn = FALSE)
 maf_subset_blood <- subsetMaf(maf = maf_object_blood, genes = myeloma_genes, includeSyn = FALSE)
 
@@ -347,7 +377,9 @@ mutation_export <- bind_rows(temp_bm, temp_blood)
 saveRDS(mutation_export, file = file.path(export_dir, "mutation_export_updated2.rds"))
 write.table(mutation_export, file = file.path(export_dir, "mutation_export_updated.txt"), sep = "\t", row.names = FALSE, quote = FALSE)
 
-## Get more metrics 
+## Build an expanded mutation/QC companion table.
+# This keeps the same retained myeloma-panel mutations but carries additional
+# caller, depth, and annotation fields for manual review and troubleshooting.
 temp_qc_blood <- maf_subset_blood@data %>%
   # 1) only well‐supported tumour calls
   filter(t_depth > 10) %>%
@@ -398,7 +430,7 @@ temp_qc_blood <- maf_subset_blood@data %>%
   ) %>%
   distinct()
 
-## Get more metrics 
+## Add the BM component of the expanded mutation/QC companion table.
 temp_qc_bm <- maf_subset@data %>%
   # 1) only well‐supported tumour calls
   filter(t_depth >= 10) %>%
@@ -708,7 +740,7 @@ print(comparison)
 
 
 
-## Export this 
+## Export final integration outputs.
 # All_feature_data_logical is the primary output of this script and the
 # central input table for all downstream analysis scripts:
 #   2_0_Assemble_Table_With_All_Features.R - builds the final analytical table

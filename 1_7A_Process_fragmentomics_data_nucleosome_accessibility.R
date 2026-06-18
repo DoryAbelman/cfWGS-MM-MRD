@@ -27,6 +27,15 @@
 #        – combined_clinical_data_updated_April2025.csv
 #        – Final_aggregate_table_cfWGS_features_with_clinical_and_demographics_updated3.csv
 #
+# How to run:
+#   Rscript Scripts_2025/Final_Scripts/1_7A_Process_fragmentomics_data_nucleosome_accessibility.R
+#
+# Role in manuscript workflow:
+#   Upstream/intermediate processing script. It does not usually export a
+#   final assembled manuscript figure/table directly, but its outputs feed
+#   later manuscript source scripts. Processes nucleosome-accessibility
+#   features.
+#
 # Author: Dory Abelman
 # Last updated: 2025-05-23
 # ──────────────────────────────────────────────────────────────────────────────

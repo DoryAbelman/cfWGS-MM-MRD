@@ -13,20 +13,34 @@
 #        • Dumbbell plots of event-level concordance, sensitivity & specificity by ctDNA fraction
 #
 # Inputs:
-#   - Final_aggregate_table_cfWGS_features_with_clinical_and_demographics_updated8.rds
+#   - Final_aggregate_table_cfWGS_features_with_clinical_and_demographics_updated9.rds
 #   - cohort_assignment_table_updated.rds
 #   - Jan2025_exported_data/mutation_export_updated.rds
-#   - Jan2025_exported_data/All_feature_data_June2025.rds
+#   - Jan2025_exported_data/All_feature_data_Sep2025_updated2.rds
 #   - combined_clinical_data_updated_April2025.csv
 #
 # Outputs:
-#   - Tables (CSV/XLSX) in Output_tables_2025/
+#   - FISH/WGS concordance tables in Output_tables_2025_updated/
+#   - Supplementary Table 2/3 source CSV/XLSX files in Final Tables and Figures/
 #   - Figures in Final Tables and Figures/Baseline_concordance/
-#   - R objects (RDS) for downstream use
+#   - R objects (RDS) for downstream concordance/source-data reuse
 #
 # Required packages:
 #   tidyverse, purrr, stringr, writexl, glue, Hmisc, broom,
 #   ggpubr, patchwork, viridis, scales
+# How to run:
+#   Rscript Scripts_2025/Final_Scripts/2_3_Feature_Concordance_And_Mutation_Counts.R
+#
+# Role in manuscript workflow:
+#   Direct manuscript-output script. Mapped output(s):
+#   Extended_Data_Figure_2 panel/sheet A; Extended_Data_Figure_2
+#   panel/sheet B; Extended_Data_Figure_2 panel/sheet C;
+#   Extended_Data_Figure_2 panel/sheet D; Extended_Data_Figure_2
+#   panel/sheet E; Extended_Data_Figure_2 panel/sheet F;
+#   Supplementary_Table_2 panel/sheet all_sheets; Supplementary_Table_3
+#   panel/sheet all. Generates concordance tables/figures and feature
+#   correlations.
+#
 # ==============================================================================
 
 library(tidyverse)   # dplyr, tidyr, readr, etc.
@@ -38,6 +52,11 @@ library(Hmisc)    # for rcorr()
 library(broom)    # for tidy()
 library(purrr)    # for map_df()
 library(tibble)   # for tibble()
+library(readxl)   # read_excel() for BAM storage helper tables
+library(ggpubr)   # stat_compare_means() for baseline concordance plots
+library(scales)   # percent_format() for plot axes
+library(patchwork) # plot_spacer() and plot layouts
+library(viridis)  # viridis() colors for concordance plots
 
 file <- readRDS("Final_aggregate_table_cfWGS_features_with_clinical_and_demographics_updated9.rds")
 
@@ -719,8 +738,16 @@ cfDNA_tf_all <- cfDNA_tf_all %>%
 
 # add to your mutation sets
 mut_sets <- mut_sets %>%
-  left_join(tf_df, by = c("Patient","Timepoint"))
+  left_join(cfDNA_tf_all, by = c("Patient","Timepoint"))
 
+# Mutation-set specificity requires an explicit mutation universe. Interactive
+# sessions sometimes had N_muts in memory; clean command-line runs do not. Use
+# the observed baseline matched mutation universe from this section, which
+# preserves the intended comparison without relying on hidden workspace state.
+N_muts <- length(unique(mut_matched$Mutation_cDNA[!is.na(mut_matched$Mutation_cDNA)]))
+if (!is.finite(N_muts) || N_muts == 0) {
+  stop("Cannot compute mutation-set specificity: no baseline matched mutations define the mutation universe.", call. = FALSE)
+}
 
 ## 5)  per-row concordance 
 concordance_row <- mut_sets %>%
@@ -788,6 +815,8 @@ print(concordance_global)
 
 ## Export
 # 1) CSV
+outdir <- "Final Tables and Figures/Baseline_concordance/"
+if (!dir.exists(outdir)) dir.create(outdir, recursive = TRUE, showWarnings = FALSE)
 write.csv(
   concordance_global,
   file = file.path(outdir, "mutation_concordance_global.csv"),
@@ -850,40 +879,48 @@ write_csv(merged1, "Bam_to_unarchive2.csv")
 ## Now get most similar for still unmatched
 unmatched <- joined %>% filter(is.na(Bam_storage))
 
-# Expand unmatched against all storage BAMs, calculate distance, and get closest
+# Optional BAM archive diagnostics. This section is not an active manuscript
+# figure/table output; it helps identify BAM files to unarchive. It should never
+# stop the command-line manuscript pipeline if the storage helper table has a
+# different column layout or if the old diagnostic `filtered` object is absent.
 library(stringdist)
-similar_matches <- unmatched %>%
-  rowwise() %>%
-  mutate(
-    best_match = {
-      dists <- stringdist(Bam, all_bam_storage$Bam_noWG)
-      i <- which.min(dists)
-      all_bam_storage$Bam[i]
-    },
-    min_dist = {
-      dists <- stringdist(Bam, all_bam_storage$Bam_noWG)
-      min(dists)
-    },
-    best_path = {
-      dists <- stringdist(Bam, all_bam_storage$Bam_noWG)
-      i <- which.min(dists)
-      all_bam_storage$Path[i]
-    },
-    best_location = {
-      dists <- stringdist(Bam, all_bam_storage$Bam_noWG)
-      i <- which.min(dists)
-      all_bam_storage$Location[i]
-    }
-  ) %>%
-  ungroup()
+if (nrow(unmatched) > 0 && "Bam_noWG" %in% names(all_bam_storage) &&
+    any(!is.na(all_bam_storage$Bam_noWG))) {
+  similar_matches <- unmatched %>%
+    rowwise() %>%
+    mutate(
+      best_match = {
+        dists <- stringdist(Bam, all_bam_storage$Bam_noWG)
+        i <- which.min(dists)
+        all_bam_storage$Bam[i]
+      },
+      min_dist = {
+        dists <- stringdist(Bam, all_bam_storage$Bam_noWG)
+        min(dists)
+      },
+      best_path = {
+        dists <- stringdist(Bam, all_bam_storage$Bam_noWG)
+        i <- which.min(dists)
+        all_bam_storage$Path[i]
+      },
+      best_location = {
+        dists <- stringdist(Bam, all_bam_storage$Bam_noWG)
+        i <- which.min(dists)
+        all_bam_storage$Location[i]
+      }
+    ) %>%
+    ungroup()
+} else {
+  similar_matches <- tibble()
+  message("Skipping optional BAM fuzzy-match diagnostic: no unmatched BAMs or no Bam_noWG column in All_bam_storage_locations.xlsx.")
+}
 
-
-
-
-## Now add the location 
-# Export Sample and Tumor_Sample_Barcode as CSV
-export_df <- filtered[, .(Sample, Tumor_Sample_Barcode)]
-fwrite(export_df, "bam_list_and_barcodes.csv")
+if (exists("filtered") && all(c("Sample", "Tumor_Sample_Barcode") %in% names(filtered))) {
+  export_df <- filtered[, c("Sample", "Tumor_Sample_Barcode")]
+  readr::write_csv(as.data.frame(export_df), "bam_list_and_barcodes.csv")
+} else {
+  message("Skipping optional bam_list_and_barcodes.csv diagnostic: object `filtered` is not defined in this command-line run.")
+}
 
 
 
@@ -1021,13 +1058,19 @@ flatten_corr <- function(r_mat, p_mat, n_mat) {
 
 all_corrs <- flatten_corr(r_mat, p_mat, n_mat)
 
-## Export this 
-write.csv(all_corrs %>% filter(!is.na(p_adj)), file = "Final Tables and Figures/Suplementary_Table_2_All_Feature_Correlations_updated.csv")
 # Adjust p-value for multiple hypothesis test - although not needed since exploratory 
 all_corrs <- all_corrs %>%
   mutate(
     p_adj = p.adjust(p_val, method = "BH")
   )
+
+## Export this
+# Keep the historical misspelled "Suplementary" filename because the manuscript
+# source map and retained final table use that provenance path. The updated2 file
+# is the confirmed source for renamed Supplementary Table 3; the updated file is
+# retained as a compatibility export for earlier script runs.
+write.csv(all_corrs %>% filter(!is.na(p_adj)), file = "Final Tables and Figures/Suplementary_Table_2_All_Feature_Correlations_updated2.csv")
+write.csv(all_corrs %>% filter(!is.na(p_adj)), file = "Final Tables and Figures/Suplementary_Table_2_All_Feature_Correlations_updated.csv")
 
 # now significant by raw p-value
 sig_raw <- all_corrs %>% filter(p_val < 0.05)
@@ -1089,9 +1132,17 @@ kruskal.test(Blood_Mutation_Count ~ ISS_STAGE, data = dat_base)
 #––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––  
 # 2) Cytogenetic risk (binary: high vs standard)
 #––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––  
-wilcox.test(BM_Mutation_Count ~ Cytogenetic_Risk,
-            data = dat_base,
-            na.action = na.exclude)
+cyto_levels <- unique(na.omit(dat_base$Cytogenetic_Risk))
+if (length(cyto_levels) == 2) {
+  wilcox.test(BM_Mutation_Count ~ Cytogenetic_Risk,
+              data = dat_base,
+              na.action = na.exclude)
+} else {
+  message(
+    "Skipping exploratory Cytogenetic_Risk Wilcoxon test: expected 2 observed levels, found ",
+    length(cyto_levels), "."
+  )
+}
 
 
 #––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––  
@@ -1285,7 +1336,7 @@ rho_test <- cor.test(dat_base$BM_Mutation_Count,
                      dat_base$Blood_Mutation_Count,
                      method = "spearman")
 rho  <- round(rho_test$estimate, 2)
-pval_raw <- tf_test$p.value
+pval_raw <- rho_test$p.value
 pval     <- format_p(pval_raw)
 
 p2 <- ggplot(dat_base, aes(BM_Mutation_Count, Blood_Mutation_Count, color = cohort)) +
@@ -2469,4 +2520,3 @@ writexl::write_xlsx(
 )
 
 message("✓ Additional outputs written to ", outdir)
-

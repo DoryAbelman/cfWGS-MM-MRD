@@ -22,6 +22,14 @@
 # Dependencies:
 #   tidyverse, lubridate
 #
+# How to run:
+#   Rscript Scripts_2025/Final_Scripts/4_2_Compare_subclonal_evolution.R
+#
+# Role in manuscript workflow:
+#   Direct manuscript-output script. Mapped output(s):
+#   Extended_Data_Figure_10 panel/sheet A; Extended_Data_Figure_10
+#   panel/sheet B. Generates emergent CNA/subclonal evolution outputs.
+#
 # Author:    Dory Abelman
 # Last update: August 2025
 ###############################################################################

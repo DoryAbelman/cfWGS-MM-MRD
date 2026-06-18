@@ -2,6 +2,26 @@
 # Script:   3_1_Optimize_cfWGS_thresholds.R
 # Project:  cfWGS MRD detection in multiple myeloma (MM)
 #           Part of Abelman et al. (2025) manuscript
+# How to run:
+#   Rscript Scripts_2025/Final_Scripts/3_1_Optimize_cfWGS_thresholds.R
+#
+# Role in manuscript workflow:
+#   Direct manuscript-output script. Mapped output(s): Figure_3 panel/sheet
+#   A; Figure_3 panel/sheet B; Figure_4 panel/sheet A; Figure_4 panel/sheet
+#   B; Extended_Data_Figure_5 panel/sheet A; Extended_Data_Figure_5
+#   panel/sheet B; Extended_Data_Figure_5 panel/sheet C;
+#   Extended_Data_Figure_7 panel/sheet A; Extended_Data_Figure_7
+#   panel/sheet B; Extended_Data_Figure_7 panel/sheet C;
+#   Extended_Data_Figure_7 panel/sheet E; Extended_Data_Figure_9
+#   panel/sheet A; Extended_Data_Figure_9 panel/sheet B;
+#   Extended_Data_Figure_9 panel/sheet C; Extended_Data_Figure_9
+#   panel/sheet D; Extended_Data_Figure_9 panel/sheet E;
+#   Extended_Data_Figure_9 panel/sheet F; Supplementary_Table_4 panel/sheet
+#   all; Supplementary_Table_5 panel/sheet all; Supplementary_Table_6
+#   panel/sheet all. Stochastic/model-heavy nested-CV training; skip by
+#   default in conservative manuscript regeneration unless
+#   --include-cache-sensitive is set.
+#
 # Author:   Dory Abelman
 # Date:     May 28, 2025 (updated through Feb 2026)
 #
@@ -6532,7 +6552,9 @@ for (cmb in wanted) {
 
 
 
-#### Below here is testing - not used in main analysis 
+#### NON-MANUSCRIPT EXPLORATORY CODE
+#### Below here is testing/diagnostic ROC smoothing code. It is not used for
+#### active manuscript figures, tables, thresholds, or reported model metrics.
 
 ### Now try smoothed 
 # ── 1. Compute binormal-smoothed ROC curves ────────────────────────────────
@@ -6644,4 +6666,3 @@ dat %>%
   filter(!is.na(MRD_truth)) %>%
   distinct(Sample_Code, Cohort) %>%
   count(Cohort, name = "n_samples_with_blood_only")
-

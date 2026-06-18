@@ -1,6 +1,13 @@
 # =============================================================================
 # 1_6_Identify_High_Quality_Patient_Pairs.R
 # Project:  cfWGS MRD Detection (M4 / IMMAGINE / SPORE)
+# How to run:
+#   Rscript Scripts_2025/Final_Scripts/1_6_Identify_High_Quality_Patient_Pairs.R
+#
+# Role in manuscript workflow:
+#   Direct manuscript-output script. Mapped output(s): Figure_1 panel/sheet
+#   B. Defines high-quality sample pairs and cohort assignment.
+#
 # Author:   Dory Abelman
 # Date:     January 2025
 # Last Updated: May 2025

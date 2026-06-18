@@ -27,6 +27,15 @@
 #
 #  *This script is intended as a one-shot cleaning script to be run after the previous 1_0A script* 
 #
+# How to run:
+#   Rscript Scripts_2025/Final_Scripts/1_1A_Process_post_ACST_and_clinical_OS_PFS_and_clinical_FISH_metadata.R
+#
+# Role in manuscript workflow:
+#   Upstream/intermediate processing script. It does not usually export a
+#   final assembled manuscript figure/table directly, but its outputs feed
+#   later manuscript source scripts. Processes transplant, OS/PFS,
+#   progression, and FISH metadata.
+#
 #  Author:        Dory Abelman
 #  Last updated:  2025-05-13
 #
@@ -37,11 +46,13 @@
 
 # ─── 0.  Library loading & file checks ────────────────────────────────────────
 library(readxl)      # for reading Excel files
+library(readr)       # parse_integer/write_csv used for tidy exports
 library(dplyr)
 library(tidyr)
 library(lubridate)   # date parsing
 library(janitor)     # cleaning column names, removing empty rows/cols
 library(stringr)
+library(forcats)     # as_factor for transplant procedure fields
 library(purrr)       # for functional programming (map, etc.)
 library(glue)        # for building file‐paths and messages
 
@@ -74,7 +85,9 @@ message("✅ All required input files are present.")
 
 
 
-#### Now get the post-ACST dates for each project  
+#### Now get the post-ASCT dates for each project
+# "ASCT" is the clinical transplant event; older filenames/comments sometimes
+# spell this as "ACST". The original filenames are preserved for compatibility.
 
 ## For SPORE
 # ──────────────────────────────────────────────────────────────────────────────
@@ -87,7 +100,7 @@ raw   <- read_excel("Clinical data/SPORE/cfDNA project and clinical data just cl
 
 # readxl will automatically deduplicate identical headers by appending “…1”, “…2”.
 # Keep a copy for inspection if you like:
-write_lines(names(raw), "original_headers.txt")
+writeLines(names(raw), "original_headers.txt")
 
 # ──────────────────────────────────────────────────────────────────────────────
 #  2.  Normalise column names --------------------------------------------------
@@ -527,7 +540,11 @@ write.csv(final_tbl, "relapse_flags_table.csv", row.names = FALSE)
 saveRDS(final_tbl, file = "relapse_flags_table.rds")
 
 
-### Re-correct FISH flags 
+### Re-score IMMAGINE FISH flags from the free-text field
+# Audit note: this block is sensitive to wording changes in the IMMAGINE FISH
+# source workbook. If new FISH text patterns appear, update fish_patterns and
+# compare the resulting flags against manual review before using the export in a
+# manuscript-facing concordance analysis.
 ## --- 1) Regex patterns -----------------------------------------------------
 fish_patterns <- list(
   del_13q   = c("monosomy 13",       "del\\s*13"),
@@ -569,7 +586,9 @@ relocate(id, fish_text, everything())
 
 
 #  ──────────────────────────────────────────────────────────────────────────────
-#   Export key tables for each cohort                                         
+#   Export key helper tables for each cohort
+# These tables are intermediate clinical inputs for downstream scripts. They are
+# not final manuscript tables as written.
 
 export_dir <- "Clinical data/Exported clinical data April 2025"
 dir.create(export_dir, showWarnings = FALSE, recursive = TRUE)
@@ -589,7 +608,11 @@ write_csv(df_clean %>%
 
 # IMMAGINE
 write_csv(df_long,      file.path(export_dir, "IMMAGINE_dates_long.csv"))
-write_csv(fish_flags_corrected,   file.path(export_dir, "IMMAGINE_fish_flags.csv")) ### This is wrong, edit
+# Potential issue carried forward from the original script:
+# an older note said this IMMAGINE FISH export was "wrong". Preserve the export
+# for pipeline compatibility, but audit the free-text regex flags before treating
+# this file as an authoritative manuscript source.
+write_csv(fish_flags_corrected,   file.path(export_dir, "IMMAGINE_fish_flags.csv"))
 
 # Combined ASCT/relapse summary
 write_csv(all_xplants,  file.path(export_dir, "all_cohorts_ASCT_dates.csv"))
@@ -597,7 +620,9 @@ write_csv(final_tbl,     file.path(export_dir, "ASCT_relapse_summary.csv"))
 
 
 #  ──────────────────────────────────────────────────────────────────────────────
-#  Optional plots                                                         
+#  Optional QC plots
+# These plots summarize the ASCT-to-relapse helper table for review. They are
+# not mapped manuscript figure panels.
 # A. Histogram of days-to-relapse across all cohorts
 p1 <- final_tbl %>% 
   filter(!is.na(days_to_relapse)) %>%
@@ -847,7 +872,9 @@ combined_tbl <- combined_tbl %>%
   )
 
 
-## Now export - have everything needed for OS and PFS curves now 
+## Export the combined OS/PFS helper table
+# This table is consumed by downstream survival/PFS scripts. Regenerate it after
+# changing clinical follow-up, relapse/progression, death, or ASCT source files.
 # Export to CSV
 write.csv(combined_tbl, file = "combined_clinical_MRD_OS_table_updated_May2025.csv", row.names = FALSE)
 
