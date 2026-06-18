@@ -100,8 +100,13 @@ tmp <- combined_clinical_data_updated %>%
       str_starts(Bam, "SPORE"),
       str_extract(Bam, "^[^\\.]+"),
       str_replace(Sample_ID, "_Blood_plasma_cfDNA", "-P")
-    )
+    ),
+    Cohort = dplyr::coalesce(Study, Study.x, Study.y)
   )
+
+sample_metadata <- tmp %>%
+  dplyr::select(Sample = Merge_ID, Bam, Patient, Date_of_sample_collection) %>%
+  dplyr::distinct()
 
 cfWGS.data <- cfWGS.data %>%
   mutate(
@@ -144,9 +149,25 @@ calculate.zscore <- function(x, y) {
 }
 
 get.ttest.p.and.foldchange <- function(i, group1, group2) {
-  p  <- t.test(i[group2], i[group1])$p.value
-  fc <- mean(i[group2]) / mean(i[group1])
+  x <- i[group2]
+  y <- i[group1]
+  p  <- safe_ttest_p(x, y)
+  fc <- mean(x, na.rm = TRUE) / mean(y, na.rm = TRUE)
   return(c(fc, p))
+}
+
+safe_ttest_p <- function(x, y) {
+  x <- x[is.finite(x)]
+  y <- y[is.finite(y)]
+  if (length(x) < 2L || length(y) < 2L) return(NA_real_)
+  if (stats::sd(x) == 0 && stats::sd(y) == 0) return(NA_real_)
+  stats::t.test(x, y)$p.value
+}
+
+safe_min_p <- function(...) {
+  p <- c(...)
+  if (all(is.na(p))) return(NA_real_)
+  min(p, na.rm = TRUE)
 }
 
 
@@ -184,11 +205,13 @@ for (site in all.sites) {
   site.data <- site.data %>%
     group_by(Sample, site_name, site_type, Position, Cohort) %>%
     summarise(Coverage = mean(Coverage, na.rm = TRUE), .groups = "drop")
+  site.data <- as.data.table(site.data)
   
   # wide format: Position × Sample
-  gc.distances <- dcast(site.data,
-                        Position ~ Sample,
-                        value.var = "Coverage")
+  gc.distances <- data.table::dcast(site.data,
+                                    Position ~ Sample,
+                                    value.var = "Coverage")
+  gc.distances <- as.data.frame(gc.distances)
   colnames(gc.distances) <- gsub("Coverage\\.", "", colnames(gc.distances))
   
   # keep only valid samples in both places
@@ -272,38 +295,38 @@ for (site in all.sites) {
   # baseline vs. healthy
   idx_baseline <- which(mdata$Sample %in% baseline.samples)
   stats.data[stats.data$Site == site, "PR.coverage.p"]   <-
-    t.test(mdata$Mean.Coverage[idx_baseline], mdata$Mean.Coverage[idx_pon])$p.value
+    safe_ttest_p(mdata$Mean.Coverage[idx_baseline], mdata$Mean.Coverage[idx_pon])
   stats.data[stats.data$Site == site, "PR.midpoint.p"]   <-
-    t.test(mdata$Midpoint.normalized[idx_baseline],
-           mdata$Midpoint.normalized[idx_pon])$p.value
+    safe_ttest_p(mdata$Midpoint.normalized[idx_baseline],
+                 mdata$Midpoint.normalized[idx_pon])
   stats.data[stats.data$Site == site, "PR.amplitude.p"]  <-
-    t.test(mdata$Amplitude[idx_baseline], mdata$Amplitude[idx_pon])$p.value
+    safe_ttest_p(mdata$Amplitude[idx_baseline], mdata$Amplitude[idx_pon])
   
   # maintenance vs. healthy
   idx_maint <- which(mdata$Sample %in% maintenance.samples)
   stats.data[stats.data$Site == site, "PS.coverage.p"]   <-
-    t.test(mdata$Mean.Coverage[idx_maint], mdata$Mean.Coverage[idx_pon])$p.value
+    safe_ttest_p(mdata$Mean.Coverage[idx_maint], mdata$Mean.Coverage[idx_pon])
   stats.data[stats.data$Site == site, "PS.midpoint.p"]   <-
-    t.test(mdata$Midpoint.normalized[idx_maint],
-           mdata$Midpoint.normalized[idx_pon])$p.value
+    safe_ttest_p(mdata$Midpoint.normalized[idx_maint],
+                 mdata$Midpoint.normalized[idx_pon])
   stats.data[stats.data$Site == site, "PS.amplitude.p"]  <-
-    t.test(mdata$Amplitude[idx_maint], mdata$Amplitude[idx_pon])$p.value
+    safe_ttest_p(mdata$Amplitude[idx_maint], mdata$Amplitude[idx_pon])
   
   # baseline vs. maintenance → “response”
-  p1 <- t.test(mdata$Mean.Coverage[idx_baseline], mdata$Mean.Coverage[idx_maint])$p.value
-  p2 <- t.test(mdata$Midpoint.normalized[idx_baseline],
-               mdata$Midpoint.normalized[idx_maint])$p.value
-  p3 <- t.test(mdata$Amplitude[idx_baseline], mdata$Amplitude[idx_maint])$p.value
-  stats.data[stats.data$Site == site, "response.p"] <- min(c(p1, p2, p3))
+  p1 <- safe_ttest_p(mdata$Mean.Coverage[idx_baseline], mdata$Mean.Coverage[idx_maint])
+  p2 <- safe_ttest_p(mdata$Midpoint.normalized[idx_baseline],
+                     mdata$Midpoint.normalized[idx_maint])
+  p3 <- safe_ttest_p(mdata$Amplitude[idx_baseline], mdata$Amplitude[idx_maint])
+  stats.data[stats.data$Site == site, "response.p"] <- safe_min_p(p1, p2, p3)
   
   # M4_IMG vs. SPORE → “trial”
   idx_M4  <- which(mdata$Sample %in% M4_IMG.samples)
   idx_SPO <- which(mdata$Sample %in% SPORE.samples)
-  p4 <- t.test(mdata$Mean.Coverage[idx_M4], mdata$Mean.Coverage[idx_SPO])$p.value
-  p5 <- t.test(mdata$Midpoint.normalized[idx_M4],
-               mdata$Midpoint.normalized[idx_SPO])$p.value
-  p6 <- t.test(mdata$Amplitude[idx_M4], mdata$Amplitude[idx_SPO])$p.value
-  stats.data[stats.data$Site == site, "trial.p"] <- min(c(p4, p5, p6))
+  p4 <- safe_ttest_p(mdata$Mean.Coverage[idx_M4], mdata$Mean.Coverage[idx_SPO])
+  p5 <- safe_ttest_p(mdata$Midpoint.normalized[idx_M4],
+                     mdata$Midpoint.normalized[idx_SPO])
+  p6 <- safe_ttest_p(mdata$Amplitude[idx_M4], mdata$Amplitude[idx_SPO])
+  stats.data[stats.data$Site == site, "trial.p"] <- safe_min_p(p4, p5, p6)
 }
 
 
@@ -380,29 +403,45 @@ if (length(neg.fc3)) {
     thresholds.down$Zscore.Amplitude[neg.fc3]
 }
 
-# apply thresholds to classify each sample’s z-score
+# apply thresholds to classify each sample's z-score. A per-site lookup avoids
+# ambiguous grouped-vector recycling and records NA when a comparison was
+# underpowered or a threshold could not be estimated.
+threshold_lookup <- stats.data %>%
+  dplyr::select(
+    Site,
+    Coverage.fc, Coverage.threshold,
+    Midpoint.fc, Midpoint.threshold,
+    Amplitude.fc, Amplitude.threshold
+  )
+
 results.data <- results.data %>%
-  group_by(Site) %>%
-  mutate(
-    Threshold.Coverage = if (sign(stats.data$Coverage.fc[stats.data$Site == Site]) > 0) {
-      Zscore.Coverage > stats.data$Coverage.threshold[stats.data$Site == Site]
-    } else {
-      Zscore.Coverage < stats.data$Coverage.threshold[stats.data$Site == Site]
-    },
-    Threshold.Midpoint = if (sign(stats.data$Midpoint.fc[stats.data$Site == Site]) > 0) {
-      Zscore.Midpoint > stats.data$Midpoint.threshold[stats.data$Site == Site]
-    } else {
-      Zscore.Midpoint < stats.data$Midpoint.threshold[stats.data$Site == Site]
-    },
-    Threshold.Amplitude = if (sign(stats.data$Amplitude.fc[stats.data$Site == Site]) > 0) {
-      Zscore.Amplitude > stats.data$Amplitude.threshold[stats.data$Site == Site]
-    } else {
-      Zscore.Amplitude < stats.data$Amplitude.threshold[stats.data$Site == Site]
-    }
+  dplyr::left_join(threshold_lookup, by = "Site") %>%
+  dplyr::mutate(
+    Threshold.Coverage = dplyr::case_when(
+      is.na(Coverage.fc) | is.na(Coverage.threshold) ~ NA,
+      Coverage.fc > 0 ~ Zscore.Coverage > Coverage.threshold,
+      TRUE ~ Zscore.Coverage < Coverage.threshold
+    ),
+    Threshold.Midpoint = dplyr::case_when(
+      is.na(Midpoint.fc) | is.na(Midpoint.threshold) ~ NA,
+      Midpoint.fc > 0 ~ Zscore.Midpoint > Midpoint.threshold,
+      TRUE ~ Zscore.Midpoint < Midpoint.threshold
+    ),
+    Threshold.Amplitude = dplyr::case_when(
+      is.na(Amplitude.fc) | is.na(Amplitude.threshold) ~ NA,
+      Amplitude.fc > 0 ~ Zscore.Amplitude > Amplitude.threshold,
+      TRUE ~ Zscore.Amplitude < Amplitude.threshold
+    )
   ) %>%
-  ungroup()
+  dplyr::select(
+    -Coverage.fc, -Coverage.threshold,
+    -Midpoint.fc, -Midpoint.threshold,
+    -Amplitude.fc, -Amplitude.threshold
+  ) %>%
+  dplyr::left_join(sample_metadata, by = "Sample")
 
 # Save out per-site metrics + stats
+dir.create(file.path(out.dir, "Griffin"), recursive = TRUE, showWarnings = FALSE)
 write_tsv(results.data,
           file.path(out.dir, "Griffin/griffin_per_site_metrics.tsv"))
 

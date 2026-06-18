@@ -68,6 +68,9 @@ library(broom)           # Tidy model outputs
 library(patchwork)       # Combine multiple plots
 library(tableone)        # Create summary tables (optional)
 library(timeROC)         # Time-dependent ROC analysis (optional)
+library(scales)          # Axis/percentage label formatting
+library(glue)            # Inline text summaries for manuscript-ready statements
+library(writexl)         # Simple multi-sheet Excel exports
 
 ## ─────────────────────────────────────────────────────────────────────────────
 ## INPUT FILES: Clinical outcomes and cfWGS results
@@ -644,7 +647,7 @@ for(tp in tps) {
       fit, data       = df_sub,
       pval            = TRUE,
       break.time.by   = 12,        # put ticks every 12 “units” (i.e. every 12 months)
-      conf.int        = TRUE,
+      conf.int        = FALSE,
       risk.table      = TRUE,
       risk.table.title = "Number at risk",
       risk.table.title.theme = element_text(hjust = 0),  # ← left‑align
@@ -757,7 +760,7 @@ for(tp in tps) {
       fit, data       = df_sub,
       pval            = TRUE,
       break.time.by   = 12,        # put ticks every 12 “units” (i.e. every 12 months)
-      conf.int        = TRUE,
+      conf.int        = FALSE,
       conf.int.alpha  = 0.1,    
       risk.table      = TRUE,
       risk.table.title = "Number at risk",
@@ -933,7 +936,7 @@ for (tp in tps) {
       fit, data = df_sub,
       pval              = pval_str,
       break.time.by     = 12,
-      conf.int          = TRUE,
+      conf.int          = FALSE,
       risk.table        = TRUE,
       risk.table.title  = "Number at risk",                    # ← add
       risk.table.title.theme = element_text(hjust = 0),        # ← add (left-align)
@@ -3594,34 +3597,37 @@ plot_df2 <- plot_df2 %>%
 rel_df <- plot_df2 %>%
   filter(progress_status == "Relapse")
 
-# 2) run cor.test for each metric
-spearman_prob <- cor.test(
-  rel_df$BM_zscore_only_detection_rate_prob,
-  rel_df$days_before_event,
-  method = "spearman"
-)
+# 2) run cor.test for each metric. Some optional component metrics are not
+# present in every regenerated object, so skip those descriptively instead of
+# stopping the survival pipeline.
+safe_spearman <- function(df, x_col, y_col) {
+  if (!all(c(x_col, y_col) %in% names(df))) return(NULL)
+  x <- suppressWarnings(as.numeric(df[[x_col]]))
+  y <- suppressWarnings(as.numeric(df[[y_col]]))
+  keep <- is.finite(x) & is.finite(y)
+  if (sum(keep) < 3 || dplyr::n_distinct(x[keep]) < 2 || dplyr::n_distinct(y[keep]) < 2) {
+    return(NULL)
+  }
+  cor.test(x[keep], y[keep], method = "spearman")
+}
 
-spearman_zscore <- cor.test(
-  rel_df$zscore_BM,
-  rel_df$days_before_event,
-  method = "spearman"
-)
+print_spearman <- function(label, test_result) {
+  cat("\n--- ", label, " ---\n", sep = "")
+  if (is.null(test_result)) {
+    cat("Not available: column missing, nonnumeric, or insufficient variation.\n")
+  } else {
+    print(test_result)
+  }
+}
 
-spearman_detect_rate <- cor.test(
-  rel_df$detect_rate_BM,
-  rel_df$days_before_event,
-  method = "spearman"
-)
+spearman_prob <- safe_spearman(rel_df, "BM_zscore_only_detection_rate_prob", "days_before_event")
+spearman_zscore <- safe_spearman(rel_df, "zscore_BM", "days_before_event")
+spearman_detect_rate <- safe_spearman(rel_df, "detect_rate_BM", "days_before_event")
 
 # 3) print them
-cat("\n--- cfWGS model probability vs days ---\n")
-print(spearman_prob)
-
-cat("\n--- zscore_BM vs days ---\n")
-print(spearman_zscore)
-
-cat("\n--- detect_rate_BM vs days ---\n")
-print(spearman_detect_rate)
+print_spearman("cfWGS model probability vs days", spearman_prob)
+print_spearman("zscore_BM vs days", spearman_zscore)
+print_spearman("detect_rate_BM vs days", spearman_detect_rate)
 
 
 # Edit days
@@ -3734,6 +3740,13 @@ ggsave(file.path("Final Tables and Figures/Fig_4D_time_to_relapse_infinity_no_re
 ## Try different legend layout 
 library(cowplot)    # get_legend()
 library(patchwork)  # easy assembly
+
+pal_vals <- c("No relapse" = "black", "Relapse" = "red")
+legend_df <- tibble::tibble(
+  x = 1,
+  y = 1,
+  progress_status = factor(names(pal_vals), levels = names(pal_vals))
+)
 
 # --- 1) build the main plot *without* a legend (legend handled below) ---
 p_main <- ggplot(plot_df2,
@@ -4463,8 +4476,15 @@ df_sf <- dat %>%
     Blood_zscore_only_sites_call,
     Blood_plus_fragment_call
   ) %>%
-  # keep rows with at least one assay result
-  filter(if_any(all_of(assays), ~ !is.na(.x))) %>%
+  # keep rows with at least one available assay result. Some assay columns,
+  # such as EasyM, are not present in every regenerated table.
+  {
+    assays_present <- intersect(unname(assays), names(.))
+    if (length(assays_present) == 0) {
+      stop("No non-frontline assay columns were available for time-window performance analysis.")
+    }
+    filter(., if_any(all_of(assays_present), ~ !is.na(.x)))
+  } %>%
   # join in per‐patient relapse_date + relapsed flag
   left_join(
     final_tbl %>% 
@@ -4489,6 +4509,13 @@ df_sf2 <- df_sf %>%
   ungroup() %>%
   rename(relapse_date = Progression_date) %>%    # ② now safe to rename
   mutate(relapsed = as.integer(!is.na(relapse_date)))
+
+assays_available <- assays[unname(assays) %in% names(df_sf2)]
+missing_assays <- setdiff(names(assays), names(assays_available))
+if (length(missing_assays) > 0) {
+  message("Skipping absent optional assay columns in non-frontline window analysis: ",
+          paste(missing_assays, collapse = ", "))
+}
 
 # 3) Define windows (days) to evaluate
 windows <- c(90, 180, 365, 730)
@@ -4527,7 +4554,7 @@ calc_metrics <- function(df, assay_label, col_name, win_d) {
 
 
 # 6) Inspect results
-results <- imap_dfr(assays, 
+results <- imap_dfr(assays_available,
                     # .x = column name, .y = assay label
                     .f = function(col_name, assay_label) {
                       map_dfr(windows, function(win_d) {
@@ -4551,14 +4578,14 @@ df_sf_blood <- df_sf2 %>% dplyr::filter(!is.na(.data[[blood_col]]))
 
 # Recompute results on the consistent base
 results_BM <- purrr::map_dfr(windows, function(w) {
-  purrr::map_dfr(names(assays), function(a) {
-    calc_metrics(df_sf_BM, a, assays[[a]], w)
+  purrr::map_dfr(names(assays_available), function(a) {
+    calc_metrics(df_sf_BM, a, assays_available[[a]], w)
   })
 }) %>% dplyr::arrange(Window_days, dplyr::desc(Sensitivity), dplyr::desc(Specificity))
 
 results_blood <- purrr::map_dfr(windows, function(w) {
-  purrr::map_dfr(names(assays), function(a) {
-    calc_metrics(df_sf_blood, a, assays[[a]], w)
+  purrr::map_dfr(names(assays_available), function(a) {
+    calc_metrics(df_sf_blood, a, assays_available[[a]], w)
   })
 }) %>% dplyr::arrange(Window_days, dplyr::desc(Sensitivity), dplyr::desc(Specificity))
 
@@ -4621,8 +4648,8 @@ bm_col     <- assays["cfWGS_BM"]    # "BM_zscore_only_detection_rate_call"
 df_sf_BM   <- df_sf2 %>% filter(!is.na(.data[[bm_col]]))
 
 results_BM <- map_dfr(windows, function(w) {
-  map_dfr(names(assays), function(a) {
-    calc_metrics(df_sf_BM, a, assays[[a]], w)
+  map_dfr(names(assays_available), function(a) {
+    calc_metrics(df_sf_BM, a, assays_available[[a]], w)
   })
 }) %>%
   arrange(Window_days, desc(Sensitivity), desc(Specificity))
@@ -4632,8 +4659,8 @@ blood_col   <- assays["cfWGS_Blood"]  # "Blood_zscore_only_sites_call"
 df_sf_blood <- df_sf2 %>% filter(!is.na(.data[[blood_col]]))
 
 results_blood <- map_dfr(windows, function(w) {
-  map_dfr(names(assays), function(a) {
-    calc_metrics(df_sf_blood, a, assays[[a]], w)
+  map_dfr(names(assays_available), function(a) {
+    calc_metrics(df_sf_blood, a, assays_available[[a]], w)
   })
 }) %>%
   arrange(Window_days, desc(Sensitivity), desc(Specificity))
@@ -5449,7 +5476,7 @@ cat(glue(
 # ═════════════════════════════════════════════════════════════════════════════
 
 cat("\n")
-cat("═" %*% 80, "\n")
+cat(strrep("═", 80), "\n")
 cat("SURVIVAL ANALYSIS COMPLETE\n")
 cat("Scripts completed: All KM curves, sensitivity analyses, and barplots generated\n")
-cat("═" %*% 80, "\n\n")
+cat(strrep("═", 80), "\n\n")

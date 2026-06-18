@@ -622,7 +622,7 @@ for(tp in tps) {
   if (is.na(nice_tp) || nice_tp == "") nice_tp <- as.character(tp)
   
   
-  tp_dir <- file.path(outdir, gsub("\\s+","_", tp))  # sanitize folder name
+  tp_dir <- file.path(out_dir, gsub("\\s+","_", tp))  # sanitize folder name
   dir.create(tp_dir, recursive = TRUE, showWarnings = FALSE)
   
   for(var in names(techs)) {
@@ -957,14 +957,34 @@ run_landmark <- function(tp,
 # Example: post-induction, post-transplant, 1yr maintenance, relapse
 timepoints_to_run <- c("05", "07")
 
+threshold_seed_path <- file.path(out_dir, "EasyM_threshold_values_by_timepoint.csv")
+if (file.exists(threshold_seed_path)) {
+  threshold_seed <- readr::read_csv(threshold_seed_path, show_col_types = FALSE)
+  easyM_thresholds_calc <- stats::setNames(
+    threshold_seed$Threshold_raw_percent,
+    threshold_seed$Timepoint
+  )
+} else {
+  easyM_thresholds_calc <- numeric(0)
+  message(
+    "No existing EasyM threshold table found for early exploratory landmark block; ",
+    "using median EasyM cutoffs in that block. The primary optimized threshold ",
+    "section below still computes and exports the manuscript thresholds."
+  )
+}
+
 #results_list <- lapply(timepoints_to_run, run_landmark, require_paired = TRUE, easyM_cut = "median")
-results_list <- lapply(
-  timepoints_to_run,
-  run_landmark,
-  require_paired = TRUE,
-  easyM_cut = "threshold",
-  easyM_thresholds = easyM_thresholds_calc
-)
+if (length(easyM_thresholds_calc) > 0) {
+  results_list <- lapply(
+    timepoints_to_run,
+    run_landmark,
+    require_paired = TRUE,
+    easyM_cut = "threshold",
+    easyM_thresholds = easyM_thresholds_calc
+  )
+} else {
+  results_list <- lapply(timepoints_to_run, run_landmark, require_paired = TRUE, easyM_cut = "median")
+}
 
 names(results_list) <- timepoints_to_run
 

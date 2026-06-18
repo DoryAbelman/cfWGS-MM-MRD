@@ -66,6 +66,9 @@ outdir <- "Output_tables_2025/cfWGS_vs_EasyM_comparison"
 OUTPUT_DIR_FIGURES <- "Output_figures_2025"
 dir.create(outdir, showWarnings = FALSE, recursive = TRUE)
 dir.create(OUTPUT_DIR_FIGURES, showWarnings = FALSE, recursive = TRUE)
+local_sass_cache <- file.path(outdir, ".sass-cache")
+dir.create(local_sass_cache, recursive = TRUE, showWarnings = FALSE)
+Sys.setenv(SASS_CACHE = normalizePath(local_sass_cache, mustWork = FALSE))
 
 ## ── 3.  HELPER FUNCTIONS ─────────────────────────────────────────────────────
 read_csv_safely <- function(path) {
@@ -73,6 +76,30 @@ read_csv_safely <- function(path) {
     stop(sprintf("File not found: %s", path), call. = FALSE)
   }
   readr::read_csv(path, show_col_types = FALSE)
+}
+
+save_gt_table <- function(data, filename, ...) {
+  if (requireNamespace("webshot2", quietly = TRUE)) {
+    saved_png <- tryCatch(
+      {
+        gt::gtsave(data = data, filename = filename, ...)
+        TRUE
+      },
+      error = function(e) {
+        warning(
+          "Could not save GT PNG table '", filename, "': ",
+          conditionMessage(e),
+          ". Writing HTML fallback instead."
+        )
+        FALSE
+      }
+    )
+    if (isTRUE(saved_png)) return(invisible(filename))
+  }
+
+  html_filename <- sub("\\.png$", ".html", filename)
+  gt::gtsave(data = data, filename = html_filename)
+  invisible(html_filename)
 }
 
 values_to_long <- function(df) {
@@ -591,7 +618,7 @@ summary_gt <- summary_table_data %>%
     column_labels.border.bottom.color = "black"
   )
 
-gtsave(
+save_gt_table(
   data = summary_gt,
   filename = file.path(OUTPUT_DIR_FIGURES, "Tbl_cfWGS_vs_EasyM_Summary.png"),
   vwidth = 1600,

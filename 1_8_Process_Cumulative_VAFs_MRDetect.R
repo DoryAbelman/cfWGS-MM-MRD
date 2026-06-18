@@ -477,7 +477,7 @@ df <- df %>%
     timepoint_info, Sample_type_Bam, timepoint_info_Bam,
     Mut_source, Filter_source, plotting_type, VCF_factor
   ) %>%
-  summarise(across(all_of(num_cols), mean, na.rm = TRUE), .groups = "drop")
+  summarise(across(all_of(num_cols), ~ mean(.x, na.rm = TRUE)), .groups = "drop")
 
 # 3) Recompute MRD status & cumulative VAF
 # Mrd_by_WGS threshold of 4.5 z-scores: sites_rate_zscore_charm measures how many
@@ -544,13 +544,21 @@ start_dates <- df_pairs %>%
     num_weeks = num_days / 7
   )
 
-# Final guard: confirm uniqueness after joins
-stopifnot(nrow(start_dates) == dplyr::n_distinct(start_dates[c("Sample_ID","Sample_ID_Bam")]))
-
-# Optional: show any residual dupes (should be none)
-start_dates %>%
-  count(Sample_ID, Sample_ID_Bam) %>%
+# Final guard: confirm uniqueness using the same key used for the downstream join.
+start_date_dupes <- start_dates %>%
+  count(Sample_ID, Sample_ID_Bam, Patient) %>%
   filter(n > 1)
+if (nrow(start_date_dupes) > 0) {
+  readr::write_csv(
+    start_date_dupes,
+    file.path(outdir, "start_date_duplicate_key_audit.csv")
+  )
+  stop(
+    "Duplicate start-date rows remain for the Sample_ID/Sample_ID_Bam/Patient join key. ",
+    "Audit written to: ", file.path(outdir, "start_date_duplicate_key_audit.csv"),
+    call. = FALSE
+  )
+}
 
 # 5) Attach start_dates back onto df
 combined_data_plot <- df %>%
@@ -558,6 +566,7 @@ combined_data_plot <- df %>%
 
 # 6) Flag “Good_baseline_marrow” from your All_feature_data
 All_feature_data <- readRDS("Jan2025_exported_data/All_feature_data_August2025.rds")
+cohort_df <- readRDS("cohort_assignment_table_updated.rds")
 good_pts <- All_feature_data %>%
   filter(Sample_type == "BM_cells",
          Evidence_of_Disease == 1,
@@ -675,7 +684,7 @@ df <- df %>%
     timepoint_info, Sample_type_Bam, timepoint_info_Bam,
     Mut_source, Filter_source, plotting_type, VCF_factor
   ) %>%
-  summarise(across(all_of(num_cols), mean, na.rm = TRUE), .groups = "drop")
+  summarise(across(all_of(num_cols), ~ mean(.x, na.rm = TRUE)), .groups = "drop")
 
 # 3) Recompute MRD status & cumulative VAF
 df <- df %>%
@@ -689,7 +698,7 @@ df <- df %>%
 # 4) Pull in clinical dates & timepoints for both Sample_ID and Sample_ID_Bam
 cc <- cfWGS_metadata %>%
   group_by(Sample_ID) %>%
-  slice_max(Date_of_sample_collection, n = 1) %>%
+  slice_max(Date_of_sample_collection, n = 1, with_ties = FALSE) %>%
   ungroup() %>%
   select(Sample_ID, Date_of_sample_collection, Timepoint)
 

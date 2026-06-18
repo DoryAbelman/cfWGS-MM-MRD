@@ -59,11 +59,19 @@ library(glue)
 library(rmda)        # decision‑curve analysis
 library(lubridate)
 library(scales)   # for percent_format()
+library(readr)    # command-line-safe CSV input/output
+library(stringr)  # string normalization for timepoint labels
+library(tibble)   # column_to_rownames for confusion matrix helpers
+library(broom)    # tidy summaries for logistic model outputs
+library(purrr)    # functional iteration over model/list columns
 
 
 # -------- 1.  Read processed data & thresholds ------------------------------
 outdir   <- "Output_tables_2025"
 OUTPUT_DIR_FIGURES    <- "Output_figures_2025"
+local_sass_cache <- file.path(outdir, ".sass-cache")
+dir.create(local_sass_cache, recursive = TRUE, showWarnings = FALSE)
+Sys.setenv(SASS_CACHE = normalizePath(local_sass_cache, mustWork = FALSE))
 dat      <- readRDS(file.path(outdir, "all_patients_with_BM_and_blood_calls_updated2.rds"))
 PATH_MODEL_LIST       <- "~/Documents/Thesis_work/R/M4/Projects/High_risk_MM_baselinbe_relapse_marrow/Output_tables_2025/selected_combo_models_2025-06-17.rds"
 PATH_THRESHOLD_LIST   <- "~/Documents/Thesis_work/R/M4/Projects/High_risk_MM_baselinbe_relapse_marrow/Output_tables_2025/selected_combo_thresholds_2025-06-17.rds"
@@ -820,6 +828,7 @@ baseline_counts <- dat %>%
 
 # Now merge those baseline counts back onto the full dataset
 dat <- dat %>%
+  select(-any_of(c("BM_MutCount_Baseline", "Blood_MutCount_Baseline"))) %>%
   left_join(baseline_counts, by = "Patient")
 
 # Inspect the new columns
@@ -908,6 +917,11 @@ aux_cols  <- c("Adaptive_Frequency",              # clonoSEQ cumulative VAF (ren
                "FS", "Mean.Coverage", "detect_rate_BM", "zscore_BM", 
                "WGS_Tumor_Fraction_Blood_plasma_cfDNA",
                "BM_MutCount_Baseline", "Blood_MutCount_Baseline", "FS_outlier", "Mean.Coverage_outlier")
+
+# Discordance review tables are helper outputs used to audit which clinical
+# comparator results are captured or missed by the tumor-naive cfWGS calls.
+outdir_discordances <- file.path(outdir, "Tumor_naive_discordance_tables")
+dir.create(outdir_discordances, recursive = TRUE, showWarnings = FALSE)
 
 # Make sure they exist
 missing <- setdiff(aux_cols, names(dat))
@@ -1069,13 +1083,47 @@ fit_disc_model <- function(outcome) {
   glm(formula, data = tbl %>% drop_na(all_of(num_vars)), family = binomial)
 }
 
+# Sparse discordance strata can produce complete/quasi-complete separation.
+# Profile-likelihood intervals are preferred when available. If profile
+# intervals cannot be interpolated, report Wald intervals and label the method
+# so downstream review can distinguish the fallback.
+safe_tidy_glm <- function(model, conf.level = 0.95, exponentiate = TRUE) {
+  profiled <- tryCatch(
+    broom::tidy(model, conf.int = TRUE, conf.level = conf.level, exponentiate = exponentiate),
+    error = function(e) NULL
+  )
+
+  if (!is.null(profiled)) {
+    return(profiled %>% mutate(ci_method = "profile"))
+  }
+
+  z <- qnorm((1 + conf.level) / 2)
+  wald <- broom::tidy(model, conf.int = FALSE, exponentiate = FALSE) %>%
+    mutate(
+      conf.low = estimate - z * std.error,
+      conf.high = estimate + z * std.error,
+      ci_method = "wald_fallback"
+    )
+
+  if (isTRUE(exponentiate)) {
+    wald <- wald %>%
+      mutate(
+        estimate = exp(estimate),
+        conf.low = exp(conf.low),
+        conf.high = exp(conf.high)
+      )
+  }
+
+  wald
+}
+
 # 5) Fit pooled logistic models
 glm_missed   <- fit_disc_model("is_missed")   # 1 = missed, 0 = else
 glm_captured <- fit_disc_model("is_captured") # 1 = captured, 0 = else
 
 # 6) Tidy results with odds‐ratios and 95% CIs
-tidy_missed   <- tidy(glm_missed,   conf.int = TRUE, exponentiate = TRUE)
-tidy_captured <- tidy(glm_captured, conf.int = TRUE, exponentiate = TRUE)
+tidy_missed   <- safe_tidy_glm(glm_missed)
+tidy_captured <- safe_tidy_glm(glm_captured)
 
 print(tidy_missed)
 print(tidy_captured)
@@ -1087,8 +1135,8 @@ by_comp <- tbl %>%
   mutate(
     missed_mod   = map(data, ~ glm(is_missed   ~ ., data = select(.x, all_of(num_vars), is_missed),   family=binomial)),
     captured_mod = map(data, ~ glm(is_captured ~ ., data = select(.x, all_of(num_vars), is_captured), family=binomial)),
-    missed_tidy   = map(missed_mod,   ~ tidy(.x, conf.int=TRUE, exponentiate=TRUE)),
-    captured_tidy = map(captured_mod, ~ tidy(.x, conf.int=TRUE, exponentiate=TRUE))
+    missed_tidy   = map(missed_mod, safe_tidy_glm),
+    captured_tidy = map(captured_mod, safe_tidy_glm)
   ) %>%
   select(Comparator, missed_tidy, captured_tidy) %>%
   unnest(c(missed_tidy, captured_tidy), names_sep = "_")
@@ -1167,11 +1215,53 @@ make_gt_cm <- function(tabyl_tbl, title_text){
       label   = "Prediction",
       columns = c("neg", "pos")
     ) %>%
-    opt_align_table_header(align = "center")
+	    opt_align_table_header(align = "center")
+}
+
+save_gt_table <- function(data, filename, zoom = 8) {
+  png_ok <- requireNamespace("webshot2", quietly = TRUE)
+
+  if (isTRUE(png_ok)) {
+    saved_png <- tryCatch(
+      {
+        gt::gtsave(data = data, filename = filename, zoom = zoom)
+        TRUE
+      },
+      error = function(e) {
+        warning(
+          "Could not save GT PNG table '", filename, "': ",
+          conditionMessage(e),
+          ". Writing HTML fallback instead."
+        )
+        FALSE
+      }
+    )
+    if (isTRUE(saved_png)) return(invisible(filename))
+  }
+
+  html_filename <- sub("\\.png$", ".html", filename)
+  gt::gtsave(data = data, filename = html_filename)
+  invisible(html_filename)
 }
 
 # ────────────────────────────────────────────────────────────────────────────
 # 2.  Data frames ------------------------------------------------------------
+# The original plotting block used generic names from an older sensitivity-vs-
+# accuracy model comparison.  In this tumor-naive script, the current inputs are
+# explicit: BM sites-only probability, blood sites-only probability, a
+# dilution-series screening call (0.457), and the high-specificity confirmatory
+# call computed above.  Create aliases so the plotting code is clear and
+# command-line reproducible without relying on interactive objects.
+dat <- dat %>%
+  mutate(
+    BM_zscore_only_prob = BM_zscore_only_sites_prob,
+    BM_zscore_only_call = BM_zscore_only_sites_call,
+    BloodSensPriority_prob = Blood_zscore_only_sites_prob,
+    BloodSensPriority_call = Blood_zscore_only_sites_call_rescored,
+    BloodAccPriority_prob = Blood_zscore_only_sites_prob,
+    BloodAccPriority_call = Blood_zscore_only_sites_call_confirm
+  )
+
 dat_fig <- dat %>%
   filter(!is.na(MRD_truth)) %>%
   mutate(MRD_label = factor(MRD_truth,
@@ -1182,14 +1272,10 @@ dat_bm    <- dat_fig %>% filter(!is.na(BM_zscore_only_prob))
 dat_bl_s  <- dat_fig %>% filter(!is.na(BloodSensPriority_prob))
 dat_bl_a  <- dat_fig %>% filter(!is.na(BloodAccPriority_prob))
 
-# thresholds (pulled from your earlier objects)
-thr_bm   <- selected_rows %>% filter(combo == "BM_zscore_only") %>% pull(threshold)
-thr_bl_s <- selected_rows %>% filter(combo == "Blood_all_extras",
-                                     trial == "sens>=0.9") %>%
-  slice(1) %>% pull(threshold)   # sens‑priority row
-thr_bl_a <- selected_rows %>% filter(combo == "Blood_all_extras",
-                                     trial == "accuracy") %>%
-  slice(1) %>% pull(threshold)   # acc‑priority row
+# thresholds used by the aliased plotting columns above
+thr_bm <- unname(selected_thr[["BM_zscore_only_sites"]])
+thr_bl_s <- 0.457      # dilution-series screening threshold from this script
+thr_bl_a <- confirm_thr # high-specificity confirmatory threshold from this script
 
 # ────────────────────────────────────────────────────────────────────────────
 # 3.  Panels -----------------------------------------------------------------
@@ -1326,19 +1412,19 @@ gt_bl_a  <- make_gt_cm(tbl_bl_acc,"Blood acc-priority call")
 
 # ────────────────────────────────────────────────────────────────────────────
 # 2.  Save each table on its own ---------------------------------------------
-gtsave(
+save_gt_table(
   data = gt_bm,
   filename = file.path(outdir, "tbl_BM_zscore_only_contingency.png"),
   zoom = 8
 )
 
-gtsave(
+save_gt_table(
   data = gt_bl_s,
   filename = file.path(outdir, "tbl_Blood_sens_priority_contingency.png"),
   zoom = 8
 )
 
-gtsave(
+save_gt_table(
   data = gt_bl_a,
   filename = file.path(outdir, "tbl_Blood_acc_priority_contingency.png"),
   zoom = 8
@@ -1389,7 +1475,7 @@ dat_base <- dat %>%
          !is.na(BloodSensPriority_prob)) %>%
   arrange(desc(BloodSensPriority_prob)) %>%
   mutate(sample_id = row_number(),
-         truth_f   = factor(MRD_truth, labels = c("Negative","Positive")))
+         truth_f   = factor(MRD_truth, levels = c(0, 1), labels = c("Negative","Positive")))
 
 p_water <- ggplot(dat_base,
                   aes(sample_id, BloodSensPriority_prob,
@@ -1408,9 +1494,10 @@ dat_long <- dat %>%
   filter(!is.na(BloodSensPriority_prob),
          !is.na(MRD_truth)) %>%
   group_by(Patient) %>%
-  filter(n() >= 2) %>%            # need at least 2 time‑points
+  filter(dplyr::n() >= 2) %>%            # need at least 2 time‑points
   ungroup() %>%
   mutate(MRD_label = factor(MRD_truth,
+                            levels = c(0, 1),
                             labels = c("Neg","Pos")))
 
 p_long <- ggplot(dat_long,
@@ -1437,9 +1524,7 @@ ggsave("FigX_LongitudinalSpaghetti.png",p_long,  width = 7, height = 4, dpi = 50
 ### Do same for BM 
 # ---------------------------------------------------------------------------
 # 1.  Pull BM threshold ------------------------------------------------------
-thr_bm <- selected_rows %>%
-  filter(combo == "BM_zscore_only") %>%
-  pull(threshold)
+thr_bm <- unname(selected_thr[["BM_zscore_only_sites"]])
 
 # ---------------------------------------------------------------------------
 # 2.  Prepare BM‐specific data frames ----------------------------------------
@@ -1463,7 +1548,7 @@ dat_bm_long <- dat %>%
   filter(!is.na(BM_zscore_only_prob),
          !is.na(Date), !is.na(MRD_truth)) %>%
   group_by(Patient) %>%
-  filter(n() >= 2) %>%
+  filter(dplyr::n() >= 2) %>%
   ungroup() %>%
   mutate(MRD_label = factor(MRD_truth,
                             levels = c(0,1),
@@ -1495,7 +1580,7 @@ dca_bm <- decision_curve(
   data       = dat,
   family     = binomial(link = "logit"),
   thresholds = seq(0.05, 0.95, by = 0.05),
-  confidence.intervals = 0L
+  confidence.intervals = FALSE
 )
 
 p_dca_bm <- plot_decision_curve(
@@ -1538,6 +1623,3 @@ ggsave("FigX_Calibration_BM.png",          p_cal_bm,   width = 5, height = 5, dp
 ggsave("FigX_DecisionCurve_BM.png",        p_dca_bm,   width = 6, height = 4, dpi = 500)
 ggsave("FigX_Waterfall_BM.png",            p_water_bm, width = 7, height = 4, dpi = 500)
 ggsave("FigX_LongitudinalSpaghetti_BM.png",p_long_bm,  width = 7, height = 4, dpi = 500)
-
-
-

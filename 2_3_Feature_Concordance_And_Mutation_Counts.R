@@ -365,6 +365,13 @@ FISH_CNA_combined <- readRDS("Jan2025_exported_data/CNA_at_FISH_sites_combined.r
 FISH_CNA_combined <- FISH_CNA_combined %>%
   filter(Sample_type %in% c("BM_cells", "Blood_plasma_cfDNA"))
 
+patient_key_cols <- intersect(c("Patient", "Patient.x", "Patient.y", "patient"), names(FISH_CNA_combined))
+if (length(patient_key_cols) == 0) {
+  stop("CNA_at_FISH_sites_combined.rds does not contain a patient identifier column.")
+}
+FISH_CNA_combined <- FISH_CNA_combined %>%
+  mutate(Patient = coalesce(!!!rlang::syms(patient_key_cols)))
+
 ## Add ploidy to this
 Ploidy_in_BM <- readRDS("Jan2025_exported_data/Sample_ploidy_from_sequenza_400.rds")
 
@@ -718,6 +725,31 @@ mut_sets <- mut_matched %>%
     names_from  = Sample_type,
     values_from = muts,
     values_fill = list(muts = list(character(0)))  # in case one arm has zero
+  )
+
+# Command-line runs can legitimately produce a matched baseline subset where one
+# sample type has no mutation rows after upstream filtering. In an interactive
+# RStudio session this was easy to miss because objects from earlier runs could
+# remain in memory. Define the expected list columns explicitly so downstream
+# concordance statistics always compare BM-vs-cfDNA mutation sets with a clear
+# empty-set convention.
+expected_mutation_sample_types <- c("BM_cells", "Blood_plasma_cfDNA")
+for (sample_type_col in expected_mutation_sample_types) {
+  if (!sample_type_col %in% names(mut_sets)) {
+    mut_sets[[sample_type_col]] <- rep(list(character(0)), nrow(mut_sets))
+  }
+}
+
+normalise_mutation_set <- function(x) {
+  x <- unlist(x, use.names = FALSE)
+  x <- as.character(x[!is.na(x)])
+  unique(x)
+}
+
+mut_sets <- mut_sets %>%
+  mutate(
+    BM_cells = map(BM_cells, normalise_mutation_set),
+    Blood_plasma_cfDNA = map(Blood_plasma_cfDNA, normalise_mutation_set)
   )
 
 tf_cut <- 0.05   # 5 %

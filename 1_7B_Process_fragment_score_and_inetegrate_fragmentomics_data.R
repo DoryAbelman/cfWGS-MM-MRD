@@ -45,6 +45,23 @@ library(stringr)
 library(rstatix)        # for pairwise_wilcox_test, if needed
 library(tidyr)
 
+conflicted::conflicts_prefer(
+  dplyr::filter,
+  dplyr::select,
+  dplyr::mutate,
+  dplyr::summarise,
+  dplyr::arrange,
+  dplyr::rename,
+  dplyr::lag,
+  .quiet = TRUE
+)
+
+first_nonmissing <- function(x) {
+  x <- x[!is.na(x)]
+  if (length(x) == 0L) return(NA)
+  x[[1]]
+}
+
 source('session.functions.R')
 
 
@@ -52,6 +69,7 @@ source('session.functions.R')
 input.dir <- '~/Documents/Thesis_work/R/M4/Projects/High_risk_MM_baselinbe_relapse_marrow/Fragmentomics_data'
 pon.dir   <- '~/Documents/Thesis_work/R/M4/Projects/High_risk_MM_baselinbe_relapse_marrow/Fragmentomics_data/Normals'
 out.dir   <- '~/Documents/Thesis_work/R/M4/Projects/High_risk_MM_baselinbe_relapse_marrow/Results_Fragmentomics/Insert_size'
+dir.create(out.dir, recursive = TRUE, showWarnings = FALSE)
 
 
 ### STEP 1: PROCESS INSERT‐SIZE (“Proportion.Short”) ###############################################
@@ -277,7 +295,7 @@ combined_fs <- combined_fs %>%
   left_join(combined_clinical %>% select(-Bam),
             by = c("Patient", "Timepoint", "timepoint_info"))
 
-combined_fs <- combined_fs %>% dplyr::select(-`...1`)
+combined_fs <- combined_fs %>% dplyr::select(-dplyr::any_of("...1"))
   
 # Deduplicate numeric fields (take mean) and non‐numeric (first non‐NA)
 combined_fs_dedup <- combined_fs %>%
@@ -342,7 +360,7 @@ print(fs_cutoffs_tbl)
 # 3) Write out to CSV in your output directory
 readr::write_csv(
   fs_cutoffs_tbl,
-  file.path(outdir, "FS_cutoffs_table_healthy_controls.csv")
+  file.path(out.dir, "FS_cutoffs_table_healthy_controls.csv")
 )
 
 
@@ -435,10 +453,10 @@ merged_data_grouped <- merged_data %>%
   summarise(
     Sample = first(Sample),  # Pick one sample name (can be adapted to paste0 if needed)
     Date_of_sample_collection = min(Date_of_sample_collection),
-    Site = first(Site, na.rm = TRUE),
-    Threshold.Coverage = first(Threshold.Coverage, na.rm = TRUE),
-    Threshold.Midpoint = first(Threshold.Midpoint, na.rm = TRUE),
-    Threshold.Amplitude = first(Threshold.Amplitude, na.rm = TRUE),
+    Site = first_nonmissing(Site),
+    Threshold.Coverage = first_nonmissing(Threshold.Coverage),
+    Threshold.Midpoint = first_nonmissing(Threshold.Midpoint),
+    Threshold.Amplitude = first_nonmissing(Threshold.Amplitude),
     Mean.Coverage = mean(Mean.Coverage, na.rm = TRUE),
     Midpoint.Coverage = mean(Midpoint.Coverage, na.rm = TRUE),
     Midpoint.normalized = mean(Midpoint.normalized, na.rm = TRUE),
@@ -625,5 +643,5 @@ print(hc_ranges_selected)
 # Save to CSV in your output directory
 readr::write_csv(
   hc_ranges_selected,
-  file.path(outdir, "HC_Ranges_Selected_MM_DARs_Metrics.csv")
+  file.path(out.dir, "HC_Ranges_Selected_MM_DARs_Metrics.csv")
 )

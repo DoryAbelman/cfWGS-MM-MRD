@@ -443,8 +443,14 @@ combined_data_heatmap_blood <- combined_data_heatmap_blood %>%
   mutate(across(all_of(cna_trans_cols), ~ ifelse(is.na(.), 0, .)))
 
 combined_data_heatmap_blood <- combined_data_heatmap_blood %>%
-  select(-Bam_File, -Relapsed, -Num_days_to_closest_relapse_absolute, 
-         -Num_days_to_closest_relapse_non_absolute, -Num_days_to_closest_relapse, -`...1`)
+  select(-any_of(c(
+    "Bam_File",
+    "Relapsed",
+    "Num_days_to_closest_relapse_absolute",
+    "Num_days_to_closest_relapse_non_absolute",
+    "Num_days_to_closest_relapse",
+    "...1"
+  )))
 
 combined_data_heatmap_blood <- combined_data_heatmap_blood %>%
   mutate_at(vars(one_of(cna_cols)), ~ ifelse(. == "1", "Yes", "No")) %>%
@@ -482,11 +488,29 @@ combined_data_heatmap_BM <- bind_rows(BM_matched, BM_unmatched)
 # Save the composite order
 bm_order_composite <- combined_data_heatmap_BM$Patient_Timepoint
 
+make_unique_heatmap_ids <- function(primary, fallback, prefix) {
+  ids <- as.character(primary)
+  missing_ids <- is.na(ids) | ids == ""
+  fallback_ids <- as.character(fallback)
+  ids[missing_ids] <- fallback_ids[missing_ids]
+  missing_ids <- is.na(ids) | ids == ""
+  ids[missing_ids] <- paste0(prefix, "_missing_id_", seq_len(sum(missing_ids)))
+  make.unique(ids, sep = "_dup")
+}
+
 # 1j. Prepare the BM heatmap matrix
 # Keep the Patient column for ordering; then drop it when forming the matrix
-rownames(combined_data_heatmap_BM) <- combined_data_heatmap_BM$Tumor_Sample_Barcode
+rownames(combined_data_heatmap_BM) <- make_unique_heatmap_ids(
+  combined_data_heatmap_BM$Tumor_Sample_Barcode,
+  combined_data_heatmap_BM$Patient_Timepoint,
+  "BM"
+)
 
-temp1 <- combined_data_heatmap_BM$Patient_Timepoint
+temp1 <- make_unique_heatmap_ids(
+  combined_data_heatmap_BM$Patient_Timepoint,
+  combined_data_heatmap_BM$Tumor_Sample_Barcode,
+  "BM"
+)
 
 # 2. Remove the unneeded columns but retain the row names
 temp2 <- combined_data_heatmap_BM %>%
@@ -587,9 +611,17 @@ combined_data_heatmap_blood <- combined_data_heatmap_blood %>%
     Patient_Timepoint
   ))
 
-rownames(combined_data_heatmap_blood) <- combined_data_heatmap_blood$Patient_Timepoint
+rownames(combined_data_heatmap_blood) <- make_unique_heatmap_ids(
+  combined_data_heatmap_blood$Patient_Timepoint,
+  combined_data_heatmap_blood$Tumor_Sample_Barcode,
+  "Blood"
+)
 
-temp1 <- combined_data_heatmap_blood$Patient_Timepoint
+temp1 <- make_unique_heatmap_ids(
+  combined_data_heatmap_blood$Patient_Timepoint,
+  combined_data_heatmap_blood$Tumor_Sample_Barcode,
+  "Blood"
+)
 
 # 2. Remove the unneeded columns but retain the row names
 temp2 <- combined_data_heatmap_blood %>%

@@ -2044,13 +2044,18 @@ tmp <- lab_summary %>%
 # 4) Quick pairwise scatter/diagnostic plot to catch unusual lab units.
 #    GGally is optional because this plot is not a manuscript output.
 if (requireNamespace("GGally", quietly = TRUE)) {
-  filled_df %>%
+  lab_qc_df <- filled_df %>%
     select(all_of(lab_vars)) %>%
     # drop rows with any NAs across labs
-    drop_na() %>%
-    # keep the diagnostic plot light when many rows are available
-    slice_sample(n = min(200, dplyr::n())) %>%
-    GGally::ggpairs(title = "Lab Variables Pairwise Check")
+    drop_na()
+  if (nrow(lab_qc_df) > 0) {
+    lab_qc_df %>%
+      # keep the diagnostic plot light when many rows are available
+      slice_sample(n = min(200, nrow(lab_qc_df))) %>%
+      GGally::ggpairs(title = "Lab Variables Pairwise Check")
+  } else {
+    message("Skipping optional GGally lab QC plot because no complete lab rows are available.")
+  }
 } else {
   message("Skipping optional GGally lab QC plot because GGally is not installed.")
 }

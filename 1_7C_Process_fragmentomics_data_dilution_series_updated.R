@@ -106,7 +106,7 @@ ins_fs.dir    <- "~/Documents/Thesis_work/R/M4/Projects/High_risk_MM_baselinbe_r
 clinical.csv  <- "~/Documents/Thesis_work/R/M4/Projects/High_risk_MM_baselinbe_relapse_marrow/Fragmentomics_data/Dilution_series/Metadata_dilution_series.csv"
 
 # 1e) If you have additional dilution series metadata file (e.g. dilution percentages), put it here:
-# meta.csv      <- file.path(ins_fs.dir, "Metadata_dilution_series.csv") ## Not used
+meta.csv      <- clinical.csv
 
 # 1f) Output folder for dilution series results
 out.dir       <- "~/Documents/Thesis_work/R/M4/Projects/High_risk_MM_baselinbe_relapse_marrow/Results_Fragmentomics/Dilution_series"
@@ -376,27 +376,40 @@ if (length(neg.fc3)) {
     thresholds.down$Zscore.Amplitude[neg.fc3]
 }
 
-# apply thresholds to classify each sample’s z-score
+# apply thresholds to classify each sample's z-score. A per-site lookup avoids
+# grouped-vector recycling and leaves underpowered comparisons as NA.
+threshold_lookup <- stats.data %>%
+  dplyr::select(
+    Site,
+    Coverage.fc, Coverage.threshold,
+    Midpoint.fc, Midpoint.threshold,
+    Amplitude.fc, Amplitude.threshold
+  )
+
 results.data <- results.data %>%
-  group_by(Site) %>%
-  mutate(
-    Threshold.Coverage = if (sign(stats.data$Coverage.fc[stats.data$Site == Site]) > 0) {
-      Zscore.Coverage > stats.data$Coverage.threshold[stats.data$Site == Site]
-    } else {
-      Zscore.Coverage < stats.data$Coverage.threshold[stats.data$Site == Site]
-    },
-    Threshold.Midpoint = if (sign(stats.data$Midpoint.fc[stats.data$Site == Site]) > 0) {
-      Zscore.Midpoint > stats.data$Midpoint.threshold[stats.data$Site == Site]
-    } else {
-      Zscore.Midpoint < stats.data$Midpoint.threshold[stats.data$Site == Site]
-    },
-    Threshold.Amplitude = if (sign(stats.data$Amplitude.fc[stats.data$Site == Site]) > 0) {
-      Zscore.Amplitude > stats.data$Amplitude.threshold[stats.data$Site == Site]
-    } else {
-      Zscore.Amplitude < stats.data$Amplitude.threshold[stats.data$Site == Site]
-    }
+  dplyr::left_join(threshold_lookup, by = "Site") %>%
+  dplyr::mutate(
+    Threshold.Coverage = dplyr::case_when(
+      is.na(Coverage.fc) | is.na(Coverage.threshold) ~ NA,
+      Coverage.fc > 0 ~ Zscore.Coverage > Coverage.threshold,
+      TRUE ~ Zscore.Coverage < Coverage.threshold
+    ),
+    Threshold.Midpoint = dplyr::case_when(
+      is.na(Midpoint.fc) | is.na(Midpoint.threshold) ~ NA,
+      Midpoint.fc > 0 ~ Zscore.Midpoint > Midpoint.threshold,
+      TRUE ~ Zscore.Midpoint < Midpoint.threshold
+    ),
+    Threshold.Amplitude = dplyr::case_when(
+      is.na(Amplitude.fc) | is.na(Amplitude.threshold) ~ NA,
+      Amplitude.fc > 0 ~ Zscore.Amplitude > Amplitude.threshold,
+      TRUE ~ Zscore.Amplitude < Amplitude.threshold
+    )
   ) %>%
-  ungroup()
+  dplyr::select(
+    -Coverage.fc, -Coverage.threshold,
+    -Midpoint.fc, -Midpoint.threshold,
+    -Amplitude.fc, -Amplitude.threshold
+  )
 
 # Save out per-site metrics + stats
 dir.create(file.path(out.dir, "Griffin"), recursive = TRUE, showWarnings = FALSE)
@@ -457,8 +470,13 @@ fs_df <- fs.files %>%
 
 ### 10. OPTIONAL: LOAD ADDITIONAL DILUTION METADATA  ######################################
 if (file.exists(meta.csv)) {
-  meta_df <- read_csv(meta.csv, show_col_types = FALSE) %>%
-    mutate(Sample = clean_sample(Sample))
+  meta_df <- read_csv(meta.csv, show_col_types = FALSE)
+  sample_key <- intersect(c("Sample", "Merge", "Sample_ID"), names(meta_df))[1]
+  if (is.na(sample_key)) {
+    stop("Dilution metadata must contain one of: Sample, Merge, Sample_ID. File: ", meta.csv)
+  }
+  meta_df <- meta_df %>%
+    mutate(Sample = clean_sample(.data[[sample_key]]))
 } else {
   meta_df <- tibble(Sample = character(0))
 }

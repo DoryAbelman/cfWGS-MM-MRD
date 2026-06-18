@@ -297,14 +297,14 @@ vars_cat <- c(
 )
 
 dat_base <- dat_base %>%
-  mutate(across(all_of(vars_cat), ~ factor(.x, exclude = NULL)))
+  mutate(across(all_of(vars_cat), ~ factor(.x)))
 
 
 # -----------------------------------------------------------
 # 4.  BUILD TABLE 1  ---------------------------------------
 # -----------------------------------------------------------
 tbl1 <- dat_base %>%
-  select(all_of(c(vars_cat, "cohort"))) %>%
+  select(all_of(c(vars_cat, vars_cont, "cohort"))) %>%
   tbl_summary(
     by        = cohort,
     type      = all_continuous() ~ "continuous",

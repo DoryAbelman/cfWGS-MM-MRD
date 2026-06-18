@@ -56,10 +56,14 @@ library(scales)
 library(conflicted)
 
 # resolve common conflicts
-conflicted::conflicts_prefer("dplyr::mutate")
-conflicted::conflicts_prefer("dplyr::filter")
-conflicted::conflicts_prefer("dplyr::select")
-conflicted::conflicts_prefer("dplyr::summarize")
+conflicted::conflicts_prefer(
+  dplyr::mutate,
+  dplyr::filter,
+  dplyr::select,
+  dplyr::summarise,
+  dplyr::summarize,
+  .quiet = TRUE
+)
 
 
 # ──────────────────────────────────────────────────────────────────────────────

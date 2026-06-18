@@ -2913,10 +2913,8 @@ wrap_labels <- function(labels, width = 20) {
   sapply(labels, function(x) paste(strwrap(x, width = width), collapse = "\n"))
 }
 
-wrapped_labels <- wrap_labels(names(pair_df), width = 15)
-
-
 pair_df <- pair_df %>% select(-Patient)
+wrapped_labels <- wrap_labels(names(pair_df), width = 15)
 p_pairs <- ggpairs(
   pair_df,
   columns    = 1:ncol(pair_df),

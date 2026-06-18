@@ -60,6 +60,10 @@ library(rmda)        # Decision curve analysis (DCA) for clinical utility
 library(lubridate)   # Date/time manipulation
 library(scales)      # Formatting helpers (percent_format,, etc.)
 library(readr)       # Fast CSV import/export
+library(stringr)     # String normalization for timepoint labels and sample IDs
+library(tibble)      # column_to_rownames for confusion matrix helpers
+library(broom)       # Tidy summaries for logistic model outputs
+library(purrr)       # Functional iteration over model/list columns
 
 
 # ===========================================================================
@@ -128,6 +132,7 @@ if (file.exists(PATH_THRESHOLD_LIST)) {
 cat("\nLoading EasyM data from script 3_1_A...\n")
 
 EasyM_file <- file.path(OUTPUT_DIR_EASYМ, "EasyM_all_samples_with_optimized_calls.csv")
+EasyM_thresholds <- NULL
 
 if (file.exists(EasyM_file)) {
   EasyM_data <- readr::read_csv(EasyM_file, show_col_types = FALSE)
@@ -317,6 +322,11 @@ mfc_sentence
 seq_sentence
 
 ## Counts 
+tp_labels <- c(
+  "Post-ASCT" = "post-ASCT",
+  "Maintenance-1yr" = "1-year maintenance"
+)
+
 # 1) Counts per landmark timepoint
 front_counts <- dat %>%
   filter(Cohort == "Frontline", !is.na(landmark_tp)) %>%
@@ -2165,14 +2175,24 @@ techs <- c(
 ## ── Core contingency (one row) ─────────────────────────────────────────
 compute_ct <- function(df, pred_col, truth_col) {
   if (!all(c(pred_col, truth_col) %in% names(df))) return(NULL)
-  dd <- df %>% select(all_of(c(pred_col, truth_col))) %>% drop_na() %>% mutate(across(everything(), as.integer))
+
+  # Build an explicit 2 x 2 table on numeric 0/1 calls.  The original
+  # table()/complete() implementation was sensitive to retained column names
+  # and factor levels when called from Rscript; this version makes the
+  # prediction/truth roles unambiguous and preserves zero-count cells.
+  dd <- df %>%
+    transmute(
+      Pred = as.integer(.data[[pred_col]]),
+      Truth = as.integer(.data[[truth_col]])
+    ) %>%
+    filter(!is.na(Pred), !is.na(Truth))
+
   if (nrow(dd) == 0) return(NULL)
-  
-  tbl <- as.data.frame(table(Pred = dd[[pred_col]], Truth = dd[[truth_col]]))
-  tbl <- complete(tbl,
-                  Pred  = factor(c(0,1), levels = c(0,1)),
-                  Truth = factor(c(0,1), levels = c(0,1)),
-                  fill  = list(Freq = 0)) %>% arrange(Pred, Truth)
+
+  tbl <- dd %>%
+    count(Pred, Truth, name = "Freq") %>%
+    complete(Pred = 0:1, Truth = 0:1, fill = list(Freq = 0)) %>%
+    arrange(Pred, Truth)
   
   tp <- tbl$Freq[tbl$Pred == 1 & tbl$Truth == 1]
   fp <- tbl$Freq[tbl$Pred == 1 & tbl$Truth == 0]
@@ -2614,13 +2634,48 @@ fit_disc_model <- function(outcome) {
   glm(formula, data = tbl %>% drop_na(all_of(num_vars)), family = binomial)
 }
 
+# Sparse discordance strata can produce complete/quasi-complete separation.
+# Profile-likelihood intervals are preferred when available, but they can fail
+# when there are too few non-NA support points.  In that case we keep the model
+# summary command-line-runnable by reporting Wald intervals and recording the
+# interval method explicitly.
+safe_tidy_glm <- function(model, conf.level = 0.95, exponentiate = TRUE) {
+  profiled <- tryCatch(
+    broom::tidy(model, conf.int = TRUE, conf.level = conf.level, exponentiate = exponentiate),
+    error = function(e) NULL
+  )
+
+  if (!is.null(profiled)) {
+    return(profiled %>% mutate(ci_method = "profile"))
+  }
+
+  z <- qnorm((1 + conf.level) / 2)
+  wald <- broom::tidy(model, conf.int = FALSE, exponentiate = FALSE) %>%
+    mutate(
+      conf.low = estimate - z * std.error,
+      conf.high = estimate + z * std.error,
+      ci_method = "wald_fallback"
+    )
+
+  if (isTRUE(exponentiate)) {
+    wald <- wald %>%
+      mutate(
+        estimate = exp(estimate),
+        conf.low = exp(conf.low),
+        conf.high = exp(conf.high)
+      )
+  }
+
+  wald
+}
+
 # 5) Fit pooled logistic models
 glm_missed   <- fit_disc_model("is_missed")   # 1 = missed, 0 = else
 glm_captured <- fit_disc_model("is_captured") # 1 = captured, 0 = else
 
 # 6) Tidy results with odds‐ratios and 95% CIs
-tidy_missed   <- tidy(glm_missed,   conf.int = TRUE, exponentiate = TRUE)
-tidy_captured <- tidy(glm_captured, conf.int = TRUE, exponentiate = TRUE)
+tidy_missed   <- safe_tidy_glm(glm_missed)
+tidy_captured <- safe_tidy_glm(glm_captured)
 
 print(tidy_missed)
 print(tidy_captured)
@@ -2632,8 +2687,8 @@ by_comp <- tbl %>%
   mutate(
     missed_mod   = map(data, ~ glm(is_missed   ~ ., data = select(.x, all_of(num_vars), is_missed),   family=binomial)),
     captured_mod = map(data, ~ glm(is_captured ~ ., data = select(.x, all_of(num_vars), is_captured), family=binomial)),
-    missed_tidy   = map(missed_mod,   ~ tidy(.x, conf.int=TRUE, exponentiate=TRUE)),
-    captured_tidy = map(captured_mod, ~ tidy(.x, conf.int=TRUE, exponentiate=TRUE))
+    missed_tidy   = map(missed_mod, safe_tidy_glm),
+    captured_tidy = map(captured_mod, safe_tidy_glm)
   ) %>%
   select(Comparator, missed_tidy, captured_tidy) %>%
   unnest(c(missed_tidy, captured_tidy), names_sep = "_")
@@ -4107,12 +4162,29 @@ cat("  • CLINICIAN: Original MRD+/- classifications from EasyM assay\n")
 cat("  • OPTIMIZED: Data-driven threshold (log-rank chi-square optimization)\n")
 cat("\n")
 cat("Primary timepoints with optimized thresholds:\n")
-if (!is.null(EasyM_thresholds) && nrow(EasyM_thresholds) > 0) {
-  for (i in seq_len(nrow(EasyM_thresholds))) {
-    row <- EasyM_thresholds[i, ]
+threshold_summary_tbl <- NULL
+if (exists("EasyM_thresholds", inherits = FALSE) && !is.null(EasyM_thresholds)) {
+  threshold_summary_tbl <- EasyM_thresholds
+} else if (exists("easyM_thresholds", inherits = FALSE) && !is.null(easyM_thresholds)) {
+  threshold_summary_tbl <- easyM_thresholds
+}
+
+if (!is.null(threshold_summary_tbl) && nrow(threshold_summary_tbl) > 0) {
+  threshold_col <- dplyr::case_when(
+    "opt_cut_raw" %in% names(threshold_summary_tbl) ~ "opt_cut_raw",
+    "Threshold_raw_percent" %in% names(threshold_summary_tbl) ~ "Threshold_raw_percent",
+    TRUE ~ NA_character_
+  )
+
+  for (i in seq_len(nrow(threshold_summary_tbl))) {
+    row <- threshold_summary_tbl[i, ]
     tp <- row$Timepoint
-    cut <- row$opt_cut_raw
-    cat(sprintf("  • TP%s: Threshold = %.4f%%\n", tp, cut))
+    cut <- if (!is.na(threshold_col)) row[[threshold_col]] else NA_real_
+    if (is.na(cut)) {
+      cat(sprintf("  • TP%s: threshold value column not found\n", tp))
+    } else {
+      cat(sprintf("  • TP%s: Threshold = %.4f%%\n", tp, cut))
+    }
   }
 } else {
   cat("  (Threshold table not available)\n")
