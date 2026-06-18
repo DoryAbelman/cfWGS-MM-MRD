@@ -40,9 +40,16 @@
 # How to run:
 #   Rscript Scripts_2025/Final_Scripts/2_1_Clinical_Demographics_Table.R
 #
-# Role in manuscript workflow:
-#   Direct manuscript-output script. Mapped output(s): Table_1 panel/sheet
-#   all. Generates Table 1 source outputs.
+# Manuscript outputs created/updated:
+#   - Table 1: baseline clinical/demographic characteristics, exported as the
+#     generated Word source and, when present, the manually edited final DOCX/PDF
+#     used for the manuscript.
+#
+# Pipeline role:
+#   Table 1 is built from the baseline/diagnosis sample per patient after
+#   resolving known duplicate baseline records. The cohort assignment exported
+#   here is reused by later scripts so clinical grouping is consistent across
+#   figures, supplementary tables, and survival analyses.
 #
 # Author: Dory Abelman
 # Date:   2025-05-26
@@ -56,6 +63,16 @@ library(tidyverse)
 library(gtsummary)
 library(officer)
 library(flextable)
+
+# Shared manuscript-output helpers.
+# These copy the exact final Table 1 artifacts into final_manuscript_objects/
+# while retaining this script as the place where the Table 1 source is built.
+.manuscript_helper <- file.path("Scripts_2025", "Final_Scripts", "manuscript_output_helpers.R")
+if (!file.exists(.manuscript_helper)) {
+  .manuscript_helper <- "manuscript_output_helpers.R"
+}
+source(.manuscript_helper)
+rm(.manuscript_helper)
 
 
 # -----------------------------------------------------------
@@ -245,6 +262,101 @@ dat_base <- dat_base %>%
   ) %>%
   select(-Cytogenetic_Risk_calc)   # drop the helper column if you like
 
+### Export deterministic Table 1 source-data companions
+# These CSV/TSV files are not the formatted manuscript table. They are a
+# reviewer/developer-friendly audit trail for the categorical counts and
+# denominators that feed the gtsummary Table 1 object below. Keeping them in the
+# original Table 1 script makes the final_manuscript_objects source-data folder
+# reproducible without relying on the separate reproducible_workflow generator.
+format_table1_count_percent <- function(n, denominator) {
+  if (is.na(n) || is.na(denominator) || denominator == 0) {
+    return("0 (0%)")
+  }
+  paste0(n, " (", round(100 * n / denominator), "%)")
+}
+
+table1_labels <- c(
+  Gender = "Gender",
+  AGE_GROUP = "Age Group",
+  ISS_STAGE = "ISS Stage",
+  Cytogenetic_Risk = "Cytogenetic Risk",
+  Subtype = "Myeloma Ig Subtype",
+  ECOG_SCORE = "ECOG Performance Status"
+)
+table1_cohort_levels <- c("Frontline induction-transplant", "Non-frontline")
+
+table1_source_rows <- list()
+for (variable in vars_cat) {
+  values <- as.character(dat_base[[variable]])
+  display_values <- ifelse(is.na(values), "(Missing)", values)
+  levels_to_show <- unique(display_values)
+  levels_to_show <- levels_to_show[order(levels_to_show == "(Missing)", levels_to_show)]
+
+  for (level in levels_to_show) {
+    source_row <- data.frame(
+      variable = unname(table1_labels[[variable]]),
+      level = level,
+      stringsAsFactors = FALSE
+    )
+    for (cohort_level in table1_cohort_levels) {
+      in_cohort <- dat_base$cohort == cohort_level
+      n_level <- sum(in_cohort & display_values == level, na.rm = TRUE)
+      denominator <- sum(in_cohort, na.rm = TRUE)
+      source_row[[cohort_level]] <- format_table1_count_percent(n_level, denominator)
+    }
+    source_row[["Total"]] <- format_table1_count_percent(
+      sum(display_values == level, na.rm = TRUE),
+      nrow(dat_base)
+    )
+    table1_source_rows[[length(table1_source_rows) + 1]] <- source_row
+  }
+}
+
+table1_source_counts <- bind_rows(table1_source_rows)
+dir.create("Output_tables_2025", recursive = TRUE, showWarnings = FALSE)
+table1_source_counts_path <- file.path(
+  "Output_tables_2025",
+  "Table_1_clinical_demographics_computed_source_counts.csv"
+)
+write.csv(table1_source_counts, table1_source_counts_path, row.names = FALSE, quote = TRUE)
+
+table1_source_qc <- data.frame(
+  input_rds = "Final_aggregate_table_cfWGS_features_with_clinical_and_demographics_updated5.rds",
+  cohort_csv = "Output_tables_2025/patient_cohort_assignment.csv",
+  n_baseline_table_patients = nrow(dat_base),
+  n_frontline = sum(dat_base$cohort == "Frontline induction-transplant", na.rm = TRUE),
+  n_non_frontline = sum(dat_base$cohort == "Non-frontline", na.rm = TRUE),
+  output_csv = table1_source_counts_path,
+  stringsAsFactors = FALSE
+)
+table1_source_qc_path <- file.path(
+  "Output_tables_2025",
+  "Table_1_clinical_demographics_computed_source_qc.tsv"
+)
+write.table(
+  table1_source_qc,
+  file = table1_source_qc_path,
+  sep = "\t",
+  row.names = FALSE,
+  quote = TRUE,
+  na = ""
+)
+
+ms_copy_artifact(
+  source_path = table1_source_counts_path,
+  artifact_id = "TABLE1_DOCX",
+  role = "main_table_source_counts_csv",
+  description = "Table 1 computed categorical count/percent source data used to build the gtsummary table.",
+  script_name = "2_1_Clinical_Demographics_Table.R"
+)
+
+ms_copy_artifact(
+  source_path = table1_source_qc_path,
+  artifact_id = "TABLE1_DOCX",
+  role = "main_table_source_qc_tsv",
+  description = "Table 1 source-data QC summary with input paths and cohort denominators.",
+  script_name = "2_1_Clinical_Demographics_Table.R"
+)
 
 ### Build and export categorical manuscript Table 1 source
 tbl1_cat <- dat_base %>%
@@ -273,7 +385,57 @@ tbl1_flex <- as_flex_table(tbl1_cat)
 doc <- read_docx() %>%
   body_add_flextable(tbl1_flex) %>%
   body_end_section_portrait()
-print(doc, target = "table1_clinical_categorical_updated_final_3.docx")
+table1_generated_docx <- "table1_clinical_categorical_updated_final_3.docx"
+print(doc, target = table1_generated_docx)
+
+# MANUSCRIPT OUTPUT: Table 1
+# This script regenerates the categorical Table 1 source DOCX above. The mapped
+# final manuscript artifacts are the manually DA-edited DOCX and exported PDF in
+# Final Tables and Figures/. Those frozen files are copied when present because
+# they are the exact files used in the current manuscript. If the edited DOCX is
+# absent, we still export the regenerated source DOCX so a command-line run has
+# a usable Table 1 artifact, but the manifest will make the source filename clear.
+table1_final_docx <- file.path(
+  "Final Tables and Figures",
+  "table1_clinical_categorical_updated_final_3_DA_edited.docx"
+)
+table1_final_pdf <- file.path(
+  "Final Tables and Figures",
+  "table1_clinical_categorical_updated_final_3_DA_edited.pdf"
+)
+
+table1_docx_to_copy <- if (file.exists(table1_final_docx)) {
+  table1_final_docx
+} else {
+  warning(
+    "Final edited Table 1 DOCX was not found; copying regenerated source DOCX instead: ",
+    table1_generated_docx
+  )
+  table1_generated_docx
+}
+
+ms_copy_artifact(
+  source_path = table1_docx_to_copy,
+  artifact_id = "TABLE1_DOCX",
+  role = "main_table_docx",
+  description = "Table 1: clinical and demographic baseline characteristics. Edited manuscript DOCX is preferred when present; otherwise the regenerated source DOCX is copied.",
+  script_name = "2_1_Clinical_Demographics_Table.R"
+)
+
+if (file.exists(table1_final_pdf)) {
+  ms_copy_artifact(
+    source_path = table1_final_pdf,
+    artifact_id = "TABLE1_PDF",
+    role = "main_table_pdf",
+    description = "Table 1: edited/exported manuscript PDF corresponding to the final DOCX table.",
+    script_name = "2_1_Clinical_Demographics_Table.R"
+  )
+} else {
+  warning(
+    "Final edited Table 1 PDF was not found. The PDF is a manuscript/export artifact and is not regenerated by this R script: ",
+    table1_final_pdf
+  )
+}
 
 ### Exploratory/legacy continuous Table 1 companion
 # This block is retained from the original script for traceability, but it is

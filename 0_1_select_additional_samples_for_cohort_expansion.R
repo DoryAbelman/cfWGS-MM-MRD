@@ -15,11 +15,9 @@
 # How to run:
 #   Rscript Scripts_2025/Final_Scripts/0_1_select_additional_samples_for_cohort_expansion.R
 #
-# Role in manuscript workflow:
-#   Upstream/intermediate processing script. It does not usually export a
-#   final assembled manuscript figure/table directly, but its outputs feed
-#   later manuscript source scripts. Identifies additional eligible samples
-#   and timepoint classes.
+# Manuscript outputs created/updated:
+#   - None directly. This upstream script identifies additional eligible
+#     samples and timepoint classes that feed later manuscript-output scripts.
 #
 # Author: Dory Abelman
 # Date: 2026-02-05

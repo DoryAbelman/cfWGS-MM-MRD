@@ -47,11 +47,10 @@
 # How to run:
 #   Rscript Scripts_2025/Final_Scripts/1_4A_Process_sequenza_CNA_Data.R
 #
-# Role in manuscript workflow:
-#   This is an upstream CNA-processing script. It does not directly export a
-#   mapped manuscript figure/table, but its outputs feed WGS feature integration,
-#   CNA/FISH concordance analyses, Supplementary Table 2, and downstream
-#   subclonal-evolution/supporting CNA summaries.
+# Manuscript outputs created/updated:
+#   - None directly. This upstream CNA-processing script creates Sequenza CNA
+#     feature tables for WGS feature integration, CNA/FISH concordance,
+#     Supplementary Table 2, and downstream subclonal-evolution support.
 #
 # Inputs:
 #   • seg_dir   = directory with Sequenza segment files (e.g., “…/All_Segments_400/”)

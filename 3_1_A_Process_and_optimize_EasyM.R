@@ -24,11 +24,10 @@
 # How to run:
 #   Rscript Scripts_2025/Final_Scripts/3_1_A_Process_and_optimize_EasyM.R
 #
-# Role in manuscript workflow:
-#   Upstream/intermediate processing script. It does not usually export a
-#   final assembled manuscript figure/table directly, but its outputs feed
-#   later manuscript source scripts. Processes EasyM/proteomic MRD
-#   thresholds and comparisons.
+# Manuscript outputs created/updated:
+#   - None directly in the current mapped manuscript set. This upstream/support
+#     script processes EasyM/proteomic MRD thresholds and comparisons used by
+#     later clinical-concordance and survival analyses.
 ## ============================================================
 
 ## ============================================================

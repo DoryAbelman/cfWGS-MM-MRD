@@ -38,12 +38,20 @@
 ##  How to run:
 ##    Rscript Scripts_2025/Final_Scripts/4_1_Survival_Analysis.R
 ##
-##  Role in manuscript workflow:
-##    Direct manuscript-output script. Mapped outputs include Figure 3F,
-##    Figure 4E, Extended Data Figures 6A-K, Extended Data Figures 8A-D,
-##    Extended Data Figure 8 bottom panels, and Supplementary Table 9.
-##    Generates survival, relapse-detection, and assay-sensitivity
-##    figures/tables.
+##  Manuscript outputs created/updated:
+##    - Figure 3F: BM cfWGS time-to-event/survival panel.
+##    - Figure 4E: blood cfWGS time-to-event/survival panel.
+##    - Extended Data Figure 6A-K: BM cfWGS survival and relapse-detection
+##      sensitivity panels.
+##    - Extended Data Figure 8A-D plus unlabeled bottom panels: blood cfWGS
+##      survival and relapse-detection sensitivity panels.
+##    - Supplementary Table 9: BM/blood time-window detection results.
+##
+##  Pipeline role:
+##    Survival analyses are downstream of frozen cfWGS calls. The script tests
+##    whether MRD status at clinically meaningful landmarks is associated with
+##    progression-free survival and estimates how often relapsing patients were
+##    detected by each assay before progression.
 ##  
 ##  Author: Dory Abelman
 ##  Updated: February 2026
@@ -71,6 +79,16 @@ library(timeROC)         # Time-dependent ROC analysis (optional)
 library(scales)          # Axis/percentage label formatting
 library(glue)            # Inline text summaries for manuscript-ready statements
 library(writexl)         # Simple multi-sheet Excel exports
+
+# Shared manuscript-output helpers.
+# These functions copy or save the exact figure/table files produced below into
+# final_manuscript_objects/, organized by final manuscript figure/table label.
+.manuscript_helper <- file.path("Scripts_2025", "Final_Scripts", "manuscript_output_helpers.R")
+if (!file.exists(.manuscript_helper)) {
+  .manuscript_helper <- "manuscript_output_helpers.R"
+}
+source(.manuscript_helper)
+rm(.manuscript_helper)
 
 ## ─────────────────────────────────────────────────────────────────────────────
 ## INPUT FILES: Clinical outcomes and cfWGS results
@@ -416,6 +434,24 @@ dx_tbl <- survival_df %>%
 
 cat("  ✓ Configuration complete\n\n")
 
+# MANUSCRIPT PANEL MAP FOR KAPLAN-MEIER CURVES
+# The KM loop below creates many exploratory and QC curves. Only the
+# combinations listed here are active manuscript panels. Mapping by the
+# internal timepoint and assay column is deliberate: it is more stable than
+# matching on display text or filenames, which have changed across revisions.
+km_manuscript_artifacts <- tibble::tribble(
+  ~timepoint_info,    ~assay_variable,                            ~artifact_id, ~description,
+  "1yr maintenance",  "BM_zscore_only_detection_rate_call",        "FIG3F",     "Figure 3F: one-year maintenance PFS by BM-derived cfWGS MRD status.",
+  "1yr maintenance",  "Blood_zscore_only_sites_call",              "FIG4E",     "Figure 4E: one-year maintenance PFS by cfDNA-derived cfWGS MRD status.",
+  "1yr maintenance",  "Flow_Binary",                               "EDFIG6C",   "Extended Data Figure 6C: one-year maintenance PFS by MFC MRD status.",
+  "1yr maintenance",  "Adaptive_Binary",                           "EDFIG6D",   "Extended Data Figure 6D: one-year maintenance PFS by clonoSEQ MRD status.",
+  "post_transplant",  "BM_zscore_only_detection_rate_call",        "EDFIG6E",   "Extended Data Figure 6E: post-ASCT PFS by BM-derived cfWGS MRD status.",
+  "post_transplant",  "Flow_Binary",                               "EDFIG6F",   "Extended Data Figure 6F: post-ASCT PFS by MFC MRD status.",
+  "1yr maintenance",  "EasyM_optimized_binary",                    "EDFIG6G",   "Extended Data Figure 6G: one-year maintenance PFS by EasyM MRD status.",
+  "post_transplant",  "EasyM_optimized_binary",                    "EDFIG6H",   "Extended Data Figure 6H: post-ASCT PFS by EasyM MRD status.",
+  "post_transplant",  "Blood_zscore_only_sites_call",              "EDFIG8C",   "Extended Data Figure 8C: post-ASCT PFS by cfDNA-derived cfWGS MRD status."
+)
+
 
 ## ── 4. GENERATE KAPLAN-MEIER CURVES: Timepoint × Technology Analysis ────────
 ##
@@ -476,6 +512,7 @@ for(tp in tps) {
   for(var in names(techs)) {
     assay_lab <- techs[[var]]
     fname     <- file.path(tp_dir, paste0("KM_", assay_lab, "_", nice_tp, "_updated_no_CI_", date_tag, ".png"))
+    fname_manuscript <- file.path(tp_dir, paste0("KM_", assay_lab, "_", nice_tp, "_updated_no_CI.png"))
     
     # ─────────────────────────────────────────────────────────────────────────
     # PREPARE DATA FOR THIS TIMEPOINT × ASSAY
@@ -593,6 +630,32 @@ for(tp in tps) {
       height   = 7,
       dpi      = dpi_target
     )
+
+    # MANUSCRIPT OUTPUT: stable no-date copy of active KM panels
+    # The dated file above is retained as the run archive. The no-date file
+    # below is the stable manuscript source file used for Figure 3F, Figure 4E,
+    # and Extended Data Figures 6C-H/8C. Keeping both makes reruns auditable
+    # while giving the manuscript pipeline stable filenames.
+    ggsave(
+      filename = fname_manuscript,
+      plot     = combined,
+      width    = 7,
+      height   = 7,
+      dpi      = dpi_target
+    )
+
+    km_artifact <- km_manuscript_artifacts %>%
+      filter(timepoint_info == tp, assay_variable == var)
+
+    if (nrow(km_artifact) == 1) {
+      ms_copy_artifact(
+        source_path = fname_manuscript,
+        artifact_id = km_artifact$artifact_id,
+        role = "figure_panel_png",
+        description = km_artifact$description,
+        script_name = "4_1_Survival_Analysis.R"
+      )
+    }
   }
 }
 
@@ -1404,12 +1467,23 @@ print(p_sens)
 # SAVE BM-SUBSET SENSITIVITY BARPLOT (500 DPI for manuscripts)
 # Saves to: Final Tables and Figures/Supp_6A_Fig_sensitivity_by_tech_training3_{date}.png
 
+edfig6a_path <- paste0("Final Tables and Figures/Supp_6A_Fig_sensitivity_by_tech_training3_", date_tag, ".png")
 ggsave(
-  filename = paste0("Final Tables and Figures/Supp_6A_Fig_sensitivity_by_tech_training3_", date_tag, ".png"),
+  filename = edfig6a_path,
   plot     = p_sens,
   width    = 6,
   height   = 4,
   dpi      = 500
+)
+
+# MANUSCRIPT OUTPUT: Extended Data Figure 6A
+# BM-subset relapse-detection sensitivity by MRD assay and landmark timepoint.
+ms_copy_artifact(
+  source_path = edfig6a_path,
+  artifact_id = "EDFIG6A",
+  role = "figure_panel_png",
+  description = "Extended Data Figure 6A: BM-subset sensitivity by MRD assay and landmark timepoint.",
+  script_name = "4_1_Survival_Analysis.R"
 )
 
 cat("  ✓ Saved BM-subset sensitivity barplot\n\n")
@@ -1493,12 +1567,23 @@ p_sens_blood
 # SAVE BLOOD-SUBSET SENSITIVITY BARPLOT (500 DPI for manuscripts)
 # Saves to: Final Tables and Figures/Supp_8A_Fig_sensitivity_by_tech_training_blood2_{date}.png
 
+edfig8a_path <- paste0("Final Tables and Figures/Supp_8A_Fig_sensitivity_by_tech_training_blood2_", date_tag, ".png")
 ggsave(
-  filename = paste0("Final Tables and Figures/Supp_8A_Fig_sensitivity_by_tech_training_blood2_", date_tag, ".png"),
+  filename = edfig8a_path,
   plot     = p_sens_blood,
   width    = 6,
   height   = 4,
   dpi      = 500
+)
+
+# MANUSCRIPT OUTPUT: Extended Data Figure 8A
+# Blood-subset relapse-detection sensitivity by MRD assay and landmark timepoint.
+ms_copy_artifact(
+  source_path = edfig8a_path,
+  artifact_id = "EDFIG8A",
+  role = "figure_panel_png",
+  description = "Extended Data Figure 8A: blood-subset sensitivity by MRD assay and landmark timepoint.",
+  script_name = "4_1_Survival_Analysis.R"
 )
 
 cat("  ✓ Saved blood-subset sensitivity barplot\n\n")
@@ -3158,8 +3243,18 @@ p_hr <- ggplot(hr_plot_df_blood,
     legend.text        = element_text(size = 8)
   )
 
-ggsave(paste0("Final Tables and Figures/SuppFig8B_cfWGS_blood_HR_updated3_", date_tag, ".png"),
-       p_hr, width = 6, height = 4, dpi = 600)
+edfig8b_path <- paste0("Final Tables and Figures/SuppFig8B_cfWGS_blood_HR_updated3_", date_tag, ".png")
+ggsave(edfig8b_path, p_hr, width = 6, height = 4, dpi = 600)
+
+# MANUSCRIPT OUTPUT: Extended Data Figure 8B
+# Hazard ratios for relapse by blood-derived MRD assay and landmark timepoint.
+ms_copy_artifact(
+  source_path = edfig8b_path,
+  artifact_id = "EDFIG8B",
+  role = "figure_panel_png",
+  description = "Extended Data Figure 8B: hazard ratios by blood-derived MRD assay and landmark timepoint.",
+  script_name = "4_1_Survival_Analysis.R"
+)
 
 
 
@@ -3275,8 +3370,18 @@ p_hr_bm <- ggplot(hr_plot_df_bm,
 
 p_hr_bm
 
-ggsave(paste0("Final Tables and Figures/Supp_Figure_6B_cfWGS_BM_HR_updated3_", date_tag, ".png"),
-       p_hr_bm, width = 6, height = 4, dpi = 600)
+edfig6b_path <- paste0("Final Tables and Figures/Supp_Figure_6B_cfWGS_BM_HR_updated3_", date_tag, ".png")
+ggsave(edfig6b_path, p_hr_bm, width = 6, height = 4, dpi = 600)
+
+# MANUSCRIPT OUTPUT: Extended Data Figure 6B
+# Hazard ratios for relapse by BM-derived MRD assay and landmark timepoint.
+ms_copy_artifact(
+  source_path = edfig6b_path,
+  artifact_id = "EDFIG6B",
+  role = "figure_panel_png",
+  description = "Extended Data Figure 6B: hazard ratios by BM-derived MRD assay and landmark timepoint.",
+  script_name = "4_1_Survival_Analysis.R"
+)
 
 
 
@@ -3475,6 +3580,16 @@ ggsave("Final Tables and Figures/F4C_cfWGS_prob_vs_time_updated5.png",
 
 ggsave("Final Tables and Figures/F4C_cfWGS_prob_vs_time_updated5_label.png",
        p_prob2, width = 6, height = 4.5, dpi = 600)
+
+# MANUSCRIPT OUTPUT: Extended Data Figure 6J
+# BM-derived cfWGS probability versus time before relapse/censoring.
+ms_copy_artifact(
+  source_path = "Final Tables and Figures/F4C_cfWGS_prob_vs_time_updated5_label.png",
+  artifact_id = "EDFIG6J",
+  role = "figure_panel_png",
+  description = "Extended Data Figure 6J: BM-derived cfWGS probability over time before relapse or censoring.",
+  script_name = "4_1_Survival_Analysis.R"
+)
 
 
 
@@ -3837,6 +3952,16 @@ print(final_plot)
 ggsave("Final Tables and Figures/Fig_4D_time_to_relapse_footer3cols_BM_muts.png",
        final_plot, width = 5.5, height = 5.5, dpi = 600)
 
+# MANUSCRIPT OUTPUT: Extended Data Figure 6K
+# BM-derived cfWGS probability by time-to-relapse window with footer summaries.
+ms_copy_artifact(
+  source_path = "Final Tables and Figures/Fig_4D_time_to_relapse_footer3cols_BM_muts.png",
+  artifact_id = "EDFIG6K",
+  role = "figure_panel_png",
+  description = "Extended Data Figure 6K: BM-derived cfWGS probability versus days before relapse with summary footer.",
+  script_name = "4_1_Survival_Analysis.R"
+)
+
 
 
 plot_df2 %>%
@@ -4043,6 +4168,16 @@ ggsave("Final Tables and Figures/F4C_cfWGS_prob_vs_time_updated3_blood4.png",
 
 ggsave("Final Tables and Figures/F4C_cfWGS_prob_vs_time_updated3_blood2_labelled3.png",
        p_prob2, width = 6, height = 4.5, dpi = 600)
+
+# MANUSCRIPT OUTPUT: Extended Data Figure 8 bottom-left panel
+# Blood-derived cfWGS probability versus time before relapse/censoring.
+ms_copy_artifact(
+  source_path = "Final Tables and Figures/F4C_cfWGS_prob_vs_time_updated3_blood2_labelled3.png",
+  artifact_id = "EDFIG8_UNLABELED_BOTTOM_LEFT",
+  role = "figure_panel_png",
+  description = "Extended Data Figure 8 bottom-left panel: cfDNA-derived cfWGS probability over time before relapse or censoring.",
+  script_name = "4_1_Survival_Analysis.R"
+)
 
 
 ## Way Trevor was thinking 
@@ -4413,6 +4548,16 @@ final_plot <- p_main / bottom_row + plot_layout(heights = c(1, 0.22))
 print(final_plot)
 ggsave("Final Tables and Figures/Fig_4D_time_to_relapse_footer3cols_blood_muts.png",
        final_plot, width = 5.5, height = 5.5, dpi = 600)
+
+# MANUSCRIPT OUTPUT: Extended Data Figure 8 bottom-right panel
+# Blood-derived cfWGS probability by time-to-relapse window with footer summaries.
+ms_copy_artifact(
+  source_path = "Final Tables and Figures/Fig_4D_time_to_relapse_footer3cols_blood_muts.png",
+  artifact_id = "EDFIG8_UNLABELED_BOTTOM_RIGHT",
+  role = "figure_panel_png",
+  description = "Extended Data Figure 8 bottom-right panel: cfDNA-derived cfWGS probability versus days before relapse with summary footer.",
+  script_name = "4_1_Survival_Analysis.R"
+)
 
 
 
@@ -4879,6 +5024,16 @@ ggsave("Final Tables and Figures/Supp_Fig_6_Fig_sensitivity_windows_BM_test_coho
        plot = p_sens_bm,
        width = 4.75, height = 6.25, dpi = 500)
 
+# MANUSCRIPT OUTPUT: Extended Data Figure 6I
+# Test-cohort BM sensitivity across relapse follow-up windows.
+ms_copy_artifact(
+  source_path = "Final Tables and Figures/Supp_Fig_6_Fig_sensitivity_windows_BM_test_cohort_updated2.png",
+  artifact_id = "EDFIG6I",
+  role = "figure_panel_png",
+  description = "Extended Data Figure 6I: BM test-cohort sensitivity across relapse follow-up windows.",
+  script_name = "4_1_Survival_Analysis.R"
+)
+
 
 ### Now remake for blood muts
 sens_blood_df <- results_blood %>%
@@ -4938,6 +5093,16 @@ p_sens_blood <- ggplot(sens_blood_df,
 ggsave("Final Tables and Figures/Supp_Fig_8_Fig_sensitivity_windows_blood_test_cohort3.png",
        plot = p_sens_blood,
        width = 5, height = 5, dpi = 500)
+
+# MANUSCRIPT OUTPUT: Extended Data Figure 8D
+# Test-cohort blood sensitivity across relapse follow-up windows.
+ms_copy_artifact(
+  source_path = "Final Tables and Figures/Supp_Fig_8_Fig_sensitivity_windows_blood_test_cohort3.png",
+  artifact_id = "EDFIG8D",
+  role = "figure_panel_png",
+  description = "Extended Data Figure 8D: blood test-cohort sensitivity across relapse follow-up windows.",
+  script_name = "4_1_Survival_Analysis.R"
+)
 
 
 
@@ -4999,6 +5164,16 @@ export_list <- list(
 write_xlsx(
   export_list,
   path = file.path("Final Tables and Figures/Supplementary_Table_9_timewindow_results_test_cohort.xlsx")
+)
+
+# MANUSCRIPT OUTPUT: Supplementary Table 9
+# Multi-sheet workbook with BM and blood time-window results for the test cohort.
+ms_copy_artifact(
+  source_path = file.path("Final Tables and Figures/Supplementary_Table_9_timewindow_results_test_cohort.xlsx"),
+  artifact_id = "STABLE9",
+  role = "supplementary_table_xlsx",
+  description = "Supplementary Table 9: test-cohort time-window sensitivity results for BM and blood models.",
+  script_name = "4_1_Survival_Analysis.R"
 )
 
 # event counts for BM‐cfWGS

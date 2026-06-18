@@ -26,10 +26,16 @@
 # How to run:
 #   Rscript Scripts_2025/Final_Scripts/2_1_Part2_Cohort_Swim_Plot.R
 #
-# Role in manuscript workflow:
-#   Direct manuscript-output script. Mapped output(s): Figure_1 panel/sheet
-#   A; Supplementary_Table_1 panel/sheet all. Generates cohort swim plot
-#   and events table.
+# Manuscript outputs created/updated:
+#   - Figure 1A: cohort treatment/sample-timing swim plot component.
+#   - Supplementary Table 1: patient-level clinical event/treatment timeline
+#     table supporting the swim plot and cohort description.
+#
+# Pipeline role:
+#   This script harmonizes treatment and event dates across M4, SPORE, and
+#   IMMAGINE source files, then converts them into a patient-by-time display.
+#   The output is the traceable plot component used in Figure 1A plus the
+#   accompanying timeline table.
 #
 # Author:    Dory Abelman
 # Last update: May 2025
@@ -42,6 +48,17 @@ library(lubridate)
 library(patchwork)
 library(forcats)
 library(purrr)
+
+# Shared helper for final manuscript-organized outputs.
+# This keeps the scientific code in this script, while also copying the final
+# figure/table components into Scripts_2025/Final_Scripts/final_manuscript_objects
+# with manuscript labels such as Figure_1A and Supplementary_Table_1.
+.manuscript_helper <- file.path("Scripts_2025", "Final_Scripts", "manuscript_output_helpers.R")
+if (!file.exists(.manuscript_helper)) {
+  .manuscript_helper <- "manuscript_output_helpers.R"
+}
+source(.manuscript_helper)
+rm(.manuscript_helper)
 
 ### Load cohort assignments up front
 # The cohort table is needed both for early event-table filtering and for the
@@ -740,6 +757,36 @@ all_events_indexed <- all_events_updated %>%
 
 write_csv(all_events_indexed,
           "Final Tables and Figures/Supp_Table_1_all_events_for_swim_plot_INDEX_DATES_privacy_protected.csv")
+
+# -------------------------------------------------------------------------
+# Manuscript output: Supplementary Table 1
+#
+# What this is:
+#   Privacy-protected, indexed event table for the treatment/sample timing swim
+#   plot. Dates are represented as days from baseline rather than absolute
+#   calendar dates.
+#
+# Why it is here:
+#   This table supports Main Figure 1A and is the code-generated counterpart to
+#   final Supplementary Table 1.
+#
+# Current provenance note:
+#   docs/manuscript_artifact_source_map.tsv records that the retained renamed
+#   manuscript CSV is currently authoritative until the exact protected-input
+#   version of this old-name export is fully reconciled. We still copy the table
+#   generated here so this script is visibly responsible for the regenerated
+#   Supplementary Table 1 candidate.
+# -------------------------------------------------------------------------
+ms_copy_artifact(
+  source_path = "Final Tables and Figures/Supp_Table_1_all_events_for_swim_plot_INDEX_DATES_privacy_protected.csv",
+  artifact_id = "STABLE1",
+  role = "regenerated_table_csv",
+  description = paste(
+    "Regenerated privacy-protected indexed event table for Supplementary Table 1;",
+    "supports Main Figure 1A swim plot."
+  ),
+  script_name = "2_1_Part2_Cohort_Swim_Plot.R"
+)
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -2731,6 +2778,25 @@ ggsave("Final Tables and Figures/Figure1A_swimplot_with_3_annotations_wide_updat
        width  = 16.5,
        height = 10,
        dpi    = 500)
+
+# -------------------------------------------------------------------------
+# Manuscript output: Main Figure 1A
+#
+# What this is:
+#   The wide treatment/sample timing swim plot with annotation tracks.
+#
+# Why it is here:
+#   This is the script-generated component used for final Main Figure 1A. The
+#   assembled Figure 1 PDF is created outside this script, but this PNG is the
+#   traceable plotted source component.
+# -------------------------------------------------------------------------
+ms_copy_artifact(
+  source_path = "Final Tables and Figures/Figure1A_swimplot_with_3_annotations_wide_updated10A.png",
+  artifact_id = "FIG1A",
+  role = "figure_panel_png",
+  description = "Wide treatment and sample timing swim plot used as Main Figure 1A.",
+  script_name = "2_1_Part2_Cohort_Swim_Plot.R"
+)
 
 
 

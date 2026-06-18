@@ -4,9 +4,15 @@
 # How to run:
 #   Rscript Scripts_2025/Final_Scripts/1_6_Identify_High_Quality_Patient_Pairs.R
 #
-# Role in manuscript workflow:
-#   Direct manuscript-output script. Mapped output(s): Figure_1 panel/sheet
-#   B. Defines high-quality sample pairs and cohort assignment.
+# Manuscript outputs created/updated:
+#   - Figure 1B source table: patient/sample availability and quality-control
+#     counts used to assemble the final study-flow diagram.
+#
+# Pipeline role:
+#   This script defines which patients and sample pairs are eligible for the
+#   downstream baseline analyses. It does not draw the final flowchart panel
+#   itself; instead, it exports the auditable source table copied into
+#   final_manuscript_objects/Figure_1B.
 #
 # Author:   Dory Abelman
 # Date:     January 2025
@@ -23,7 +29,7 @@
 #       • summary_table_of_samples_and_patient_availability_cfWGS.txt
 #       • high_quality_patients_list_for_baseline_mut_calling.{csv,rds}
 #       • patient_cohort_assignment.{csv,rds}
-#   5. Print console summaries of overall counts and per‐study breakdowns.
+#   5. Print console summaries of overall counts and per-study breakdowns.
 #
 # Dependencies:
 #   • readxl, dplyr, readr, stringr, glue
@@ -53,6 +59,16 @@ library(readr)
 library(stringr)
 library(glue)
 library(tidyr)
+
+# Shared manuscript-output helpers.
+# Figure 1B itself is assembled outside R, but this script creates the exact
+# source table used for that assembly and copies it into final_manuscript_objects/.
+.manuscript_helper <- file.path("Scripts_2025", "Final_Scripts", "manuscript_output_helpers.R")
+if (!file.exists(.manuscript_helper)) {
+  .manuscript_helper <- "manuscript_output_helpers.R"
+}
+source(.manuscript_helper)
+rm(.manuscript_helper)
 
 # ──────────────────────────────────────────────────────────────────────────────
 # 1. FILE PATHS & SETUP
@@ -483,7 +499,21 @@ failed_info <- failed_info %>%
     )
   )
 
-write.csv(failed_info, file = "Table for creating sample flowchart updated3.csv")
+fig1b_source_table <- "Table for creating sample flowchart updated3.csv"
+write.csv(failed_info, file = fig1b_source_table)
+
+# MANUSCRIPT OUTPUT: Figure 1B source table
+# The final Figure 1B visual panel is created from this table in the manuscript
+# figure file. This is the command-line-regenerated source table that documents
+# which samples/patients pass sequencing, quality, cohort, and disease-evidence
+# filters for the sample-flow diagram.
+ms_copy_artifact(
+  source_path = fig1b_source_table,
+  artifact_id = "FIG1B",
+  role = "figure_source_csv",
+  description = "Figure 1B source table: patient/sample flowchart counts and cohort/QC annotations.",
+  script_name = "1_6_Identify_High_Quality_Patient_Pairs.R"
+)
 
 # 4) Calculate proportions
 prop_bm <- cohort_patients %>%

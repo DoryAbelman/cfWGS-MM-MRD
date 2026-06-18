@@ -4,11 +4,10 @@
 # How to run:
 #   Rscript Scripts_2025/Final_Scripts/1_8_Process_Cumulative_VAFs_MRDetect.R
 #
-# Role in manuscript workflow:
-#   Upstream/intermediate processing script. It does not usually export a
-#   final assembled manuscript figure/table directly, but its outputs feed
-#   later manuscript source scripts. Processes MRDetect outputs for patient
-#   samples.
+# Manuscript outputs created/updated:
+#   - None directly. This upstream script processes MRDetect outputs for
+#     patient samples that feed model training, clinical concordance, and
+#     survival analyses.
 #
 # Author:   Dory Abelman
 # Date:     January 2025

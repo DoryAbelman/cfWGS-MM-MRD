@@ -49,10 +49,10 @@
 # How to run:
 #   Rscript Scripts_2025/Final_Scripts/1_5_Integrate_WGS_Feature_Data.R
 #
-# Role in manuscript workflow:
-#   Upstream/intermediate processing script. It does not usually export a
-#   final assembled manuscript figure/table directly, but its outputs feed
-#   later manuscript source scripts. Merges WGS-derived features.
+# Manuscript outputs created/updated:
+#   - None directly. This upstream script merges WGS-derived mutation, CNA,
+#     translocation, and tumor-fraction features used by baseline heatmaps,
+#     concordance tables, model training, and longitudinal analyses.
 #
 # Author: Dory Abelman
 # Date:   2025-05-26

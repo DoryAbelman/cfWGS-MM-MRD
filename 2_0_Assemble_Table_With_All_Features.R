@@ -36,11 +36,10 @@
 # How to run:
 #   Rscript Scripts_2025/Final_Scripts/2_0_Assemble_Table_With_All_Features.R
 #
-# Role in manuscript workflow:
-#   Upstream/intermediate processing script. It does not usually export a
-#   final assembled manuscript figure/table directly, but its outputs feed
-#   later manuscript source scripts. Assembles final aggregate
-#   feature/clinical table.
+# Manuscript outputs created/updated:
+#   - None directly. This upstream script assembles the final aggregate
+#     feature/clinical table used by Table 1, longitudinal analyses, model
+#     training/application, concordance scripts, and survival analyses.
 #
 # Author:    Dory Abelman
 # Last update: September 2025

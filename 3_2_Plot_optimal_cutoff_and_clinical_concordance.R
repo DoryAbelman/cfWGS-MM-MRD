@@ -4,16 +4,19 @@
 # How to run:
 #   Rscript Scripts_2025/Final_Scripts/3_2_Plot_optimal_cutoff_and_clinical_concordance.R
 #
-# Role in manuscript workflow:
-#   Direct manuscript-output script. Mapped output(s): Figure_3 panel/sheet
-#   D; Figure_3 panel/sheet E; Figure_4 panel/sheet C; Figure_4 panel/sheet
-#   D; Extended_Data_Figure_5 panel/sheet E; Extended_Data_Figure_5
-#   panel/sheet F; Extended_Data_Figure_5 panel/sheet G;
-#   Extended_Data_Figure_7 panel/sheet F; Extended_Data_Figure_7
-#   panel/sheet G; Extended_Data_Figure_7 panel/sheet H;
-#   Supplementary_Table_8 panel/sheet all_sheets; Supplementary_Table_10
-#   panel/sheet all_sheets. Generates tumor-informed clinical concordance
-#   figures/tables.
+# Manuscript outputs created/updated:
+#   - Figure 3D-E: BM cfWGS clinical-concordance and probability panels.
+#   - Figure 4C-D: blood cfWGS clinical-concordance and probability panels.
+#   - Extended Data Figure 5E-G: BM supplementary concordance/diagnostic panels.
+#   - Extended Data Figure 7F-H: blood supplementary concordance/diagnostic panels.
+#   - Supplementary Table 8: BM model concordance/source-data workbook.
+#   - Supplementary Table 10: blood model concordance/source-data workbook.
+#
+# Pipeline role:
+#   This script starts from the preserved model calls/probabilities created in
+#   3_1_Optimize_cfWGS_thresholds.R and compares them with clinical MRD assays
+#   and EasyM. It is the main script for interpreting model calls against
+#   independent clinical measurements, not for changing model weights.
 #
 # Author:   Dory Abelman
 # Date:     May 28, 2025
@@ -64,6 +67,18 @@ library(stringr)     # String normalization for timepoint labels and sample IDs
 library(tibble)      # column_to_rownames for confusion matrix helpers
 library(broom)       # Tidy summaries for logistic model outputs
 library(purrr)       # Functional iteration over model/list columns
+
+# Shared helper for final manuscript-organized outputs.
+# The script keeps its historical output filenames while copying final
+# manuscript-facing figure/table components into
+# Scripts_2025/Final_Scripts/final_manuscript_objects with final labels such as
+# Figure_3D, Figure_4D, Extended_Data_Figure_5E, and Supplementary_Table_10.
+.manuscript_helper <- file.path("Scripts_2025", "Final_Scripts", "manuscript_output_helpers.R")
+if (!file.exists(.manuscript_helper)) {
+  .manuscript_helper <- "manuscript_output_helpers.R"
+}
+source(.manuscript_helper)
+rm(.manuscript_helper)
 
 
 # ===========================================================================
@@ -767,6 +782,24 @@ ggsave(
   dpi      = 500
 )
 
+# -------------------------------------------------------------------------
+# Manuscript output: Main Figure 3D
+#
+# What this is:
+#   BM-informed cfWGS positivity by clinical-assay technology and cohort.
+#
+# Why it is here:
+#   This PNG is the final Main Figure 3D component. The source-data filename
+#   below still says facet6, while the final plotted component is facet7.
+# -------------------------------------------------------------------------
+ms_copy_artifact(
+  source_path = file.path(OUTPUT_DIR_FIGURES, "Fig_4I_BM_positivity_by_tech_facet7.png"),
+  artifact_id = "FIG3D",
+  role = "figure_panel_png",
+  description = "BM-informed cfWGS positivity by technology panel used as Main Figure 3D.",
+  script_name = "3_2_Plot_optimal_cutoff_and_clinical_concordance.R"
+)
+
 # ══════════════════════════════════════════════════════════════════════════
 # SOURCE DATA: Faceted BM positivity (training + test cohorts)
 # ══════════════════════════════════════════════════════════════════════════
@@ -1103,6 +1136,24 @@ ggsave(
   width    = 7.5,    # wider to accommodate two facets
   height   = 4.5,
   dpi      = 500
+)
+
+# -------------------------------------------------------------------------
+# Manuscript output: Main Figure 4C
+#
+# What this is:
+#   Blood/cfDNA-informed cfWGS positivity by clinical-assay technology and
+#   cohort.
+#
+# Why it is here:
+#   This PNG is the final Main Figure 4C component.
+# -------------------------------------------------------------------------
+ms_copy_artifact(
+  source_path = file.path(OUTPUT_DIR_FIGURES, "Fig_5I_Blood_positivity_by_tech_facet_updated6.png"),
+  artifact_id = "FIG4C",
+  role = "figure_panel_png",
+  description = "Blood/cfDNA-informed cfWGS positivity by technology panel used as Main Figure 4C.",
+  script_name = "3_2_Plot_optimal_cutoff_and_clinical_concordance.R"
 )
 
 
@@ -1685,6 +1736,39 @@ ggsave("Final Tables and Figures/Fig4_confmat_maintenance5.png",
 ggsave("Final Tables and Figures/Fig4_confmat_nonfront5.png",
        p_non,   width = 3, height = 2.75, dpi = 600)   # single facet – narrower
 
+# -------------------------------------------------------------------------
+# Manuscript outputs: Extended Data Figure 5E-G
+#
+# What these are:
+#   BM-informed cfWGS confusion-matrix panels against clinical comparators at
+#   post-ASCT, 1-year maintenance, and non-frontline/test-cohort settings.
+#
+# Why they are here:
+#   The retained final components use older updated4 filenames, while this
+#   script currently writes updated5 versions from the same plotted section.
+# -------------------------------------------------------------------------
+ms_copy_artifact(
+  source_path = "Final Tables and Figures/Fig4_confmat_post_ASCT_updated5.png",
+  artifact_id = "EDFIG5E",
+  role = "figure_panel_png",
+  description = "BM-informed post-ASCT clinical-comparator confusion matrix used as Extended Data Figure 5E.",
+  script_name = "3_2_Plot_optimal_cutoff_and_clinical_concordance.R"
+)
+ms_copy_artifact(
+  source_path = "Final Tables and Figures/Fig4_confmat_maintenance5.png",
+  artifact_id = "EDFIG5F",
+  role = "figure_panel_png",
+  description = "BM-informed one-year maintenance clinical-comparator confusion matrix used as Extended Data Figure 5F.",
+  script_name = "3_2_Plot_optimal_cutoff_and_clinical_concordance.R"
+)
+ms_copy_artifact(
+  source_path = "Final Tables and Figures/Fig4_confmat_nonfront5.png",
+  artifact_id = "EDFIG5G",
+  role = "figure_panel_png",
+  description = "BM-informed non-frontline clinical-comparator confusion matrix used as Extended Data Figure 5G.",
+  script_name = "3_2_Plot_optimal_cutoff_and_clinical_concordance.R"
+)
+
 # ══════════════════════════════════════════════════════════════════════════
 # SOURCE DATA: Confusion matrices (BM) - individual panels
 # ══════════════════════════════════════════════════════════════════════════
@@ -1951,6 +2035,40 @@ ggsave("Final Tables and Figures/Fig5_confmat_maintenance_blood_updated6.png",
        p_maint, width = 5, height = 2.75, dpi = 600)
 ggsave("Final Tables and Figures/Fig5_confmat_nonfront_blood_updated6.png",
        p_non,   width = 3, height = 2.75, dpi = 600)   # single facet – narrower
+
+# -------------------------------------------------------------------------
+# Manuscript outputs: Extended Data Figure 7F-H
+#
+# What these are:
+#   Blood/cfDNA-informed cfWGS confusion-matrix panels against clinical
+#   comparators at post-ASCT, 1-year maintenance, and non-frontline/test-cohort
+#   settings.
+#
+# Why they are here:
+#   The retained final components use older updated5 filenames, while this
+#   script currently writes updated6 versions from the same plotted section.
+# -------------------------------------------------------------------------
+ms_copy_artifact(
+  source_path = "Final Tables and Figures/Fig5_confmat_post_ASCT_blood_updated6.png",
+  artifact_id = "EDFIG7F",
+  role = "figure_panel_png",
+  description = "Blood/cfDNA-informed post-ASCT clinical-comparator confusion matrix used as Extended Data Figure 7F.",
+  script_name = "3_2_Plot_optimal_cutoff_and_clinical_concordance.R"
+)
+ms_copy_artifact(
+  source_path = "Final Tables and Figures/Fig5_confmat_maintenance_blood_updated6.png",
+  artifact_id = "EDFIG7G",
+  role = "figure_panel_png",
+  description = "Blood/cfDNA-informed one-year maintenance clinical-comparator confusion matrix used as Extended Data Figure 7G.",
+  script_name = "3_2_Plot_optimal_cutoff_and_clinical_concordance.R"
+)
+ms_copy_artifact(
+  source_path = "Final Tables and Figures/Fig5_confmat_nonfront_blood_updated6.png",
+  artifact_id = "EDFIG7H",
+  role = "figure_panel_png",
+  description = "Blood/cfDNA-informed non-frontline clinical-comparator confusion matrix used as Extended Data Figure 7H.",
+  script_name = "3_2_Plot_optimal_cutoff_and_clinical_concordance.R"
+)
 
 # ══════════════════════════════════════════════════════════════════════════
 # SOURCE DATA: Blood confusion matrices (cfWGS vs clinical - individual panels)
@@ -2337,6 +2455,25 @@ metrics_tbl <- metrics_tbl %>%
 # Export
 writexl::write_xlsx(list("All_Call_Metrics" = metrics_tbl),
                     path = file.path(outdir, "Supplementary_Table_9_All_call_metrics_against_clinical_metrics.xlsx"))
+
+# -------------------------------------------------------------------------
+# Manuscript output: Supplementary Table 10
+#
+# What this is:
+#   All call metrics against clinical comparators across cohort/timepoint
+#   strata.
+#
+# Why it is here:
+#   The historical script filename says Supplementary Table 9, but the audited
+#   manuscript map identifies this workbook as final Supplementary Table 10.
+# -------------------------------------------------------------------------
+ms_copy_artifact(
+  source_path = file.path(outdir, "Supplementary_Table_9_All_call_metrics_against_clinical_metrics.xlsx"),
+  artifact_id = "STABLE10",
+  role = "workbook_xlsx",
+  description = "All call metrics against clinical metrics workbook used as Supplementary Table 10.",
+  script_name = "3_2_Plot_optimal_cutoff_and_clinical_concordance.R"
+)
 
 
 # Example: filter to the Combined Model column if it’s named "Blood_plus_fragment_call"
@@ -2886,6 +3023,25 @@ add_sheet_with_style(wb, "Blood_Test",  Blood_Test)
 saveWorkbook(wb, "Final Tables and Figures/Supplementary_Table_8_model_comparisons_to_clinical_metrics3.xlsx",
              overwrite = TRUE)
 
+# -------------------------------------------------------------------------
+# Manuscript output: Supplementary Table 8
+#
+# What this is:
+#   Multi-sheet workbook comparing cfWGS model outputs to clinical metrics,
+#   including discordance/concordance summaries used with Main Figure 3E and
+#   Main Figure 4D.
+#
+# Why it is here:
+#   This is the code-generated workbook mapped to final Supplementary Table 8.
+# -------------------------------------------------------------------------
+ms_copy_artifact(
+  source_path = "Final Tables and Figures/Supplementary_Table_8_model_comparisons_to_clinical_metrics3.xlsx",
+  artifact_id = "STABLE8",
+  role = "workbook_xlsx",
+  description = "Model comparisons to clinical metrics workbook used as Supplementary Table 8.",
+  script_name = "3_2_Plot_optimal_cutoff_and_clinical_concordance.R"
+)
+
 
 
 ### Now make figure showing LOD of each
@@ -3350,6 +3506,24 @@ p_scatter_with_easym_bm
 ggsave("Final Tables and Figures/Fig4K_cfWGS_vs_MFC_clonoSEQ_EasyM_BM_muts_updated5.png",
        p_scatter_with_easym_bm,
        width = 8.5, height = 5, dpi = 600)
+
+# -------------------------------------------------------------------------
+# Manuscript output: Main Figure 3E
+#
+# What this is:
+#   BM-informed cfWGS comparison to MFC, clonoSEQ, and EasyM.
+#
+# Why it is here:
+#   This PNG is the final Main Figure 3E component and also supports
+#   Supplementary Table 8.
+# -------------------------------------------------------------------------
+ms_copy_artifact(
+  source_path = "Final Tables and Figures/Fig4K_cfWGS_vs_MFC_clonoSEQ_EasyM_BM_muts_updated5.png",
+  artifact_id = "FIG3E",
+  role = "figure_panel_png",
+  description = "BM-informed cfWGS comparison to MFC, clonoSEQ, and EasyM used as Main Figure 3E.",
+  script_name = "3_2_Plot_optimal_cutoff_and_clinical_concordance.R"
+)
 
 # Export source data
 readr::write_csv(
@@ -3934,6 +4108,24 @@ p_scatter_with_easym_blood
 ggsave("Final Tables and Figures/Fig5K_cfWGS_vs_MFC_clonoSEQ_EasyM_Blood_muts_updated5.png",
        p_scatter_with_easym_blood,
        width = 8.5, height = 5, dpi = 600)
+
+# -------------------------------------------------------------------------
+# Manuscript output: Main Figure 4D
+#
+# What this is:
+#   Blood/cfDNA-informed cfWGS comparison to MFC, clonoSEQ, and EasyM.
+#
+# Why it is here:
+#   This PNG is the final Main Figure 4D component and also supports
+#   Supplementary Table 8.
+# -------------------------------------------------------------------------
+ms_copy_artifact(
+  source_path = "Final Tables and Figures/Fig5K_cfWGS_vs_MFC_clonoSEQ_EasyM_Blood_muts_updated5.png",
+  artifact_id = "FIG4D",
+  role = "figure_panel_png",
+  description = "Blood/cfDNA-informed cfWGS comparison to MFC, clonoSEQ, and EasyM used as Main Figure 4D.",
+  script_name = "3_2_Plot_optimal_cutoff_and_clinical_concordance.R"
+)
 
 # Export source data
 readr::write_csv(

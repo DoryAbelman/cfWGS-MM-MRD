@@ -4,11 +4,10 @@
 # How to run:
 #   Rscript Scripts_2025/Final_Scripts/3_3_Plot_optimal_cutoff_tumor_naive_calls_and_clinical_concordance.R
 #
-# Role in manuscript workflow:
-#   Upstream/intermediate processing script. It does not usually export a
-#   final assembled manuscript figure/table directly, but its outputs feed
-#   later manuscript source scripts. Generates tumor-naive clinical
-#   concordance figures/tables.
+# Manuscript outputs created/updated:
+#   - None directly in the current mapped manuscript set. This support script
+#     generates tumor-naive clinical concordance outputs for comparison and
+#     sensitivity review.
 #
 # Author:   Dory Abelman
 # Date:     May 2025

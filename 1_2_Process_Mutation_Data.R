@@ -33,11 +33,11 @@
 #   • RDS: combined_maf_blood_all_muts_updated.rds
 #   • Figures: VAF ridgeplots & t_depth histograms
 #
-# Role in manuscript workflow:
-#   Upstream mutation-processing script. The BM diagnosis/baseline MAF object
-#   defines patient-specific tumor-informed mutation panels, and the blood MAF
-#   object supports BM/cfDNA mutation overlap, mutation-count summaries, WGS
-#   feature integration, and downstream concordance analyses.
+# Manuscript outputs created/updated:
+#   - None directly. This upstream mutation-processing script creates the BM
+#     diagnosis/baseline and blood MAF objects used by Extended Data Figure 2,
+#     mutation-count summaries, WGS feature integration, and tumor-informed
+#     MRDetect feature generation.
 #
 # Dependencies:
 #   library(maftools)

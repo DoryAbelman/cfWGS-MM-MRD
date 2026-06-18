@@ -30,11 +30,10 @@
 # How to run:
 #   Rscript Scripts_2025/Final_Scripts/1_7A_Process_fragmentomics_data_nucleosome_accessibility.R
 #
-# Role in manuscript workflow:
-#   Upstream/intermediate processing script. It does not usually export a
-#   final assembled manuscript figure/table directly, but its outputs feed
-#   later manuscript source scripts. Processes nucleosome-accessibility
-#   features.
+# Manuscript outputs created/updated:
+#   - None directly. This upstream script processes nucleosome-accessibility
+#     features for fragmentomics model training, longitudinal summaries, and
+#     dilution-series feature processing.
 #
 # Author: Dory Abelman
 # Last updated: 2025-05-23

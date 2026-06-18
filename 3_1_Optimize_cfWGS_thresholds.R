@@ -5,22 +5,30 @@
 # How to run:
 #   Rscript Scripts_2025/Final_Scripts/3_1_Optimize_cfWGS_thresholds.R
 #
-# Role in manuscript workflow:
-#   Direct manuscript-output script. Mapped output(s): Figure_3 panel/sheet
-#   A; Figure_3 panel/sheet B; Figure_4 panel/sheet A; Figure_4 panel/sheet
-#   B; Extended_Data_Figure_5 panel/sheet A; Extended_Data_Figure_5
-#   panel/sheet B; Extended_Data_Figure_5 panel/sheet C;
-#   Extended_Data_Figure_7 panel/sheet A; Extended_Data_Figure_7
-#   panel/sheet B; Extended_Data_Figure_7 panel/sheet C;
-#   Extended_Data_Figure_7 panel/sheet E; Extended_Data_Figure_9
-#   panel/sheet A; Extended_Data_Figure_9 panel/sheet B;
-#   Extended_Data_Figure_9 panel/sheet C; Extended_Data_Figure_9
-#   panel/sheet D; Extended_Data_Figure_9 panel/sheet E;
-#   Extended_Data_Figure_9 panel/sheet F; Supplementary_Table_4 panel/sheet
-#   all; Supplementary_Table_5 panel/sheet all; Supplementary_Table_6
-#   panel/sheet all. Stochastic/model-heavy nested-CV training; skip by
-#   default in conservative manuscript regeneration unless
-#   --include-cache-sensitive is set.
+# Manuscript outputs created/updated:
+#   - Figure 3A-B: BM cfWGS model performance and selected-threshold panels.
+#   - Figure 4A-B: blood cfWGS model performance and selected-threshold panels.
+#   - Extended Data Figure 5A-C: BM supplementary model-performance panels.
+#   - Extended Data Figure 7A-C and 7E: blood supplementary model-performance
+#     and threshold panels.
+#   - Extended Data Figure 9A-F: fragmentomics nested-CV performance panels.
+#   - Supplementary Table 4: final BM model metrics/source workbook.
+#   - Supplementary Table 5: final all-model metrics workbook. Note that the
+#     historical source file is named Supplementary_Table_4_All_Model_Metrics_*
+#     because of a manuscript-numbering correction; the artifact map records it
+#     as Supplementary Table 5.
+#   - Supplementary Table 6: final blood model metrics/source workbook.
+#
+# Pipeline role and reproducibility note:
+#   This script contains the model-training, nested cross-validation, performance
+#   summarization, and downstream scoring logic used for the cfWGS and
+#   fragmentomics outputs listed above. The manuscript workflow treats this as a
+#   cache-sensitive step: by default, the command-line pipeline reuses preserved
+#   model/metric outputs from the original analysis so that manuscript values
+#   remain stable. Full recomputation can be requested with
+#   --include-cache-sensitive, but regenerated artifacts may differ unless the
+#   exact same inputs, seeds, package versions, and execution environment are
+#   preserved.
 #
 # Author:   Dory Abelman
 # Date:     May 28, 2025 (updated through Feb 2026)
@@ -132,6 +140,18 @@ library(DescTools)      # calibration plots and additional statistical functions
 library(PRROC)          # precision-recall curve analysis
 library(readr)          # fast CSV reading
 library(readxl)         # Excel file reading
+
+# Shared helper for final manuscript-organized outputs.
+# The model script retains its historical filenames and cached model artifacts,
+# while these helper calls copy final manuscript-facing figures/tables into
+# Scripts_2025/Final_Scripts/final_manuscript_objects with final labels such as
+# Figure_3A, Extended_Data_Figure_5A, and Supplementary_Table_5.
+.manuscript_helper <- file.path("Scripts_2025", "Final_Scripts", "manuscript_output_helpers.R")
+if (!file.exists(.manuscript_helper)) {
+  .manuscript_helper <- "manuscript_output_helpers.R"
+}
+source(.manuscript_helper)
+rm(.manuscript_helper)
 
 # -----------------------------------------------------------------------------
 # 2. Data Import & Cohort Definition
@@ -2092,6 +2112,26 @@ write_csv(
   "Final Tables and Figures/Supplementary_Table_3_All_Model_performance_nested_CV_v3_Feb2026_with_restricted_fragmentomics.csv"
 )
 
+# -------------------------------------------------------------------------
+# Manuscript output: Supplementary Table 4
+#
+# What this is:
+#   Nested cross-validation model-performance table across BM, blood/cfDNA, and
+#   fragmentomics model families.
+#
+# Why it is here:
+#   The historical filename says Supplementary Table 3, but the audited
+#   manuscript map identifies this export as final Supplementary Table 4.
+#   Cached model-performance objects are preserved to avoid stochastic drift.
+# -------------------------------------------------------------------------
+ms_copy_artifact(
+  source_path = "Final Tables and Figures/Supplementary_Table_3_All_Model_performance_nested_CV_v3_Feb2026_with_restricted_fragmentomics.csv",
+  artifact_id = "STABLE4",
+  role = "table_csv",
+  description = "Nested cross-validation model-performance table used as Supplementary Table 4.",
+  script_name = "3_1_Optimize_cfWGS_thresholds.R"
+)
+
 # NOTE: This file exports as "Supplementary_Table_5_All_Model_performance_testing_cohort_v3_Feb2026_with_restricted_fragmentomics.csv"
 #       But in the final manuscript, this corresponds to: Supplementary_Table_6_All_Model_performance_nested_CV_on_test_cohort.csv
 #       (Table numbering adjusts in final manuscript due to rearrangement of supplementary tables)
@@ -2100,6 +2140,25 @@ write_csv(
   val_clean %>%
     mutate(across(where(is.numeric), ~ round(.x, 3))),
   "Final Tables and Figures/Supplementary_Table_5_All_Model_performance_testing_cohort_v3_Feb2026_with_restricted_fragmentomics.csv"
+)
+
+# -------------------------------------------------------------------------
+# Manuscript output: Supplementary Table 6
+#
+# What this is:
+#   Test/non-frontline cohort model-performance table using the preserved
+#   training-derived models and thresholds.
+#
+# Why it is here:
+#   The historical filename says Supplementary Table 5, but the audited
+#   manuscript map identifies this export as final Supplementary Table 6.
+# -------------------------------------------------------------------------
+ms_copy_artifact(
+  source_path = "Final Tables and Figures/Supplementary_Table_5_All_Model_performance_testing_cohort_v3_Feb2026_with_restricted_fragmentomics.csv",
+  artifact_id = "STABLE6",
+  role = "table_csv",
+  description = "Testing-cohort model-performance table used as Supplementary Table 6.",
+  script_name = "3_1_Optimize_cfWGS_thresholds.R"
 )
 
 
@@ -2983,6 +3042,33 @@ write.csv(all_perf_metrics,
           "Final Tables and Figures/Supplementary_Table_4_All_Model_Metrics_Refit6_Feb2026.csv", 
           row.names = FALSE)
 
+# -------------------------------------------------------------------------
+# Manuscript output: Supplementary Table 5
+#
+# What this is:
+#   Full refit/training-cohort model metrics table at Youden, fixed 95%
+#   specificity, and fixed 95% sensitivity operating points.
+#
+# Why it is here:
+#   This is the corrected source for final Supplementary Table 5. The old
+#   filename says Supplementary Table 4; that naming drift is preserved because
+#   it is documented in docs/supplementary_table_5_name_comparison.tsv.
+# -------------------------------------------------------------------------
+ms_copy_artifact(
+  source_path = "Final Tables and Figures/Supplementary_Table_4_All_Model_Metrics_Refit6_Feb2026.xlsx",
+  artifact_id = "STABLE5",
+  role = "workbook_xlsx",
+  description = "Correct full-refit model metrics workbook used as Supplementary Table 5.",
+  script_name = "3_1_Optimize_cfWGS_thresholds.R"
+)
+ms_copy_artifact(
+  source_path = "Final Tables and Figures/Supplementary_Table_4_All_Model_Metrics_Refit6_Feb2026.csv",
+  artifact_id = "STABLE5",
+  role = "table_csv_companion",
+  description = "CSV companion for the corrected Supplementary Table 5 full-refit model metrics.",
+  script_name = "3_1_Optimize_cfWGS_thresholds.R"
+)
+
 
 
 
@@ -3496,12 +3582,48 @@ ggsave(
   dpi      = 500
 )
 
+# -------------------------------------------------------------------------
+# Manuscript output: Main Figure 3A
+#
+# What this is:
+#   BM-derived nested-CV sensitivity/specificity performance panel.
+#
+# Why it is here:
+#   This PNG is the script-generated component used for final Main Figure 3A.
+#   It is generated from cached nested-CV metrics to avoid stochastic model
+#   refitting drift.
+# -------------------------------------------------------------------------
+ms_copy_artifact(
+  source_path = "Final Tables and Figures/Performance_nested_folds_bm_updated2_only_performance.png",
+  artifact_id = "FIG3A",
+  role = "figure_panel_png",
+  description = "BM-derived nested-CV performance panel used as Main Figure 3A.",
+  script_name = "3_1_Optimize_cfWGS_thresholds.R"
+)
+
 ggsave(
   filename = "Final Tables and Figures/ROC_plot_folds_bm_updated2.png",
   plot     = roc_plot,
   width    = 6,
   height   = 6,
   dpi      = 500
+)
+
+# -------------------------------------------------------------------------
+# Manuscript output: Extended Data Figure 5A
+#
+# What this is:
+#   Standalone pooled outer-fold ROC panel for BM-derived models.
+#
+# Why it is here:
+#   The final Extended Data Figure 5 uses this as panel A.
+# -------------------------------------------------------------------------
+ms_copy_artifact(
+  source_path = "Final Tables and Figures/ROC_plot_folds_bm_updated2.png",
+  artifact_id = "EDFIG5A",
+  role = "figure_panel_png",
+  description = "BM-derived pooled outer-fold ROC panel used as Extended Data Figure 5A.",
+  script_name = "3_1_Optimize_cfWGS_thresholds.R"
 )
 
 
@@ -3650,6 +3772,23 @@ ggsave(
   dpi    = 600
 )
 
+# -------------------------------------------------------------------------
+# Manuscript output: Extended Data Figure 5B
+#
+# What this is:
+#   BM classifier performance summary in the training/primary cohort.
+#
+# Why it is here:
+#   The final Extended Data Figure 5 uses this as panel B.
+# -------------------------------------------------------------------------
+ms_copy_artifact(
+  source_path = "Final Tables and Figures/Supp5A_classifier_performance_bar_updated3.png",
+  artifact_id = "EDFIG5B",
+  role = "figure_panel_png",
+  description = "BM classifier performance summary used as Extended Data Figure 5B.",
+  script_name = "3_1_Optimize_cfWGS_thresholds.R"
+)
+
 
  ## do for validation as well 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -3790,6 +3929,23 @@ ggsave(
   width  = 5,
   height = 3.5,
   dpi    = 600
+)
+
+# -------------------------------------------------------------------------
+# Manuscript output: Extended Data Figure 5C
+#
+# What this is:
+#   BM classifier performance summary in the test/non-frontline cohort.
+#
+# Why it is here:
+#   The final Extended Data Figure 5 uses this as panel C.
+# -------------------------------------------------------------------------
+ms_copy_artifact(
+  source_path = "Final Tables and Figures/Supp5A_classifier_performance_bar_test_cohort_updated3.png",
+  artifact_id = "EDFIG5C",
+  role = "figure_panel_png",
+  description = "BM classifier test-cohort performance summary used as Extended Data Figure 5C.",
+  script_name = "3_1_Optimize_cfWGS_thresholds.R"
 )
 
 
@@ -4041,6 +4197,24 @@ ggsave(
   dpi    = 600
 )
 
+# -------------------------------------------------------------------------
+# Manuscript output: Main Figure 3B
+#
+# What this is:
+#   BM model confusion-matrix panel for the training/primary cohort.
+#
+# Why it is here:
+#   This PNG is one of the two confusion-matrix components used for final Main
+#   Figure 3B.
+# -------------------------------------------------------------------------
+ms_copy_artifact(
+  source_path = "Final Tables and Figures/Fig4C_confusion_tables_primary_updated5.png",
+  artifact_id = "FIG3B",
+  role = "figure_panel_png_training",
+  description = "BM model training-cohort confusion matrix used as part of Main Figure 3B.",
+  script_name = "3_1_Optimize_cfWGS_thresholds.R"
+)
+
 
 ## Now validation
 # ──────────────────────────────────────────────────────────────────────────────
@@ -4122,6 +4296,24 @@ ggsave(
   width  = 5,
   height = 2.75,
   dpi    = 600
+)
+
+# -------------------------------------------------------------------------
+# Manuscript output: Main Figure 3B
+#
+# What this is:
+#   BM model confusion-matrix panel for the test/non-frontline cohort.
+#
+# Why it is here:
+#   This PNG is the second confusion-matrix component used for final Main
+#   Figure 3B.
+# -------------------------------------------------------------------------
+ms_copy_artifact(
+  source_path = "Final Tables and Figures/Fig4C_confusion_tables_test5.png",
+  artifact_id = "FIG3B",
+  role = "figure_panel_png_test",
+  description = "BM model test-cohort confusion matrix used as part of Main Figure 3B.",
+  script_name = "3_1_Optimize_cfWGS_thresholds.R"
 )
 
 
@@ -4374,6 +4566,24 @@ ggsave(
   dpi    = 600
 )
 
+# -------------------------------------------------------------------------
+# Manuscript output: Main Figure 4B
+#
+# What this is:
+#   Blood/cfDNA model confusion-matrix panel for the training/primary cohort.
+#
+# Why it is here:
+#   This PNG is one of the two confusion-matrix components used for final Main
+#   Figure 4B.
+# -------------------------------------------------------------------------
+ms_copy_artifact(
+  source_path = "Final Tables and Figures/Fig5C_confusion_tables_primary_blood6.png",
+  artifact_id = "FIG4B",
+  role = "figure_panel_png_training",
+  description = "Blood/cfDNA model training-cohort confusion matrix used as part of Main Figure 4B.",
+  script_name = "3_1_Optimize_cfWGS_thresholds.R"
+)
+
 
 ## Now validation
 # ──────────────────────────────────────────────────────────────────────────────
@@ -4454,6 +4664,24 @@ ggsave(
   width  = 5,
   height = 2.75,
   dpi    = 600
+)
+
+# -------------------------------------------------------------------------
+# Manuscript output: Main Figure 4B
+#
+# What this is:
+#   Blood/cfDNA model confusion-matrix panel for the test/non-frontline cohort.
+#
+# Why it is here:
+#   This PNG is the second confusion-matrix component used for final Main
+#   Figure 4B.
+# -------------------------------------------------------------------------
+ms_copy_artifact(
+  source_path = "Final Tables and Figures/Fig5C_confusion_tables_test_blood6.png",
+  artifact_id = "FIG4B",
+  role = "figure_panel_png_test",
+  description = "Blood/cfDNA model test-cohort confusion matrix used as part of Main Figure 4B.",
+  script_name = "3_1_Optimize_cfWGS_thresholds.R"
 )
 
 
@@ -4594,6 +4822,23 @@ ggsave(
   width  = 5,
   height = 3.5,
   dpi    = 600
+)
+
+# -------------------------------------------------------------------------
+# Manuscript output: Extended Data Figure 7B
+#
+# What this is:
+#   Blood/cfDNA classifier performance summary in the training/primary cohort.
+#
+# Why it is here:
+#   The final Extended Data Figure 7 uses this as panel B.
+# -------------------------------------------------------------------------
+ms_copy_artifact(
+  source_path = "Final Tables and Figures/Supp7A_classifier_performance_bar_updated_blood_muts2.png",
+  artifact_id = "EDFIG7B",
+  role = "figure_panel_png",
+  description = "Blood/cfDNA classifier training-cohort performance summary used as Extended Data Figure 7B.",
+  script_name = "3_1_Optimize_cfWGS_thresholds.R"
 )
 
 
@@ -4742,6 +4987,23 @@ ggsave(
   dpi    = 600
 )
 
+# -------------------------------------------------------------------------
+# Manuscript output: Extended Data Figure 7C
+#
+# What this is:
+#   Blood/cfDNA classifier performance summary in the test/non-frontline cohort.
+#
+# Why it is here:
+#   The final Extended Data Figure 7 uses this as panel C.
+# -------------------------------------------------------------------------
+ms_copy_artifact(
+  source_path = "Final Tables and Figures/Supp_7B_classifier_performance_bar_test_cohort_updated3.png",
+  artifact_id = "EDFIG7C",
+  role = "figure_panel_png",
+  description = "Blood/cfDNA classifier test-cohort performance summary used as Extended Data Figure 7C.",
+  script_name = "3_1_Optimize_cfWGS_thresholds.R"
+)
+
 
 
 
@@ -4882,6 +5144,23 @@ ggsave(
   width  = 5,
   height = 3.5,
   dpi    = 600
+)
+
+# -------------------------------------------------------------------------
+# Manuscript output: Extended Data Figure 9C
+#
+# What this is:
+#   Fragmentomics classifier performance summary in the training/primary cohort.
+#
+# Why it is here:
+#   The final Extended Data Figure 9 uses this as panel C.
+# -------------------------------------------------------------------------
+ms_copy_artifact(
+  source_path = "Final Tables and Figures/Supp9D_classifier_performance_bar_updated_frag2.png",
+  artifact_id = "EDFIG9C",
+  role = "figure_panel_png",
+  description = "Fragmentomics classifier training-cohort performance summary used as Extended Data Figure 9C.",
+  script_name = "3_1_Optimize_cfWGS_thresholds.R"
 )
 
 
@@ -5026,6 +5305,24 @@ ggsave(
   dpi    = 600
 )
 
+# -------------------------------------------------------------------------
+# Manuscript output: Extended Data Figure 9D
+#
+# What this is:
+#   Fragmentomics classifier performance summary in the test/non-frontline
+#   cohort.
+#
+# Why it is here:
+#   The final Extended Data Figure 9 uses this as panel D.
+# -------------------------------------------------------------------------
+ms_copy_artifact(
+  source_path = "Final Tables and Figures/Supp_Fig9F_classifier_performance_bar_test_cohort_updated2_frag2.png",
+  artifact_id = "EDFIG9D",
+  role = "figure_panel_png",
+  description = "Fragmentomics classifier test-cohort performance summary used as Extended Data Figure 9D.",
+  script_name = "3_1_Optimize_cfWGS_thresholds.R"
+)
+
 
 
 
@@ -5119,6 +5416,23 @@ ggsave(
   dpi    = 600
 )
 
+# -------------------------------------------------------------------------
+# Manuscript output: Extended Data Figure 9E
+#
+# What this is:
+#   Fragmentomics model confusion-matrix panel for the training/primary cohort.
+#
+# Why it is here:
+#   The final Extended Data Figure 9 uses this as panel E.
+# -------------------------------------------------------------------------
+ms_copy_artifact(
+  source_path = "Final Tables and Figures/Supp_Fig9E_confusion_tables_primary_fragmentomics4.png",
+  artifact_id = "EDFIG9E",
+  role = "figure_panel_png",
+  description = "Fragmentomics model training-cohort confusion matrix used as Extended Data Figure 9E.",
+  script_name = "3_1_Optimize_cfWGS_thresholds.R"
+)
+
 
 ## Now validation
 # ──────────────────────────────────────────────────────────────────────────────
@@ -5198,6 +5512,23 @@ ggsave(
   width  = 5,
   height = 2.75,
   dpi    = 600
+)
+
+# -------------------------------------------------------------------------
+# Manuscript output: Extended Data Figure 9F
+#
+# What this is:
+#   Fragmentomics model confusion-matrix panel for the test/non-frontline cohort.
+#
+# Why it is here:
+#   The final Extended Data Figure 9 uses this as panel F.
+# -------------------------------------------------------------------------
+ms_copy_artifact(
+  source_path = "Final Tables and Figures/Supp_Fig9F_confusion_tables_val_fragmentomics3.png",
+  artifact_id = "EDFIG9F",
+  role = "figure_panel_png",
+  description = "Fragmentomics model test-cohort confusion matrix used as Extended Data Figure 9F.",
+  script_name = "3_1_Optimize_cfWGS_thresholds.R"
 )
 
 
@@ -5394,12 +5725,48 @@ ggsave(
   dpi      = 500
 )
 
+# -------------------------------------------------------------------------
+# Manuscript output: Main Figure 4A
+#
+# What this is:
+#   Blood/cfDNA-derived nested-CV sensitivity/specificity performance panel.
+#
+# Why it is here:
+#   This PNG is the script-generated component used for final Main Figure 4A.
+#   It is generated from cached nested-CV metrics to avoid stochastic model
+#   refitting drift.
+# -------------------------------------------------------------------------
+ms_copy_artifact(
+  source_path = "Final Tables and Figures/Performance_nested_folds_blood_updated2_only_performance2.png",
+  artifact_id = "FIG4A",
+  role = "figure_panel_png",
+  description = "Blood/cfDNA-derived nested-CV performance panel used as Main Figure 4A.",
+  script_name = "3_1_Optimize_cfWGS_thresholds.R"
+)
+
 ggsave(
   filename = "Final Tables and Figures/ROC_plot_folds_blood_updated3.png",
   plot     = roc_plot,
   width    = 6,
   height   = 6,
   dpi      = 500
+)
+
+# -------------------------------------------------------------------------
+# Manuscript output: Extended Data Figure 7A
+#
+# What this is:
+#   Standalone pooled outer-fold ROC panel for blood/cfDNA-derived models.
+#
+# Why it is here:
+#   The final Extended Data Figure 7 uses this as panel A.
+# -------------------------------------------------------------------------
+ms_copy_artifact(
+  source_path = "Final Tables and Figures/ROC_plot_folds_blood_updated3.png",
+  artifact_id = "EDFIG7A",
+  role = "figure_panel_png",
+  description = "Blood/cfDNA-derived pooled outer-fold ROC panel used as Extended Data Figure 7A.",
+  script_name = "3_1_Optimize_cfWGS_thresholds.R"
 )
 
 
@@ -5595,6 +5962,24 @@ ggsave(
   width  = 5.5,
   height = 4,
   dpi    = 600
+)
+
+# -------------------------------------------------------------------------
+# Manuscript output: Extended Data Figure 7E
+#
+# What this is:
+#   Blood/cfDNA ROC performance panel with the fixed confirmatory marker used
+#   in the final manuscript.
+#
+# Why it is here:
+#   The final Extended Data Figure 7 uses this as panel E.
+# -------------------------------------------------------------------------
+ms_copy_artifact(
+  source_path = "Final Tables and Figures/Supp7D_ROC_performance_blood_updated4.png",
+  artifact_id = "EDFIG7E",
+  role = "figure_panel_png",
+  description = "Blood/cfDNA ROC performance panel used as Extended Data Figure 7E.",
+  script_name = "3_1_Optimize_cfWGS_thresholds.R"
 )
 
 
@@ -6205,12 +6590,46 @@ ggsave(
   dpi      = 500
 )
 
+# -------------------------------------------------------------------------
+# Manuscript output: Extended Data Figure 9B
+#
+# What this is:
+#   Fragmentomics nested-CV sensitivity/specificity performance diagnostic.
+#
+# Why it is here:
+#   The final Extended Data Figure 9 uses this as panel B.
+# -------------------------------------------------------------------------
+ms_copy_artifact(
+  source_path = "Final Tables and Figures/Performance_nested_folds_fragmentomics_only_performance4.png",
+  artifact_id = "EDFIG9B",
+  role = "figure_panel_png",
+  description = "Fragmentomics nested-CV performance panel used as Extended Data Figure 9B.",
+  script_name = "3_1_Optimize_cfWGS_thresholds.R"
+)
+
 ggsave(
   filename = "Final Tables and Figures/ROC_plot_folds_fragmentomics_train3.png",
   plot     = roc_plot,
   width    = 6,
   height   = 6,
   dpi      = 500
+)
+
+# -------------------------------------------------------------------------
+# Manuscript output: Extended Data Figure 9A
+#
+# What this is:
+#   Standalone pooled outer-fold ROC panel for fragmentomics models.
+#
+# Why it is here:
+#   The final Extended Data Figure 9 uses this as panel A.
+# -------------------------------------------------------------------------
+ms_copy_artifact(
+  source_path = "Final Tables and Figures/ROC_plot_folds_fragmentomics_train3.png",
+  artifact_id = "EDFIG9A",
+  role = "figure_panel_png",
+  description = "Fragmentomics pooled outer-fold ROC panel used as Extended Data Figure 9A.",
+  script_name = "3_1_Optimize_cfWGS_thresholds.R"
 )
 
 

@@ -15,11 +15,9 @@
 # How to run:
 #   Rscript Scripts_2025/Final_Scripts/1_0_Process_clinical_metadata.R
 #
-# Role in manuscript workflow:
-#   Upstream/intermediate processing script. It does not usually export a
-#   final assembled manuscript figure/table directly, but its outputs feed
-#   later manuscript source scripts. Harmonises clinical metadata across
-#   cohorts.
+# Manuscript outputs created/updated:
+#   - None directly. This upstream script harmonizes clinical metadata across
+#     cohorts for downstream Table 1, swim-plot, model, and survival scripts.
 #
 #  Author:        Dory Abelman
 #  Last updated:  2025-06-06

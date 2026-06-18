@@ -26,11 +26,10 @@
 # How to run:
 #   Rscript Scripts_2025/Final_Scripts/1_7B_Process_fragment_score_and_inetegrate_fragmentomics_data.R
 #
-# Role in manuscript workflow:
-#   Upstream/intermediate processing script. It does not usually export a
-#   final assembled manuscript figure/table directly, but its outputs feed
-#   later manuscript source scripts. Processes fragment-size scores and
-#   integrates fragmentomics.
+# Manuscript outputs created/updated:
+#   - None directly. This upstream script processes fragment-size scores and
+#     integrates fragmentomics features used by model training, longitudinal
+#     summaries, and dilution-series comparisons.
 # ──────────────────────────────────────────────────────────────────────────────
 
 ### PREPARE SESSION ################################################################################

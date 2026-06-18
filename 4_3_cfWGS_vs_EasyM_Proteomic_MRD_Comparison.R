@@ -26,9 +26,10 @@
 ## How to run:
 ##   Rscript Scripts_2025/Final_Scripts/4_3_cfWGS_vs_EasyM_Proteomic_MRD_Comparison.R
 ##
-## Role in manuscript workflow:
-##   Upstream/intermediate processing script. Generates cfWGS-vs-EasyM
-##   comparison outputs used by downstream manuscript figures/tables.
+## Manuscript outputs created/updated:
+##   - None directly in the current mapped manuscript set. This support script
+##     generates cfWGS-vs-EasyM comparison outputs used for downstream review
+##     and potential manuscript updates.
 ##
 ## Dependencies:
 ##   tidyverse, lubridate, survival, survminer, broom, patchwork,

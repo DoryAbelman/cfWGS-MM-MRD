@@ -17,10 +17,9 @@
 # Usage:
 #   source("config.R")   # called at the top of each numbered script
 #
-# Role in manuscript workflow:
-#   Support infrastructure. This file does not generate manuscript outputs, but
-#   it defines shared package and path configuration used by the reproducible
-#   manuscript analysis scripts.
+# Manuscript outputs created/updated:
+#   - None directly. This support file defines shared package and path
+#     configuration used by the command-line manuscript analysis scripts.
 #
 # Directory variables (update these for your system):
 #   clinical_data_dir  <- path to clinical metadata spreadsheets

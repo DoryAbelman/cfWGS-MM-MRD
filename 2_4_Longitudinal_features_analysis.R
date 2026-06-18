@@ -3,13 +3,18 @@
 # How to run:
 #   Rscript Scripts_2025/Final_Scripts/2_4_Longitudinal_features_analysis.R
 #
-# Role in manuscript workflow:
-#   Direct manuscript-output script. Mapped output(s): Figure_2 panel/sheet
-#   A; Figure_2 panel/sheet B; Figure_2 panel/sheet C; Figure_2 panel/sheet
-#   D; Extended_Data_Figure_3 panel/sheet A; Extended_Data_Figure_3
-#   panel/sheet B; Extended_Data_Figure_3 panel/sheet C;
-#   Extended_Data_Figure_4 panel/sheet all. Generates longitudinal feature
-#   panels.
+# Manuscript outputs created/updated:
+#   - Figure 2A-D: longitudinal cfWGS/cfDNA response examples and cohort-level
+#     longitudinal feature summaries.
+#   - Extended Data Figure 3A-C: supplementary longitudinal trajectory panels.
+#   - Extended Data Figure 4: longitudinal feature/biomarker correlation heatmap.
+#
+# Pipeline role:
+#   This script evaluates whether cfWGS and fragmentomic features change over
+#   treatment and follow-up in the expected direction. It masks assay values for
+#   patients without baseline WGS evidence of disease so that apparent negative
+#   MRD values are not overinterpreted when the assay was not informative for
+#   that patient at baseline.
 #
 # Author: Dory Abelman
 # Date: 2025-06
@@ -40,6 +45,18 @@ suppressPackageStartupMessages({
   library(scales)
   library(viridis)
 })
+
+# Shared helper for final manuscript-organized outputs.
+# This script retains its historical Output_tables_2025 filenames, while the
+# helper copies the manuscript-facing components into
+# Scripts_2025/Final_Scripts/final_manuscript_objects with final labels such
+# as Figure_2B and Extended_Data_Figure_3A.
+.manuscript_helper <- file.path("Scripts_2025", "Final_Scripts", "manuscript_output_helpers.R")
+if (!file.exists(.manuscript_helper)) {
+  .manuscript_helper <- "manuscript_output_helpers.R"
+}
+source(.manuscript_helper)
+rm(.manuscript_helper)
 
 ## ───── 1. Load data ──────────────────────────────────────────────────────────
 ### Set paths 
@@ -863,6 +880,24 @@ ggsave(
   dpi      = 600
 )
 
+# -------------------------------------------------------------------------
+# Manuscript output: Extended Data Figure 3A
+#
+# What this is:
+#   Raw/unstandardized BM-informed longitudinal mutation trajectory panel.
+#
+# Why it is here:
+#   The historical filename uses earlier Figure 3 numbering, but the audited
+#   manuscript map identifies this PNG as final Extended Data Figure 3A.
+# -------------------------------------------------------------------------
+ms_copy_artifact(
+  source_path = file.path(outdir, "Fig3A_sideBySide_lockedY_segmented2.png"),
+  artifact_id = "EDFIG3A",
+  role = "figure_panel_png",
+  description = "Raw BM-informed longitudinal mutation trajectory panel used as Extended Data Figure 3A.",
+  script_name = "2_4_Longitudinal_features_analysis.R"
+)
+
 
 # 2) Build the two mini‑plots for other features
 
@@ -1046,6 +1081,25 @@ ggsave(
   width    = 12,   # 4 panels across
   height   = 4,
   dpi      = 600
+)
+
+# -------------------------------------------------------------------------
+# Manuscript output: Main Figure 2B
+#
+# What this is:
+#   Standardized BM-informed longitudinal mutation trajectory panel, including
+#   the capped BM cVAF z-score axis used in the final manuscript figure.
+#
+# Why it is here:
+#   The historical filename uses earlier Figure 3 numbering, but the audited
+#   manuscript map identifies this PNG as final Main Figure 2B.
+# -------------------------------------------------------------------------
+ms_copy_artifact(
+  source_path = file.path(outdir, "Fig3A_sideBySide_lockedY_zscore_segmented4.png"),
+  artifact_id = "FIG2B",
+  role = "figure_panel_png",
+  description = "Standardized BM-informed longitudinal mutation trajectory panel used as Main Figure 2B.",
+  script_name = "2_4_Longitudinal_features_analysis.R"
 )
 
 
@@ -2001,6 +2055,35 @@ for(pid in all_pids){
   }
 }
 
+# -------------------------------------------------------------------------
+# Manuscript output: Main Figure 2A
+#
+# What this is:
+#   Patient-level longitudinal cVAF examples for the two final manuscript
+#   example patients.
+#
+# Why it is here:
+#   The final assembled Figure 2A uses the retained deanonymized CA-08 and CA-02
+#   PNG components. The source map records that exact redraw still depends on
+#   cached longitudinal mutation-tracking/de-identification state, so these
+#   copied files remain explicit manuscript components until that upstream
+#   reconstruction is fully reconciled.
+# -------------------------------------------------------------------------
+ms_copy_artifact(
+  source_path = "Final Tables and Figures/Longitudinal tracking deanonymized/CA-08_cVAF_vsHealthy_updated.png",
+  artifact_id = "FIG2A",
+  role = "figure_panel_png_CA_08",
+  description = "Patient-level longitudinal cVAF example component for Main Figure 2A.",
+  script_name = "2_4_Longitudinal_features_analysis.R"
+)
+ms_copy_artifact(
+  source_path = "Final Tables and Figures/Longitudinal tracking deanonymized/CA-02_cVAF_vsHealthy_updated.png",
+  artifact_id = "FIG2A",
+  role = "figure_panel_png_CA_02",
+  description = "Patient-level longitudinal cVAF example component for Main Figure 2A.",
+  script_name = "2_4_Longitudinal_features_analysis.R"
+)
+
 
 
 
@@ -2290,6 +2373,24 @@ ggsave(
   dpi      = 600
 )
 
+# -------------------------------------------------------------------------
+# Manuscript output: Extended Data Figure 3B
+#
+# What this is:
+#   Raw/unstandardized cfDNA-informed longitudinal mutation trajectory panel.
+#
+# Why it is here:
+#   The historical filename uses earlier Figure 3 numbering, but the audited
+#   manuscript map identifies this PNG as final Extended Data Figure 3B.
+# -------------------------------------------------------------------------
+ms_copy_artifact(
+  source_path = file.path(outdir, "Fig3B_sideBySide_lockedY_blood_segmented2.png"),
+  artifact_id = "EDFIG3B",
+  role = "figure_panel_png",
+  description = "Raw cfDNA-informed longitudinal mutation trajectory panel used as Extended Data Figure 3B.",
+  script_name = "2_4_Longitudinal_features_analysis.R"
+)
+
 
 # 2) Build the two mini‑plots
 
@@ -2402,6 +2503,24 @@ ggsave(
   width    = 12,   # 4 panels across
   height   = 4,
   dpi      = 600
+)
+
+# -------------------------------------------------------------------------
+# Manuscript output: Main Figure 2C
+#
+# What this is:
+#   Standardized cfDNA-informed longitudinal mutation trajectory panel.
+#
+# Why it is here:
+#   The historical filename uses earlier Figure 3 numbering, but the audited
+#   manuscript map identifies this PNG as final Main Figure 2C.
+# -------------------------------------------------------------------------
+ms_copy_artifact(
+  source_path = file.path(outdir, "Fig3B_sideBySide_lockedY_zscore_blood_segmented2.png"),
+  artifact_id = "FIG2C",
+  role = "figure_panel_png",
+  description = "Standardized cfDNA-informed longitudinal mutation trajectory panel used as Main Figure 2C.",
+  script_name = "2_4_Longitudinal_features_analysis.R"
 )
 
 
@@ -2740,6 +2859,25 @@ ggsave(
   dpi      = 600
 )
 
+# -------------------------------------------------------------------------
+# Manuscript output: Main Figure 2D
+#
+# What this is:
+#   Longitudinal fragmentomics panel using fragment score and mean cfDNA
+#   coverage with the plotting transformations used in the manuscript.
+#
+# Why it is here:
+#   The historical filename uses earlier Figure 3 numbering, but the audited
+#   manuscript map identifies this PNG as final Main Figure 2D.
+# -------------------------------------------------------------------------
+ms_copy_artifact(
+  source_path = file.path(outdir, "Fig3C_sideBySide_lockedY_fragmentomics_segmented2.png"),
+  artifact_id = "FIG2D",
+  role = "figure_panel_png",
+  description = "Longitudinal fragmentomics trajectory panel used as Main Figure 2D.",
+  script_name = "2_4_Longitudinal_features_analysis.R"
+)
+
 
 # 2) Now for next
 
@@ -2852,6 +2990,25 @@ ggsave(
   width    = 12,   # 4 panels across
   height   = 4,
   dpi      = 600
+)
+
+# -------------------------------------------------------------------------
+# Manuscript output: Extended Data Figure 3C
+#
+# What this is:
+#   Complementary longitudinal fragmentomics panel showing short-fragment and
+#   cfDNA tumor-fraction trajectories.
+#
+# Why it is here:
+#   The historical filename uses earlier Figure 3 numbering, but the audited
+#   manuscript map identifies this PNG as final Extended Data Figure 3C.
+# -------------------------------------------------------------------------
+ms_copy_artifact(
+  source_path = file.path(outdir, "Fig3B_sideBySide_lockedY_2_fragmentomics_segmented2.png"),
+  artifact_id = "EDFIG3C",
+  role = "figure_panel_png",
+  description = "Complementary longitudinal fragmentomics trajectory panel used as Extended Data Figure 3C.",
+  script_name = "2_4_Longitudinal_features_analysis.R"
 )
 
 
@@ -3081,7 +3238,7 @@ p_heatmap_tri <- p_heatmap_tri +
 
 
 # 8. Save the triangular Spearman heatmap.
-# Manuscript role: Extended Data Figure 4 support; older file names/comments
+# Manuscript output: Extended Data Figure 4 support. Older file names/comments
 # in this block predate the final figure numbering.
 ggsave(
   filename = file.path(outdir, "Fig_heatmap_spearman_upper_triangle4.png"),
@@ -3090,6 +3247,25 @@ ggsave(
   height   = 5,
   dpi      = 1800,
   bg       = "white"
+)
+
+# -------------------------------------------------------------------------
+# Manuscript output: Extended Data Figure 4
+#
+# What this is:
+#   Upper-triangle Spearman correlation heatmap across longitudinal cfDNA
+#   features and biomarkers.
+#
+# Why it is here:
+#   This PNG is the script-generated component used for final Extended Data
+#   Figure 4.
+# -------------------------------------------------------------------------
+ms_copy_artifact(
+  source_path = file.path(outdir, "Fig_heatmap_spearman_upper_triangle4.png"),
+  artifact_id = "EDFIG4",
+  role = "figure_component_png",
+  description = "Longitudinal feature Spearman correlation heatmap used as Extended Data Figure 4.",
+  script_name = "2_4_Longitudinal_features_analysis.R"
 )
 
 

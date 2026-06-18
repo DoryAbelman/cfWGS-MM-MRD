@@ -22,11 +22,9 @@
 # How to run:
 #   Rscript Scripts_2025/Final_Scripts/1_8B_Export_MRDetect_patient_feature_table.R
 #
-# Role in manuscript workflow:
-#   Upstream/intermediate processing script. It does not usually export a
-#   final assembled manuscript figure/table directly, but its outputs feed
-#   later manuscript source scripts. Exports combined MRDetect patient
-#   feature table.
+# Manuscript outputs created/updated:
+#   - None directly. This upstream script exports the combined MRDetect patient
+#     feature table used by downstream model and concordance scripts.
 #
 # =============================================================================
 

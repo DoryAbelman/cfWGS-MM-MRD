@@ -42,10 +42,16 @@
 # How to run:
 #   Rscript Scripts_2025/Final_Scripts/2_2_Baseline_demographics_by_WGS_heatmap_updated.R
 #
-# Role in manuscript workflow:
-#   Direct manuscript-output script. Mapped output(s):
-#   Extended_Data_Figure_1 panel/sheet all; Supplementary_Table_1A
-#   panel/sheet all. Generates baseline WGS heatmap and feature catalog.
+# Manuscript outputs created/updated:
+#   - Extended Data Figure 1: baseline BM/cfDNA WGS alteration heatmap.
+#   - Supplementary Table 1A: baseline feature catalog/source table for the
+#     heatmap and WGS alteration calls.
+#
+# Pipeline role:
+#   The heatmap compares matched baseline bone-marrow and cfDNA WGS calls in
+#   the same visual matrix: upper-triangle tiles are BM calls and lower-triangle
+#   tiles are plasma cfDNA calls. This lets reviewers inspect concordance and
+#   discordance by patient, assay compartment, alteration class, and cohort.
 #
 # Author:    Dory Abelman
 # Last edit: 2025-05-26
@@ -63,6 +69,18 @@ library(stringr)
 library(readr)
 library(grid)
 library(ggplot2)
+
+# Shared helper for final manuscript-organized outputs.
+# This script still writes its historical output files. The helper additionally
+# copies the final heatmap/table components into
+# Scripts_2025/Final_Scripts/final_manuscript_objects with clear manuscript
+# labels such as Extended_Data_Figure_1 and Supplementary_Table_1A.
+.manuscript_helper <- file.path("Scripts_2025", "Final_Scripts", "manuscript_output_helpers.R")
+if (!file.exists(.manuscript_helper)) {
+  .manuscript_helper <- "manuscript_output_helpers.R"
+}
+source(.manuscript_helper)
+rm(.manuscript_helper)
 
 
 ### Load data 
@@ -1392,6 +1410,26 @@ draw(
   heatmap_legend_list    = list(lgd_cohort, lgd_sampletype, lgd_mut, lgd_cna, lgd_count, lgd_fish),
 )
 dev.off()
+
+# -------------------------------------------------------------------------
+# Manuscript output: Extended Data Figure 1
+#
+# What this is:
+#   Integrated baseline genomic alteration heatmap. Bone marrow calls are shown
+#   in the upper triangle and cfDNA calls in the lower triangle, with FISH and
+#   cohort annotations.
+#
+# Why it is here:
+#   This PNG is the plotted source component used to assemble final Extended
+#   Data Figure 1.
+# -------------------------------------------------------------------------
+ms_copy_artifact(
+  source_path = "Final Tables and Figures/Figure_1B_overlay_heatmap_BM_vs_cfDNA_updated_with_FISH_15.png",
+  artifact_id = "EDFIG1",
+  role = "figure_component_png",
+  description = "Integrated BM-vs-cfDNA baseline genomic alteration heatmap used for Extended Data Figure 1.",
+  script_name = "2_2_Baseline_demographics_by_WGS_heatmap_updated.R"
+)
 
 # Removed lgd_sampletype2
 
@@ -2902,6 +2940,26 @@ feature_catalog <- data.frame(
 
 write_csv(feature_catalog, "Output_tables_2025_updated/MM_disease_associated_features_catalog.csv")
 saveRDS(feature_catalog,   "Output_tables_2025_updated/MM_disease_associated_features_catalog.rds")
+
+# -------------------------------------------------------------------------
+# Manuscript output: Supplementary Table 1A
+#
+# What this is:
+#   Catalog of disease-associated genomic features assessed in the baseline
+#   BM/cfDNA heatmap, including myeloma genes, copy-number alterations, and
+#   translocations.
+#
+# Why it is here:
+#   This feature catalog defines the rows of Extended Data Figure 1 and is the
+#   code-generated source for final Supplementary Table 1A.
+# -------------------------------------------------------------------------
+ms_copy_artifact(
+  source_path = "Output_tables_2025_updated/MM_disease_associated_features_catalog.csv",
+  artifact_id = "STABLE1A",
+  role = "table_csv",
+  description = "Disease-associated genomic feature catalog used for Supplementary Table 1A and Extended Data Figure 1.",
+  script_name = "2_2_Baseline_demographics_by_WGS_heatmap_updated.R"
+)
 
 cat("\n✓ Exported MM-like/disease-associated features catalog\n")
 cat("  - Myeloma genes:", length(myeloma_genes), "\n")

@@ -34,11 +34,11 @@
 #     --output path/to/detection_rates_with_lod.csv \
 #     --ir-column reads_checked
 #
-# ## Role in manuscript workflow
-# This is an upstream QC/annotation script. It augments MRDetect detection-rate
-# outputs with denominator-derived LOD proxy fields that can be used to audit
-# analytical sensitivity and explain why low-informative-read samples have
-# weaker detection limits.
+# ## Manuscript outputs created/updated
+# - None directly. This upstream QC/annotation script augments MRDetect
+#   detection-rate outputs with denominator-derived LOD proxy fields that can
+#   audit analytical sensitivity and explain why low-informative-read samples
+#   have weaker detection limits.
 #
 # ## Main input
 # - MRDetect_output_winter_2025/Processed_R_outputs/

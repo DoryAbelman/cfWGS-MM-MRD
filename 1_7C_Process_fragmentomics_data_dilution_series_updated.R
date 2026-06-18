@@ -25,11 +25,9 @@
 # How to run:
 #   Rscript Scripts_2025/Final_Scripts/1_7C_Process_fragmentomics_data_dilution_series_updated.R
 #
-# Role in manuscript workflow:
-#   Upstream/intermediate processing script. It does not usually export a
-#   final assembled manuscript figure/table directly, but its outputs feed
-#   later manuscript source scripts. Processes dilution-series
-#   fragmentomics.
+# Manuscript outputs created/updated:
+#   - None directly. This upstream script processes dilution-series
+#     fragmentomics features that are scored and plotted in 3_1_part2.
 #
 # Author:  Dory Abelman
 # Updated: 2025-06-06

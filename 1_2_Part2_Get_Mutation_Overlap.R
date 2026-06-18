@@ -26,26 +26,36 @@
 #   library(grid)        # grid graphics  
 #   library(VennDiagram) # draw.pairwise.venn()  
 #  
-# Input files :  
-#   - combined_maf_temp_bm_Jan2025.maf  
-#   - combined_maf_temp_blood_Jan2025.maf  
-#   - metada_df_mutation_comparison (data frame in workspace)  
+# Input files :
+#   - combined_maf_bm_dx.rds
+#   - combined_maf_blood_all_muts_updated.rds
+#   - combined_clinical_data_updated_April2025.csv
+#   - cohort_assignment_table_updated.rds
+#   - id_map.rds
+#   - Jan2025_exported_data/All_feature_data_Sep2025_updated2.rds
 #  
-# Output files:  
-#   - VennDiagram_<Patient>_May2024_updatedcolors.png  
-#   - percent_overlap_barplot.png  
+# Output files:
+#   - VennDiagram_<Patient>_May2024_updatedcolors.png
+#   - percent_overlap_barplot_Sep2025.png
+#   - Final Tables and Figures/Fig3C_mutation_overlap_lollipop2_updated.png
 #  
-# Notes       :  
-#   • Ensure your working directory is set appropriately or use full paths  
-#   • Make sure metada_df_mutation_comparison is loaded and correctly spelled  
+# Notes:
+#   - The script is command-line runnable from the project root. Clinical
+#     metadata are read from disk; no preloaded RStudio workspace object is
+#     required.
 #  
 # How to run:
 #   Rscript Scripts_2025/Final_Scripts/1_2_Part2_Get_Mutation_Overlap.R
 #
-# Role in manuscript workflow:
-#   Direct manuscript-output script. Mapped output(s):
-#   Extended_Data_Figure_2 panel/sheet G. Computes BM/cfDNA mutation
-#   overlap and Venn outputs.
+# Manuscript outputs created/updated:
+#   - Extended Data Figure 2G: patient-level lollipop plot showing the
+#     percentage of baseline BM mutations recovered in matched cfDNA.
+#
+# Pipeline role:
+#   This analysis asks whether baseline tumour mutations seen in diagnostic
+#   bone marrow are also detectable in plasma cfDNA. Likely germline dbSNP
+#   rsID calls are removed before overlap calculations so the plotted values
+#   reflect somatic tumour mutation recovery rather than common polymorphisms.
 # ──────────────────────────────────────────────────────────────────────────────
 
 
@@ -61,6 +71,15 @@ library(grid)
 library(VennDiagram)
 library(viridis)
 
+# Shared manuscript-output helpers.
+# The manuscript panel produced by this script is copied into
+# final_manuscript_objects/ immediately after it is saved below.
+.manuscript_helper <- file.path("Scripts_2025", "Final_Scripts", "manuscript_output_helpers.R")
+if (!file.exists(.manuscript_helper)) {
+  .manuscript_helper <- "manuscript_output_helpers.R"
+}
+source(.manuscript_helper)
+rm(.manuscript_helper)
 
 outdir <- "Final Tables and Figures/"
 
@@ -488,12 +507,23 @@ p_overlap <- ggplot(plot_df, aes(x = Percent_Overlap, y = Patient)) +
 # 4. Save manuscript panel
 # Current manuscript assignment: Extended Data Figure 2G.
 # Historical filename: Fig3C_mutation_overlap_lollipop2_updated.png.
+edfig2g_path <- file.path(outdir, "Fig3C_mutation_overlap_lollipop2_updated.png")
 ggsave(
-  filename = file.path(outdir, "Fig3C_mutation_overlap_lollipop2_updated.png"),
+  filename = edfig2g_path,
   plot     = p_overlap,
   width    = 4,   # a bit narrower
   height   = 5,
   dpi      = 600
+)
+
+# MANUSCRIPT OUTPUT: Extended Data Figure 2G
+# Patient-level lollipop plot summarizing baseline BM/cfDNA mutation overlap.
+ms_copy_artifact(
+  source_path = edfig2g_path,
+  artifact_id = "EDFIG2G",
+  role = "figure_panel_png",
+  description = "Extended Data Figure 2G: baseline patient-level BM/cfDNA mutation-overlap lollipop plot.",
+  script_name = "1_2_Part2_Get_Mutation_Overlap.R"
 )
 
 

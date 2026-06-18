@@ -33,15 +33,20 @@
 # How to run:
 #   Rscript Scripts_2025/Final_Scripts/2_3_Feature_Concordance_And_Mutation_Counts.R
 #
-# Role in manuscript workflow:
-#   Direct manuscript-output script. Mapped output(s):
-#   Extended_Data_Figure_2 panel/sheet A; Extended_Data_Figure_2
-#   panel/sheet B; Extended_Data_Figure_2 panel/sheet C;
-#   Extended_Data_Figure_2 panel/sheet D; Extended_Data_Figure_2
-#   panel/sheet E; Extended_Data_Figure_2 panel/sheet F;
-#   Supplementary_Table_2 panel/sheet all_sheets; Supplementary_Table_3
-#   panel/sheet all. Generates concordance tables/figures and feature
-#   correlations.
+# Manuscript outputs created/updated:
+#   - Extended Data Figure 2A-F: baseline concordance, mutation burden, and
+#     feature-correlation panels.
+#   - Supplementary Table 2: FISH/WGS concordance summaries and related source
+#     sheets.
+#   - Supplementary Table 3: baseline mutation-count and feature-correlation
+#     source table.
+#
+# Pipeline role:
+#   This script quantifies how well cfDNA and BM WGS recover clinically reported
+#   FISH/cytogenetic events, then summarizes mutation burden and its association
+#   with tumour fraction and fragmentomic features. Concordance is stratified by
+#   ctDNA fraction because low tumour fraction is a known biological and technical
+#   limit on detecting CNAs and structural variants in plasma.
 #
 # ==============================================================================
 
@@ -59,6 +64,18 @@ library(ggpubr)   # stat_compare_means() for baseline concordance plots
 library(scales)   # percent_format() for plot axes
 library(patchwork) # plot_spacer() and plot layouts
 library(viridis)  # viridis() colors for concordance plots
+
+# Shared helper for final manuscript-organized outputs.
+# The script continues to write its historical outputs. The helper additionally
+# copies each final manuscript component into
+# Scripts_2025/Final_Scripts/final_manuscript_objects with labels such as
+# Extended_Data_Figure_2A and Supplementary_Table_3.
+.manuscript_helper <- file.path("Scripts_2025", "Final_Scripts", "manuscript_output_helpers.R")
+if (!file.exists(.manuscript_helper)) {
+  .manuscript_helper <- "manuscript_output_helpers.R"
+}
+source(.manuscript_helper)
+rm(.manuscript_helper)
 
 file <- readRDS("Final_aggregate_table_cfWGS_features_with_clinical_and_demographics_updated9.rds")
 
@@ -727,8 +744,8 @@ mut_sets <- mut_matched %>%
     values_fill = list(muts = list(character(0)))  # in case one arm has zero
   )
 
-# Command-line runs can legitimately produce a matched baseline subset where one
-# sample type has no mutation rows after upstream filtering. In an interactive
+# Command-line runs may produce a matched baseline subset where one sample type
+# has no mutation rows after upstream filtering. In an interactive
 # RStudio session this was easy to miss because objects from earlier runs could
 # remain in memory. Define the expected list columns explicitly so downstream
 # concordance statistics always compare BM-vs-cfDNA mutation sets with a clear
@@ -1106,6 +1123,33 @@ all_corrs <- all_corrs %>%
 write.csv(all_corrs %>% filter(!is.na(p_adj)), file = "Final Tables and Figures/Suplementary_Table_2_All_Feature_Correlations_updated2.csv")
 write.csv(all_corrs %>% filter(!is.na(p_adj)), file = "Final Tables and Figures/Suplementary_Table_2_All_Feature_Correlations_updated.csv")
 
+# -------------------------------------------------------------------------
+# Manuscript output: Supplementary Table 3
+#
+# What this is:
+#   Feature-correlation table comparing baseline mutation burden and related
+#   cfWGS/clinical variables, with Benjamini-Hochberg adjusted p-values.
+#
+# Why it is here:
+#   The historical filename says "Suplementary_Table_2", but the audited
+#   manuscript source map identifies this export as final Supplementary Table 3.
+#
+# Current provenance note:
+#   The retained renamed manuscript CSV remains authoritative until the known
+#   row-count mismatch in direct recomputation is reconciled. This copy records
+#   the regenerated table produced by the current source script.
+# -------------------------------------------------------------------------
+ms_copy_artifact(
+  source_path = "Final Tables and Figures/Suplementary_Table_2_All_Feature_Correlations_updated2.csv",
+  artifact_id = "STABLE3",
+  role = "regenerated_table_csv",
+  description = paste(
+    "Regenerated feature-correlation table for Supplementary Table 3;",
+    "historical filename retained for provenance."
+  ),
+  script_name = "2_3_Feature_Concordance_And_Mutation_Counts.R"
+)
+
 # now significant by raw p-value
 sig_raw <- all_corrs %>% filter(p_val < 0.05)
 
@@ -1321,6 +1365,24 @@ p1 <- ggplot(plot_df, aes(cohort, MutCount, fill = cohort)) +
 
 ggsave("Final Tables and Figures/Baseline_concordance/Figure2F_boxplot_with_bracket.png", p1, width = 5, height = 4.25, dpi = 600)
 
+# -------------------------------------------------------------------------
+# Manuscript output: Extended Data Figure 2E
+#
+# What this is:
+#   Baseline mutation-count boxplot by cohort, with the original Wilcoxon
+#   comparison bracket and training/test cohort labels.
+#
+# Why it is here:
+#   The final assembled Extended Data Figure 2 uses this PNG as panel E.
+# -------------------------------------------------------------------------
+ms_copy_artifact(
+  source_path = "Final Tables and Figures/Baseline_concordance/Figure2F_boxplot_with_bracket.png",
+  artifact_id = "EDFIG2E",
+  role = "figure_panel_png",
+  description = "Baseline mutation-count boxplot used as Extended Data Figure 2E.",
+  script_name = "2_3_Feature_Concordance_And_Mutation_Counts.R"
+)
+
 
 
 #### Now redo but percent high tumor fraction instead 
@@ -1364,6 +1426,24 @@ p2 <- ggplot(plot_df, aes(cohort, WGS_Tumor_Fraction_Blood_plasma_cfDNA, fill = 
   )
 
 ggsave("Final Tables and Figures/Baseline_concordance/Figure2B_boxplot_with_bracket_tumor_fraction.png", p2, width = 4, height = 4, dpi = 600)
+
+# -------------------------------------------------------------------------
+# Manuscript output: Extended Data Figure 2A
+#
+# What this is:
+#   cfDNA tumor-fraction boxplot by cohort, including the 5% tumor-fraction
+#   reference line used throughout this concordance analysis.
+#
+# Why it is here:
+#   The final assembled Extended Data Figure 2 uses this PNG as panel A.
+# -------------------------------------------------------------------------
+ms_copy_artifact(
+  source_path = "Final Tables and Figures/Baseline_concordance/Figure2B_boxplot_with_bracket_tumor_fraction.png",
+  artifact_id = "EDFIG2A",
+  role = "figure_panel_png",
+  description = "cfDNA tumor-fraction by cohort boxplot used as Extended Data Figure 2A.",
+  script_name = "2_3_Feature_Concordance_And_Mutation_Counts.R"
+)
 
 
 # Extended Data Figure 2 support - BM vs cfDNA mutation-count scatter.
@@ -1597,6 +1677,24 @@ ggsave("Final Tables and Figures/Baseline_concordance/Figure2D_facetted_scatter.
        height = 4,
        dpi    = 600)
 
+# -------------------------------------------------------------------------
+# Manuscript output: Extended Data Figure 2F
+#
+# What this is:
+#   Faceted scatterplot of cfDNA mutation burden against baseline clinical and
+#   fragmentomic correlates, with Spearman labels and cohort colors.
+#
+# Why it is here:
+#   The final assembled Extended Data Figure 2 uses this PNG as panel F.
+# -------------------------------------------------------------------------
+ms_copy_artifact(
+  source_path = "Final Tables and Figures/Baseline_concordance/Figure2D_facetted_scatter.png",
+  artifact_id = "EDFIG2F",
+  role = "figure_panel_png",
+  description = "Faceted mutation-burden correlation scatterplot used as Extended Data Figure 2F.",
+  script_name = "2_3_Feature_Concordance_And_Mutation_Counts.R"
+)
+
 
 
 
@@ -1790,6 +1888,25 @@ p_tf_sens2 <- ggplot(tf_plot_df, aes(x = value, y = event, group = event)) +
 ggsave(
   "Final Tables and Figures/Baseline_concordance/Fig2B_event_concordance_with_sensitivity_updated5.png",
   p_tf_sens2, width = 5.5, height = 4, dpi = 600
+)
+
+# -------------------------------------------------------------------------
+# Manuscript output: Extended Data Figure 2C
+#
+# What this is:
+#   Structural-variant and copy-number FISH concordance plot stratified by high
+#   versus low tumor fraction, faceted by BM and cfDNA source.
+#
+# Why it is here:
+#   The audited manuscript map assigns this PNG to final Extended Data Figure
+#   2C, even though the historical filename still contains "Fig2B".
+# -------------------------------------------------------------------------
+ms_copy_artifact(
+  source_path = "Final Tables and Figures/Baseline_concordance/Fig2B_event_concordance_with_sensitivity_updated5.png",
+  artifact_id = "EDFIG2B_D_C",
+  role = "figure_panel_png",
+  description = "FISH concordance by tumor fraction used as Extended Data Figure 2C.",
+  script_name = "2_3_Feature_Concordance_And_Mutation_Counts.R"
 )
 
 
@@ -2264,6 +2381,50 @@ ggsave(
   p_3panel, width = 5.5, height = 4, dpi = 600
 )
 
+# -------------------------------------------------------------------------
+# Manuscript output: Extended Data Figure 2B
+#
+# What this is:
+#   Three-panel BM-vs-cfDNA concordance/sensitivity/specificity summary by high
+#   versus low tumor fraction.
+#
+# Why it is here:
+#   The audited manuscript map assigns this PNG to final Extended Data Figure
+#   2B, even though the historical filename still contains "Fig2C".
+# -------------------------------------------------------------------------
+ms_copy_artifact(
+  source_path = "Final Tables and Figures/Baseline_concordance/Fig2C_BM_cfDNA_conc_sens_spec_byTF_updated6.png",
+  artifact_id = "EDFIG2B_D_B",
+  role = "figure_panel_png",
+  description = "BM-vs-cfDNA concordance, sensitivity, and specificity panel used as Extended Data Figure 2B.",
+  script_name = "2_3_Feature_Concordance_And_Mutation_Counts.R"
+)
+
+# Manuscript note: Extended Data Figure 2D is currently recorded in
+# docs/manuscript_artifact_source_map.tsv as a PowerPoint-only focal 1q
+# schematic/annotation with no resolved local R image export. It remains
+# explicitly documented in provenance rather than silently fabricated here.
+edfig2_final_pdf_candidates <- c(
+  file.path("Manuscript_Exports", "02_extended_data_figures", "Extended_Data_Figure_2", "final_artifacts", "Extended_Data_Figure_2.pdf"),
+  file.path("Figures_Exported", "Final_Feb2026", "Extended_Data_Figure_2.pdf"),
+  file.path("reproducible_workflow", "outputs", "frozen", "extended_figures", "Extended_Data_Figure_2.pdf")
+)
+edfig2_final_pdf <- edfig2_final_pdf_candidates[file.exists(edfig2_final_pdf_candidates)][1]
+
+if (!is.na(edfig2_final_pdf)) {
+  ms_copy_artifact(
+    source_path = edfig2_final_pdf,
+    artifact_id = "EDFIG2B_D_D",
+    role = "manual_final_figure_pdf",
+    description = "Extended Data Figure 2D: PowerPoint-only focal 1q schematic/annotation preserved as part of the frozen Extended Data Figure 2 PDF.",
+    script_name = "2_3_Feature_Concordance_And_Mutation_Counts.R"
+  )
+} else {
+  warning(
+    "Extended Data Figure 2D is a PowerPoint-only panel and no frozen Extended Data Figure 2 PDF was found locally."
+  )
+}
+
 
 
 # Get overall summary
@@ -2419,6 +2580,25 @@ out_xlsx <- "Final Tables and Figures/Supplementary_Table_2_BM_cfDNA_Concordance
 saveWorkbook(wb, out_xlsx, overwrite = TRUE)
 
 message("Wrote: ", normalizePath(out_xlsx))
+
+# -------------------------------------------------------------------------
+# Manuscript output: Supplementary Table 2
+#
+# What this is:
+#   Multi-sheet workbook summarizing BM-vs-cfDNA concordance and performance,
+#   plus FISH-vs-WGS metrics used for the Extended Data Figure 2 analysis.
+#
+# Why it is here:
+#   This is the script-generated workbook counterpart for final Supplementary
+#   Table 2. Historical filename drift is preserved in the source-map notes.
+# -------------------------------------------------------------------------
+ms_copy_artifact(
+  source_path = out_xlsx,
+  artifact_id = "STABLE2",
+  role = "workbook_xlsx",
+  description = "BM/cfDNA concordance workbook used as Supplementary Table 2.",
+  script_name = "2_3_Feature_Concordance_And_Mutation_Counts.R"
+)
 
 ### Export additional important things 
 # =====================================================================

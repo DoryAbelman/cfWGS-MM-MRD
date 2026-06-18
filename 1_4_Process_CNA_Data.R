@@ -68,10 +68,10 @@
 #   source("1_4_Process_CNA_Data.R")
 #   # creates combined_seg_data and myeloma_CNA_matrix_with_HRD in working dir
 #
-# Role in manuscript workflow:
-#   Upstream/intermediate processing script. It does not usually export a
-#   final assembled manuscript figure/table directly, but its outputs feed
-#   later manuscript source scripts. Processes ichorCNA CNA calls.
+# Manuscript outputs created/updated:
+#   - None directly. This upstream script processes ichorCNA CNA calls for WGS
+#     feature integration, baseline heatmaps, FISH/WGS concordance, and
+#     subclonal-evolution support outputs.
 #
 # Author: Dory Abelman
 # Date:   2025-05-26

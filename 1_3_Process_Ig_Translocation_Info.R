@@ -50,11 +50,10 @@
 # How to run:
 #   Rscript Scripts_2025/Final_Scripts/1_3_Process_Ig_Translocation_Info.R
 #
-# Role in manuscript workflow:
-#   Upstream/intermediate processing script. It does not usually export a
-#   final assembled manuscript figure/table directly, but its outputs feed
-#   later manuscript source scripts. Processes Ig-caller translocation
-#   calls.
+# Manuscript outputs created/updated:
+#   - None directly. This upstream script processes Ig-caller translocation
+#     calls for WGS feature integration, baseline heatmaps, and FISH/WGS
+#     concordance analyses.
 #
 # Author: Dory Abelman
 # Date:   2025-05-26

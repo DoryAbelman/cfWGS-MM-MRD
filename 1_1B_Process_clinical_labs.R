@@ -19,11 +19,9 @@
 # How to run:
 #   Rscript Scripts_2025/Final_Scripts/1_1B_Process_clinical_labs.R
 #
-# Role in manuscript workflow:
-#   Upstream/intermediate processing script. It does not usually export a
-#   final assembled manuscript figure/table directly, but its outputs feed
-#   later manuscript source scripts. Processes clinical laboratory
-#   measurements.
+# Manuscript outputs created/updated:
+#   - None directly. This upstream script processes clinical laboratory
+#     measurements that feed Table 1 and downstream clinical-feature summaries.
 #
 # Author:    Dory Abelman
 # Date:      May 2025

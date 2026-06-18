@@ -30,11 +30,10 @@
 # How to run:
 #   Rscript Scripts_2025/Final_Scripts/1_1A_Process_post_ACST_and_clinical_OS_PFS_and_clinical_FISH_metadata.R
 #
-# Role in manuscript workflow:
-#   Upstream/intermediate processing script. It does not usually export a
-#   final assembled manuscript figure/table directly, but its outputs feed
-#   later manuscript source scripts. Processes transplant, OS/PFS,
-#   progression, and FISH metadata.
+# Manuscript outputs created/updated:
+#   - None directly. This upstream script processes transplant, OS/PFS,
+#     progression, and FISH metadata for downstream clinical, concordance, and
+#     survival figures/tables.
 #
 #  Author:        Dory Abelman
 #  Last updated:  2025-05-13

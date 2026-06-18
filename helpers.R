@@ -14,9 +14,9 @@
 # Usage:
 #   source("helpers.R")  # called at the top of each numbered script
 #
-# Role in manuscript workflow:
-#   Support infrastructure. This file does not generate manuscript outputs; it
-#   centralizes reusable helper functions for consistent sample-ID handling.
+# Manuscript outputs created/updated:
+#   - None directly. This support file centralizes reusable helper functions
+#     for consistent sample-ID handling.
 # =============================================================================
 
 # Collection of helper functions used across scripts
