@@ -22,6 +22,10 @@
 #   - Data from 1_2, 1_3, 1_4 (mutation, translocation, CNA RDS files)
 #
 # Outputs:
+#   - Final Tables and Figures/Fig1_BM_heatmap.pdf
+#   - Final Tables and Figures/Fig1_Blood_heatmap.pdf
+#   - Final Tables and Figures/Fig1_Combined_overlay_heatmap.pdf
+#   - Output_tables_2025/BM_blood_concordance_stats.csv
 #   - heatmap_matrix_BM_Sep2025.rds
 #   - heatmap_matrix_blood_Sep2025_updated.rds
 #   - combined_data_heatmap_BM_Sep2025.rds

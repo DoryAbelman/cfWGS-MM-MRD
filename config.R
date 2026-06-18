@@ -17,6 +17,11 @@
 # Usage:
 #   source("config.R")   # called at the top of each numbered script
 #
+# Role in manuscript workflow:
+#   Support infrastructure. This file does not generate manuscript outputs, but
+#   it defines shared package and path configuration used by the reproducible
+#   manuscript analysis scripts.
+#
 # Directory variables (update these for your system):
 #   clinical_data_dir  <- path to clinical metadata spreadsheets
 #   wgs_results_dir    <- path to WGS variant call, CNA, and fragmentomics files

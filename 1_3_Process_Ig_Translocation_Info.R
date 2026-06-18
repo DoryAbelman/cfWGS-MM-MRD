@@ -67,6 +67,7 @@ library(ChromHeatMap)
 data("cytobands")
 library(tidyverse)
 library(stringr)
+library(readxl)
 library(reshape2)
 library(ComplexHeatmap)
 library(RColorBrewer)
@@ -84,6 +85,7 @@ source("GENIUSVariantAnalysis_Functions.R")
 # a later clinical file without checking whether downstream feature values change.
 # Load in the patient info 
 metada_df_mutation_comparison <- read_csv("combined_clinical_data_updated_Feb5_2025.csv")
+cohort_df <- readRDS("cohort_assignment_table_updated.rds")
 
 # Add a Tumor_Sample_Barcode column to metada_df_mutation_comparison
 metada_df_mutation_comparison <- metada_df_mutation_comparison %>%
@@ -107,6 +109,21 @@ cfWGS_res_filtered_f <- list.files(cfWGS_res_dir,
 
 cfWGS_res_filtered <- data.frame()
 
+if (!length(cfWGS_res_filtered_f)) {
+  cached_igcaller_path <- "Oct_2024_Ig_caller_MM_translocations_all.rds"
+  if (!file.exists(cached_igcaller_path)) {
+    stop(
+      "No raw Ig_caller *_filtered.tsv files were found in ", cfWGS_res_dir,
+      " and cached fallback is missing: ", cached_igcaller_path,
+      call. = FALSE
+    )
+  }
+  message(
+    "No raw Ig_caller *_filtered.tsv files found in ", cfWGS_res_dir,
+    "; using cached parsed Ig_caller object: ", cached_igcaller_path
+  )
+  cfWGS_res_filtered <- readRDS(cached_igcaller_path)
+} else {
 for(f in cfWGS_res_filtered_f){
   
   lns <- readLines(f)
@@ -171,6 +188,7 @@ for(f in cfWGS_res_filtered_f){
       
     }
   }
+}
 }
 
 ## Add cytobands

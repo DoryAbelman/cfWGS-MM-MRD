@@ -49,6 +49,7 @@ library(readxl)      # for reading Excel files
 library(readr)       # parse_integer/write_csv used for tidy exports
 library(dplyr)
 library(tidyr)
+library(ggplot2)     # QC plots
 library(lubridate)   # date parsing
 library(janitor)     # cleaning column names, removing empty rows/cols
 library(stringr)
@@ -73,13 +74,29 @@ input_files <- c(
   "Clinical data/IMMAGINE/Extracted_clinical_MRD_data.xlsx",
   "Clinical data/IMMAGINE/Cleaned_Patient_Follow-Up_Table_IMMAGINE.csv",
   "Clinical data/SPORE/SPORE_OS_info.xlsx",
-  "M4_CMRG_Data/M4_COHORT_DEMO.xlsx"
+  "M4_CMRG_Data/M4_COHORT_DEMO.xlsx",
+  "combined_clinical_data_updated_April2025.csv",
+  "Exported_data_tables_clinical/latest_dates_per_patient_updated.csv",
+  "Exported_data_tables_clinical/Relapse_dates_full_updated.rds"
 )
 
 # Verify existence of each input
 walk(input_files, ensure_exists)
 
 message("✅ All required input files are present.")
+
+Relapse_dates_full <- readRDS("Exported_data_tables_clinical/Relapse_dates_full_updated.rds")
+combined_clinical_data_updated <- read_csv(
+  "combined_clinical_data_updated_April2025.csv",
+  show_col_types = FALSE
+) %>%
+  mutate(Date_of_sample_collection = as.Date(Date_of_sample_collection))
+latest_dates <- read_csv(
+  "Exported_data_tables_clinical/latest_dates_per_patient_updated.csv",
+  show_col_types = FALSE
+) %>%
+  mutate(latest_date = as.Date(latest_date))
+spore_OS_info <- read_excel("Clinical data/SPORE/SPORE_OS_info.xlsx")
 
 
 
@@ -633,7 +650,7 @@ p1 <- final_tbl %>%
     x     = "Days to Relapse",
     y     = "Count"
   )
-ggsave("Exported clinical data April 2025/days_to_relapse_histogram.png", p1, width = 6, height = 4)
+ggsave(file.path(export_dir, "days_to_relapse_histogram.png"), p1, width = 6, height = 4)
 
 # 10b. Proportion relapsed within each window
 p2 <- final_tbl %>%
@@ -651,7 +668,7 @@ p2 <- final_tbl %>%
     x     = "Time Window After ACST",
     y     = "Proportion Relapsed"
   )
-ggsave("Exported clinical data April 2025/relapse_window_proportions.png", p2, width = 6, height = 4)
+ggsave(file.path(export_dir, "relapse_window_proportions.png"), p2, width = 6, height = 4)
 
 
 

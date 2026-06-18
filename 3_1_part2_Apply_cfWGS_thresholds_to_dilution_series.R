@@ -656,8 +656,8 @@ combined_plot <- p_bm_spearman_actual + p_bm_prob +
 # draw it
 print(combined_plot)
 
-### Figure 4G
-# and save
+### Extended Data Figure 5D support (older working filename contains Fig4G)
+# Save the BM dilution-series LOD component.
 ggsave(
   filename = file.path(OUTPUT_DIR_FIGURES, "Fig4G_LOD_combined_updated4.png"),
   plot     = combined_plot,
@@ -809,8 +809,8 @@ combined_plot <- p_bm_spearman_actual + p_bm_prob +
 # draw it
 print(combined_plot)
 
-### Figure 4G
-# and save
+### Extended Data Figure 5D support (older working filename contains Fig4G)
+# Save the final BM mutation/fragmentomics dilution-series component.
 ggsave(
   filename = file.path(OUTPUT_DIR_FIGURES, "Fig4G_LOD_combined_updated5.png"),
   plot     = combined_plot,
@@ -1260,8 +1260,8 @@ combined_plot <- p_blood_spearman_actual + p_blood_prob +
 # draw it
 print(combined_plot)
 
-### Figure 5G
-# and save
+### Extended Data Figure 7D support (older working filename contains Fig5G)
+# Save the blood/cfDNA dilution-series component.
 ggsave(
   filename = file.path(OUTPUT_DIR_FIGURES, "Fig5G_LOD_combined2.png"),
   plot     = combined_plot,
@@ -2296,4 +2296,3 @@ ggsave(
 message("Saved: Fig5G_LOD_combined_HCaxis_v2_20260225.png")
 
 message("\n═══ Done: healthy-control overlays saved ═══\n")
-

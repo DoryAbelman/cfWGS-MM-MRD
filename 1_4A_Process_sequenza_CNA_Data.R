@@ -106,6 +106,7 @@ library(purrr)           # for reduce()
 library(tidyr)           # for pivot_longer()
 library(GenomicRanges)
 library(readxl)
+library(dplyr)           # reattach after Bioconductor packages so bare verbs are tidyverse verbs
 
 ## Load clinical info
 # Load in the patient info 
@@ -211,7 +212,7 @@ read_pp_safe <- function(path) {
     str_replace("^ploidy\\.estimate$", "ploidy.estimate")
   names(df) <- nm
   
-  row2 <- df |> slice(2)
+  row2 <- df |> dplyr::slice(2)
   
   # Extract clean sample ID from filename
   sample_id <- basename(path) |> str_remove("_confints_CP\\.txt$")
@@ -226,7 +227,7 @@ read_pp_safe <- function(path) {
 
 pp_table <- map_dfr(confints, read_pp_safe) |>
   # Keep only labeled columns for downstream use
-  select(Sample, Purity, Ploidy)
+  dplyr::select(Sample, Purity, Ploidy)
 
 # Basic sanity checks + labeling polish
 pp_table <- pp_table |>
@@ -336,39 +337,50 @@ write.csv(sample_ploidy, "Sep_2025_sequenza_ploidy_estimates_updated.csv", row.n
 
 # Harmonize chr labels in segments
 combined_seg_data <- combined_seg_data %>%
-  mutate(chr = toupper(as.character(chr))) %>%
-  mutate(chr = gsub("^CHR", "", chr)) %>%
-  mutate(chr = dplyr::recode(chr, `23`="X", `24`="Y"))
+  dplyr::mutate(chr = toupper(as.character(chr))) %>%
+  dplyr::mutate(chr = gsub("^CHR", "", chr)) %>%
+  dplyr::mutate(chr = dplyr::recode(chr, `23`="X", `24`="Y"))
 
 valid_chr <- c(as.character(1:22), "X", "Y")
-combined_seg_data <- combined_seg_data %>% filter(chr %in% valid_chr)
+combined_seg_data <- combined_seg_data %>% dplyr::filter(chr %in% valid_chr)
+
+cytoband_txt <- "cytoband.txt"
+if (!file.exists(cytoband_txt)) {
+  stop("Missing required hg38 cytoband file: ", cytoband_txt,
+       ". This file is needed to map Sequenza CNA segments to chromosome arms.")
+}
+cb_frame <- readr::read_tsv(
+  cytoband_txt,
+  col_names = c("chr", "start", "end", "band", "stain"),
+  show_col_types = FALSE
+)
 
 # Ensure cytoband column is named 'band' (some tables use 'name')
 if (!"band" %in% names(cb_frame) && "name" %in% names(cb_frame)) {
-  cb_frame <- cb_frame %>% rename(band = name)
+  cb_frame <- cb_frame %>% dplyr::rename(band = name)
 }
 stopifnot(all(c("chr","start","end","band") %in% names(cb_frame)))
 
 # Collapse cytobands to one p- and one q-range per chromosome
 cb_arms <- cb_frame %>%
-  mutate(chr = gsub("^chr", "", chr)) %>%
-  filter(chr %in% valid_chr) %>%
-  mutate(arm_letter = substr(band, 1, 1)) %>%
-  filter(arm_letter %in% c("p","q")) %>%
-  group_by(chr, arm_letter) %>%
-  summarise(start = min(start), end = max(end), .groups = "drop") %>%
-  mutate(arm = paste0(chr, arm_letter))
+  dplyr::mutate(chr = gsub("^chr", "", chr)) %>%
+  dplyr::filter(chr %in% valid_chr) %>%
+  dplyr::mutate(arm_letter = substr(band, 1, 1)) %>%
+  dplyr::filter(arm_letter %in% c("p","q")) %>%
+  dplyr::group_by(chr, arm_letter) %>%
+  dplyr::summarise(start = min(start), end = max(end), .groups = "drop") %>%
+  dplyr::mutate(arm = paste0(chr, arm_letter))
 
 # Arm lengths (bp)
 arm_lengths <- cb_arms %>%
-  mutate(arm_len = end - start + 1) %>%
-  rename(arm_start = start, arm_end = end) %>%
-  select(chr, arm, arm_start, arm_end, arm_len)
+  dplyr::mutate(arm_len = end - start + 1) %>%
+  dplyr::rename(arm_start = start, arm_end = end) %>%
+  dplyr::select(chr, arm, arm_start, arm_end, arm_len)
 
 # Chromosome lengths (p+q)
 chr_lengths <- cb_arms %>%
-  group_by(chr) %>%
-  summarise(chr_len = max(end) - min(start) + 1, .groups = "drop")
+  dplyr::group_by(chr) %>%
+  dplyr::summarise(chr_len = max(end) - min(start) + 1, .groups = "drop")
 
 # Build GRanges
 arms_gr <- GRanges(

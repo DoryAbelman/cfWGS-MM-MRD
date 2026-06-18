@@ -95,11 +95,39 @@ translocation_data <- readRDS(file.path(export_dir, "translocation_data_cytoband
 tumor_fraction     <- read_tsv("Oct 2024 data/tumor_fraction_cfWGS.txt")
 
 # Load mutation MAF objects.
-# The blood MAF path is a historical OneDrive export path. For Code Ocean or a
-# clean GitHub checkout, this should eventually be made a project-relative input
-# or rebuilt by the upstream mutation-processing script.
-maf_object_blood <- read.maf("~/OneDrive - University of Toronto/Project data/cfWGS project data/R outputs/combined_maf_temp_blood_Jan2025.maf")
-maf_object_bm    <- read.maf("combined_maf_temp_bm_May2025.maf")
+# The upstream mutation-processing script (1_2_Process_Mutation_Data.R) writes
+# project-local combined MAF files. These local files are preferred so the
+# command-line pipeline can run without a user-specific OneDrive mount. The
+# historical external paths are kept only as fallbacks for old local checkouts.
+resolve_first_existing <- function(label, candidates) {
+  hit <- candidates[file.exists(candidates)][1]
+  if (is.na(hit)) {
+    stop(
+      "Could not find ", label, ". Checked:\n  ",
+      paste(candidates, collapse = "\n  "),
+      "\nRun 1_2_Process_Mutation_Data.R first or provide the expected MAF input.",
+      call. = FALSE
+    )
+  }
+  hit
+}
+
+blood_maf_path <- resolve_first_existing(
+  "combined cfDNA/blood MAF",
+  c(
+    "combined_maf_temp_blood_Jan2025.maf",
+    "~/OneDrive - University of Toronto/Project data/cfWGS project data/R outputs/combined_maf_temp_blood_Jan2025.maf"
+  )
+)
+bm_maf_path <- resolve_first_existing(
+  "combined baseline BM MAF",
+  c(
+    "combined_maf_temp_bm_Jan2025.maf",
+    "combined_maf_temp_bm_May2025.maf"
+  )
+)
+maf_object_blood <- read.maf(blood_maf_path)
+maf_object_bm    <- read.maf(bm_maf_path)
 
 
 ### Integrate arm-level CNA and IgH translocation features
@@ -404,6 +432,9 @@ temp_qc_blood <- maf_subset_blood@data %>%
       TRUE                                                ~ "Other"
     )
   ) %>%
+  mutate(
+    across(any_of(c("Patient", "Timepoint", "Sample_type")), as.character)
+  ) %>%
   
   # 3) pick your key QC columns first, then grab everything else
   select(
@@ -454,6 +485,9 @@ temp_qc_bm <- maf_subset@data %>%
       Variant_Classification == "Splice_Site"             ~ "Splice_Site",
       TRUE                                                ~ "Other"
     )
+  ) %>%
+  mutate(
+    across(any_of(c("Patient", "Timepoint", "Sample_type")), as.character)
   ) %>%
   
   # 3) pick your key QC columns first, then grab everything else

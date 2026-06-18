@@ -20,11 +20,7 @@
 # Section 5: Survival analysis and Kaplan-Meier curves
 # Section 6: Landmark analyses with threshold optimization
 # Section 7: Export comprehensive results tables
-## ============================================================
-
-## ============================================================
-## 0) Setup
-## ============================================================
+#
 # How to run:
 #   Rscript Scripts_2025/Final_Scripts/3_1_A_Process_and_optimize_EasyM.R
 #
@@ -33,8 +29,10 @@
 #   final assembled manuscript figure/table directly, but its outputs feed
 #   later manuscript source scripts. Processes EasyM/proteomic MRD
 #   thresholds and comparisons.
-#
-NA
+## ============================================================
+
+## ============================================================
+## 0) Setup
 ## ============================================================
 suppressPackageStartupMessages({
   library(tidyverse)

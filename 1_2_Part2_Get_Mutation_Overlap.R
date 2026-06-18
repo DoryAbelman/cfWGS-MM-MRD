@@ -38,10 +38,7 @@
 # Notes       :  
 #   • Ensure your working directory is set appropriately or use full paths  
 #   • Make sure metada_df_mutation_comparison is loaded and correctly spelled  
-# ──────────────────────────────────────────────────────────────────────────────
-
-
-### Load libraries 
+#  
 # How to run:
 #   Rscript Scripts_2025/Final_Scripts/1_2_Part2_Get_Mutation_Overlap.R
 #
@@ -49,14 +46,17 @@
 #   Direct manuscript-output script. Mapped output(s):
 #   Extended_Data_Figure_2 panel/sheet G. Computes BM/cfDNA mutation
 #   overlap and Venn outputs.
-#
-NA
+# ──────────────────────────────────────────────────────────────────────────────
+
+
 ### Load libraries 
 library(maftools)
 library(dplyr)
 library(tidyr)
+library(readr)
 library(ggplot2)
 library(scales)
+library(stringr)
 library(grid)
 library(VennDiagram)
 library(viridis)
@@ -132,17 +132,19 @@ combined_maf <- combined_maf %>%
 
 combined_maf <- combined_maf %>%
   select(
-    -Patient,
-    -Date_of_sample_collection,
-    -Sample_type,
-    -Timepoint,
-    -Study,
-    -Sample_ID,
-    -timepoint_info,
-    -Relapsed,
-    -Num_days_to_closest_relapse_absolute,
-    -Num_days_to_closest_relapse_non_absolute,
-    -Num_days_to_closest_relapse
+    -any_of(c(
+      "Patient",
+      "Date_of_sample_collection",
+      "Sample_type",
+      "Timepoint",
+      "Study",
+      "Sample_ID",
+      "timepoint_info",
+      "Relapsed",
+      "Num_days_to_closest_relapse_absolute",
+      "Num_days_to_closest_relapse_non_absolute",
+      "Num_days_to_closest_relapse"
+    ))
   )
 
 # Join with the metadata dataframe
@@ -203,9 +205,14 @@ for (i in 1:length(patients)) {
   df_patient <- df_wide %>% filter(Patient == patients[i])
   
   # Get the mutations for each set
-  bm_mutations <- df_patient %>% filter(Presence_BM_cells == 1) %>% pull(Unique_ID_patient)
-  cf_mutations <- df_patient %>% filter(Presence_Blood_plasma_cfDNA == 1) %>% pull(Unique_ID_patient)
-  both_mutations <- df_patient %>% filter(Presence_BM_cells == 1 & Presence_Blood_plasma_cfDNA == 1) %>% pull(Unique_ID_patient)
+  bm_mutations <- df_patient %>% filter(Presence_BM_cells == 1) %>% pull(Unique_ID_patient) %>% unique() %>% na.omit()
+  cf_mutations <- df_patient %>% filter(Presence_Blood_plasma_cfDNA == 1) %>% pull(Unique_ID_patient) %>% unique() %>% na.omit()
+  both_mutations <- df_patient %>% filter(Presence_BM_cells == 1 & Presence_Blood_plasma_cfDNA == 1) %>% pull(Unique_ID_patient) %>% unique() %>% na.omit()
+
+  if (length(bm_mutations) == 0 || length(cf_mutations) == 0) {
+    message("Skipping Venn diagram for ", patients[i], ": one or both mutation sets are empty.")
+    next
+  }
   
   # Create a new plot with a white background
   png(filename = paste0("VennDiagram_", patients[i], "_Sep2025_updatedcolors.png"), width = 2400, height = 2400, res = 300)

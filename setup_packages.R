@@ -17,6 +17,10 @@
 #
 # To install all dependencies at once:
 #   install.packages(packages)  # where `packages` is the vector defined below
+#
+# Role in manuscript workflow:
+#   Support infrastructure. This file standardizes package loading for
+#   reproducible reruns and does not generate manuscript outputs directly.
 # =============================================================================
 
 # Shared package loader

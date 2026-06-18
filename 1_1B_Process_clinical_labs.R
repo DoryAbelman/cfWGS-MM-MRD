@@ -37,6 +37,21 @@ library(fuzzyjoin)   # fuzzy / date-slack joins
 library(data.table)  # fast grouping & reshaping
 library(tidyverse)
 
+combined_clinical_data_path <- "combined_clinical_data_updated_April2025.csv"
+if (!file.exists(combined_clinical_data_path)) {
+  stop(
+    "Missing upstream clinical metadata file: ", combined_clinical_data_path,
+    ". Run 1_0_Process_clinical_metadata.R first.",
+    call. = FALSE
+  )
+}
+
+combined_clinical_data_updated <- readr::read_csv(
+  combined_clinical_data_path,
+  show_col_types = FALSE
+) %>%
+  mutate(Date_of_sample_collection = as.Date(Date_of_sample_collection))
+
 ### Upstream clinical demographics fields used later by Table 1
 ## This script creates the lab/staging/cytogenetic fields. The formatted Table 1
 ## itself is created downstream in 2_1_Clinical_Demographics_Table.R.

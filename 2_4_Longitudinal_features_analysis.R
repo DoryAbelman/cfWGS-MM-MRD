@@ -3082,8 +3082,9 @@ p_heatmap_tri <- p_heatmap_tri +
   )
 
 
-# 8. Save the triangular heatmap
-### Figure 3B
+# 8. Save the triangular Spearman heatmap.
+# Manuscript role: Extended Data Figure 4 support; older file names/comments
+# in this block predate the final figure numbering.
 ggsave(
   filename = file.path(outdir, "Fig_heatmap_spearman_upper_triangle4.png"),
   plot     = p_heatmap_tri,

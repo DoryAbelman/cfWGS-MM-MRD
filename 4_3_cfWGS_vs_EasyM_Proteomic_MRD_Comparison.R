@@ -23,6 +23,13 @@
 ##   - Output_tables_2025/cfWGS_vs_EasyM_comparison/  (tables + source data)
 ##   - Output_figures_2025/Fig4_3_cfWGS_vs_EasyM_*.png
 ##
+## How to run:
+##   Rscript Scripts_2025/Final_Scripts/4_3_cfWGS_vs_EasyM_Proteomic_MRD_Comparison.R
+##
+## Role in manuscript workflow:
+##   Upstream/intermediate processing script. Generates cfWGS-vs-EasyM
+##   comparison outputs used by downstream manuscript figures/tables.
+##
 ## Dependencies:
 ##   tidyverse, lubridate, survival, survminer, broom, patchwork,
 ##   gt, scales, janitor, glue
@@ -30,17 +37,6 @@
 ##
 ################################################################################
 
-## ── 0.  SETUP ────────────────────────────────────────────────────────────────
-# How to run:
-#   Rscript Scripts_2025/Final_Scripts/4_3_cfWGS_vs_EasyM_Proteomic_MRD_Comparison.R
-#
-# Role in manuscript workflow:
-#   Upstream/intermediate processing script. It does not usually export a
-#   final assembled manuscript figure/table directly, but its outputs feed
-#   later manuscript source scripts. Generates cfWGS-vs-EasyM comparison
-#   outputs.
-#
-NA
 ## ── 0.  SETUP ────────────────────────────────────────────────────────────────
 suppressPackageStartupMessages({
   library(tidyverse)
@@ -272,8 +268,8 @@ plot_theme <- theme_bw(base_size = 11) +
     legend.text       = element_text(size = 9)
   )
 
-## ── 10. FIGURE 1: Positivity Rate Comparison by Timepoint ──────────────────
-cat("\n[Figure 1] Generating positivity rate comparison...\n")
+## ── 10. SUPPLEMENTAL EASYM ANALYSIS: Positivity Rate Comparison by Timepoint ─
+cat("\n[Supplemental EasyM analysis] Generating positivity rate comparison...\n")
 
 pos_comp_df <- paired_data %>%
   group_by(landmark_tp) %>%
@@ -332,8 +328,8 @@ ggsave(
   dpi = 500
 )
 
-## ── 11. FIGURE 2: Concordance Heatmap (Detections) ──────────────────────────
-cat("[Figure 2] Generating concordance heatmap...\n")
+## ── 11. SUPPLEMENTAL EASYM ANALYSIS: Concordance Heatmap (Detections) ───────
+cat("[Supplemental EasyM analysis] Generating concordance heatmap...\n")
 
 concordance_df <- paired_data %>%
   filter(!is.na(landmark_tp)) %>%
@@ -392,8 +388,8 @@ ggsave(
   dpi = 500
 )
 
-## ── 12. FIGURE 3: Scatter Plot (cfWGS Burden vs. EasyM Burden) ──────────────
-cat("[Figure 3] Generating burden correlation scatter plot...\n")
+## ── 12. SUPPLEMENTAL EASYM ANALYSIS: cfWGS Burden vs EasyM Burden ───────────
+cat("[Supplemental EasyM analysis] Generating burden correlation scatter plot...\n")
 
 scatter_df <- paired_data %>%
   filter(!is.na(landmark_tp),
@@ -459,8 +455,8 @@ ggsave(
   dpi = 500
 )
 
-## ── 13. FIGURE 4: Cohen's Kappa Agreement (Binary Concordance) ──────────────
-cat("[Figure 4] Generating Cohen's kappa agreement...\n")
+## ── 13. SUPPLEMENTAL EASYM ANALYSIS: Cohen's Kappa Agreement ────────────────
+cat("[Supplemental EasyM analysis] Generating Cohen's kappa agreement...\n")
 
 # Helper function for Cohen's kappa
 kappa_2x2 <- function(tab) {
@@ -547,8 +543,8 @@ ggsave(
   dpi = 500
 )
 
-## ── 14. FIGURE 5: Summary Findings Table ──────────────────────────────────
-cat("[Figure 5] Generating summary table...\n")
+## ── 14. SUPPLEMENTAL EASYM ANALYSIS: Summary Findings Table ─────────────────
+cat("[Supplemental EasyM analysis] Generating summary table...\n")
 
 summary_table_data <- tibble(
   Landmark = c("Post-ASCT", "Post-ASCT", "1-yr Maintenance", "1-yr Maintenance"),
@@ -602,8 +598,8 @@ gtsave(
   vheight = 350
 )
 
-## ── 15. OPTIONAL: Survival Outcomes by Dual-Modality Status ────────────────
-cat("[Figure 6] Generating survival analysis by dual modality...\n")
+## ── 15. OPTIONAL SUPPLEMENTAL EASYM ANALYSIS: Dual-Modality Survival ────────
+cat("[Supplemental EasyM analysis] Generating survival analysis by dual modality...\n")
 
 # Focus on 1-year maintenance where we have adequate n
 survival_dual <- paired_data %>%

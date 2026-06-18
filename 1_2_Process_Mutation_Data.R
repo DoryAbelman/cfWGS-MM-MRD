@@ -75,6 +75,30 @@ library(scales)
 library(stringr)
 library(purrr)
 
+resolve_maf_files <- function(label, env_var, candidate_dirs) {
+  env_dir <- Sys.getenv(env_var, unset = "")
+  dirs <- c(env_dir, candidate_dirs)
+  dirs <- unique(path.expand(dirs[nzchar(dirs)]))
+
+  checked <- character()
+  for (dir in dirs) {
+    checked <- c(checked, dir)
+    files <- list.files(dir, pattern = "[.]maf$", full.names = TRUE)
+    if (length(files)) {
+      message(label, " MAF directory: ", dir)
+      message(label, " MAF files found: ", length(files))
+      return(list(directory = dir, files = sort(files)))
+    }
+  }
+
+  stop(
+    "No ", label, " MAF files were found. Checked:\n",
+    paste(checked, collapse = "\n"),
+    "\nSet ", env_var, " to the directory containing the expected .maf files.",
+    call. = FALSE
+  )
+}
+
 
 ### Define the mutation gene list (used for both BM and blood)
 # This curated list covers the most frequently mutated or translocated genes in
@@ -117,11 +141,18 @@ myeloma_genes <- c(
 
 #### FIRST Load in BM Data
 
-# Define the directory containing the MAF files
-maf_directory <- "~/OneDrive - University of Toronto/Project data/cfWGS project data/MAF files/BM/"
-
-# List all MAF files in the directory
-maf_files <- list.files(maf_directory, pattern = "\\.maf$", full.names = TRUE)
+# Define the directory containing the BM MAF files. The original OneDrive path is
+# preserved, but a project-local fallback is used for command-line/reviewer runs.
+bm_maf_source <- resolve_maf_files(
+  label = "BM",
+  env_var = "CFWGS_BM_MAF_DIR",
+  candidate_dirs = c(
+    "~/OneDrive - University of Toronto/Project data/cfWGS project data/MAF files/BM/",
+    "Ultima data comparison/OncoKB annotated mafs"
+  )
+)
+maf_directory <- bm_maf_source$directory
+maf_files <- bm_maf_source$files
 
 # Read each MAF file (BM) into a dataframe and correct column types.
 # Each MAF begins with meta-comment lines prefixed "#"; comment="#" skips them so
@@ -341,11 +372,19 @@ rm(combined_maf)  # Drop the duplicate BM object to free memory before loading b
 
 #### Next load in PB cfDNA Data
 
-# Define the directory containing the MAF files
-maf_directory <- "~/OneDrive - University of Toronto/Project data/cfWGS project data/MAF files/Blood/"
-
-# List all MAF files in the directory
-maf_files <- list.files(maf_directory, pattern = "\\.maf$", full.names = TRUE)
+# Define the directory containing the blood/cfDNA MAF files. The original
+# OneDrive path is preserved, but a project-local fallback is used for
+# command-line/reviewer runs.
+blood_maf_source <- resolve_maf_files(
+  label = "Blood",
+  env_var = "CFWGS_BLOOD_MAF_DIR",
+  candidate_dirs = c(
+    "~/OneDrive - University of Toronto/Project data/cfWGS project data/MAF files/Blood/",
+    "Ultima data comparison/OncoKB annotated mafs/Plasma_mafs"
+  )
+)
+maf_directory <- blood_maf_source$directory
+maf_files <- blood_maf_source$files
 
 # Read each PB cfDNA MAF file into a dataframe using identical col_types as the
 # BM block above.  The Blood/ directory contains plasma cfDNA samples only;

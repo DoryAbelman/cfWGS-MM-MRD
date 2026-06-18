@@ -162,6 +162,17 @@ combined_seg_data <- purrr::reduce(seg_data_list, full_join, by = c("chr", "star
 # UCSC band name ("p" or "q"). This arm label is then assigned to
 # each ichorCNA segment by genomic overlap, enabling arm-level
 # summarisation downstream.
+cytoband_txt <- "cytoband.txt"
+if (!file.exists(cytoband_txt)) {
+  stop("Missing required hg38 cytoband file: ", cytoband_txt,
+       ". This file is needed to map segment-level CNA calls to chromosome arms.")
+}
+cb_frame <- readr::read_tsv(
+  cytoband_txt,
+  col_names = c("chr", "start", "end", "band", "stain"),
+  show_col_types = FALSE
+)
+
 cb_frame_arm <- cb_frame %>%
   mutate(arm = paste0(gsub("chr", "", chr), substr(band, 1, 1))) %>%
   dplyr::select(chr, start, end, arm)  # Select only chr, start, end, and

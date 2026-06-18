@@ -32,7 +32,7 @@
 #   • Clinical data/M4/M4 V1 BM processed at baseline.xlsx
 #   • TFRIM4_Processing Log_Nov2024.xlsx   (sheet 6)
 #   • combined_clinical_data_updated_April2025.csv
-#   • All_feature_data_Feb2025.rds
+#   • Jan2025_exported_data/All_feature_data_August2025.rds
 #   • summary_table_of_samples_and_patient_availability_cfWGS - for making the flow chart of samples.xlsx
 #
 # Output Files (written to working directory or “Output_tables_2025”):
@@ -52,6 +52,7 @@ library(dplyr)
 library(readr)
 library(stringr)
 library(glue)
+library(tidyr)
 
 # ──────────────────────────────────────────────────────────────────────────────
 # 1. FILE PATHS & SETUP
@@ -150,6 +151,13 @@ get_patient_list <- function(df, sample_type, timepoints, evidence_col = NULL, e
   df2 %>% distinct(Patient) %>% pull(Patient)
 }
 
+max_flag_or_na <- function(x) {
+  x <- suppressWarnings(as.numeric(x))
+  if (all(is.na(x))) return(NA_real_)
+  out <- max(x, na.rm = TRUE)
+  if (is.infinite(out)) NA_real_ else out
+}
+
 
 # ──────────────────────────────────────────────────────────────────────────────
 # 4. LOAD CLINICAL & FEATURE DATA
@@ -218,8 +226,7 @@ summary_table <- summary_table %>%
 bm_hq_prog <- All_feature_data %>%
   filter(Sample_type == "BM_cells", timepoint_info %in% c("Progression","Relapse")) %>%
   group_by(Patient) %>%
-  summarise(high_quality_progression_sample_BM = max(Evidence_of_Disease, na.rm = TRUE), .groups = "drop") %>%
-  mutate(high_quality_progression_sample_BM = na_if(high_quality_progression_sample_BM, Inf))
+  summarise(high_quality_progression_sample_BM = max_flag_or_na(Evidence_of_Disease), .groups = "drop")
 
 bm_prog_available <- All_feature_data %>%
   filter(Sample_type == "BM_cells", timepoint_info %in% c("Progression","Relapse")) %>%
@@ -229,8 +236,7 @@ bm_prog_available <- All_feature_data %>%
 cfDNA_hq_prog <- All_feature_data %>%
   filter(Sample_type == "Blood_plasma_cfDNA", timepoint_info %in% c("Progression","Relapse")) %>%
   group_by(Patient) %>%
-  summarise(high_quality_progression_sample_cfDNA = max(Evidence_of_Disease, na.rm = TRUE), .groups = "drop") %>%
-  mutate(high_quality_progression_sample_cfDNA = na_if(high_quality_progression_sample_cfDNA, Inf))
+  summarise(high_quality_progression_sample_cfDNA = max_flag_or_na(Evidence_of_Disease), .groups = "drop")
 
 cfDNA_prog_available <- All_feature_data %>%
   filter(Sample_type == "Blood_plasma_cfDNA", timepoint_info %in% c("Progression","Relapse")) %>%
@@ -271,7 +277,7 @@ high_quality_patients <- summary_table %>%
   filter(High_quality_baseline == 1) %>%
   pull(Patient)
 
-write_csv(high_quality_patients, "high_quality_patients_list_for_baseline_mut_calling2.csv")
+write_csv(tibble(Patient = high_quality_patients), "high_quality_patients_list_for_baseline_mut_calling2.csv")
 saveRDS(high_quality_patients,   "high_quality_patients_list_for_baseline_mut_calling2.rds")
 message("Saved → high_quality_patients_list_for_baseline_mut_calling.{csv,rds}")
 
@@ -299,6 +305,26 @@ print(study_counts); cat("\n")
 
 
 # 6.2 Combined high-quality summary (baseline ∪ progression ∪ failure)
+failed_flags <- read_excel(failed_info_path) %>%
+  rename(
+    BM_status    = `BM Status`,
+    cfDNA_status = `cfDNA Status`
+  ) %>%
+  filter(!Patient %in% c("IMG-146", "IMG-163")) %>%
+  group_by(Patient) %>%
+  summarise(
+    BM_failed = as.integer(any(BM_status %in% c("Sequenced_fail_QC", "Failed_extraction", "Failed_insufficient"), na.rm = TRUE)),
+    cfDNA_failed = as.integer(any(cfDNA_status %in% c("Sequenced_fail_QC", "Failed_extraction", "Failed_insufficient"), na.rm = TRUE)),
+    .groups = "drop"
+  )
+
+summary_table <- summary_table %>%
+  left_join(failed_flags, by = "Patient") %>%
+  mutate(
+    BM_failed = replace_na(BM_failed, 0L),
+    cfDNA_failed = replace_na(cfDNA_failed, 0L)
+  )
+
 summary_filtered <- summary_table %>%
   filter(
     BM_diagnosis_baseline == 1 |

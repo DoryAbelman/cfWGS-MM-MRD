@@ -34,6 +34,16 @@
 ##    1. 3_1_Optimize_cfWGS_thresholds.R - cfWGS model optimization/thresholds
 ##    2. 3_1_A_Process_and_optimize_EasyM.R - EasyM model development
 ##    3. 2_0_Assemble_Table_With_All_Features.R - Feature integration
+##
+##  How to run:
+##    Rscript Scripts_2025/Final_Scripts/4_1_Survival_Analysis.R
+##
+##  Role in manuscript workflow:
+##    Direct manuscript-output script. Mapped outputs include Figure 3F,
+##    Figure 4E, Extended Data Figures 6A-K, Extended Data Figures 8A-D,
+##    Extended Data Figure 8 bottom panels, and Supplementary Table 9.
+##    Generates survival, relapse-detection, and assay-sensitivity
+##    figures/tables.
 ##  
 ##  Author: Dory Abelman
 ##  Updated: February 2026
@@ -49,28 +59,6 @@
 ##
 ## ────────────────────────────────────────────────────────────────────────────
 
-# Required packages for survival analysis, visualization, and data wrangling
-# How to run:
-#   Rscript Scripts_2025/Final_Scripts/4_1_Survival_Analysis.R
-#
-# Role in manuscript workflow:
-#   Direct manuscript-output script. Mapped output(s): Figure_3 panel/sheet
-#   F; Figure_4 panel/sheet E; Extended_Data_Figure_6 panel/sheet A;
-#   Extended_Data_Figure_6 panel/sheet B; Extended_Data_Figure_6
-#   panel/sheet C; Extended_Data_Figure_6 panel/sheet D;
-#   Extended_Data_Figure_6 panel/sheet E; Extended_Data_Figure_6
-#   panel/sheet F; Extended_Data_Figure_6 panel/sheet G;
-#   Extended_Data_Figure_6 panel/sheet H; Extended_Data_Figure_6
-#   panel/sheet I; Extended_Data_Figure_6 panel/sheet J;
-#   Extended_Data_Figure_6 panel/sheet K; Extended_Data_Figure_8
-#   panel/sheet A; Extended_Data_Figure_8 panel/sheet B;
-#   Extended_Data_Figure_8 panel/sheet C; Extended_Data_Figure_8
-#   panel/sheet D; Extended_Data_Figure_8 panel/sheet
-#   unlabeled_bottom_left; Extended_Data_Figure_8 panel/sheet
-#   unlabeled_bottom_right; Supplementary_Table_9 panel/sheet all_sheets.
-#   Generates survival and relapse-detection figures/tables.
-#
-NA
 # Required packages for survival analysis, visualization, and data wrangling
 library(tidyverse)       # dplyr, ggplot2, tidyr
 library(lubridate)       # Date/time operations
@@ -5465,5 +5453,3 @@ cat("═" %*% 80, "\n")
 cat("SURVIVAL ANALYSIS COMPLETE\n")
 cat("Scripts completed: All KM curves, sensitivity analyses, and barplots generated\n")
 cat("═" %*% 80, "\n\n")
-
-
