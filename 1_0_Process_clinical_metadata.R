@@ -50,6 +50,7 @@
 #                     Cleaned transplant dates just dates.xlsx,
 #                     Extracted_clinical_MRD_data.xlsx,
 #                     Cleaned_Patient_Follow-Up_Table_IMMAGINE.csv,
+#                     Additional_relapse_dates_IMG_from_Esther.xlsx,
 #                     NAs in timepoint info - IMMAGINE additional timepoint info.csv
 #
 #    • Outputs:
@@ -97,11 +98,20 @@ normalize_clinical_date <- function(x) {
     return(out)
   }
 
-  parsed <- suppressWarnings(ymd(x))
+  x_chr <- as.character(x)
+  numeric_text <- suppressWarnings(as.numeric(x_chr))
+  parsed <- rep(as.Date(NA), length(x_chr))
+  excel_serial_text <- !is.na(numeric_text) & numeric_text > 30000
+  r_serial_text <- !is.na(numeric_text) & !excel_serial_text
+  parsed[excel_serial_text] <- as.Date(numeric_text[excel_serial_text], origin = "1899-12-30")
+  parsed[r_serial_text] <- as.Date(numeric_text[r_serial_text], origin = "1970-01-01")
+
+  needs_text_parse <- is.na(parsed)
+  parsed[needs_text_parse] <- suppressWarnings(ymd(x_chr[needs_text_parse]))
   still_missing <- is.na(parsed) & !is.na(x) & nzchar(as.character(x))
-  parsed[still_missing] <- suppressWarnings(mdy(x[still_missing]))
+  parsed[still_missing] <- suppressWarnings(mdy(x_chr[still_missing]))
   still_missing <- is.na(parsed) & !is.na(x) & nzchar(as.character(x))
-  parsed[still_missing] <- suppressWarnings(dmy(x[still_missing]))
+  parsed[still_missing] <- suppressWarnings(dmy(x_chr[still_missing]))
   as.Date(parsed)
 }
 
@@ -1289,7 +1299,15 @@ latest_dates <- df_combined %>%
 tmp <- spore_OS_info %>%
   select(Patient, latest_date = `Status last follow up`)
 
-## Add additional IMG info have 
+## Add additional IMG last-follow-up information from Esther.
+##
+## Important distinction:
+##   The PFS table uses `censor_date` as the first progression/censoring date
+##   for survival analysis. That is not always the same as the last date a
+##   relapsed patient was known to be followed clinically. For prospective
+##   time-window analyses in the non-frontline/test cohort, downstream scripts
+##   need the latter: a patient-level "known through" date. Esther's workbook
+##   provides that date explicitly for updated IMMAGINE cases such as IMG-098.
 tmp_IMG <- read_excel(
   "Clinical data/IMMAGINE/Additional_relapse_dates_IMG_from_Esther.xlsx",
   sheet = 2,
@@ -1302,25 +1320,47 @@ tmp_IMG <- read_excel(
 
 tmp_IMG <- tmp_IMG %>%
   mutate(
-    latest_date = as.Date(
-      as.numeric(latest_date),
-      origin = "1899-12-30"
-    )
+    latest_date = normalize_clinical_date(latest_date),
+    followup_source = "Clinical data/IMMAGINE/Additional_relapse_dates_IMG_from_Esther.xlsx:Date_of_last_followup"
   )
 
 
 # Combine the two tables
-latest_dates <- bind_rows(latest_dates, tmp_IMG)
+latest_dates <- bind_rows(
+  latest_dates %>% mutate(followup_source = "latest clinical/sample date available in combined metadata"),
+  tmp_IMG
+)
 
 latest_dates <- latest_dates %>%
   group_by(Patient) %>%
   summarise(
     latest_date = max(latest_date, na.rm = TRUE),
+    followup_source = paste(sort(unique(followup_source[!is.na(latest_date)])), collapse = "; "),
     .groups = "drop"
   )
 
 ## Export this 
 write.csv(latest_dates, file = "Exported_data_tables_clinical/latest_dates_per_patient.csv", row.names = FALSE)
+
+## Export an explicitly named follow-up table for downstream scripts that need
+## evaluability windows rather than PFS event/censor dates. Keeping this separate
+## prevents relapsed patients' PFS event dates from being overwritten by later
+## last-contact dates.
+patient_followup_dates_updated <- latest_dates %>%
+  transmute(
+    Patient,
+    followup_end_date = latest_date,
+    followup_source
+  )
+write.csv(
+  patient_followup_dates_updated,
+  file = "Exported_data_tables_clinical/patient_followup_dates_updated.csv",
+  row.names = FALSE
+)
+saveRDS(
+  patient_followup_dates_updated,
+  file = "Exported_data_tables_clinical/patient_followup_dates_updated.rds"
+)
 
 
 
