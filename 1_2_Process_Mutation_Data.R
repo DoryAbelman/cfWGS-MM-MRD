@@ -16,12 +16,14 @@
 #        sample IDs.
 #     5. Filter BM data to diagnosis/baseline and save `combined_maf_bm_dx`.
 #     6. Repeat steps 2–5 for PB cfDNA MAFs into `combined_maf_blood`.
-#     7. Export combined objects as RDS:
+#     7. Export combined objects as pipeline intermediates:
 #        • combined_maf_bm_all_muts.rds
 #        • combined_maf_bm_dx.rds
-#        • combined_maf_blood_all_muts.rds
-#     8. Generate VAF density‐ridge plots (BM and PB), histograms of `t_depth`,
-#        and save figures.
+#        • combined_maf_blood_all_muts_updated.rds
+#        • combined_maf_temp_bm_Jan2025.maf
+#        • combined_maf_temp_blood_Jan2025.maf
+#     8. Generate support-only VAF density-ridge plots and read-depth histograms
+#        for mutation-calling QC. These plots are not final manuscript panels.
 #
 # Inputs:
 #   • maf_directory: path to “*.maf” BM and PB directories
@@ -31,7 +33,8 @@
 #   • RDS: combined_maf_bm_all_muts.rds
 #   • RDS: combined_maf_bm_dx.rds
 #   • RDS: combined_maf_blood_all_muts_updated.rds
-#   • Figures: VAF ridgeplots & t_depth histograms
+#   • Support-only QC figures:
+#       Final Tables and Figures/mutation_processing_support/
 #
 # Manuscript outputs created/updated:
 #   - None directly. This upstream mutation-processing script creates the BM
@@ -67,6 +70,13 @@
 #   final manuscript figure/table, but downstream scripts depend on its cleaned
 #   outputs for figure, table, or model generation.
 #
+# Analyst note:
+#   The root-level RDS and temporary MAF files remain pipeline intermediates
+#   because downstream scripts read those historical filenames. The VAF and
+#   read-depth plots are support-only QC exports and are written to
+#   `Final Tables and Figures/mutation_processing_support/` so they are not
+#   mistaken for manuscript panels.
+#
 
 # Load required libraries
 library(maftools)
@@ -79,6 +89,9 @@ library(viridis)
 library(scales)
 library(stringr)
 library(purrr)
+
+support_plot_dir <- file.path("Final Tables and Figures", "mutation_processing_support")
+dir.create(support_plot_dir, recursive = TRUE, showWarnings = FALSE)
 
 resolve_maf_files <- function(label, env_var, candidate_dirs) {
   env_dir <- Sys.getenv(env_var, unset = "")
@@ -572,8 +585,10 @@ saveRDS(combined_maf_bm_all_muts, file = "combined_maf_bm_all_muts.rds")
 
 
 
-########### Plot histogram of mutations 
-## VAF plot 
+########### Support-only mutation-calling QC plots
+# These plots help review VAF distributions and read-depth ranges after MAF
+# parsing. They are not mapped to a final manuscript figure/table and are saved
+# in a support folder to avoid confusion with final manuscript components.
 
 # BM samples
 vaf_plot <- ggplot(combined_maf_bm_dx %>% filter(!is.na(VAF)) %>%
@@ -589,7 +604,7 @@ vaf_plot <- ggplot(combined_maf_bm_dx %>% filter(!is.na(VAF)) %>%
   scale_x_continuous(breaks = scales::breaks_width(0.05), limits = c(0, 1))  # Adjust the x-axis as needed
 
 vaf_plot
-ggsave("Vaf_plot_BM_cell_dx_updated_3.png", plot = vaf_plot, width = 15, height = 12, dpi = 500)
+ggsave(file.path(support_plot_dir, "Vaf_plot_BM_cell_dx_updated_3.png"), plot = vaf_plot, width = 15, height = 12, dpi = 500)
 
 ## Order 
 # Step 1: Compute the mean VAF for each patient
@@ -625,7 +640,7 @@ vaf_plot <- ggplot(combined_maf_bm_dx, aes(x = VAF, y = Patient)) +
 vaf_plot
 
 # Save the plot
-ggsave("Vaf_plot_BM_cell_dx_ordered_updated_4.png", plot = vaf_plot, width = 6, height = 12, dpi = 500)
+ggsave(file.path(support_plot_dir, "Vaf_plot_BM_cell_dx_ordered_updated_4.png"), plot = vaf_plot, width = 6, height = 12, dpi = 500)
 
 
 
@@ -647,7 +662,7 @@ vaf_plot <- ggplot(combined_maf_blood %>% dplyr::filter(!is.na(VAF)) %>% dplyr::
   theme(axis.text.x = element_text(angle = 45, hjust = 1)) +  # Rotate x-axis text
   scale_x_continuous(breaks = scales::breaks_width(0.05), limits = c(0, 1))  # Adjust the x-axis as needed
 
-ggsave("Vaf_plot_Blood_cfDNA_dx_updated_4.png", plot = vaf_plot, width = 15, height = 22, dpi = 500)
+ggsave(file.path(support_plot_dir, "Vaf_plot_Blood_cfDNA_dx_updated_4.png"), plot = vaf_plot, width = 15, height = 22, dpi = 500)
 
 
 ## Reorder blood VAFs 
@@ -680,11 +695,8 @@ vaf_plot <- ggplot(blood_dx_maf %>% dplyr::filter(timepoint_info %in% c("Diagnos
 vaf_plot
 
 # Save the plot
-ggsave("Vaf_plot_blood_dx_ordered_updated_4.png", plot = vaf_plot, width = 6, height = 12, dpi = 500)
+ggsave(file.path(support_plot_dir, "Vaf_plot_blood_dx_ordered_updated_4.png"), plot = vaf_plot, width = 6, height = 12, dpi = 500)
 
-
-# Filter the data to include only t_depth values greater than 1
-filtered_data <- combined_maf_bm_dx[combined_maf_bm_dx$t_depth >= 1, ]
 
 # Create the histogram with ggplot2
 # t_depth is the total read depth at each variant locus in the tumour BAM.
@@ -705,7 +717,7 @@ histogram <- ggplot(combined_maf_bm_dx, aes(x = t_depth)) +
     axis.title.y = element_text(size = 12)
   )
 
-ggsave("Histogram_BM_muts.png", plot = histogram, width = 6, height = 6, dpi = 500)
+ggsave(file.path(support_plot_dir, "Histogram_BM_muts.png"), plot = histogram, width = 6, height = 6, dpi = 500)
 
 # Create the histogram with ggplot2
 histogram <- ggplot(combined_maf_blood, aes(x = t_depth)) +
@@ -721,7 +733,7 @@ histogram <- ggplot(combined_maf_blood, aes(x = t_depth)) +
     axis.title.y = element_text(size = 12)
   )
 
-ggsave("Histogram_blood_muts.png", plot = histogram, width = 6, height = 6, dpi = 500)
+ggsave(file.path(support_plot_dir, "Histogram_blood_muts.png"), plot = histogram, width = 6, height = 6, dpi = 500)
 
 
 ### Cleaning up 

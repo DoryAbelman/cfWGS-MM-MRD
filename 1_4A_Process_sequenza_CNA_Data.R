@@ -61,16 +61,23 @@
 #   • Clinical data/FISH probe locations.xlsx
 #   • cytoband.txt / cytoBand.txt-compatible cytoband reference
 #
-# Outputs (γ=400 run):
-#   • CSV/RDS:  "Sep_2025_combined_sequenza_calls_400_updated.csv/.rds"
-#   • CSV:      "Sep_2025_FISH_probe_calls_400_updated.csv"
-#   • CSV:      "Sep_2025_sequenza_ploidy_estimates_updated.csv"
-#   • TXT:      "Jan2025_exported_data/sequenza_purity_ploidy_estimates.txt"
-#   • RDS/TXT:  "Jan2025_exported_data/cna_data_from_sequenza_400_updated.rds/.txt"
-#   • RDS/TXT:  "Jan2025_exported_data/FISH_data_from_sequenza_400_updated.rds/.txt"
-#   • RDS/TXT:  "Jan2025_exported_data/FISH_data_from_sequenza_400_by_cytoband_updated.rds/.txt"
-#   • RDS:      "Jan2025_exported_data/Sample_ploidy_from_sequenza_400.rds"
-#   • RDS/TXT:  "Jan2025_exported_data/cna_data_summary_400_updated.rds/.txt"
+# Active downstream outputs (gamma = 400 run):
+#   • Jan2025_exported_data/cna_data_from_sequenza_400_updated.rds/.txt
+#       - consumed by 1_5_Integrate_WGS_Feature_Data.R
+#   • Jan2025_exported_data/FISH_data_from_sequenza_400_updated.rds/.txt
+#       - consumed by 1_5_Integrate_WGS_Feature_Data.R
+#   • Jan2025_exported_data/Sample_ploidy_from_sequenza_400.rds
+#       - consumed by 2_3_Feature_Concordance_And_Mutation_Counts.R
+#   • Jan2025_exported_data/Sample_ploidy_from_sequenza.txt
+#       - readable companion for the active ploidy RDS
+#
+# Support/QC outputs:
+#   • Output_tables_2025/sequenza_cna_processing_support/Sep_2025_combined_sequenza_calls_400_updated.csv/.rds
+#   • Output_tables_2025/sequenza_cna_processing_support/Sep_2025_FISH_probe_calls_400_updated.csv/.rds
+#   • Output_tables_2025/sequenza_cna_processing_support/Sep_2025_sequenza_ploidy_estimates_updated.csv
+#   • Output_tables_2025/sequenza_cna_processing_support/sequenza_purity_ploidy_estimates.txt
+#   • Output_tables_2025/sequenza_cna_processing_support/FISH_data_from_sequenza_400_by_cytoband_updated.rds/.txt
+#   • Output_tables_2025/sequenza_cna_processing_support/cna_data_summary_400_updated.rds/.txt
 #   • Console:  one-row tibble with cohort proportions for each feature
 #
 # Key parameters (tunable):
@@ -100,6 +107,13 @@
 #   Active upstream dependency. This script does not directly create a named
 #   final manuscript figure/table, but downstream scripts depend on its cleaned
 #   outputs for figure, table, or model generation.
+#
+# Reproducibility note:
+#   The preferred end-to-end path starts from raw Sequenza segment files in
+#   Oct 2024 data/Sequenza/All_Segments_400/ plus matching confints files in
+#   Oct 2024 data/Sequenza/All_confints_400/. Non-consumed segment, probe, and
+#   ploidy audit files are written to a support folder so they cannot be
+#   mistaken for final manuscript tables.
 #
 
 
@@ -131,7 +145,25 @@ metada_df_mutation_comparison <- metada_df_mutation_comparison %>%
 seg_dir <- "Oct 2024 data/Sequenza/All_Segments_400/"
 
 export_dir <- "Jan2025_exported_data"
-if (!dir.exists(export_dir)) dir.create(export_dir)
+support_table_dir <- file.path("Output_tables_2025", "sequenza_cna_processing_support")
+dir.create(export_dir, recursive = TRUE, showWarnings = FALSE)
+dir.create(support_table_dir, recursive = TRUE, showWarnings = FALSE)
+
+support_file <- function(filename) {
+  file.path(support_table_dir, filename)
+}
+
+require_files <- function(paths, description) {
+  missing_paths <- paths[!file.exists(paths)]
+  if (length(missing_paths) > 0L) {
+    stop(
+      "Missing required ", description, ":\n  ",
+      paste(missing_paths, collapse = "\n  "),
+      call. = FALSE
+    )
+  }
+  invisible(paths)
+}
 
 # ---- helper: derive ichor-like categorical calls from Sequenza fields
 call_from_CNt_AB <- function(CNt, A, B) {
@@ -241,9 +273,13 @@ pp_table <- pp_table |>
   ) |>
   arrange(Sample)
 
-write.table(pp_table,
-            paste0(export_dir,"/sequenza_purity_ploidy_estimates.txt"),sep="\t", 
-            row.names = FALSE, quote = FALSE)
+write.table(
+  pp_table,
+  support_file("sequenza_purity_ploidy_estimates.txt"),
+  sep = "\t",
+  row.names = FALSE,
+  quote = FALSE
+)
 
 
 
@@ -336,7 +372,7 @@ sample_ploidy <- dplyr::bind_rows(ploidy_list) %>%
 
 
 print(sample_ploidy, n = 50)
-write.csv(sample_ploidy, "Sep_2025_sequenza_ploidy_estimates_updated.csv", row.names = FALSE)
+write.csv(sample_ploidy, support_file("Sep_2025_sequenza_ploidy_estimates_updated.csv"), row.names = FALSE)
 
 
 # Harmonize chr labels in segments
@@ -808,11 +844,12 @@ probe_calls_bin_cytoband <- probe_calls_long_cyto %>%
 # ---- Save combined Sequenza segment and probe-call intermediates ----
 # These files support audit/reuse of the Sequenza layer; final manuscript-facing
 # feature integration consumes the cleaned exports written near the end.
-write.csv(combined_seg_data, "Sep_2025_combined_sequenza_calls_400_updated.csv", row.names = FALSE)
-saveRDS(combined_seg_data,  "Sep_2025_combined_sequenza_calls_400_updated.rds")
+write.csv(combined_seg_data, support_file("Sep_2025_combined_sequenza_calls_400_updated.csv"), row.names = FALSE)
+saveRDS(combined_seg_data, support_file("Sep_2025_combined_sequenza_calls_400_updated.rds"))
 
-write.csv(probe_calls_bin, "Sep_2025_FISH_probe_calls_400_updated.csv", row.names = FALSE)
-saveRDS(probe_calls_bin,  "Sep_2025_FISH_probe_calls_400_updated.rds")
+write.csv(probe_calls_bin, support_file("Sep_2025_FISH_probe_calls_400_updated.csv"), row.names = FALSE)
+saveRDS(probe_calls_bin, support_file("Sep_2025_FISH_probe_calls_400_updated.rds"))
+message("Support Sequenza CNA/probe caches written under: ", support_table_dir)
 
 # ---- long format with segment length (for length-weighting)
 sample_cols <- setdiff(
@@ -996,7 +1033,7 @@ cna_data_merged <- cna_data_cleaned %>%
   )
 
 # Check results
-message("✅ Merged CNA data with metadata: added Bam_clean_tmp column.")
+message("Merged Sequenza CNA data with metadata: added Bam_clean_tmp column.")
 
 
 ## ---- Export Sequenza CNA results ----
@@ -1008,15 +1045,18 @@ saveRDS(cna_data_merged, file = file.path(export_dir, "cna_data_from_sequenza_40
 write.table(cna_data_merged,
             file = file.path(export_dir, "cna_data_from_sequenza_400_updated.txt"),
             sep = "\t", row.names = FALSE, quote = FALSE)
+message("Active Sequenza CNA feature table written: ",
+        file.path(export_dir, "cna_data_from_sequenza_400_updated.rds"))
 
-# Summary statistics (proportion of samples per alteration)
-saveRDS(cna_data_summary, file = file.path(export_dir, "cna_data_summary_400_updated.rds"))
+# Summary statistics (proportion of samples per alteration). This is support/QC,
+# not a downstream manuscript input.
+saveRDS(cna_data_summary, file = support_file("cna_data_summary_400_updated.rds"))
 write.table(cna_data_summary,
-            file = file.path(export_dir, "cna_data_summary_400_updated.txt"),
+            file = support_file("cna_data_summary_400_updated.txt"),
             sep = "\t", row.names = FALSE, quote = FALSE)
 
 # Console confirmation
-message("✅ Export complete:")
+message("Sequenza CNA export complete.")
 
 
 ### Export FISH-probe-level Sequenza calls based on direct hg38 coordinates
@@ -1045,6 +1085,8 @@ saveRDS(FISH_data_cleaned, file = file.path(export_dir, "FISH_data_from_sequenza
 write.table(FISH_data_cleaned,
             file = file.path(export_dir, "FISH_data_from_sequenza_400_updated.txt"),
             sep = "\t", row.names = FALSE, quote = FALSE)
+message("Active Sequenza FISH helper written: ",
+        file.path(export_dir, "FISH_data_from_sequenza_400_updated.rds"))
 
 
 ## Export FISH-probe-level Sequenza calls based on cytoband-expanded windows
@@ -1068,10 +1110,11 @@ FISH_data_cleaned <- FISH_data_cleaned %>%
   )
 
 
-# Export
-saveRDS(FISH_data_cleaned, file = file.path(export_dir, "FISH_data_from_sequenza_400_by_cytoband_updated.rds"))
+# Export cytoband-expanded probe calls as support/QC. The active downstream
+# integration script uses the direct-coordinate FISH helper above.
+saveRDS(FISH_data_cleaned, file = support_file("FISH_data_from_sequenza_400_by_cytoband_updated.rds"))
 write.table(FISH_data_cleaned,
-            file = file.path(export_dir, "FISH_data_from_sequenza_400_by_cytoband_updated.txt"),
+            file = support_file("FISH_data_from_sequenza_400_by_cytoband_updated.txt"),
             sep = "\t", row.names = FALSE, quote = FALSE)
 
 
@@ -1101,6 +1144,8 @@ saveRDS(sample_ploidy, file = file.path(export_dir, "Sample_ploidy_from_sequenza
 write.table(sample_ploidy,
             file = file.path(export_dir, "Sample_ploidy_from_sequenza.txt"),
             sep = "\t", row.names = FALSE, quote = FALSE)
+message("Active Sequenza ploidy helper written: ",
+        file.path(export_dir, "Sample_ploidy_from_sequenza_400.rds"))
 
 
 

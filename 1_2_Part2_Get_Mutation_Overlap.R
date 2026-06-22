@@ -35,9 +35,16 @@
 #   - Jan2025_exported_data/All_feature_data_Sep2025_updated2.rds
 #  
 # Output files:
-#   - VennDiagram_<Patient>_May2024_updatedcolors.png
-#   - percent_overlap_barplot_Sep2025.png
+#   Manuscript-facing:
 #   - Final Tables and Figures/Fig3C_mutation_overlap_lollipop2_updated.png
+#   - Final Tables and Figures/Extended_Data_Figure_2G_mutation_overlap_source_data.csv
+#   - Final Tables and Figures/Extended_Data_Figure_2G_mutation_overlap_summary.csv
+#
+#   Support-only QA/review:
+#   - Final Tables and Figures/mutation_overlap_support/patient_venn_diagrams/
+#     VennDiagram_<Patient>_Sep2025_updatedcolors.png
+#   - Final Tables and Figures/mutation_overlap_support/percent_overlap_barplot_Sep2025.png
+#   - Final Tables and Figures/mutation_overlap_support/*summary*.csv
 #  
 # Notes:
 #   - The script is command-line runnable from the project root. Clinical
@@ -87,6 +94,11 @@ source(.manuscript_helper)
 rm(.manuscript_helper)
 
 outdir <- "Final Tables and Figures/"
+mutation_overlap_support_dir <- file.path(outdir, "mutation_overlap_support")
+venn_output_dir <- file.path(mutation_overlap_support_dir, "patient_venn_diagrams")
+dir.create(outdir, recursive = TRUE, showWarnings = FALSE)
+dir.create(mutation_overlap_support_dir, recursive = TRUE, showWarnings = FALSE)
+dir.create(venn_output_dir, recursive = TRUE, showWarnings = FALSE)
 
 # Read the MAF file using read.maf
 df_bm <- readRDS("combined_maf_bm_dx.rds")
@@ -113,7 +125,10 @@ combined_maf <- bind_rows(df_bm, df_blood)
 rm(df_bm)
 rm(df_blood)
 
-## Venn diagram between mutations at diagnosis 
+# Support-only QA: per-patient Venn diagrams between diagnostic BM and cfDNA
+# mutations. These help inspect individual overlap patterns but are not mapped
+# to a final manuscript panel; the manuscript-facing output is the lollipop
+# summary saved later as Extended Data Figure 2G.
 # Create unique identifiers for each mutation
 # Two ID fields are built:
 #   Unique_ID_patient = chr:start:end:ref:alt:Patient  -> used to COMPARE BM vs cfDNA
@@ -239,7 +254,12 @@ for (i in 1:length(patients)) {
   }
   
   # Create a new plot with a white background
-  png(filename = paste0("VennDiagram_", patients[i], "_Sep2025_updatedcolors.png"), width = 2400, height = 2400, res = 300)
+  png(
+    filename = file.path(venn_output_dir, paste0("VennDiagram_", patients[i], "_Sep2025_updatedcolors.png")),
+    width = 2400,
+    height = 2400,
+    res = 300
+  )
   
   # Clear the plot and set background to white
   grid.newpage()
@@ -287,8 +307,14 @@ for (i in 1:length(patients)) {
   # Calculate the total number of unique mutations
   total_unique_mutations <- length(unique(c(bm_mutations, cf_mutations)))
   
-  # Calculate the percent overlap
-  percent_overlap <- (overlap_count / total_unique_mutations) * 100
+  # Calculate the percent overlap. If both mutation sets are empty, retain the
+  # patient in the audit table but mark the overlap as missing rather than
+  # creating NaN/Inf summary statistics.
+  percent_overlap <- if (total_unique_mutations > 0) {
+    (overlap_count / total_unique_mutations) * 100
+  } else {
+    NA_real_
+  }
   
   # Store the results in the dataframe
   overlap_data <- rbind(overlap_data, data.frame(Patient = patients[i], Percent_Overlap = percent_overlap))
@@ -299,8 +325,13 @@ overlap_data <- overlap_data %>%
   arrange(desc(Percent_Overlap)) %>%
   mutate(Patient = factor(Patient, levels = unique(Patient)))
 
+# The support overview plot should show only patients with a defined overlap
+# percentage. Patients with no callable mutation set remain in the audit CSV.
+overlap_plot_data <- overlap_data %>%
+  filter(!is.na(Percent_Overlap))
+
 # Create the bar plot
-overlap_plot <- ggplot(overlap_data, aes(x = Patient, y = Percent_Overlap)) +
+overlap_plot <- ggplot(overlap_plot_data, aes(x = Patient, y = Percent_Overlap)) +
   geom_bar(stat = "identity") +
   theme_minimal() +
   labs(
@@ -313,22 +344,45 @@ overlap_plot <- ggplot(overlap_data, aes(x = Patient, y = Percent_Overlap)) +
 # Display the plot
 print(overlap_plot)
 
-# Save the plot
-ggsave("percent_overlap_barplot_Sep2025.png", plot = overlap_plot, width = 6, height = 5, dpi = 500)
+# Save support-only overview barplot. The final manuscript panel below uses a
+# protected-ID lollipop layout instead.
+ggsave(
+  file.path(mutation_overlap_support_dir, "percent_overlap_barplot_Sep2025.png"),
+  plot = overlap_plot,
+  width = 6,
+  height = 5,
+  dpi = 500
+)
 
 
 ### Now get the overlap table and summarise stats 
 
 # 1) Left-join the cohort assignments onto the overlap table
 overlap_with_cohort <- overlap_data %>%
-  left_join(cohort_df, by = "Patient")
+  left_join(cohort_df, by = "Patient") %>%
+  mutate(
+    Percent_Overlap = if_else(
+      is.nan(Percent_Overlap) | is.infinite(Percent_Overlap),
+      NA_real_,
+      Percent_Overlap
+    )
+  )
+
+# Rows with a finite percent overlap are valid for numerical summaries. Patients
+# with no callable baseline mutation set are retained in overlap_with_cohort for
+# audit but excluded from plotted/summary percentages.
+overlap_for_stats <- overlap_with_cohort %>%
+  filter(!is.na(Percent_Overlap))
+
+overlap_for_cohort_stats <- overlap_for_stats %>%
+  filter(!is.na(Cohort))
 
 # 2) How many patients have both baseline BM and cfDNA samples?
 n_patients_overlap <- n_distinct(overlap_with_cohort$Patient)
 message("Number of patients with both baseline BM and cfDNA: ", n_patients_overlap)
 
 # 3) Overall summary of Percent_Overlap
-overall_stats <- overlap_with_cohort %>%
+overall_stats <- overlap_for_stats %>%
   summarise(
     mean_overlap   = mean(Percent_Overlap, na.rm = TRUE),
     median_overlap = median(Percent_Overlap, na.rm = TRUE),
@@ -339,7 +393,7 @@ overall_stats <- overlap_with_cohort %>%
 print(overall_stats)
 
 # 4) Summary by cohort (replace 'Cohort' with your actual cohort column name)
-stats_by_cohort <- overlap_with_cohort %>%
+stats_by_cohort <- overlap_for_cohort_stats %>%
   group_by(Cohort) %>%
   summarise(
     n               = dplyr::n(),
@@ -373,6 +427,7 @@ cat(cohort_sentences, sep = "\n")
 # 1. Sort overlap_data and add position for plotting
 plot_df <- overlap_with_cohort %>%
   filter(Cohort == "Frontline") %>%
+  filter(!is.na(Percent_Overlap)) %>%
   arrange(Percent_Overlap) %>%
   mutate(
     Patient = factor(Patient, levels = Patient),      # keep order
@@ -386,6 +441,7 @@ id_map <- readRDS("id_map.rds") %>% distinct(Patient, New_ID)
 # 1) Apply ID map, keep order for plotting
 plot_df <- overlap_with_cohort %>%
   filter(Cohort == "Frontline") %>%
+  filter(!is.na(Percent_Overlap)) %>%
   left_join(id_map, by = "Patient") %>%
   mutate(Patient = coalesce(New_ID, Patient)) %>%   # swap to New_ID when available
   select(-New_ID) %>%
@@ -477,7 +533,7 @@ p_overlap <- ggplot(plot_df, aes(x = Percent_Overlap, y = Patient)) +
  # ) +
   geom_vline(xintercept = med, linetype = "dashed", colour = "grey40") +
   geom_segment(aes(x = 0, xend = Percent_Overlap, yend = Patient),
-               colour = "grey65", size = 0.35) +
+               colour = "grey65", linewidth = 0.35) +
   geom_point(aes(colour = Percent_Overlap), size = 2) +
   scale_colour_viridis_c(
     option = "D", end = 0.9, name = "% overlap",
@@ -532,13 +588,54 @@ ms_copy_artifact(
 )
 
 
-# Export source/helper tables for the overlap panel.
-write.csv(overlap_with_cohort, "mutation_overlap_with_cohort.csv", row.names = FALSE)
-# or TSV:
-# write.table(overlap_with_cohort, "overlap_with_cohort.tsv", sep = "\t", quote = FALSE, row.names = FALSE)
+# Export manuscript source/helper tables for Extended Data Figure 2G.
+edfig2g_source_data_path <- file.path(outdir, "Extended_Data_Figure_2G_mutation_overlap_source_data.csv")
+edfig2g_summary_path <- file.path(outdir, "Extended_Data_Figure_2G_mutation_overlap_summary.csv")
 
-# Export overall stats
-write.csv(overall_stats, "overall_percent_overlap_stats.csv", row.names = FALSE)
+edfig2g_summary <- plot_df %>%
+  summarise(
+    n = n(),
+    mean_overlap = mean(Percent_Overlap, na.rm = TRUE),
+    median_overlap = median(Percent_Overlap, na.rm = TRUE),
+    IQR_overlap = IQR(Percent_Overlap, na.rm = TRUE),
+    IQR_lower = quantile(Percent_Overlap, 0.25, na.rm = TRUE),
+    IQR_upper = quantile(Percent_Overlap, 0.75, na.rm = TRUE),
+    min_overlap = min(Percent_Overlap, na.rm = TRUE),
+    max_overlap = max(Percent_Overlap, na.rm = TRUE)
+  )
 
-# Export cohort-specific summary stats
-write.csv(stats_by_cohort, "percent_overlap_stats_by_cohort.csv", row.names = FALSE)
+write.csv(plot_df, edfig2g_source_data_path, row.names = FALSE)
+write.csv(edfig2g_summary, edfig2g_summary_path, row.names = FALSE)
+
+ms_copy_artifact(
+  source_path = edfig2g_source_data_path,
+  artifact_id = "EDFIG2G",
+  role = "source_data_csv",
+  description = "Extended Data Figure 2G source data: patient-level baseline BM/cfDNA mutation overlap used for the lollipop plot.",
+  script_name = "1_2_Part2_Get_Mutation_Overlap.R"
+)
+ms_copy_artifact(
+  source_path = edfig2g_summary_path,
+  artifact_id = "EDFIG2G",
+  role = "summary_csv",
+  description = "Extended Data Figure 2G summary statistics for baseline BM/cfDNA mutation overlap.",
+  script_name = "1_2_Part2_Get_Mutation_Overlap.R"
+)
+
+# Export broader support tables for audit/review. These are not direct
+# manuscript panel files and are intentionally kept out of the project root.
+write.csv(
+  overlap_with_cohort,
+  file.path(mutation_overlap_support_dir, "mutation_overlap_with_cohort.csv"),
+  row.names = FALSE
+)
+write.csv(
+  overall_stats,
+  file.path(mutation_overlap_support_dir, "overall_percent_overlap_stats.csv"),
+  row.names = FALSE
+)
+write.csv(
+  stats_by_cohort,
+  file.path(mutation_overlap_support_dir, "percent_overlap_stats_by_cohort.csv"),
+  row.names = FALSE
+)

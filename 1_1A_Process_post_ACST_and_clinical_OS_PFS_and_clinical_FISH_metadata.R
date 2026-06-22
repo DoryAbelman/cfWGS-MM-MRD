@@ -1,14 +1,16 @@
 # ──────────────────────────────────────────────────────────────────────────────
-#  process_post_ACST_and_clinical_OS_PFS_and_clinical_FISH_metadata.R
+#  1_1A_Process_post_ACST_and_clinical_OS_PFS_and_clinical_FISH_metadata.R
 #
-#  Purpose:
-#    • Ingest and clean clinical/transplant/progression data for SPORE, M4, IMMAGINE cohorts
-#    • Normalize column names, extract timepoints, treatments, and FISH flags
-#    • Merge ASCT (autologous stem‐cell transplant) dates with relapse/progression dates
-#    • Compute time‐to‐relapse metrics (days, flags within 12/18/24 months)
-#    • Integrate overall survival (OS) follow‐up and vital‐status information
-#    • Export tidy “tidy_timepoints.csv”, “tidy_treatments.csv”, “tidy_progression.csv”,
-#      “tidy_fish.csv”, “ASCT_relapse_summary.csv”, and a combined OS/PFS master table
+#  Script purpose:
+#    • Ingest and clean clinical/transplant/progression data for the SPORE, M4,
+#      and IMMAGINE cohorts.
+#    • Normalize free-text and workbook-derived clinical fields into tidy
+#      timepoint, treatment, progression, FISH, ASCT, and OS/PFS helper tables.
+#    • Merge ASCT (autologous stem-cell transplant) dates with relapse or
+#      progression dates and compute time-to-relapse flags within 12, 18, and
+#      24 months after transplant.
+#    • Integrate overall-survival follow-up and vital-status information for
+#      downstream clinical, concordance, and survival analyses.
 #
 #  Usage:
 #    1. Place this script in your project root.
@@ -22,18 +24,36 @@
 #         • Clinical data/SPORE/SPORE_OS_info.xlsx
 #         • M4_CMRG_Data/M4_COHORT_DEMO.xlsx
 #
-#    3. From R (in project root), run:
-#         source("process_post_ACST_and_clinical_OS_PFS.R")
-#
-#  *This script is intended as a one-shot cleaning script to be run after the previous 1_0A script* 
-#
-# How to run:
+#  Execution note:
 #   Rscript Scripts_2025/Final_Scripts/1_1A_Process_post_ACST_and_clinical_OS_PFS_and_clinical_FISH_metadata.R
 #
 # Manuscript outputs created/updated:
 #   - None directly. This upstream script processes transplant, OS/PFS,
 #     progression, and FISH metadata for downstream clinical, concordance, and
 #     survival figures/tables.
+#
+# Active downstream outputs:
+#   - Clinical data/SPORE/tidy_timepoints.csv
+#   - Clinical data/SPORE/tidy_treatments.csv
+#   - Clinical data/SPORE/tidy_progression.csv
+#   - Clinical data/SPORE/tidy_fish.csv
+#   - Clinical data/Exported clinical data April 2025/SPORE_timepoints.csv
+#   - Clinical data/Exported clinical data April 2025/SPORE_treatments.csv
+#   - Clinical data/Exported clinical data April 2025/SPORE_progression.csv
+#   - Clinical data/Exported clinical data April 2025/SPORE_fish_flags.csv
+#   - Clinical data/Exported clinical data April 2025/M4_cohort_df_clean.csv
+#   - Clinical data/Exported clinical data April 2025/M4_ASCT_dates.csv
+#   - Clinical data/Exported clinical data April 2025/IMMAGINE_dates_long.csv
+#   - Clinical data/Exported clinical data April 2025/IMMAGINE_fish_flags.csv
+#   - Clinical data/Exported clinical data April 2025/all_cohorts_ASCT_dates.csv
+#   - Clinical data/Exported clinical data April 2025/ASCT_relapse_summary.csv
+#
+# Support-only outputs:
+#   - Output_tables_2025/clinical_followup_support/original_headers.txt
+#   - Output_tables_2025/clinical_followup_support/relapse_flags_table.csv/rds
+#   - Output_tables_2025/clinical_followup_support/SPORE_Patient_Timeline_ClinicalInfo.csv
+#   - Output_tables_2025/clinical_followup_support/combined_clinical_MRD_OS_table_updated_May2025.csv/rds
+#   - Output_tables_2025/clinical_followup_support/plots/*.png
 #
 #  Author:        Dory Abelman
 #  Last updated:  2025-05-13
@@ -43,8 +63,10 @@
 # ──────────────────────────────────────────────────────────────────────────────
 # Pipeline status:
 #   Active upstream dependency. This script does not directly create a named
-#   final manuscript figure/table, but downstream scripts depend on its cleaned
-#   outputs for figure, table, or model generation.
+#   final manuscript figure/table. It creates clinical helper inputs consumed
+#   by downstream scripts that generate Figure 1A, Table 1, clinical
+#   concordance panels, and survival/relapse analyses. Support-only review
+#   tables and QC plots are separated from active manuscript inputs.
 #
 
 
@@ -61,10 +83,38 @@ library(forcats)     # as_factor for transplant procedure fields
 library(purrr)       # for functional programming (map, etc.)
 library(glue)        # for building file‐paths and messages
 
+support_dir <- file.path("Output_tables_2025", "clinical_followup_support")
+support_plot_dir <- file.path(support_dir, "plots")
+spore_tidy_dir <- file.path("Clinical data", "SPORE")
+dir.create(support_dir, recursive = TRUE, showWarnings = FALSE)
+dir.create(support_plot_dir, recursive = TRUE, showWarnings = FALSE)
+dir.create(spore_tidy_dir, recursive = TRUE, showWarnings = FALSE)
+
+write_support_csv <- function(x, filename) {
+  path <- file.path(support_dir, filename)
+  readr::write_csv(x, path)
+  message("Support table written: ", path)
+  invisible(path)
+}
+
+write_support_rds <- function(x, filename) {
+  path <- file.path(support_dir, filename)
+  saveRDS(x, file = path)
+  message("Support RDS written: ", path)
+  invisible(path)
+}
+
+write_active_csv <- function(x, path) {
+  dir.create(dirname(path), recursive = TRUE, showWarnings = FALSE)
+  readr::write_csv(x, path)
+  message("Active clinical input written: ", path)
+  invisible(path)
+}
+
 # Helper to verify that required input files exist
 ensure_exists <- function(path) {
   if (!file.exists(path)) {
-    stop(glue("❌ Required file not found: {path}"), call. = FALSE)
+    stop(glue("Required file not found: {path}"), call. = FALSE)
   }
   invisible(path)
 }
@@ -87,7 +137,7 @@ input_files <- c(
 # Verify existence of each input
 walk(input_files, ensure_exists)
 
-message("✅ All required input files are present.")
+message("All required input files are present.")
 
 Relapse_dates_full <- readRDS("Exported_data_tables_clinical/Relapse_dates_full_updated.rds")
 combined_clinical_data_updated <- read_csv(
@@ -119,9 +169,10 @@ raw   <- read_excel("Clinical data/SPORE/cfDNA project and clinical data just cl
                     na    = c("NA","N/A","", " ")) |>   # treat blank‑likes as NA
   janitor::remove_empty("rows")                 # drop fully‑empty rows
 
-# readxl will automatically deduplicate identical headers by appending “…1”, “…2”.
-# Keep a copy for inspection if you like:
-writeLines(names(raw), "original_headers.txt")
+# readxl automatically deduplicates identical headers by appending suffixes.
+# Save the raw header list as a support diagnostic because it is useful when
+# checking whether upstream clinical workbooks changed their column names.
+writeLines(names(raw), file.path(support_dir, "original_headers.txt"))
 
 # ──────────────────────────────────────────────────────────────────────────────
 #  2.  Normalise column names --------------------------------------------------
@@ -253,15 +304,17 @@ fish <- core |>
 fish <- fish %>% filter(!is.na(fish_abnormalities))
 
 # ──────────────────────────────────────────────────────────────────────────────
-#  8.  Tidy outputs ------------------------------------------------------------
+#  8.  Active SPORE tidy outputs ----------------------------------------------
 # ──────────────────────────────────────────────────────────────────────────────
+# These four files are active downstream inputs. Keep them in
+# Clinical data/SPORE/ because later scripts read those historical paths.
 list(
   timepoints  = timepoints,
   treatments  = treat_long,
   progression = progression,
   fish        = fish
 ) |> purrr::iwalk(\(df, nm) {
-  write_csv(df, glue::glue("tidy_{nm}.csv"))
+  write_active_csv(df, file.path(spore_tidy_dir, glue::glue("tidy_{nm}.csv")))
 })
 
 
@@ -551,14 +604,14 @@ final_tbl <- bind_rows(next_relapse, never_relapsed) %>%
     within_24mo   = if_else(relapsed == 1 & days_to_relapse <= 730, 1, 0)
   )
 
-# Inspect
+# Inspect in the command-line log so unexpected ASCT/relapse changes are visible.
 print(final_tbl)
 
-# Export as CSV
-write.csv(final_tbl, "relapse_flags_table.csv", row.names = FALSE)
-
-# Export as RDS
-saveRDS(final_tbl, file = "relapse_flags_table.rds")
+# Export support copies of the ASCT-to-relapse helper table. The manuscript
+# pipeline uses the explicit clinical export below; these copies are retained
+# only for audit/debugging.
+write_support_csv(final_tbl, "relapse_flags_table.csv")
+write_support_rds(final_tbl, "relapse_flags_table.rds")
 
 
 ### Re-score IMMAGINE FISH flags from the free-text field
@@ -654,7 +707,7 @@ p1 <- final_tbl %>%
     x     = "Days to Relapse",
     y     = "Count"
   )
-ggsave(file.path(export_dir, "days_to_relapse_histogram.png"), p1, width = 6, height = 4)
+ggsave(file.path(support_plot_dir, "days_to_relapse_histogram.png"), p1, width = 6, height = 4)
 
 # 10b. Proportion relapsed within each window
 p2 <- final_tbl %>%
@@ -672,7 +725,7 @@ p2 <- final_tbl %>%
     x     = "Time Window After ACST",
     y     = "Proportion Relapsed"
   )
-ggsave(file.path(export_dir, "relapse_window_proportions.png"), p2, width = 6, height = 4)
+ggsave(file.path(support_plot_dir, "relapse_window_proportions.png"), p2, width = 6, height = 4)
 
 
 
@@ -681,8 +734,9 @@ spore_clinical_subset <- combined_clinical_data_updated %>%
   filter(Study == "SPORE") %>%
   select(Patient, Date_of_sample_collection, timepoint_info)
 
-# Export to CSV
-write_csv(spore_clinical_subset, "SPORE_Patient_Timeline_ClinicalInfo.csv")
+# Export to the support folder. This is a review helper, not an active
+# downstream manuscript input.
+write_support_csv(spore_clinical_subset, "SPORE_Patient_Timeline_ClinicalInfo.csv")
 
 
 
@@ -894,10 +948,8 @@ combined_tbl <- combined_tbl %>%
 
 
 ## Export the combined OS/PFS helper table
-# This table is consumed by downstream survival/PFS scripts. Regenerate it after
-# changing clinical follow-up, relapse/progression, death, or ASCT source files.
-# Export to CSV
-write.csv(combined_tbl, file = "combined_clinical_MRD_OS_table_updated_May2025.csv", row.names = FALSE)
-
-# Export to RDS
-saveRDS(combined_tbl, file = "combined_clinical_MRD_OS_table_updated_May2025.rds")
+# Current mapped manuscript scripts do not read this historical root filename
+# directly. It is retained as a support table for checking clinical follow-up,
+# relapse/progression, death, and ASCT integration after source-file updates.
+write_support_csv(combined_tbl, "combined_clinical_MRD_OS_table_updated_May2025.csv")
+write_support_rds(combined_tbl, "combined_clinical_MRD_OS_table_updated_May2025.rds")

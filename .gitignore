@@ -30,3 +30,4 @@ AGENTS.md
 !/archive/support_analysis/
 !/archive/support_analysis/**
 local_input_check_report.tsv
+/output_comparison_4_1_examples

@@ -19,6 +19,14 @@
 #   - None directly. This upstream script harmonizes clinical metadata across
 #     cohorts for downstream Table 1, swim-plot, model, and survival scripts.
 #
+# Pipeline role:
+#   This script creates the canonical clinical metadata inputs used by later
+#   scripts. Historical root-level outputs that are read downstream are kept in
+#   place for compatibility. Support-only QC summaries, temporary checkpoints,
+#   and BAM review lists are written under
+#   `Output_tables_2025/clinical_metadata_support/` so they are not confused
+#   with manuscript figure/table outputs.
+#
 #  Author:        Dory Abelman
 #  Last updated:  2025-06-06
 #
@@ -47,8 +55,8 @@
 #    • Outputs:
 #         – “combined_clinical_data_updated_April2025.csv” (master metadata table)
 #         – Various exported tables under “Exported_data_tables_clinical” and “Oct2024_exported_data”
-#         – Summary CSVs: patient_counts_summary.csv, patient_counts_detailed.csv, BAM lists, etc.
-#         – QC/barplots under “plots_Oct”#
+#         – Support/QC summaries and BAM review lists under
+#           “Output_tables_2025/clinical_metadata_support”
 #
 #   *This script is intended to be a one‐shot cleanup for downstream analysis.*
 # ──────────────────────────────────────────────────────────────────────────────
@@ -65,6 +73,11 @@ library(readxl)       # reading Excel files
 library(data.table)   # fast fread/fwrite if needed
 library(tidyverse)    # dplyr, tidyr, ggplot2, etc.
 library(lubridate)    # date parsing
+
+clinical_support_dir <- file.path("Output_tables_2025", "clinical_metadata_support")
+clinical_support_plot_dir <- file.path(clinical_support_dir, "plots")
+dir.create(clinical_support_dir, recursive = TRUE, showWarnings = FALSE)
+dir.create(clinical_support_plot_dir, recursive = TRUE, showWarnings = FALSE)
 
 # Type-stable date normalization used before joins and patient-specific date
 # corrections. Some source spreadsheets provide R Date objects, some provide
@@ -333,7 +346,7 @@ combined_clinical_data_updated <- combined_clinical_data_updated %>%
 # final clinical metadata table used by downstream manuscript scripts.
 write.csv(
   combined_clinical_data_updated,
-  "combined_clinical_data_updated_tmp.csv",
+  file.path(clinical_support_dir, "combined_clinical_data_updated_tmp.csv"),
   row.names = FALSE
 )
 
@@ -367,24 +380,18 @@ print(samples_by_type)
 print(samples_by_timepoint)
 print(samples_by_study)
 
-# Export the number of unique patients
-write.csv(num_patients, "num_patients.csv", row.names = FALSE)
-
-# Export the number of samples by sample type
-write.csv(samples_by_type, "samples_by_type.csv", row.names = FALSE)
-
-# Export the number of samples by timepoint
-write.csv(samples_by_timepoint, "samples_by_timepoint.csv", row.names = FALSE)
-
-# Export the number of samples by study
-write.csv(samples_by_study, "samples_by_study.csv", row.names = FALSE)
+# Export support-only count summaries used to audit clinical metadata updates.
+write.csv(num_patients, file.path(clinical_support_dir, "num_patients.csv"), row.names = FALSE)
+write.csv(samples_by_type, file.path(clinical_support_dir, "samples_by_type.csv"), row.names = FALSE)
+write.csv(samples_by_timepoint, file.path(clinical_support_dir, "samples_by_timepoint.csv"), row.names = FALSE)
+write.csv(samples_by_study, file.path(clinical_support_dir, "samples_by_study.csv"), row.names = FALSE)
 
 
 # ─── 13.  Make simple QC barplots (Sample_type, timepoint_info, Study) ─────────
 # These plots are quick data-integrity checks for the clinical metadata build.
 # They are not mapped manuscript figure panels.
-output_dir <- "plots_Oct"
-dir.create(output_dir, showWarnings = FALSE)
+output_dir <- clinical_support_plot_dir
+dir.create(output_dir, showWarnings = FALSE, recursive = TRUE)
 
 ##  13.1  Samples by Sample_type
 plot_samples_by_type <- ggplot(samples_by_type,
@@ -1455,22 +1462,22 @@ detailed_results <- tibble(
   patient     = c(patients_a, patients_b, patients_c, patients_d, patients_e, patients_f, patients_g)
 )
 
-write.csv(results,          "patient_counts_summary.csv",  row.names = FALSE)
-write.csv(detailed_results, "patient_counts_detailed.csv",  row.names = FALSE)
+write.csv(results,          file.path(clinical_support_dir, "patient_counts_summary.csv"),  row.names = FALSE)
+write.csv(detailed_results, file.path(clinical_support_dir, "patient_counts_detailed.csv"),  row.names = FALSE)
 
 
 # ─── 20.  Filter BAM lists (IMG only, SPORE only) → write out CSVs ─────────────
 bams_filtered_IMG <- combined_clinical_data_updated %>%
   filter(grepl("IMG", Patient, ignore.case = TRUE)) %>%
   select(Bam, Patient, Sample_ID)
-write.csv(bams_filtered_IMG, "bams_with_IMG_patients.csv", row.names = FALSE)
+write.csv(bams_filtered_IMG, file.path(clinical_support_dir, "bams_with_IMG_patients.csv"), row.names = FALSE)
 
 bams_filtered_SPORE <- combined_clinical_data_updated %>%
   filter(grepl("SPORE", Patient, ignore.case = TRUE)) %>%
   select(Bam, Patient, Sample_ID)
-write.csv(bams_filtered_SPORE, "SPORE_bams.csv", row.names = FALSE)
+write.csv(bams_filtered_SPORE, file.path(clinical_support_dir, "SPORE_bams.csv"), row.names = FALSE)
 
-cat("Filtered BAM list exported to bams_with_IMG_patients.csv and SPORE_bams.csv\n")
+cat("Filtered BAM lists exported under ", clinical_support_dir, "\n", sep = "")
 
 
 # ─── 21.  Final tweaks & write combined_clinical_data_updated_April2025.csv ────

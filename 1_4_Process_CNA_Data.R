@@ -13,9 +13,8 @@
 #        `combined_seg_data`
 #     3. Loads cytoband definitions (cb_frame) and derives an “arm” label
 #        (e.g. “1p”, “1q”, “13q”, “17p”) by overlapping each segment
-#     4. Saves the wide format as:
-#        – CSV “Oct_2024_combined_corrected_calls.csv”
-#        – RDS “Oct_2024_combined_corrected_calls.rds”
+#     4. Saves the wide segment cache under
+#        Output_tables_2025/ichor_cna_processing_support/
 #     5. Pivots to long format and uppercases calls for consistency
 #     6. Defines a list of myeloma-relevant arms (del1p, amp1q,
 #        del13q, del17p) and for each:
@@ -42,12 +41,17 @@
 #   • Clinical data/FISH probe locations.xlsx
 #   • cytoband.txt
 #
-# Outputs:
-#   • RDS: Oct_2024_combined_corrected_calls.rds
-#   • CSV: Oct_2024_combined_corrected_calls.csv
-#   • RDS/TXT: Jan2025_exported_data/FISH_probe_calls_bin_cytoband_ichorCNA.rds/.txt
-#   • RDS/TXT: Jan2025_exported_data/cna_data_ichorCNA.rds/.txt
-#   • TXT: Jan2025_exported_data/cna_data_backup.txt
+# Active downstream outputs:
+#   • Jan2025_exported_data/FISH_probe_calls_bin_cytoband_ichorCNA.rds
+#   • Jan2025_exported_data/FISH_probe_calls_bin_cytoband_ichorCNA.txt
+#   • Jan2025_exported_data/cna_data_ichorCNA.rds
+#   • Jan2025_exported_data/cna_data_ichorCNA.txt
+#
+# Support/QC outputs:
+#   • Output_tables_2025/ichor_cna_processing_support/Oct_2024_combined_corrected_calls.rds
+#   • Output_tables_2025/ichor_cna_processing_support/Oct_2024_combined_corrected_calls.csv
+#   • Output_tables_2025/ichor_cna_processing_support/cna_data_compact_backup.txt
+#   • Output_tables_2025/ichor_cna_processing_support/cna_data_hyperdiploid_chromosome_qc.txt
 #   • R object: myeloma_CNA_matrix_with_HRD (binary arm-level matrix)
 #
 # Key assumptions and audit notes:
@@ -81,6 +85,13 @@
 #   final manuscript figure/table, but downstream scripts depend on its cleaned
 #   outputs for figure, table, or model generation.
 #
+# Reproducibility note:
+#   The preferred end-to-end path starts from raw ichorCNA *.seg files in
+#   Oct 2024 data/Ichor_CNA/. If those raw segment files are not distributed in a
+#   lightweight review bundle, the script can use the preserved combined segment
+#   cache in Output_tables_2025/ichor_cna_processing_support/ to regenerate the
+#   same downstream CNA feature tables without requiring RStudio state.
+#
 
 
 # Load Libraries:
@@ -90,6 +101,27 @@ library(tidyr)           # for pivot_longer()
 library(GenomicRanges)
 library(IRanges)
 library(S4Vectors)
+
+export_dir <- "Jan2025_exported_data"
+support_table_dir <- file.path("Output_tables_2025", "ichor_cna_processing_support")
+dir.create(export_dir, recursive = TRUE, showWarnings = FALSE)
+dir.create(support_table_dir, recursive = TRUE, showWarnings = FALSE)
+
+support_file <- function(filename) {
+  file.path(support_table_dir, filename)
+}
+
+first_existing_file <- function(paths, description) {
+  hit <- paths[file.exists(paths)][1]
+  if (is.na(hit)) {
+    stop(
+      "Missing required ", description, ". Checked:\n  ",
+      paste(paths, collapse = "\n  "),
+      call. = FALSE
+    )
+  }
+  hit
+}
 
 
 ## Load clinical info
@@ -118,102 +150,106 @@ metada_df_mutation_comparison <- metada_df_mutation_comparison %>%
 # Set the directory containing the SEG files
 seg_dir <- "Oct 2024 data/Ichor_CNA"
 
-# Get a list of all SEG files in the directory
-seg_files <- list.files(seg_dir, pattern = "*.seg", full.names = TRUE)
-
-# Initialize an empty list to store data for each file
-seg_data_list <- list()
-
-# Loop over each SEG file and process it
-for (file in seg_files) {
-  
-  # Read the SEG file into a dataframe
-  seg_data <- read.delim(file, header = TRUE)
-  
-  # Extract the filename without the .seg extension
-  sample_name <- gsub(".cna.seg$", "", basename(file))
-  
-  # Extract the relevant columns: chr, start, end, and the exact Corrected_Call column
-  # Corrected_Call encodes the ichorCNA segment state after tumor-fraction
-  # correction. Possible values (uppercased later):
-  #   NEUT  = copy-neutral (2 copies in diploid);
-  #   GAIN  = single-copy gain (3 copies); AMP = high-level gain (>=4);
-  #   HLAMP = focal high-level amplification (>=6+);
-  #   HETD  = heterozygous deletion (1 copy); HOMD = homozygous deletion (0).
-  #   LOSS / CNLOH may appear in Sequenza-derived segments.
-  seg_corrected_call <- seg_data %>%
-    dplyr::select(chr, start, end, Corrected_Call = matches("Corrected_Call$"))
-  
-  # Rename the Corrected_Call column to include the sample name
-  colnames(seg_corrected_call)[4] <- paste0(sample_name)
-  
-  # Add the processed data to the list
-  seg_data_list[[file]] <- seg_corrected_call
+# Get a list of all SEG files in the directory. The explicit "\\.seg$" pattern
+# avoids accidentally reading non-segment files that happen to contain "seg" in
+# their names.
+seg_files <- if (dir.exists(seg_dir)) {
+  list.files(seg_dir, pattern = "\\.seg$", full.names = TRUE)
+} else {
+  character()
 }
 
+combined_seg_cache_rds <- support_file("Oct_2024_combined_corrected_calls.rds")
+combined_seg_cache_csv <- support_file("Oct_2024_combined_corrected_calls.csv")
 
-# Combine all the data into one dataframe by chr, start, and end
-# A full_join (rather than inner/left) is used so that every unique
-# genomic segment present in ANY sample is retained. Samples that
-# lack a particular segment will receive NA for that segment's call;
-# NA values are treated as copy-neutral (NEUT) in downstream binary
-# calling steps. Rows: genome-wide segments; Columns: one per sample.
-combined_seg_data <- purrr::reduce(seg_data_list, full_join, by = c("chr", "start", "end"))
-
-## Add the arm info to the directory 
-# Cytoband definitions (cb_frame) supply hg38 chromosomal band
-# coordinates. The arm label (e.g. "1p", "13q") is synthesised by
-# stripping the "chr" prefix and appending the first character of the
-# UCSC band name ("p" or "q"). This arm label is then assigned to
-# each ichorCNA segment by genomic overlap, enabling arm-level
-# summarisation downstream.
-cytoband_txt <- "cytoband.txt"
-if (!file.exists(cytoband_txt)) {
-  stop("Missing required hg38 cytoband file: ", cytoband_txt,
-       ". This file is needed to map segment-level CNA calls to chromosome arms.")
-}
-cb_frame <- readr::read_tsv(
-  cytoband_txt,
-  col_names = c("chr", "start", "end", "band", "stain"),
-  show_col_types = FALSE
-)
-
-cb_frame_arm <- cb_frame %>%
-  mutate(arm = paste0(gsub("chr", "", chr), substr(band, 1, 1))) %>%
-  dplyr::select(chr, start, end, arm)  # Select only chr, start, end, and
-
-cb_frame_arm <- cb_frame_arm %>%
-  mutate(chr = gsub("chr", "", chr))  # edit to match other dataframe
-
-# Function to determine if two ranges overlap
-check_overlap <- function(chr, start1, end1, cb_frame_arm) {
-  cb_matches <- cb_frame_arm %>%
-    filter(chr == !!chr & start <= !!end1 & end >= !!start1)
+if (length(seg_files) > 0L) {
+  message("Reading ", length(seg_files), " raw ichorCNA SEG files from ", seg_dir)
   
-  if (nrow(cb_matches) > 0) {
-    return(cb_matches$arm[1])  # Return the first matching arm if there's an overlap
-  } else {
-    return(NA)  # Return NA if no overlap is found
+  # Loop over each SEG file and keep only the genomic interval and corrected
+  # copy-number state. The result is one sample-specific call column per file.
+  seg_data_list <- lapply(seg_files, function(file) {
+    seg_data <- read.delim(file, header = TRUE)
+    required_cols <- c("chr", "start", "end")
+    if (!all(required_cols %in% names(seg_data))) {
+      stop("SEG file is missing required columns chr/start/end: ", file, call. = FALSE)
+    }
+    corrected_call_cols <- grep("Corrected_Call$", names(seg_data), value = TRUE)
+    if (length(corrected_call_cols) != 1L) {
+      stop(
+        "Expected exactly one Corrected_Call column in ", file,
+        "; found ", length(corrected_call_cols),
+        call. = FALSE
+      )
+    }
+    
+    sample_name <- gsub("\\.cna\\.seg$", "", basename(file))
+    seg_corrected_call <- seg_data %>%
+      dplyr::select(chr, start, end, Corrected_Call = all_of(corrected_call_cols))
+    colnames(seg_corrected_call)[4] <- sample_name
+    seg_corrected_call
+  })
+  
+  # A full_join retains every unique genomic segment present in any sample.
+  # Samples without a segment receive NA for that genomic interval; downstream
+  # binary summaries treat those values as unaltered for the specific feature
+  # being summarized.
+  combined_seg_data <- purrr::reduce(seg_data_list, full_join, by = c("chr", "start", "end"))
+  
+  ## Add the arm info to the directory
+  # Cytoband definitions supply hg38 chromosomal band coordinates. The arm label
+  # (for example, "1p" or "13q") is assigned by overlap, enabling arm-level
+  # summarisation downstream.
+  cytoband_txt <- "cytoband.txt"
+  if (!file.exists(cytoband_txt)) {
+    stop("Missing required hg38 cytoband file: ", cytoband_txt,
+         ". This file is needed to map segment-level CNA calls to chromosome arms.")
   }
+  cb_frame <- readr::read_tsv(
+    cytoband_txt,
+    col_names = c("chr", "start", "end", "band", "stain"),
+    show_col_types = FALSE
+  )
+  
+  cb_frame_arm <- cb_frame %>%
+    mutate(arm = paste0(gsub("chr", "", chr), substr(band, 1, 1))) %>%
+    dplyr::select(chr, start, end, arm) %>%
+    mutate(chr = gsub("chr", "", chr))
+  
+  check_overlap <- function(chr, start1, end1, cb_frame_arm) {
+    cb_matches <- cb_frame_arm %>%
+      filter(chr == !!chr & start <= !!end1 & end >= !!start1)
+    
+    if (nrow(cb_matches) > 0) {
+      cb_matches$arm[1]
+    } else {
+      NA_character_
+    }
+  }
+  
+  combined_seg_data <- combined_seg_data %>%
+    rowwise() %>%
+    mutate(arm = check_overlap(chr, start, end, cb_frame_arm)) %>%
+    ungroup() %>%
+    relocate(arm, .after = end)
+  
+  write.csv(combined_seg_data, file = combined_seg_cache_csv, row.names = FALSE)
+  saveRDS(combined_seg_data, file = combined_seg_cache_rds)
+  message("Support segment cache written: ", combined_seg_cache_rds)
+} else {
+  # Review bundles and Code Ocean capsules may preserve derived intermediates
+  # rather than all raw ichorCNA SEG files. This fallback is explicit: it uses
+  # only the combined segment table produced by the raw-data branch above.
+  combined_seg_cache_rds <- first_existing_file(
+    c(
+      combined_seg_cache_rds,
+      "Oct_2024_combined_corrected_calls.rds"
+    ),
+    "combined ichorCNA segment cache"
+  )
+  message("No raw ichorCNA SEG files found in ", seg_dir,
+          "; using preserved support cache: ", combined_seg_cache_rds)
+  combined_seg_data <- readRDS(combined_seg_cache_rds)
 }
-
-# Apply the function to add the arm column based on overlap
-combined_seg_data <- combined_seg_data %>%
-  rowwise() %>%
-  mutate(arm = check_overlap(chr, start, end, cb_frame_arm)) %>%
-  ungroup() %>%
-  relocate(arm, .after = end)  # Move the arm column to the 4th position (after 'end')
-
-# Save the combined dataframe as a CSV file for later use
-write.csv(combined_seg_data, file = "Oct_2024_combined_corrected_calls.csv", row.names = FALSE)
-
-# Save as RDS for efficient reloading later
-saveRDS(combined_seg_data, file = "Oct_2024_combined_corrected_calls.rds")
-
-## Transform data 
-# Pivot the data to long format
-
-combined_seg_data <- readRDS("Oct_2024_combined_corrected_calls.rds")
 
 
 
@@ -529,12 +565,12 @@ print(head(probe_calls_bin_cytoband, 10))
 # This helper table is used by downstream concordance logic. It is not itself a
 # final manuscript table, but it supports Extended Data Figure 2C and
 # Supplementary Table 2 through the later 2_3 concordance script.
-export_dir <- "Jan2025_exported_data"
-if (!dir.exists(export_dir)) dir.create(export_dir, recursive = TRUE)
 saveRDS(probe_calls_bin_cytoband, file = file.path(export_dir, "FISH_probe_calls_bin_cytoband_ichorCNA.rds"))
 write.table(probe_calls_bin_cytoband,
             file = file.path(export_dir, "FISH_probe_calls_bin_cytoband_ichorCNA.txt"),
             sep = "\t", row.names = FALSE, quote = FALSE)
+message("Active CNA/FISH helper written: ",
+        file.path(export_dir, "FISH_probe_calls_bin_cytoband_ichorCNA.rds"))
 
 
 ### Now continue with regular data transformations
@@ -722,27 +758,37 @@ cna_data <- myeloma_CNA_matrix_with_HRD %>%
   dplyr::select(Sample, del1p, amp1q, del13q, del17p, hyperdiploid) %>%
   mutate_at(vars(-Sample), as.character)  # Convert numeric to character for consistency
 
+# Keep the full hyperdiploidy chromosome-by-chromosome matrix as support/QC so
+# analysts can audit why a sample did or did not meet the >=5/8 HRD rule.
 cna_data_backup <- cna_data
+cna_data_hyperdiploid_qc <- myeloma_CNA_matrix_with_HRD %>%
+  mutate_at(vars(-Sample), as.character)
 
 ## Export final ichorCNA arm-level feature table
 # This is the main output consumed by 1_5_Integrate_WGS_Feature_Data.R.
-# Define the directory for export
-export_dir <- "Jan2025_exported_data"
-
-# Check if the directory exists, if not, create it
-if (!dir.exists(export_dir)) {
-  dir.create(export_dir)
-}
-
-# Exporting dataframes as RDS files
 # cna_data_ichorCNA.rds  – compact binary arm-level call table; read in
 #   1_5_Integrate_WGS_Feature_Data.R as the ichorCNA-derived CNA layer
 #   before merging with Sequenza calls (1_4A output). The RDS format
 #   preserves column types exactly and loads ~10× faster than the TSV.
-# cna_data_backup.txt    – includes the intermediate per-chromosome
-#   hyperdiploid_* columns useful for QC; not loaded by downstream scripts.
 saveRDS(cna_data, file = file.path(export_dir, "cna_data_ichorCNA.rds"))
 
-# Exporting dataframes as text files
 write.table(cna_data, file = file.path(export_dir, "cna_data_ichorCNA.txt"), sep = "\t", row.names = FALSE, quote = FALSE)
-write.table(cna_data_backup, file = file.path(export_dir, "cna_data_backup.txt"), sep = "\t", row.names = FALSE, quote = FALSE)
+message("Active CNA feature table written: ", file.path(export_dir, "cna_data_ichorCNA.rds"))
+
+# Support-only exports. These are useful for auditing and historical comparison
+# but are not read by downstream manuscript scripts.
+write.table(
+  cna_data_backup,
+  file = support_file("cna_data_compact_backup.txt"),
+  sep = "\t",
+  row.names = FALSE,
+  quote = FALSE
+)
+write.table(
+  cna_data_hyperdiploid_qc,
+  file = support_file("cna_data_hyperdiploid_chromosome_qc.txt"),
+  sep = "\t",
+  row.names = FALSE,
+  quote = FALSE
+)
+message("Support CNA QC tables written under: ", support_table_dir)

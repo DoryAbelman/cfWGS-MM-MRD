@@ -27,14 +27,22 @@
 #   • Jan2025_exported_data/FISH_data_from_sequenza_400_updated.rds
 #   • Jan2025_exported_data/FISH_probe_calls_bin_cytoband_ichorCNA.rds
 #
-# Outputs:
-#   • Jan2025_exported_data/mutation_export_updated2.rds
-#   • Jan2025_exported_data/mutation_export_updated.txt
-#   • Jan2025_exported_data/mutation_export_updated_more_info2.rds
-#   • Jan2025_exported_data/mutation_export_updated_more_info.txt
-#   • Jan2025_exported_data/CNA_at_FISH_sites_combined.rds/.txt
-#   • Jan2025_exported_data/CNA_translocation_Sep2025_updated2.rds/.txt
+# Active downstream outputs:
 #   • Jan2025_exported_data/All_feature_data_Sep2025_updated2.rds/.txt
+#       - primary integrated WGS feature table consumed by 2_0, 2_2, 2_3,
+#         2_4, 3_1, and downstream manuscript analyses.
+#   • Jan2025_exported_data/CNA_translocation_Sep2025_updated2.rds/.txt
+#       - CNA/translocation-only helper consumed by baseline heatmap scripts.
+#   • Jan2025_exported_data/CNA_at_FISH_sites_combined.rds/.txt
+#       - FISH-probe CNA helper consumed by 2_3 concordance analyses.
+#   • Jan2025_exported_data/mutation_export_updated2.rds/.txt
+#       - compact myeloma-panel mutation helper table.
+#   • Jan2025_exported_data/mutation_export_updated_more_info2.rds/.txt
+#       - expanded mutation/QC helper consumed by 2_3.
+#
+# Support/QC outputs:
+#   • Output_tables_2025/feature_integration_support/samples_missing_metadata_after_cna_translocation_join.csv
+#   • Output_tables_2025/feature_integration_support/evidence_rule_del13q_sensitivity_check.csv
 #
 # Dependencies:
 #   library(dplyr)
@@ -62,6 +70,13 @@
 #   final manuscript figure/table, but downstream scripts depend on its cleaned
 #   outputs for figure, table, or model generation.
 #
+# Pipeline role and reproducibility note:
+#   This is the main WGS feature-integration step. It should be rerun whenever
+#   upstream mutation, CNA, translocation, tumor-fraction, or reviewed IGV
+#   translocation inputs change. It performs deterministic joins and rule-based
+#   feature calls; no model fitting, threshold selection, or stochastic sampling
+#   is performed here.
+#
 
 # Load libraries
 library(dplyr)
@@ -71,8 +86,41 @@ library(stringr)
 library(readxl)
 library(maftools)
 
-# Define export directory
+# Define export directories.
 export_dir <- "Jan2025_exported_data"
+support_table_dir <- file.path("Output_tables_2025", "feature_integration_support")
+dir.create(export_dir, recursive = TRUE, showWarnings = FALSE)
+dir.create(support_table_dir, recursive = TRUE, showWarnings = FALSE)
+
+support_file <- function(filename) {
+  file.path(support_table_dir, filename)
+}
+
+require_files <- function(paths, description) {
+  missing_paths <- paths[!file.exists(paths)]
+  if (length(missing_paths) > 0L) {
+    stop(
+      "Missing required ", description, ":\n  ",
+      paste(missing_paths, collapse = "\n  "),
+      call. = FALSE
+    )
+  }
+  invisible(paths)
+}
+
+require_files(
+  c(
+    "combined_clinical_data_updated_April2025.csv",
+    file.path(export_dir, "cna_data_ichorCNA.rds"),
+    file.path(export_dir, "cna_data_from_sequenza_400_updated.rds"),
+    file.path(export_dir, "translocation_data_cytoband_updated.rds"),
+    "Oct 2024 data/tumor_fraction_cfWGS.txt",
+    file.path(export_dir, "FISH_data_from_sequenza_400_updated.rds"),
+    file.path(export_dir, "FISH_probe_calls_bin_cytoband_ichorCNA.rds"),
+    file.path(export_dir, "Ig_caller_df_cfWGS_filtered_aggressive2_iGV_check.xlsm")
+  ),
+  "feature-integration inputs"
+)
 
 # Load clinical metadata.
 # This table provides the patient, timepoint, sample type, and BAM identifiers
@@ -169,7 +217,7 @@ cna_combined <- bind_rows(cna_ichor_filtered, cna_seq_renamed)
 CNA_translocation <- full_join(cna_combined, translocation_data, by = "Sample")
 
 # QC
-message("✅ Combined CNA rows: ", nrow(cna_combined),
+message("Combined CNA rows: ", nrow(cna_combined),
         " | After translocation join: ", nrow(CNA_translocation))
 
 ## Attach clinical/sample metadata to the CNA/translocation rows.
@@ -277,6 +325,8 @@ saveRDS(FISH_CNA_combined, file = file.path(export_dir, "CNA_at_FISH_sites_combi
 write.table(FISH_CNA_combined,
             file = file.path(export_dir, "CNA_at_FISH_sites_combined.txt"),
             sep = "\t", row.names = FALSE, quote = FALSE)
+message("Active FISH-probe CNA helper written: ",
+        file.path(export_dir, "CNA_at_FISH_sites_combined.rds"))
 
 
 
@@ -285,6 +335,13 @@ write.table(FISH_CNA_combined,
 samples_with_na_barcode <- CNA_translocation %>%
   filter(is.na(Tumor_Sample_Barcode)) %>% 
   unique()
+
+readr::write_csv(
+  samples_with_na_barcode,
+  support_file("samples_missing_metadata_after_cna_translocation_join.csv")
+)
+message("Support QC table written: ",
+        support_file("samples_missing_metadata_after_cna_translocation_join.csv"))
 
 
 ##### Extract mutation data for specified genes
@@ -408,6 +465,8 @@ mutation_export <- bind_rows(temp_bm, temp_blood)
 
 saveRDS(mutation_export, file = file.path(export_dir, "mutation_export_updated2.rds"))
 write.table(mutation_export, file = file.path(export_dir, "mutation_export_updated.txt"), sep = "\t", row.names = FALSE, quote = FALSE)
+message("Active compact mutation helper written: ",
+        file.path(export_dir, "mutation_export_updated2.rds"))
 
 ## Build an expanded mutation/QC companion table.
 # This keeps the same retained myeloma-panel mutations but carries additional
@@ -523,6 +582,8 @@ mutation_export2 <- bind_rows(temp_qc_bm, temp_qc_blood)
 
 saveRDS(mutation_export2, file = file.path(export_dir, "mutation_export_updated_more_info2.rds"))
 write.table(mutation_export2, file = file.path(export_dir, "mutation_export_updated_more_info.txt"), sep = "\t", row.names = FALSE, quote = FALSE)
+message("Active expanded mutation/QC helper written: ",
+        file.path(export_dir, "mutation_export_updated_more_info2.rds"))
 
 
 # Step 1: Create a helper table with required mutation information
@@ -764,6 +825,11 @@ compute_new_evidence_test <- function(df) {
 }
 
 # 3) Chain them together and filter for differences
+# This support-only sensitivity check asks whether adding del13q to the
+# moderate-TF cfDNA cytogenetic tier changes any Evidence_of_Disease calls.
+# The final manuscript classifier above uses the explicit rule block in
+# All_feature_data_logical; this table is retained only to audit that historical
+# rule question.
 comparison <- All_feature_data %>%
   compute_new_evidence() %>%
   compute_new_evidence_test() %>%
@@ -773,8 +839,13 @@ comparison <- All_feature_data %>%
     Evidence_new, Evidence_new_test
   )
 
-# 4) View
 print(comparison)
+readr::write_csv(
+  comparison,
+  support_file("evidence_rule_del13q_sensitivity_check.csv")
+)
+message("Support QC table written: ",
+        support_file("evidence_rule_del13q_sensitivity_check.csv"))
 
 
 
@@ -796,6 +867,8 @@ saveRDS(All_feature_data_logical, file = file.path(export_dir, "All_feature_data
 
 # Save All_feature_data as a text file with tab-separated values
 write.table(All_feature_data_logical, file = file.path(export_dir, "All_feature_data_Sep2025_updated2.txt"), sep = "\t", row.names = TRUE, quote = FALSE)
+message("Active integrated WGS feature table written: ",
+        file.path(export_dir, "All_feature_data_Sep2025_updated2.rds"))
 
 
 ### Save the CNA_Translocation file 
@@ -807,3 +880,5 @@ saveRDS(CNA_translocation, file = file.path(export_dir, "CNA_translocation_Sep20
 # Save All_feature_data as a text file with tab-separated values
 write.table(CNA_translocation, file = file.path(export_dir, "CNA_translocation_Sep2025_updated2.txt"), sep = "\t", row.names = TRUE, quote = FALSE)
 #write.table(CNA_translocation, file = file.path(export_dir, "CNA_translocation_June2025.txt"), sep = "\t", row.names = TRUE, quote = FALSE)
+message("Active CNA/translocation helper written: ",
+        file.path(export_dir, "CNA_translocation_Sep2025_updated2.rds"))

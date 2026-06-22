@@ -19,6 +19,27 @@
 #   - None directly. This upstream script identifies additional eligible
 #     samples and timepoint classes that feed later manuscript-output scripts.
 #
+# Pipeline role:
+#   This script is an upstream cohort-expansion and sample-classification step.
+#   Its outputs are review/operations tables for deciding which new samples can
+#   enter the test cohort. They are not copied into `final_manuscript_objects/`
+#   because no final manuscript panel or table is currently mapped to this
+#   script.
+#
+# Outputs:
+#   Primary cohort-expansion review tables:
+#   - Output_tables_2025/cohort_expansion/eligible_samples_ANY_MRD.csv
+#   - Output_tables_2025/cohort_expansion/eligible_samples_BLOOD_MRD_ONLY.csv
+#   - Output_tables_2025/cohort_expansion/blood_MRD_multi_timepoint_expansion_targets.csv
+#
+#   Support/QC tables:
+#   - Output_tables_2025/cohort_expansion/support_qc/unmatched_event_comments.csv
+#   - Output_tables_2025/cohort_expansion/support_qc/unmatched_event_comments.rds
+#   - Output_tables_2025/cohort_expansion/support_qc/complete_sample_inventory_with_patient_IDs.csv
+#   - Output_tables_2025/cohort_expansion/support_qc/patient_sample_summary.csv
+#   - Output_tables_2025/cohort_expansion/support_qc/removed_duplicate_samples.csv
+#   - Output_tables_2025/cohort_expansion/support_qc/blood_MRD_patient_analysis.csv
+#
 # Author: Dory Abelman
 # Date: 2026-02-05
 # Pipeline status:
@@ -35,6 +56,11 @@ suppressPackageStartupMessages({
   library(stringr)   # for string operations
   library(tidyr)     # for data tidying
 })
+
+cohort_expansion_dir <- file.path("Output_tables_2025", "cohort_expansion")
+cohort_expansion_support_dir <- file.path(cohort_expansion_dir, "support_qc")
+dir.create(cohort_expansion_dir, recursive = TRUE, showWarnings = FALSE)
+dir.create(cohort_expansion_support_dir, recursive = TRUE, showWarnings = FALSE)
 
 # ------------------------------------------------------------------------------
 # ## 0. Link sample inventory records to patient IDs
@@ -121,22 +147,29 @@ if (n_unmatched > 0) {
   # Export unmatched Event Comment values as a CSV and an RDS list
   unmatched_event_list <- unmatched_events$Event_Comment_clean
 
+  unmatched_events_csv <- file.path(cohort_expansion_support_dir, "unmatched_event_comments.csv")
+  unmatched_events_rds <- file.path(cohort_expansion_support_dir, "unmatched_event_comments.rds")
+
   # CSV with counts
-  write.csv(as.data.frame(unmatched_events), file = "unmatched_event_comments.csv", row.names = FALSE)
+  write.csv(as.data.frame(unmatched_events), file = unmatched_events_csv, row.names = FALSE)
 
   # RDS containing character vector of unmatched Event Comment strings
-  saveRDS(unmatched_event_list, file = "unmatched_event_comments.rds")
+  saveRDS(unmatched_event_list, file = unmatched_events_rds)
 
-  cat("✓ Exported unmatched Event Comments to 'unmatched_event_comments.csv' and 'unmatched_event_comments.rds'\n\n")
+  cat("✓ Exported unmatched Event Comments to:\n  - ", unmatched_events_csv, "\n  - ", unmatched_events_rds, "\n\n", sep = "")
 }
 
 # Export the complete sample inventory with patient IDs
+sample_inventory_with_ids_path <- file.path(
+  cohort_expansion_support_dir,
+  "complete_sample_inventory_with_patient_IDs.csv"
+)
 write.csv(
   sample_inventory_with_ids,
-  file = "complete_sample_inventory_with_patient_IDs.csv",
+  file = sample_inventory_with_ids_path,
   row.names = FALSE
 )
-cat("✓ Complete sample inventory written to 'complete_sample_inventory_with_patient_IDs.csv'\n\n")
+cat("✓ Complete sample inventory written to ", sample_inventory_with_ids_path, "\n\n", sep = "")
 
 # Create summary table by patient
 patient_sample_summary <- sample_inventory_with_ids %>%
@@ -149,12 +182,13 @@ patient_sample_summary <- sample_inventory_with_ids %>%
     .groups = 'drop'
   )
 
+patient_sample_summary_path <- file.path(cohort_expansion_support_dir, "patient_sample_summary.csv")
 write.csv(
   patient_sample_summary,
-  file = "patient_sample_summary.csv",
+  file = patient_sample_summary_path,
   row.names = FALSE
 )
-cat("✓ Patient sample summary written to 'patient_sample_summary.csv'\n")
+cat("✓ Patient sample summary written to ", patient_sample_summary_path, "\n", sep = "")
 cat("  Total patients with samples:", nrow(patient_sample_summary), "\n\n")
 
 cat("========== ID MAPPING AND INVENTORY COMPLETE ==========\n\n")
@@ -317,9 +351,10 @@ duplicates <- samples_combined %>%
 
 if (nrow(duplicates) > 0) {
   cat("⚠️  Found", nrow(duplicates), "duplicate samples (same patient, date, type)\n")
-  cat("   Removing duplicates and keeping first occurrence. Review 'removed_duplicate_samples.csv' for details.\n\n")
+  duplicate_samples_path <- file.path(cohort_expansion_support_dir, "removed_duplicate_samples.csv")
+  cat("   Removing duplicates and keeping first occurrence. Review ", duplicate_samples_path, " for details.\n\n", sep = "")
   
-  write.csv(duplicates, file = "removed_duplicate_samples.csv", row.names = FALSE)
+  write.csv(duplicates, file = duplicate_samples_path, row.names = FALSE)
   
   # Remove duplicates by keeping only first occurrence
   samples_combined <- samples_combined %>%
@@ -626,9 +661,10 @@ blood_mrd_analysis <- samples_final %>%
 blood_mrd_eligible <- blood_mrd_analysis %>% filter(is_eligible)
 blood_mrd_ineligible <- blood_mrd_analysis %>% filter(!is_eligible)
 
-# Output both to CSV
-write.csv(blood_mrd_analysis, file = "blood_MRD_patient_analysis.csv", row.names = FALSE)
-cat("✓ Full blood MRD analysis written to 'blood_MRD_patient_analysis.csv'\n\n")
+# Output full blood-MRD diagnostic table to support/QC.
+blood_mrd_analysis_path <- file.path(cohort_expansion_support_dir, "blood_MRD_patient_analysis.csv")
+write.csv(blood_mrd_analysis, file = blood_mrd_analysis_path, row.names = FALSE)
+cat("✓ Full blood MRD analysis written to ", blood_mrd_analysis_path, "\n\n", sep = "")
 
 cat("========== BLOOD MRD PATIENTS: ELIGIBLE ==========\n")
 cat("Count:", nrow(blood_mrd_eligible), "\n\n")
@@ -718,8 +754,9 @@ final_output_any_mrd <- eligible_samples_any_mrd %>%
     progressed
   )
 
-write.csv(final_output_any_mrd, file = "eligible_samples_ANY_MRD.csv", row.names = FALSE)
-cat("✓ Results written to 'eligible_samples_ANY_MRD.csv'\n")
+eligible_any_mrd_path <- file.path(cohort_expansion_dir, "eligible_samples_ANY_MRD.csv")
+write.csv(final_output_any_mrd, file = eligible_any_mrd_path, row.names = FALSE)
+cat("✓ Results written to ", eligible_any_mrd_path, "\n", sep = "")
 
 # Cohort 2: Blood MRD only
 final_output_mrd_blood <- eligible_samples_mrd_blood_only %>%
@@ -737,8 +774,9 @@ final_output_mrd_blood <- eligible_samples_mrd_blood_only %>%
     progressed
   )
 
-write.csv(final_output_mrd_blood, file = "eligible_samples_BLOOD_MRD_ONLY.csv", row.names = FALSE)
-cat("✓ Results written to 'eligible_samples_BLOOD_MRD_ONLY.csv'\n\n")
+eligible_blood_mrd_path <- file.path(cohort_expansion_dir, "eligible_samples_BLOOD_MRD_ONLY.csv")
+write.csv(final_output_mrd_blood, file = eligible_blood_mrd_path, row.names = FALSE)
+cat("✓ Results written to ", eligible_blood_mrd_path, "\n\n", sep = "")
 
 # ------------------------------------------------------------------------------
 # ## 10. Print cohort summary and expansion opportunities
@@ -816,7 +854,7 @@ if (nrow(blood_mrd_ineligible) > 0) {
     cat(sprintf("- %d patients with blood MRD AND multiple sample timepoints (but no baseline)\n", multi_tp_count))
     cat("  These patients have additional samples at other timepoints beyond baseline/MRD,\n")
     cat("  suggesting rich longitudinal data that could be valuable if baseline samples are obtained.\n")
-    cat("  See 'blood_MRD_multi_timepoint_expansion_targets.csv' for details.\n\n")
+    cat("  See ", file.path(cohort_expansion_dir, "blood_MRD_multi_timepoint_expansion_targets.csv"), " for details.\n\n", sep = "")
   }
   
   cat("RECOMMENDATIONS:\n")
@@ -825,7 +863,7 @@ if (nrow(blood_mrd_ineligible) > 0) {
     cat("2. Give priority to the ", multi_tp_count, " multi-timepoint patients (IDs: ",
         paste(multi_timepoint_patients, collapse = ", "), ")\n")
   }
-  cat("3. Review blood_MRD_patient_analysis.csv for complete diagnostic information\n\n")
+  cat("3. Review ", blood_mrd_analysis_path, " for complete diagnostic information\n\n", sep = "")
 }
 
 
@@ -841,8 +879,9 @@ if (length(multi_timepoint_patients) > 0) {
     arrange(PATIENT_ID, sample_date)
   
   # Export to CSV
-  write.csv(multi_timepoint_details, file = "blood_MRD_multi_timepoint_expansion_targets.csv", row.names = FALSE)
-  cat("✓ Detailed sample info written to 'blood_MRD_multi_timepoint_expansion_targets.csv'\n\n")
+  multi_timepoint_targets_path <- file.path(cohort_expansion_dir, "blood_MRD_multi_timepoint_expansion_targets.csv")
+  write.csv(multi_timepoint_details, file = multi_timepoint_targets_path, row.names = FALSE)
+  cat("✓ Detailed sample info written to ", multi_timepoint_targets_path, "\n\n", sep = "")
   
   # Display in console
   cat("Sample details by patient:\n\n")

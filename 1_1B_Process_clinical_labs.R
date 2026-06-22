@@ -1,10 +1,12 @@
 # ==============================================================================
 # 1_1B_Process_clinical_labs.R
 #
-# Purpose:
-#   Compile and clean laboratory measurements (CBC, serum immunofixation,
-#   staging markers) for patients in the M4 cohort. Produces a master clinical
-#   labs table that feeds into the demographics summary (script 2_1).
+# Script purpose:
+#   Compile and clean laboratory measurements, staging markers, demographic
+#   fields, and FISH/cytogenetic annotations across M4, SPORE, and IMMAGINE.
+#   The output is an active upstream clinical table used by
+#   2_0_Assemble_Table_With_All_Features.R and, downstream of that, Table 1 and
+#   clinical-feature summaries.
 #
 # Inputs:
 #   • "M4_COHORT_DEMO.xlsx"               - patient demographics
@@ -13,8 +15,10 @@
 #   • "M4_COHORT_STAGING.xlsx"             - ISS/R-ISS staging
 #   (all under M4_CMRG_Data/)
 #
-# Outputs:
-#   • Master clinical labs table (used downstream in 2_1 demographics)
+# Active downstream output:
+#   • Clinical data/Master_clinical_data_table_all_projects_May2025_updated2.csv
+#     This is not a final manuscript table. It is an intermediate clinical
+#     helper table consumed by script 2_0.
 #
 # How to run:
 #   Rscript Scripts_2025/Final_Scripts/1_1B_Process_clinical_labs.R
@@ -28,8 +32,8 @@
 # ==============================================================================
 # Pipeline status:
 #   Active upstream dependency. This script does not directly create a named
-#   final manuscript figure/table, but downstream scripts depend on its cleaned
-#   outputs for figure, table, or model generation.
+#   final manuscript figure/table. It creates the cross-cohort clinical/lab
+#   helper table consumed by 2_0, which then feeds manuscript figures/tables.
 #
 
 # Load only the packages actually used below
@@ -40,13 +44,35 @@ library(fuzzyjoin)   # fuzzy / date-slack joins
 library(data.table)  # fast grouping & reshaping
 library(tidyverse)
 
+ensure_exists <- function(path, producer = NULL) {
+  if (file.exists(path)) return(invisible(path))
+  msg <- paste0("Missing required input file: ", path)
+  if (!is.null(producer)) msg <- paste0(msg, ". Run ", producer, " first.")
+  stop(msg, call. = FALSE)
+}
+
 combined_clinical_data_path <- "combined_clinical_data_updated_April2025.csv"
-if (!file.exists(combined_clinical_data_path)) {
-  stop(
-    "Missing upstream clinical metadata file: ", combined_clinical_data_path,
-    ". Run 1_0_Process_clinical_metadata.R first.",
-    call. = FALSE
-  )
+input_files <- c(
+  combined_clinical_data_path,
+  "M4_CMRG_Data/M4_COHORT_DEMO.xlsx",
+  "M4_CMRG_Data/M4_COHORT_CHEMOTHERAPY.xlsx",
+  "M4_CMRG_Data/M4_COHORT_BONE_MARROW_BIOPSY.xlsx",
+  "M4_CMRG_Data/M4_COHORT_STAGING.xlsx",
+  "M4_CMRG_Data/M4_COHORT_LABS.xlsx",
+  "Clinical data/IMMAGINE/Clinical data for IMG patients at diagnosis_filled_DA_edited.xlsx",
+  "Clinical data/SPORE/Spore_baseline_clinical_demographics_DA_edited.xlsx",
+  "Clinical data/SPORE/Spore patient timeline clinical info sent to Toronto.xlsx",
+  "Clinical data/SPORE/tidy_fish.csv",
+  "Clinical data/Exported clinical data April 2025/IMMAGINE_fish_flags.csv"
+)
+purrr::walk(input_files, ensure_exists)
+message("All required clinical/lab inputs are present.")
+
+write_active_csv <- function(x, path) {
+  dir.create(dirname(path), recursive = TRUE, showWarnings = FALSE)
+  utils::write.csv(x, path, row.names = FALSE)
+  message("Active clinical/lab input written: ", path)
+  invisible(path)
 }
 
 combined_clinical_data_updated <- readr::read_csv(
@@ -1198,4 +1224,7 @@ clinical_filled <- clinical_filled %>%
 ### Final export: cross-cohort master clinical/lab table
 # Downstream scripts use this table for clinical demographics, baseline
 # covariates, cytogenetic/FISH comparisons, and clinical-feature summaries.
-write.csv(clinical_filled, "Clinical data/Master_clinical_data_table_all_projects_May2025_updated2.csv", row.names = FALSE)
+write_active_csv(
+  clinical_filled,
+  "Clinical data/Master_clinical_data_table_all_projects_May2025_updated2.csv"
+)

@@ -975,8 +975,15 @@ tibble(
   patients_without_bm  = n_patients_no_bm
 )
 
-## Get reason 
-failures <- read_csv("Table for creating sample flowchart updated3.csv")
+## Get reason
+# `1_6_Identify_High_Quality_Patient_Pairs.R` writes the Figure 1B source
+# table to Final Tables and Figures/. Keep a legacy root-file fallback for older
+# local runs, but the organized path is the pipeline source going forward.
+fig1b_source_table <- file.path("Final Tables and Figures", "Table for creating sample flowchart updated3.csv")
+if (!file.exists(fig1b_source_table)) {
+  fig1b_source_table <- "Table for creating sample flowchart updated3.csv"
+}
+failures <- read_csv(fig1b_source_table)
 no_bm <- left_join(no_bm)
 
 patients_no_bm <- no_bm %>%

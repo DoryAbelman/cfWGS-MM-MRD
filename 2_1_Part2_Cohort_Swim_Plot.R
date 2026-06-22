@@ -54,6 +54,11 @@ library(patchwork)
 library(forcats)
 library(purrr)
 
+# Support-only review outputs from this script are written here so that the
+# project root stays clean and manuscript outputs remain easy to identify.
+swim_support_dir <- file.path("Final Tables and Figures", "swim_plot_support")
+dir.create(swim_support_dir, recursive = TRUE, showWarnings = FALSE)
+
 # Shared helper for final manuscript-organized outputs.
 # This keeps the scientific code in this script, while also copying the final
 # figure/table components into Scripts_2025/Final_Scripts/final_manuscript_objects
@@ -129,7 +134,11 @@ m4_chemo <- m4_raw %>%
   )
 
 m4_chemo <- m4_chemo %>% filter(!is.na(start))
-write.csv(m4_chemo %>% filter(patient %in% cohort_df$Patient) %>% filter(is.na(end)), "m4_chemo.csv")
+write.csv(
+  m4_chemo %>% filter(patient %in% cohort_df$Patient) %>% filter(is.na(end)),
+  file.path(swim_support_dir, "m4_chemo_missing_end_dates.csv"),
+  row.names = FALSE
+)
 
 ### Add transplant info for M4 
 # Read the raw sheet
@@ -641,23 +650,27 @@ write_csv(all_events_updated,
           "Final Tables and Figures/Supp_Table_1_all_events_for_swim_plot_combined_updated_with_new_patient_ID.csv")
 
 
-## Export for Esteban to get more info 
+# Support-only export for collaborator review of SPORE chemotherapy dates.
+# This file is not copied to final_manuscript_objects/ and is not required for
+# Figure 1A or Supplementary Table 1 regeneration.
 spore_chemo_events <- all_events %>%
   filter(event == "Chemotherapy", grepl("^SPORE", patient)) %>% 
   mutate(end = NA) %>% 
   filter(details != "ASCT")
 
 # Export to CSV
-write_csv(spore_chemo_events, "spore_chemo_events.csv")
+write_csv(spore_chemo_events, file.path(swim_support_dir, "spore_chemo_events.csv"))
 
-## Export for Esteban to get more info 
+# Support-only export for collaborator review of all SPORE timeline events.
+# This file is not copied to final_manuscript_objects/ and is not required for
+# Figure 1A or Supplementary Table 1 regeneration.
 spore_all_events <- all_events %>%
   filter(grepl("^SPORE", patient)) %>% 
   mutate(end = NA) %>% 
   filter(details != "ASCT")
 
 # Export to CSV
-write_csv(spore_all_events, "spore_all_events.csv")
+write_csv(spore_all_events, file.path(swim_support_dir, "spore_all_events.csv"))
 
 
  #### Now assemble plot 
@@ -1386,19 +1399,18 @@ combined_plot <- p_front / p_non +
     )
   )
 
-ggsave("swimplot_by_cohort_v5.pdf", combined_plot,
+ggsave(file.path(swim_support_dir, "swimplot_by_cohort_v5.pdf"), combined_plot,
        width = 12, height = 10, device = cairo_pdf)
 
-ggsave("swimplot_by_cohort_v5.png", combined_plot,
+ggsave(file.path(swim_support_dir, "swimplot_by_cohort_v5.png"), combined_plot,
        width = 12, height = 10, dpi = 300)
 
 
 
-## Seperately 
-# Export the front-line cohort plot
-# Export the non-front-line cohort plot
+## Separate cohort-level review plots.
+# These are useful QA views but are not the final Figure 1A component.
 ggsave(
-  filename = "swimplot_nonfrontline_cohort_updated.png",
+  filename = file.path(swim_support_dir, "swimplot_nonfrontline_cohort_updated.png"),
   plot     = p_non,
   width    = 10,
   height   = 2,
@@ -1406,7 +1418,7 @@ ggsave(
 )
 
 ggsave(
-  filename = "swimplot_frontline_cohort_updated.png",
+  filename = file.path(swim_support_dir, "swimplot_frontline_cohort_updated.png"),
   plot     = p_front,
   width    = 10,
   height   = 10,
@@ -1499,9 +1511,9 @@ p_combined <- p_combined +
 
 # D) Display / Save
 print(p_combined)
-ggsave("swimplot_combined_cohorts_v3.png", p_combined,
+ggsave(file.path(swim_support_dir, "swimplot_combined_cohorts_v3.png"), p_combined,
        width = 10, height = 12, dpi = 500)
-ggsave("swimplot_combined_cohorts_wide_v3.png", p_combined,
+ggsave(file.path(swim_support_dir, "swimplot_combined_cohorts_wide_v3.png"), p_combined,
        width = 16, height = 12, dpi = 500)
 
 
@@ -2432,7 +2444,7 @@ p_swim <- p_swim +
     breaks = NULL    # no ticks or labels
   )
 
-ggsave("Final Tables and Figures/Test_swim3.png",
+ggsave(file.path(swim_support_dir, "Figure1A_draft_swim_plot_without_annotations.png"),
        p_swim,
        width  = 15,
        height = 10,
@@ -2934,11 +2946,11 @@ if (requireNamespace("cowplot", quietly = TRUE)) {
   grid::grid.draw(full_legend)
   
   # Save standalone legend helpers.
-  ggsave("swimplot_full_legend.png", full_legend,
+  ggsave(file.path(swim_support_dir, "swimplot_full_legend.png"), full_legend,
          width = 14, height = 2, dpi = 500)
-  ggsave("full_swimplot_legend.pdf", full_legend,
+  ggsave(file.path(swim_support_dir, "full_swimplot_legend.pdf"), full_legend,
          width = 8, height = 2, device = cairo_pdf)
-  ggsave("full_swimplot_legend.png", full_legend,
+  ggsave(file.path(swim_support_dir, "full_swimplot_legend.png"), full_legend,
          width = 8, height = 2, dpi = 300)
 } else {
   message("Skipping optional standalone swim-plot legend export because cowplot is not installed.")

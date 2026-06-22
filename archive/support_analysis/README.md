@@ -20,7 +20,13 @@ Routine manuscript regeneration uses:
 
 Keep this script only if tumor-naive support/sensitivity review is needed. It
 should not be required for reviewers to regenerate the manuscript figures and
-tables.
+tables. If run manually, it writes only to `Output_figures_2025/tumor_naive_support/`
+and `Output_tables_2025/tumor_naive_support/`, not to
+`final_manuscript_objects/`.
+
+Older duplicate copies of the pre-rerun `3_3` code are treated as local-only
+legacy material and are ignored by Git. The copy in this `support_analysis/`
+folder is the documented optional support version.
 
 ## `4_3_cfWGS_vs_EasyM_Proteomic_MRD_Comparison.R`
 

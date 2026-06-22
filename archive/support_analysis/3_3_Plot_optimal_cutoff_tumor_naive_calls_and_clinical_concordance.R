@@ -17,8 +17,8 @@
 #   cfWGS strategy. It intentionally does not copy files into
 #   final_manuscript_objects/ because docs/manuscript_artifact_source_map.tsv
 #   does not currently assign any final manuscript panel or table to this
-#   script. Outputs are written to clearly labeled support folders under
-#   Output_figures_2025/ and Output_tables_2025/ for review.
+#   script. Optional outputs are written to tumor_naive_support folders so they
+#   cannot be mistaken for active manuscript exports.
 #
 # Author:   Dory Abelman
 # Date:     May 2025
@@ -45,18 +45,18 @@
 #
 # Outputs:
 #   Primary support figures:
-#     - Output_figures_2025/Fig_PB_cfDNA_positivity_by_tech_updated.png
-#     - Output_figures_2025/Fig_PB_cfDNA_positivity_by_tech_later_line.png
+#     - Output_figures_2025/tumor_naive_support/Fig_PB_cfDNA_positivity_by_tech_updated.png
+#     - Output_figures_2025/tumor_naive_support/Fig_PB_cfDNA_positivity_by_tech_later_line.png
 #
 #   Tumor-naive exploratory support figures:
 #     - Output_figures_2025/tumor_naive_support/FigX_*.png
 #
 #   Support tables:
-#     - Output_tables_2025/Positivity_by_Landmark_TimePoint_PB_cfDNA_Frontline_updated.csv
-#     - Output_tables_2025/Positivity_All_TimePoints_PB_cfDNA_NonFrontline_updated.csv
-#     - Output_tables_2025/Frontline_PB_cfDNA_*_Concordance.csv
-#     - Output_tables_2025/Frontline_PB_cfDNA_*_PPV_NPV.csv
-#     - Output_tables_2025/Tumor_naive_discordance_tables/*.csv
+#     - Output_tables_2025/tumor_naive_support/Positivity_by_Landmark_TimePoint_PB_cfDNA_Frontline_updated.csv
+#     - Output_tables_2025/tumor_naive_support/Positivity_All_TimePoints_PB_cfDNA_NonFrontline_updated.csv
+#     - Output_tables_2025/tumor_naive_support/Frontline_PB_cfDNA_*_Concordance.csv
+#     - Output_tables_2025/tumor_naive_support/Frontline_PB_cfDNA_*_PPV_NPV.csv
+#     - Output_tables_2025/tumor_naive_support/discordance_tables/*.csv
 #
 # Dependencies:
 #   dplyr, tidyr, ggplot2, pROC, patchwork, janitor, gt, glue,
@@ -93,8 +93,10 @@ library(purrr)    # functional iteration over model/list columns
 # -------- 1.  Read processed data & thresholds ------------------------------
 outdir   <- "Output_tables_2025"
 OUTPUT_DIR_FIGURES    <- "Output_figures_2025"
+SUPPORT_TABLE_DIR <- file.path(outdir, "tumor_naive_support")
 SUPPORT_FIGURE_DIR <- file.path(OUTPUT_DIR_FIGURES, "tumor_naive_support")
 dir.create(outdir, recursive = TRUE, showWarnings = FALSE)
+dir.create(SUPPORT_TABLE_DIR, recursive = TRUE, showWarnings = FALSE)
 dir.create(OUTPUT_DIR_FIGURES, recursive = TRUE, showWarnings = FALSE)
 dir.create(SUPPORT_FIGURE_DIR, recursive = TRUE, showWarnings = FALSE)
 local_sass_cache <- file.path(outdir, ".sass-cache")
@@ -116,7 +118,7 @@ selected_thr    <- readRDS(PATH_THRESHOLD_LIST)
 write_support_csv <- function(x, filename) {
   # Keep historical support-table filenames stable while making each export
   # visibly intentional in the command-line log.
-  path <- file.path(outdir, filename)
+  path <- file.path(SUPPORT_TABLE_DIR, filename)
   readr::write_csv(x, path)
   message("Support table written: ", path)
   invisible(path)
@@ -130,7 +132,7 @@ write_support_csv_path <- function(x, path) {
   invisible(path)
 }
 
-save_support_plot <- function(plot, filename, width, height, dpi = 500, dir = OUTPUT_DIR_FIGURES) {
+save_support_plot <- function(plot, filename, width, height, dpi = 500, dir = SUPPORT_FIGURE_DIR) {
   # All non-final support plots are written into explicit output folders rather
   # than the project root, so Code Ocean/GitHub users can find generated review
   # artifacts without hunting through the working directory.
@@ -980,7 +982,7 @@ aux_cols  <- c("Adaptive_Frequency",              # clonoSEQ cumulative VAF (ren
 
 # Discordance review tables are helper outputs used to audit which clinical
 # comparator results are captured or missed by the tumor-naive cfWGS calls.
-outdir_discordances <- file.path(outdir, "Tumor_naive_discordance_tables")
+outdir_discordances <- file.path(SUPPORT_TABLE_DIR, "discordance_tables")
 dir.create(outdir_discordances, recursive = TRUE, showWarnings = FALSE)
 
 # Make sure they exist
@@ -1482,19 +1484,19 @@ gt_bl_a  <- make_gt_cm(tbl_bl_acc,"Blood acc-priority call")
 # 2.  Save each table on its own ---------------------------------------------
 save_gt_table(
   data = gt_bm,
-  filename = file.path(outdir, "tbl_BM_zscore_only_contingency.png"),
+  filename = file.path(SUPPORT_TABLE_DIR, "tbl_BM_zscore_only_contingency.png"),
   zoom = 8
 )
 
 save_gt_table(
   data = gt_bl_s,
-  filename = file.path(outdir, "tbl_Blood_sens_priority_contingency.png"),
+  filename = file.path(SUPPORT_TABLE_DIR, "tbl_Blood_sens_priority_contingency.png"),
   zoom = 8
 )
 
 save_gt_table(
   data = gt_bl_a,
-  filename = file.path(outdir, "tbl_Blood_acc_priority_contingency.png"),
+  filename = file.path(SUPPORT_TABLE_DIR, "tbl_Blood_acc_priority_contingency.png"),
   zoom = 8
 )
 

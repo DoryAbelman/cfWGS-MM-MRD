@@ -1487,7 +1487,7 @@ p2 <- ggplot(dat_base, aes(BM_Mutation_Count, Blood_Mutation_Count, color = coho
     legend.position = "none"
   )
 
-ggsave("Figure2B_scatter_BM_vs_cfDNA.png", p2, width = 4, height = 4, dpi = 500)
+ggsave(file.path(outdir, "Figure2B_scatter_BM_vs_cfDNA.png"), p2, width = 4, height = 4, dpi = 500)
 
 
 # Extended Data Figure 2 support - cfDNA mutation count vs ichorCNA tumour fraction.
@@ -1518,7 +1518,7 @@ p3 <- ggplot(dat_base,
     legend.position = "none"
   )
 
-ggsave("Figure2C_scatter_tf.png", p3, width = 4, height = 4, dpi = 500)
+ggsave(file.path(outdir, "Figure2C_scatter_tf.png"), p3, width = 4, height = 4, dpi = 500)
 
 
 # Extended Data Figure 2 support - cfDNA mutation count vs fragment-size score (FS).
@@ -1548,7 +1548,7 @@ p4 <- ggplot(dat_base,
     legend.position = "none"
   )
 
-ggsave("Figure2D_scatter_FS.png", p4, width = 4, height = 4, dpi = 500)
+ggsave(file.path(outdir, "Figure2D_scatter_FS.png"), p4, width = 4, height = 4, dpi = 500)
 
 
 # Extended Data Figure 2 support - cfDNA mutation count vs serum albumin.
@@ -1578,7 +1578,7 @@ p5 <- ggplot(dat_base,
     legend.position = "none"
   )
 
-ggsave("Figure2E_scatter_albumin.png", p5, width = 4, height = 4, dpi = 500)
+ggsave(file.path(outdir, "Figure2E_scatter_albumin.png"), p5, width = 4, height = 4, dpi = 500)
 
 
 ## Combine  

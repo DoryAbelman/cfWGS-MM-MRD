@@ -24,12 +24,14 @@
 #      baseline (Diagnosis/Baseline) and progression (Progression/Relapse) BM or cfDNA samples.
 #   3. Build a patient‐level summary of sample availability, quality flags, study membership, and eligibility
 #      for MRDetect (requires ≥2 cfDNA timepoints or ≥1 BM timepoint).
-#   4. Export:
-#       • Filtered_TFRIM4_Processing_Log.csv
-#       • summary_table_of_samples_and_patient_availability_cfWGS.txt
-#       • high_quality_patients_list_for_baseline_mut_calling.{csv,rds}
-#       • patient_cohort_assignment.{csv,rds}
-#   5. Print console summaries of overall counts and per-study breakdowns.
+#   4. Export the Figure 1B source table to `Final Tables and Figures/`, and
+#      copy the same source table into the manuscript-labeled
+#      `final_manuscript_objects/Figure_1B/` folder.
+#   5. Export reusable pipeline intermediates for downstream mutation calling
+#      and cohort assignment under `Output_tables_2025/`.
+#   6. Export support-only sample-processing QC under
+#      `Output_tables_2025/sample_qc_support/`.
+#   7. Print console summaries of overall counts and per-study breakdowns.
 #
 # Dependencies:
 #   • readxl, dplyr, readr, stringr, glue
@@ -41,13 +43,19 @@
 #   • Jan2025_exported_data/All_feature_data_August2025.rds
 #   • summary_table_of_samples_and_patient_availability_cfWGS - for making the flow chart of samples.xlsx
 #
-# Output Files (written to working directory or “Output_tables_2025”):
-#   • Filtered_TFRIM4_Processing_Log.csv
-#   • summary_table_of_samples_and_patient_availability_cfWGS.txt
-#   • high_quality_patients_list_for_baseline_mut_calling.csv
-#   • high_quality_patients_list_for_baseline_mut_calling.rds
-#   • patient_cohort_assignment.csv
-#   • patient_cohort_assignment.rds
+# Output Files:
+#   Manuscript-facing:
+#   - Final Tables and Figures/Table for creating sample flowchart updated3.csv
+#     (Figure 1B source table copied into final_manuscript_objects/)
+#
+#   Pipeline intermediates:
+#   - Output_tables_2025/high_quality_patients_list_for_baseline_mut_calling2.csv
+#   - Output_tables_2025/high_quality_patients_list_for_baseline_mut_calling2.rds
+#   - Output_tables_2025/patient_cohort_assignment.csv
+#   - Output_tables_2025/patient_cohort_assignment.rds
+#
+#   Support-only QC:
+#   - Output_tables_2025/sample_qc_support/Filtered_TFRIM4_Processing_Log.csv
 #
 # Usage:
 #   Rscript 1_6_Identify_High_Quality_Patient_Pairs.R
@@ -84,16 +92,20 @@ clinical_csv_path   <- "combined_clinical_data_updated_April2025.csv"
 features_rds_path   <- "Jan2025_exported_data/All_feature_data_August2025.rds"
 failed_info_path    <- "summary_table_of_samples_and_patient_availability_cfWGS - for making the flow chart of samples.xlsx"
 export_dir          <- "Output_tables_2025"
+final_tables_dir    <- "Final Tables and Figures"
+support_dir         <- file.path(export_dir, "sample_qc_support")
 
 if (!dir.exists(export_dir)) dir.create(export_dir, recursive = TRUE)
+if (!dir.exists(final_tables_dir)) dir.create(final_tables_dir, recursive = TRUE)
+if (!dir.exists(support_dir)) dir.create(support_dir, recursive = TRUE)
 
 # ──────────────────────────────────────────────────────────────────────────────
 # 2. CLEAN PROCESSING LOG
 # ──────────────────────────────────────────────────────────────────────────────
 
 # 2.1 Read raw files
-bm_data  <- read_excel(bm_list_path)
-log_data <- read_excel(processing_log_path, sheet = 6)
+bm_data  <- read_excel(bm_list_path, .name_repair = "unique_quiet")
+log_data <- read_excel(processing_log_path, sheet = 6, .name_repair = "unique_quiet")
 
 # 2.2 Tag “sent to OICR” if any column mentions “OICR|30X|40X”
 log_data <- log_data %>%
@@ -134,7 +146,7 @@ filtered_log <- log_data %>%
         `Amount of DNA remaining post-library prep (ng)`,
         `Total Library Yield (ng)`
       ),
-      as.numeric
+      ~ suppressWarnings(as.numeric(.x))
     )
   ) %>%
   mutate(
@@ -152,8 +164,9 @@ filtered_log <- log_data %>%
     )
   )
 
-write_csv(filtered_log, "Filtered_TFRIM4_Processing_Log.csv")
-message("Saved → Filtered_TFRIM4_Processing_Log.csv")
+filtered_log_path <- file.path(support_dir, "Filtered_TFRIM4_Processing_Log.csv")
+write_csv(filtered_log, filtered_log_path)
+message("Saved support QC table -> ", filtered_log_path)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -184,7 +197,7 @@ max_flag_or_na <- function(x) {
 # 4. LOAD CLINICAL & FEATURE DATA
 # ──────────────────────────────────────────────────────────────────────────────
 
-combined_clinical <- read_csv(clinical_csv_path)
+combined_clinical <- read_csv(clinical_csv_path, show_col_types = FALSE)
 All_feature_data   <- readRDS(features_rds_path)
 
 all_patients <- combined_clinical %>% distinct(Patient) %>% pull(Patient)
@@ -298,9 +311,11 @@ high_quality_patients <- summary_table %>%
   filter(High_quality_baseline == 1) %>%
   pull(Patient)
 
-write_csv(tibble(Patient = high_quality_patients), "high_quality_patients_list_for_baseline_mut_calling2.csv")
-saveRDS(high_quality_patients,   "high_quality_patients_list_for_baseline_mut_calling2.rds")
-message("Saved → high_quality_patients_list_for_baseline_mut_calling.{csv,rds}")
+high_quality_csv <- file.path(export_dir, "high_quality_patients_list_for_baseline_mut_calling2.csv")
+high_quality_rds <- file.path(export_dir, "high_quality_patients_list_for_baseline_mut_calling2.rds")
+write_csv(tibble(Patient = high_quality_patients), high_quality_csv)
+saveRDS(high_quality_patients, high_quality_rds)
+message("Saved high-quality mutation patient list -> ", high_quality_csv, " and ", high_quality_rds)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -326,7 +341,7 @@ print(study_counts); cat("\n")
 
 
 # 6.2 Combined high-quality summary (baseline ∪ progression ∪ failure)
-failed_flags <- read_excel(failed_info_path) %>%
+failed_flags <- read_excel(failed_info_path, .name_repair = "unique_quiet") %>%
   rename(
     BM_status    = `BM Status`,
     cfDNA_status = `cfDNA Status`
@@ -407,7 +422,7 @@ print(study_totals); cat("\n")
 # 7. COHORT ASSIGNMENT FOR BASELINE PASSING SAMPLES
 # ──────────────────────────────────────────────────────────────────────────────
 
-failed_info <- read_excel(failed_info_path) %>%
+failed_info <- read_excel(failed_info_path, .name_repair = "unique_quiet") %>%
   rename(
     BM_status    = `BM Status`,
     cfDNA_status = `cfDNA Status`
@@ -457,21 +472,25 @@ patient_cohort <- failed_info %>%
 
 write_csv(patient_cohort, file.path(export_dir, "patient_cohort_assignment.csv"))
 saveRDS(patient_cohort,   file.path(export_dir, "patient_cohort_assignment.rds"))
-message("Saved → patient_cohort_assignment.{csv,rds} in ", export_dir)
+message("Saved patient cohort assignment -> ", file.path(export_dir, "patient_cohort_assignment.{csv,rds}"))
 
 
 
-### Check to see the proportion with evidence of disease 
-cohort_df <- readRDS("cohort_assignment_table_updated.rds") ## after manual confirmation 
+# Analyst note:
+#   `cohort_assignment_table_updated.rds` is the reviewed cohort assignment used
+#   by the submitted analysis. The earlier `patient_cohort_assignment.rds` export
+#   above is retained as a reproducible pipeline intermediate, while this curated
+#   assignment is used to annotate the manuscript Figure 1B source table.
+cohort_df <- readRDS("cohort_assignment_table_updated.rds")
 
-## Add 
 failed_info <- failed_info %>% 
   left_join(cohort_df)
 
-# 1) Identify the cohort patients
+# Identify the cohort patients used as denominators for the disease-evidence
+# coverage summaries below.
 cohort_patients <- cohort_df %>% distinct(Patient)
 
-# 2) Which cohort patients have a “good” baseline BM sample?
+# Which cohort patients have a baseline BM sample with evidence of disease?
 bm_good_patients <- All_feature_data %>%
   filter(
     Sample_type == "BM_cells",
@@ -480,7 +499,7 @@ bm_good_patients <- All_feature_data %>%
   ) %>%
   distinct(Patient)
 
-# 3) Which cohort patients have a “good” baseline cfDNA sample?
+# Which cohort patients have a baseline cfDNA sample with evidence of disease?
 cfDNA_good_patients <- All_feature_data %>%
   filter(
     Sample_type == "Blood_plasma_cfDNA",
@@ -489,7 +508,7 @@ cfDNA_good_patients <- All_feature_data %>%
   ) %>%
   distinct(Patient)
 
-## Add 
+# Add sample-quality flags to the Figure 1B source table.
 failed_info <- failed_info %>%
   mutate(
     high_quality_BM    = as.integer(Patient %in% bm_good_patients$Patient),
@@ -504,7 +523,7 @@ failed_info <- failed_info %>%
     )
   )
 
-fig1b_source_table <- "Table for creating sample flowchart updated3.csv"
+fig1b_source_table <- file.path(final_tables_dir, "Table for creating sample flowchart updated3.csv")
 write.csv(failed_info, file = fig1b_source_table)
 
 # MANUSCRIPT OUTPUT: Figure 1B source table
@@ -520,7 +539,11 @@ ms_copy_artifact(
   script_name = "1_6_Identify_High_Quality_Patient_Pairs.R"
 )
 
-# 4) Calculate proportions
+# Support-only QA summary:
+#   These proportions are printed to the console so the analyst can confirm the
+#   fraction of cohort patients with disease-evaluable baseline BM/cfDNA samples.
+#   They are not copied to `final_manuscript_objects/` because no final
+#   manuscript figure or table is mapped to these summaries.
 prop_bm <- cohort_patients %>%
   mutate(has_good_BM = Patient %in% bm_good_patients$Patient) %>%
   summarise(
@@ -537,13 +560,11 @@ prop_cfDNA <- cohort_patients %>%
     prop_good_cfDNA = n_good / n_total
   )
 
-# 5) Print results
+# Print the overall disease-evaluable proportions.
 prop_bm
 prop_cfDNA
 
-## Get by cohort 
-
-# BM proportion by Cohort + Overall
+# BM proportion by cohort and overall.
 prop_bm_by_cohort <- failed_info %>%
   filter(BM_status == "Sequenced_pass") %>%
   group_by(Cohort) %>%
@@ -564,7 +585,7 @@ prop_bm_by_cohort <- failed_info %>%
       )
   )
 
-# cfDNA proportion by Cohort + Overall
+# cfDNA proportion by cohort and overall.
 prop_cfDNA_by_cohort <- failed_info %>%
   filter(cfDNA_status == "Sequenced_pass") %>%
   group_by(Cohort) %>%
@@ -585,7 +606,7 @@ prop_cfDNA_by_cohort <- failed_info %>%
       )
   )
 
-# View results
+# Print the cohort-stratified disease-evaluable proportions.
 prop_bm_by_cohort
 prop_cfDNA_by_cohort
 
