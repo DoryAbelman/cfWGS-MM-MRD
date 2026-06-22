@@ -1,12 +1,21 @@
 # ===============================================================================
 # Script: 2_4_Longitudinal_features_analysis.R
-# How to run:
-#   Rscript Scripts_2025/Final_Scripts/2_4_Longitudinal_features_analysis.R
+# ===============================================================================
+#
+# Script purpose:
+#   Generate the longitudinal cfWGS, cfDNA, and fragmentomics analyses used for
+#   Figure 2 and Extended Data Figures 3-4. The script preserves the original
+#   longitudinal plotting logic while adding explicit manuscript-output copies
+#   through `manuscript_output_helpers.R`.
 #
 # Manuscript outputs created/updated:
-#   - Figure 2A-D: longitudinal cfWGS/cfDNA response examples and cohort-level
-#     longitudinal feature summaries.
-#   - Extended Data Figure 3A-C: supplementary longitudinal trajectory panels.
+#   - Figure 2A: retained patient-level cVAF example components.
+#   - Figure 2B: standardized BM-informed longitudinal mutation trajectory.
+#   - Figure 2C: standardized cfDNA-informed longitudinal mutation trajectory.
+#   - Figure 2D: longitudinal fragmentomics trajectory panel.
+#   - Extended Data Figure 3A: raw BM-informed longitudinal trajectory panel.
+#   - Extended Data Figure 3B: raw cfDNA-informed longitudinal trajectory panel.
+#   - Extended Data Figure 3C: complementary longitudinal fragmentomics panel.
 #   - Extended Data Figure 4: longitudinal feature/biomarker correlation heatmap.
 #
 # Pipeline role:
@@ -16,22 +25,26 @@
 #   MRD values are not overinterpreted when the assay was not informative for
 #   that patient at baseline.
 #
-# Author: Dory Abelman
-# Date: 2025-06
-# Purpose:
-#   - Compute longitudinal MRD feature statistics and visualizations
-#   - Handles NA values and dynamic column presence
-#   - Identifies baseline and first follow-up samples using date logic
-#   - Summarizes cohort-level counts and paired feature changes
-#   - Generates publication-quality plots (violin/box, spaghetti, correlation)
-# Dependencies:
-#   tidyverse, lubridate, rstatix, patchwork, ggpubr, glue
-# Inputs:
-#   - Final_aggregate_table_cfWGS_features_with_clinical_and_demographics_updated5.rds
+# Key inputs:
+#   - Final_aggregate_table_cfWGS_features_with_clinical_and_demographics_updated9.rds
 #   - cohort_assignment_table_updated.rds
-# Outputs:
-#   - CSV tables in 'Output_tables_2025'
-#   - PDF figures: longitudinal pairs, spaghetti, correlation plots
+#   - baseline_high_quality_patients_updated.csv
+#   - Jan2025_exported_data/All_feature_data_Sep2025_updated2.rds
+#   - MRDetect_output_winter_2025/Processed_R_outputs/cfWGS_Winter2025All_MRDetect_with_Zscore_May2025.rds
+#   - id_map.rds
+#
+# Key outputs:
+#   - Historical plots/tables under Output_tables_2025/ and
+#     Final Tables and Figures/.
+#   - Manuscript-labeled copies under
+#     Scripts_2025/Final_Scripts/final_manuscript_objects/.
+#
+# How to run:
+#   Rscript Scripts_2025/Final_Scripts/2_4_Longitudinal_features_analysis.R
+#
+# Dependencies:
+#   tidyverse, lubridate, rstatix, patchwork, ggpubr, glue, GGally, scales,
+#   viridis
 # ===============================================================================
 # Pipeline status:
 #   Active in the command-line pipeline. This script creates or stages the
@@ -64,34 +77,33 @@ source(.manuscript_helper)
 rm(.manuscript_helper)
 
 ## ───── 1. Load data ──────────────────────────────────────────────────────────
-### Set paths 
+### Set paths
 outdir   <- "Output_tables_2025"
 if (!dir.exists(outdir)) dir.create(outdir, recursive = TRUE)
 
-### Load data 
+### Load data
 file <- readRDS("Final_aggregate_table_cfWGS_features_with_clinical_and_demographics_updated9.rds")
 cohort_df <- readRDS("cohort_assignment_table_updated.rds")
 
 dat <- file 
 
-## Load good patients 
+## Load baseline WGS-evidence table from 2_0.
 Good_pts <- read.csv("baseline_high_quality_patients_updated.csv",
-                    stringsAsFactors = FALSE) ## From 2_0 script
+                    stringsAsFactors = FALSE)
 
-# 1.  Join cohort_df and keep frontline only -------------------------------------
-dat <- dat %>%                # <‑‑ your master data
+## Join cohort assignments and keep the frontline/training cohort for the
+## longitudinal manuscript panels.
+dat <- dat %>%
   left_join(cohort_df, by = "Patient") 
 
-dat <- dat %>% mutate(Date = as.Date(Date))   # safety
+dat <- dat %>% mutate(Date = as.Date(Date))
 
-## Filter to baseline for simplicity and ones have data on  
 dat <- dat %>% filter(Cohort == "Frontline")
 
 dat <- dat %>%
   filter(!is.na(zscore_BM) | !is.na(zscore_blood) | !is.na(FS))
 
-## Set na the ones without evidence of disease? 
-# Load the RDS file and compute the good-patient sets
+## Load feature evidence from 1_5/2_0 and compute assay-informative patient sets.
 All_feature_data <- readRDS("Jan2025_exported_data/All_feature_data_Sep2025_updated2.rds")
 
 BM_good_pts <- Good_pts %>%
@@ -105,7 +117,6 @@ cfDNA_good_pts <- Good_pts %>%
   unique()
 
 
-# Filter dat to rows with evidence of disease
 # EVIDENCE-OF-DISEASE MASKING:
 # Patients without conclusive WGS evidence of disease at baseline may have
 # spurious "low" MRD readings because they lacked detectable disease to begin
@@ -2106,12 +2117,11 @@ ms_copy_artifact(
 
 #### Active longitudinal cfDNA and fragmentomics manuscript panels
 #
-# The historical comments below originally described this as testing/old code,
-# but this section is part of the active manuscript workflow. It generates the
-# cfDNA mutation and fragmentomics longitudinal panels that are mapped by
-# ms_copy_artifact() calls to Main Figure 2C and Extended Data Figure 3B-C.
-# Some filenames still contain older draft figure labels; the manuscript
-# artifact map and ms_copy_artifact() calls below are the authoritative labels.
+# This section generates the cfDNA mutation and fragmentomics longitudinal
+# panels mapped by `ms_copy_artifact()` to Figure 2C and Extended Data Figure
+# 3B-C. Some historical filenames still contain older draft labels; the
+# manuscript artifact map and `ms_copy_artifact()` calls below are the
+# authoritative final labels.
 
 ## Now work on blood muts
 # 1. Pivot to long form

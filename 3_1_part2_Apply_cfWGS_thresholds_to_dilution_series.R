@@ -1761,17 +1761,23 @@ write_csv(dilution_df, file.path(OUTPUT_DIR_TABLES, "Supp_Table_7_dilution_serie
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# REVIEWER RESPONSE  –  Healthy-control overlay for dilution-series figures
+# Pipeline update: healthy-control overlay for dilution-series figures
 # Date added: 2026-02-25
 #
-# Adds healthy-control points (gray) and median reference lines (dotted) to
-# the THREE feature panels (cVAF, cVAF Z-score, Prop. Sites Detected Z-score)
-# in both the BM and Blood combined figures.
+# This active manuscript-output block adds healthy-control points (gray) and
+# median reference lines (dotted) to the feature panels for cVAF, cVAF Z-score,
+# and prop. sites detected Z-score in both the BM and blood combined dilution
+# figures.
+#
 # Manuscript mapping:
-#   - BM mutation figure = Extended Data 5D (formerly Fig 4G)
-#   - Blood mutation figure = Extended Data 7D (formerly Fig 5G)
-# Model-probability panels are left unchanged.
-# New figures are saved with a "_withHealthy_20260225" suffix.
+#   - BM mutation figure: Extended Data Figure 5D (historical filename label:
+#     Fig 4G).
+#   - Blood mutation figure: Extended Data Figure 7D (historical filename label:
+#     Fig 5G).
+#
+# Model-probability panels are left unchanged. Figures with the healthy-control
+# overlay are saved with a "_withHealthy_20260225" suffix and copied into
+# final_manuscript_objects/ by the manuscript-output helper calls below.
 # ══════════════════════════════════════════════════════════════════════════════
 
 message("\n═══ Building dilution figures WITH healthy-control overlay ═══\n")

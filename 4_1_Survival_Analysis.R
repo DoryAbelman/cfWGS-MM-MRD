@@ -1626,6 +1626,349 @@ cat("  ✓ Saved blood-subset sensitivity barplot\n\n")
 #   non-frontline/test-cohort time-window analysis; that begins in the separate
 #   "Time-window prediction performance in Non-frontline cohort" section below.
 
+# Refactored landmark-summary helpers -------------------------------------------------
+#
+# The original working script calculated the same 24-month RFS, median RFS, Cox
+# HR, Spearman correlation, and power-diagnostic values separately for each
+# model/timepoint. These helpers keep the same calculations but centralize the
+# repeated mechanics so the active command-line path is easier to audit.
+
+fmt_nr_months <- function(x) {
+  ifelse(is.na(x) | is.infinite(x), "NR", round(x, 1))
+}
+
+safe_spearman <- function(x, y) {
+  ok <- stats::complete.cases(x, y)
+  if (sum(ok) < 3 || dplyr::n_distinct(x[ok]) < 2 || dplyr::n_distinct(y[ok]) < 2) {
+    return(list(rho = NA_real_, p = NA_real_))
+  }
+  out <- suppressWarnings(stats::cor.test(x[ok], y[ok], method = "spearman"))
+  list(rho = unname(out$estimate), p = out$p.value)
+}
+
+summarise_binary_survival <- function(df, assay_col, t_days = 24 * 30.44) {
+  df_assay <- df %>%
+    filter(!is.na(.data[[assay_col]])) %>%
+    mutate(
+      .assay_numeric = as.integer(.data[[assay_col]]),
+      .assay_factor = factor(.assay_numeric, levels = c(0L, 1L))
+    )
+
+  n_patients <- dplyr::n_distinct(df_assay$Patient)
+  if (nrow(df_assay) == 0 || dplyr::n_distinct(df_assay$.assay_numeric) < 2) {
+    return(tibble(
+      n = n_patients,
+      RFS24_neg = NA_real_,
+      RFS24_pos = NA_real_,
+      MedRFS_neg = NA_real_,
+      MedRFS_pos = NA_real_,
+      HR = NA_real_,
+      CI_low = NA_real_,
+      CI_high = NA_real_
+    ))
+  }
+
+  fit <- survival::survfit(
+    survival::Surv(Time_to_event, Relapsed_Binary) ~ .assay_factor,
+    data = df_assay
+  )
+
+  surv_at <- summary(fit, times = t_days)
+  strata <- as.character(surv_at$strata)
+  rfs_neg <- surv_at$surv[match(".assay_factor=0", strata)] * 100
+  rfs_pos <- surv_at$surv[match(".assay_factor=1", strata)] * 100
+
+  med_tbl <- survminer::surv_median(fit)
+  med_strata <- as.character(med_tbl$strata)
+  med_neg <- med_tbl$median[match(".assay_factor=0", med_strata)] / 30.44
+  med_pos <- med_tbl$median[match(".assay_factor=1", med_strata)] / 30.44
+
+  cox_tbl <- broom::tidy(
+    survival::coxph(
+      survival::Surv(Time_to_event, Relapsed_Binary) ~ .assay_numeric,
+      data = df_assay
+    ),
+    exponentiate = TRUE,
+    conf.int = TRUE
+  )
+
+  tibble(
+    n = n_patients,
+    RFS24_neg = rfs_neg,
+    RFS24_pos = rfs_pos,
+    MedRFS_neg = med_neg,
+    MedRFS_pos = med_pos,
+    HR = cox_tbl$estimate[1],
+    CI_low = cox_tbl$conf.low[1],
+    CI_high = cox_tbl$conf.high[1]
+  )
+}
+
+power_diagnostics <- function(df, primary_call_col) {
+  d <- sum(df$Relapsed_Binary, na.rm = TRUE)
+  prop_p <- mean(df[[primary_call_col]] == 1, na.rm = TRUE)
+
+  if (is.na(prop_p) || prop_p <= 0 || prop_p >= 1 || d <= 0) {
+    return(tibble(Events = d, Patients = nrow(df), HR_80pct = NA_real_, Power_HR2_pct = NA_real_))
+  }
+
+  z_alpha <- qnorm(1 - 0.05 / 2)
+  z_beta_80 <- qnorm(0.80)
+  hr80 <- exp(2 * (z_alpha + z_beta_80) / sqrt(d * prop_p * (1 - prop_p)))
+
+  hr_target <- 2
+  z_beta <- sqrt(d * prop_p * (1 - prop_p)) * log(hr_target) - z_alpha
+  pw2 <- pnorm(z_beta) * 100
+
+  tibble(Events = d, Patients = nrow(df), HR_80pct = hr80, Power_HR2_pct = pw2)
+}
+
+build_landmark_progression_row <- function(survival_df,
+                                           landmark,
+                                           primary_call_col,
+                                           primary_prob_col,
+                                           include_easym = TRUE) {
+  df_km <- survival_df %>%
+    filter(timepoint_info == landmark, !is.na(.data[[primary_call_col]]))
+
+  assay_summaries <- list(
+    cf = summarise_binary_survival(df_km, primary_call_col),
+    fl = summarise_binary_survival(df_km, "Flow_Binary"),
+    seq = summarise_binary_survival(df_km, "Adaptive_Binary")
+  )
+  if (isTRUE(include_easym)) {
+    assay_summaries$em <- summarise_binary_survival(df_km, "EasyM_optimized_binary")
+  }
+
+  prob_cor <- safe_spearman(df_km[[primary_prob_col]], df_km$Time_to_event)
+  flow_cor <- safe_spearman(df_km$Flow_pct_cells, df_km$Time_to_event)
+  power_tbl <- power_diagnostics(df_km, primary_call_col)
+
+  row <- tibble(
+    Landmark = ifelse(landmark == "1yr maintenance", "1yr_maintenance", landmark),
+    RFS24_cf_neg = assay_summaries$cf$RFS24_neg,
+    RFS24_cf_pos = assay_summaries$cf$RFS24_pos,
+    MedRFS_cf_neg = assay_summaries$cf$MedRFS_neg,
+    MedRFS_cf_pos = assay_summaries$cf$MedRFS_pos,
+    RFS24_fl_neg = assay_summaries$fl$RFS24_neg,
+    RFS24_fl_pos = assay_summaries$fl$RFS24_pos,
+    MedRFS_fl_neg = assay_summaries$fl$MedRFS_neg,
+    MedRFS_fl_pos = assay_summaries$fl$MedRFS_pos,
+    RFS24_seq_neg = assay_summaries$seq$RFS24_neg,
+    RFS24_seq_pos = assay_summaries$seq$RFS24_pos,
+    MedRFS_seq_neg = assay_summaries$seq$MedRFS_neg,
+    MedRFS_seq_pos = assay_summaries$seq$MedRFS_pos,
+    HR_seq = assay_summaries$seq$HR,
+    CI_low_seq = assay_summaries$seq$CI_low,
+    CI_high_seq = assay_summaries$seq$CI_high,
+    HR_cf = assay_summaries$cf$HR,
+    CI_low_cf = assay_summaries$cf$CI_low,
+    CI_high_cf = assay_summaries$cf$CI_high,
+    HR_fl = assay_summaries$fl$HR,
+    CI_low_fl = assay_summaries$fl$CI_low,
+    CI_high_fl = assay_summaries$fl$CI_high,
+    Spearman_prob = prob_cor$rho,
+    Spearman_flow = flow_cor$rho,
+    Events = power_tbl$Events,
+    Patients = power_tbl$Patients,
+    HR_80pct = power_tbl$HR_80pct,
+    Power_HR2_pct = power_tbl$Power_HR2_pct,
+    N_cfWGS = assay_summaries$cf$n,
+    N_MFC = assay_summaries$fl$n,
+    N_clonoSEQ = assay_summaries$seq$n
+  )
+
+  if (isTRUE(include_easym)) {
+    row <- row %>%
+      mutate(
+        RFS24_em_neg = assay_summaries$em$RFS24_neg,
+        RFS24_em_pos = assay_summaries$em$RFS24_pos,
+        MedRFS_em_neg = assay_summaries$em$MedRFS_neg,
+        MedRFS_em_pos = assay_summaries$em$MedRFS_pos,
+        HR_em = assay_summaries$em$HR,
+        CI_low_em = assay_summaries$em$CI_low,
+        CI_high_em = assay_summaries$em$CI_high,
+        N_easym = assay_summaries$em$n
+      )
+  }
+
+  row
+}
+
+build_landmark_progression_table <- function(survival_df,
+                                             primary_call_col,
+                                             primary_prob_col,
+                                             include_easym = TRUE) {
+  bind_rows(
+    build_landmark_progression_row(
+      survival_df = survival_df,
+      landmark = "post_transplant",
+      primary_call_col = primary_call_col,
+      primary_prob_col = primary_prob_col,
+      include_easym = include_easym
+    ),
+    build_landmark_progression_row(
+      survival_df = survival_df,
+      landmark = "1yr maintenance",
+      primary_call_col = primary_call_col,
+      primary_prob_col = primary_prob_col,
+      include_easym = include_easym
+    )
+  )
+}
+
+print_landmark_progression_sentence <- function(row, model_label) {
+  time_phrase <- if (row$Landmark == "1yr_maintenance") {
+    "After one year of maintenance therapy"
+  } else {
+    "At post-transplant"
+  }
+
+  cat(glue(
+    "{time_phrase}, among patients with {model_label} available (n={row$N_cfWGS}), ",
+    "{model_label} MRD-negative patients had {round(row$RFS24_cf_neg)}% relapse-free survival at 24 months ",
+    "versus {round(row$RFS24_cf_pos)}% for MRD-positive patients ",
+    "(HR = {round(row$HR_cf, 2)}; 95% CI [{round(row$CI_low_cf, 2)}-{round(row$CI_high_cf, 2)}]). ",
+    "Median RFS by {model_label} was {fmt_nr_months(row$MedRFS_cf_neg)} vs {fmt_nr_months(row$MedRFS_cf_pos)} months. ",
+    "For MFC (n={row$N_MFC}), MRD-negative patients had {round(row$RFS24_fl_neg)}% RFS at 24 months ",
+    "versus {round(row$RFS24_fl_pos)}% for MRD-positive patients ",
+    "(HR = {round(row$HR_fl, 2)}; 95% CI [{round(row$CI_low_fl, 2)}-{round(row$CI_high_fl, 2)}]). ",
+    "clonoSEQ (n={row$N_clonoSEQ}) showed HR = {round(row$HR_seq, 2)} ",
+    "(95% CI [{round(row$CI_low_seq, 2)}-{round(row$CI_high_seq, 2)}]). ",
+    "Continuous {model_label} probability had Spearman rho = {round(row$Spearman_prob, 2)} with time-to-event, ",
+    "compared with rho = {round(row$Spearman_flow, 2)} for flow cytometry. ",
+    "With {row$Events} events among {row$Patients} patients in this subset, the minimum detectable HR for 80% power is ",
+    "{round(row$HR_80pct, 1)} and estimated power for HR = 2.0 is {round(row$Power_HR2_pct, 1)}%. ",
+    "These analyses are descriptive and hypothesis-generating."
+  ), "\n\n", sep = "")
+}
+
+export_landmark_progression_table <- function(tbl, csv_name, rds_name) {
+  write_csv(tbl, file.path(outdir, paste0(csv_name, date_tag, ".csv")))
+  saveRDS(tbl, file.path(outdir, paste0(rds_name, date_tag, ".rds")))
+}
+
+validate_landmark_progression_table <- function(tbl, table_name, require_easym = TRUE) {
+  expected_landmarks <- c("post_transplant", "1yr_maintenance")
+  required_cols <- c(
+    "Landmark",
+    "RFS24_cf_neg", "RFS24_cf_pos", "MedRFS_cf_neg", "MedRFS_cf_pos",
+    "RFS24_fl_neg", "RFS24_fl_pos", "MedRFS_fl_neg", "MedRFS_fl_pos",
+    "RFS24_seq_neg", "RFS24_seq_pos", "MedRFS_seq_neg", "MedRFS_seq_pos",
+    "HR_cf", "CI_low_cf", "CI_high_cf",
+    "HR_fl", "CI_low_fl", "CI_high_fl",
+    "HR_seq", "CI_low_seq", "CI_high_seq",
+    "Spearman_prob", "Spearman_flow",
+    "Events", "Patients", "HR_80pct", "Power_HR2_pct",
+    "N_cfWGS", "N_MFC", "N_clonoSEQ"
+  )
+  if (isTRUE(require_easym)) {
+    required_cols <- c(
+      required_cols,
+      "RFS24_em_neg", "RFS24_em_pos", "MedRFS_em_neg", "MedRFS_em_pos",
+      "HR_em", "CI_low_em", "CI_high_em", "N_easym"
+    )
+  }
+
+  missing_cols <- setdiff(required_cols, names(tbl))
+  if (length(missing_cols) > 0) {
+    stop(
+      table_name,
+      " is missing required columns: ",
+      paste(missing_cols, collapse = ", "),
+      call. = FALSE
+    )
+  }
+  if (nrow(tbl) != length(expected_landmarks)) {
+    stop(
+      table_name,
+      " should contain one row per frontline landmark (expected ",
+      length(expected_landmarks),
+      ", observed ",
+      nrow(tbl),
+      ").",
+      call. = FALSE
+    )
+  }
+  if (!identical(sort(as.character(tbl$Landmark)), sort(expected_landmarks))) {
+    stop(
+      table_name,
+      " has unexpected Landmark values: ",
+      paste(as.character(tbl$Landmark), collapse = ", "),
+      call. = FALSE
+    )
+  }
+
+  invisible(tbl)
+}
+
+use_refactored_landmark_summaries <- TRUE
+
+if (isTRUE(use_refactored_landmark_summaries)) {
+  progression_metrics <- build_landmark_progression_table(
+    survival_df = survival_df,
+    primary_call_col = "BM_zscore_only_detection_rate_call",
+    primary_prob_col = "BM_zscore_only_detection_rate_prob",
+    include_easym = TRUE
+  )
+
+  progression_metrics_blood <- build_landmark_progression_table(
+    survival_df = survival_df,
+    primary_call_col = "Blood_zscore_only_sites_call",
+    primary_prob_col = "Blood_zscore_only_sites_prob",
+    include_easym = TRUE
+  )
+
+  progression_metrics_blood_combined <- build_landmark_progression_table(
+    survival_df = survival_df,
+    primary_call_col = "Blood_plus_fragment_call",
+    primary_prob_col = "Blood_plus_fragment_prob",
+    include_easym = FALSE
+  )
+
+  validate_landmark_progression_table(progression_metrics, "BM landmark progression table", require_easym = TRUE)
+  validate_landmark_progression_table(progression_metrics_blood, "Blood landmark progression table", require_easym = TRUE)
+  validate_landmark_progression_table(
+    progression_metrics_blood_combined,
+    "Blood combined-model landmark progression table",
+    require_easym = FALSE
+  )
+
+  purrr::walk(seq_len(nrow(progression_metrics)), function(i) {
+    print_landmark_progression_sentence(progression_metrics[i, ], "BM-cfWGS")
+  })
+  purrr::walk(seq_len(nrow(progression_metrics_blood)), function(i) {
+    print_landmark_progression_sentence(progression_metrics_blood[i, ], "Blood-cfWGS")
+  })
+  purrr::walk(seq_len(nrow(progression_metrics_blood_combined)), function(i) {
+    print_landmark_progression_sentence(progression_metrics_blood_combined[i, ], "Blood-cfWGS combined model")
+  })
+
+  export_landmark_progression_table(
+    progression_metrics,
+    csv_name = "cfWGS_vs_flow_progression_summary_",
+    rds_name = "cfWGS_vs_flow_progression_summary_updated_"
+  )
+  export_landmark_progression_table(
+    progression_metrics_blood,
+    csv_name = "cfWGS_vs_flow_progression_summary_blood_muts_",
+    rds_name = "cfWGS_vs_flow_progression_summaryy_blood_muts_updated_"
+  )
+  export_landmark_progression_table(
+    progression_metrics_blood_combined,
+    csv_name = "cfWGS_vs_flow_progression_summary_blood_muts_combined_model_",
+    rds_name = "cfWGS_vs_flow_progression_summary_blood_muts_updated_combined_model_"
+  )
+}
+
+# Legacy comparison path:
+#   The pre-refactor implementation is retained below behind this inactive
+#   switch while the simplified helper path is being reviewed. It performs the
+#   same landmark-by-landmark calculations with repeated code blocks. The active
+#   command-line manuscript path above now creates the objects consumed by the
+#   ED6B/ED8B hazard-ratio plots and associated source CSV/RDS files.
+if (!isTRUE(use_refactored_landmark_summaries)) {
+
 # Filter to 1-year maintenance timepoint with BM-cfWGS result
 df_km <- survival_df %>%
   filter(
@@ -3134,6 +3477,8 @@ saveRDS(
   progression_metrics_blood_combined,
   file.path(outdir, paste0("cfWGS_vs_flow_progression_summary_blood_muts_updated_combined_model_", date_tag, ".rds"))
 )
+
+}
 
 
 

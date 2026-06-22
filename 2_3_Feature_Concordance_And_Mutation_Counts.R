@@ -54,6 +54,13 @@
 #   manuscript output(s) listed above into final_manuscript_objects/ when the
 #   required upstream inputs are available.
 #
+# Analyst note:
+#   BAM archive/unarchive helper tables are operational diagnostics only. They
+#   are skipped by default so routine manuscript regeneration does not require
+#   storage-location spreadsheets or create root-level helper files. To regenerate
+#   those support files intentionally, run with:
+#     CFWGS_RUN_BAM_ARCHIVE_DIAGNOSTICS=true Rscript Scripts_2025/Final_Scripts/2_3_Feature_Concordance_And_Mutation_Counts.R
+#
 
 library(tidyverse)   # dplyr, tidyr, readr, etc.
 library(purrr)       # for pmap_dfr
@@ -102,6 +109,8 @@ file <- readRDS("Final_aggregate_table_cfWGS_features_with_clinical_and_demograp
 # trade-off in the concordance analysis.
 tf_cut    <- 0.05            # ≥ 0.05 → “high TF”; change if needed
 baseline  <- c("Diagnosis","Baseline")   # recognise baseline labels
+run_bam_archive_diagnostics <- tolower(Sys.getenv("CFWGS_RUN_BAM_ARCHIVE_DIAGNOSTICS", "false")) %in%
+  c("true", "t", "1", "yes", "y")
 
 ## ------------------------------------------------------------------
 ## 2.  STARTING DATA  ------------------------------------------------
@@ -883,99 +892,99 @@ write.csv(
 ### This above does not include double negatives 
 
 
-### Export the samples with mutations for checking 
-# Merge to get Patient info
-# 1. Create join_id by removing ".bam" from Bam in clinical data
-combined_clinical_data_updated <- combined_clinical_data_updated %>%
-  mutate(join_id = str_remove(Bam, "\\.bam$"))
+## Optional operational diagnostic: BAM archive/unarchive helper tables.
+##
+## This block does not contribute to Extended Data Figure 2 or Supplementary
+## Tables 2/3. It was used during data-management review to identify BAM files
+## that might need to be retrieved from storage. It is now opt-in so the routine
+## manuscript pipeline does not depend on `All_bam_storage_locations.xlsx` and
+## does not create support files in the project root.
+if (isTRUE(run_bam_archive_diagnostics)) {
+  bam_storage_path <- "All_bam_storage_locations.xlsx"
+  if (!file.exists(bam_storage_path)) {
+    stop(
+      "BAM archive diagnostics requested, but `All_bam_storage_locations.xlsx` was not found.",
+      call. = FALSE
+    )
+  }
 
-# 2. Left join on Sample and join_id
-merged1 <- mutation_data_total 
+  bam_diag_dir <- file.path("Output_tables_2025_updated", "support_only_bam_archive_diagnostics")
+  dir.create(bam_diag_dir, recursive = TRUE, showWarnings = FALSE)
 
-# Merge to get cohort info
-merged1 <- merged1 %>%
-  left_join(cohort_df)
+  mutation_igv_review <- mutation_data_total %>%
+    left_join(cohort_df, by = "Patient") %>%
+    filter(timepoint_info %in% c("Baseline", "Diagnosis")) %>%
+    filter(!is.na(Cohort))
 
-# Filter for Baseline or Diagnosis and patients in cohort
-merged1 <- merged1 %>% 
-  filter(timepoint_info %in% c("Baseline", "Diagnosis")) %>%
-  filter(!is.na(Cohort))
+  write_csv(mutation_igv_review, file.path(bam_diag_dir, "Mutation_iGV_verification.csv"))
 
-write_csv(merged1, "Mutation_iGV_verification.csv")
+  all_bam_storage <- read_excel(bam_storage_path)
 
-all_bam_storage <- read_excel("All_bam_storage_locations.xlsx")
+  mutation_igv_review <- mutation_igv_review %>%
+    mutate(Bam = paste0(Sample, ".bam")) %>%
+    left_join(all_bam_storage, by = "Bam")
 
-merged1 <- merged1 %>%
-  mutate(Bam = paste0(Sample, ".bam"))
+  missing_path <- mutation_igv_review %>%
+    filter(is.na(Path) & is.na(Location))
 
-merged1 <- merged1 %>% 
-  left_join(all_bam_storage, by = c("Bam"))
+  all_bam_storage <- all_bam_storage %>%
+    mutate(Bam_nosuffix = str_remove_all(Bam, "_WG|_PG"))
 
-missing_path <- merged1 %>%
-  filter(is.na(Path) & is.na(Location))
+  joined <- missing_path %>%
+    mutate(Bam_nosuffix = str_remove_all(Bam, "_WG|_PG")) %>%
+    left_join(
+      all_bam_storage %>%
+        select(Bam_storage = Bam, Path, Location, Bam_nosuffix, Cohort),
+      by = "Bam_nosuffix"
+    )
 
-# This gives you which alternate name from merged1 joined to which real BAM in storage
-all_bam_storage <- all_bam_storage %>%
-  mutate(Bam_nosuffix = str_remove_all(Bam, "_WG|_PG"))
+  write_csv(joined, file.path(bam_diag_dir, "Bam_to_unarchive1.csv"))
+  write_csv(mutation_igv_review, file.path(bam_diag_dir, "Bam_to_unarchive2.csv"))
 
-# Same for missing_path
-missing_path <- missing_path %>%
-  mutate(Bam_nosuffix = str_remove_all(Bam, "_WG|_PG"))
+  unmatched <- joined %>% filter(is.na(Bam_storage))
 
-joined <- missing_path %>%
-  left_join(
-    all_bam_storage %>% select(Bam_storage = Bam, Path, Location, Bam_nosuffix, Cohort),
-    by = "Bam_nosuffix"
-  )
+  if (nrow(unmatched) > 0 &&
+      requireNamespace("stringdist", quietly = TRUE) &&
+      "Bam_noWG" %in% names(all_bam_storage) &&
+      any(!is.na(all_bam_storage$Bam_noWG))) {
+    similar_matches <- unmatched %>%
+      rowwise() %>%
+      mutate(
+        best_match = {
+          dists <- stringdist::stringdist(Bam, all_bam_storage$Bam_noWG)
+          i <- which.min(dists)
+          all_bam_storage$Bam[i]
+        },
+        min_dist = {
+          dists <- stringdist::stringdist(Bam, all_bam_storage$Bam_noWG)
+          min(dists)
+        },
+        best_path = {
+          dists <- stringdist::stringdist(Bam, all_bam_storage$Bam_noWG)
+          i <- which.min(dists)
+          all_bam_storage$Path[i]
+        },
+        best_location = {
+          dists <- stringdist::stringdist(Bam, all_bam_storage$Bam_noWG)
+          i <- which.min(dists)
+          all_bam_storage$Location[i]
+        }
+      ) %>%
+      ungroup()
 
-write_csv(joined, "Bam_to_unarchive1.csv")
-write_csv(merged1, "Bam_to_unarchive2.csv")
+    write_csv(similar_matches, file.path(bam_diag_dir, "Bam_to_unarchive_fuzzy_matches.csv"))
+  } else {
+    message("Skipping optional BAM fuzzy-match diagnostic: no unmatched BAMs, no stringdist package, or no Bam_noWG column.")
+  }
 
-
-## Now get most similar for still unmatched
-unmatched <- joined %>% filter(is.na(Bam_storage))
-
-# Optional BAM archive diagnostics. This section is not an active manuscript
-# figure/table output; it helps identify BAM files to unarchive. It should never
-# stop the command-line manuscript pipeline if the storage helper table has a
-# different column layout or if the old diagnostic `filtered` object is absent.
-library(stringdist)
-if (nrow(unmatched) > 0 && "Bam_noWG" %in% names(all_bam_storage) &&
-    any(!is.na(all_bam_storage$Bam_noWG))) {
-  similar_matches <- unmatched %>%
-    rowwise() %>%
-    mutate(
-      best_match = {
-        dists <- stringdist(Bam, all_bam_storage$Bam_noWG)
-        i <- which.min(dists)
-        all_bam_storage$Bam[i]
-      },
-      min_dist = {
-        dists <- stringdist(Bam, all_bam_storage$Bam_noWG)
-        min(dists)
-      },
-      best_path = {
-        dists <- stringdist(Bam, all_bam_storage$Bam_noWG)
-        i <- which.min(dists)
-        all_bam_storage$Path[i]
-      },
-      best_location = {
-        dists <- stringdist(Bam, all_bam_storage$Bam_noWG)
-        i <- which.min(dists)
-        all_bam_storage$Location[i]
-      }
-    ) %>%
-    ungroup()
+  if (exists("filtered") && all(c("Sample", "Tumor_Sample_Barcode") %in% names(filtered))) {
+    export_df <- filtered[, c("Sample", "Tumor_Sample_Barcode")]
+    readr::write_csv(as.data.frame(export_df), file.path(bam_diag_dir, "bam_list_and_barcodes.csv"))
+  } else {
+    message("Skipping optional bam_list_and_barcodes.csv diagnostic: object `filtered` is not defined in this command-line run.")
+  }
 } else {
-  similar_matches <- tibble()
-  message("Skipping optional BAM fuzzy-match diagnostic: no unmatched BAMs or no Bam_noWG column in All_bam_storage_locations.xlsx.")
-}
-
-if (exists("filtered") && all(c("Sample", "Tumor_Sample_Barcode") %in% names(filtered))) {
-  export_df <- filtered[, c("Sample", "Tumor_Sample_Barcode")]
-  readr::write_csv(as.data.frame(export_df), "bam_list_and_barcodes.csv")
-} else {
-  message("Skipping optional bam_list_and_barcodes.csv diagnostic: object `filtered` is not defined in this command-line run.")
+  message("Skipping support-only BAM archive diagnostics. Set CFWGS_RUN_BAM_ARCHIVE_DIAGNOSTICS=true to regenerate them.")
 }
 
 
@@ -1743,7 +1752,7 @@ overall_conc <- concordance_tbl %>%
     conc   = concord * 100                       # percent
   )
 
-# Overall sensetivity 
+# Overall sensitivity across all tumour-fraction strata.
 sens_overall <- long %>%
   filter(cohort   == "Frontline induction-transplant") %>%
   group_by(event, wgs_source) %>%
@@ -1796,7 +1805,9 @@ ggsave("Final Tables and Figures/Baseline_concordance/Fig2B_event_concordance_by
        width = 5, height = 4, dpi = 600)
 
 
-## With sensetivity as red star
+# Add overall sensitivity as a star marker on the tumour-fraction concordance
+# plot. This lets the panel show both concordance by tumour fraction and the
+# aggregate detection sensitivity for each event.
 tf_plot_df <- bind_rows(
   # high/low TF
   event_tf_conc %>%
@@ -2196,7 +2207,7 @@ overall_conc <- perf_tf_complete %>%
     conc     = concordance * 100      # percent
   )
 
-# Overall sensetivity 
+# Overall sensitivity across all tumour-fraction strata.
 sens_overall <- perf_tf_complete %>%
   filter(tf_group %in% c("All")) %>%
   transmute(
@@ -2204,7 +2215,7 @@ sens_overall <- perf_tf_complete %>%
     sens_pct   = sensitivity* 100      # percent
   )
   
-## With sensetivity as red star
+# Add overall sensitivity as a star marker on the BM-vs-cfDNA concordance plot.
 tf_plot_df_BM <- bind_rows(
   # high/low TF
   event_conc %>%
@@ -2310,7 +2321,8 @@ bad
 
 
 
-### Edit so it is 3 panel - one concordance, one sensetivity, one specificity 
+# Final three-panel event-level summary for Extended Data Figure 2:
+# concordance, sensitivity, and specificity by tumour-fraction stratum.
 # 1.  Reshape:  Concordance, Sensitivity, Specificity  ×  TF-group
 perf_long <- perf_tf_complete %>%
   filter(tf_group %in% c("High TF", "Low TF")) %>%         # keep only strata

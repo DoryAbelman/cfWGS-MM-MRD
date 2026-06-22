@@ -15,16 +15,17 @@
 ##   - Output_tables_2025/all_patients_with_BM_and_blood_calls_updated5.rds
 ##       (cfWGS scored dataset; output of 3_1/3_2)
 ##   - Exported_data_tables_clinical/Censor_dates_per_patient_for_PFS_updated.rds
-##   - ../Aimee_MRD_clinical_manuscript/Data from Aimee MRD/
-##       RAPID NOVOR VALUES with values with relapse.csv  (EasyM quantitative)
-##       RAPID NOVOR pos-neg with relapse.csv              (EasyM binary calls)
+##   - Aimee additional data/RAPID NOVOR VALUES with values with relapse.csv
+##       (EasyM quantitative)
+##   - Aimee additional data/RAPID NOVOR pos-neg with relapse.csv
+##       (EasyM binary calls)
 ##
 ## Outputs:
 ##   - Output_tables_2025/cfWGS_vs_EasyM_comparison/  (tables + source data)
 ##   - Output_figures_2025/Fig4_3_cfWGS_vs_EasyM_*.png
 ##
 ## How to run:
-##   Rscript Scripts_2025/Final_Scripts/4_3_cfWGS_vs_EasyM_Proteomic_MRD_Comparison.R
+##   Rscript Scripts_2025/Final_Scripts/archive/support_analysis/4_3_cfWGS_vs_EasyM_Proteomic_MRD_Comparison.R
 ##
 ## Manuscript outputs created/updated:
 ##   - None directly in the current mapped manuscript set. This support script
@@ -38,9 +39,10 @@
 ##
 ################################################################################
 # Pipeline status:
-#   Active supplementary/support analysis. This script is retained in the
-#   command-line pipeline, but it is not currently mapped to a named final
-#   manuscript figure or table in docs/manuscript_artifact_source_map.tsv.
+#   Archived support analysis. This script is retained for audit/future review,
+#   but it is not part of the routine command-line manuscript regeneration
+#   pipeline and is not mapped to a named final manuscript figure or table in
+#   docs/manuscript_artifact_source_map.tsv.
 #
 
 ## ── 0.  SETUP ────────────────────────────────────────────────────────────────
@@ -62,10 +64,11 @@ suppressPackageStartupMessages({
 dat_rds       <- "Output_tables_2025/all_patients_with_BM_and_blood_calls_updated5.rds"
 final_tbl_rds <- "Exported_data_tables_clinical/Censor_dates_per_patient_for_PFS_updated.rds"
 
-# EasyM data paths (match the ASCO script setup)
-proj_dir <- "../Aimee_MRD_clinical_manuscript/Data from Aimee MRD/"
-EasyM_quant_path <- file.path(proj_dir, "RAPID NOVOR VALUES with values with relapse.csv")
-EasyM_bin_path   <- file.path(proj_dir, "RAPID NOVOR pos-neg with relapse.csv")
+# EasyM data paths are project-relative so archived support runs do not depend
+# on user-specific sibling folders.
+easym_input_dir <- "Aimee additional data"
+EasyM_quant_path <- file.path(easym_input_dir, "RAPID NOVOR VALUES with values with relapse.csv")
+EasyM_bin_path   <- file.path(easym_input_dir, "RAPID NOVOR pos-neg with relapse.csv")
 
 ## ── 2.  OUTPUT ────────────────────────────────────────────────────────────────
 outdir <- "Output_tables_2025/cfWGS_vs_EasyM_comparison"

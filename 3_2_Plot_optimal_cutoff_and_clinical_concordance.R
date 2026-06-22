@@ -1675,46 +1675,11 @@ cm_maint <- bind_rows(
 cm_non <- ct_to_long(ct_non_Flow, "Flow (MFC)")
 
 ## ───────────────────────────────────────────────────────────────
-## C.  A small plotting helper (avoids repeated code)
+## C.  Confusion-matrix plotting helper
 ## ───────────────────────────────────────────────────────────────
-
-# Archived plotting helper retained for provenance only. It is not used for
-# manuscript-staged outputs.
-# plot_cm <- function(df, main_title){
-#   df <- df %>%
-#     mutate(
-#       # now x = Obs (clinical), y = Pred (cfWGS)
-#       Obs  = factor(Obs,  levels = c("neg","pos")),
-#       Pred = factor(Pred, levels = c("pos","neg"))  # note: flipped so “neg” sits in the same corner
-#     )
-#   
-#   ggplot(df, aes(x = Obs, y = Pred, fill = Count)) +
-#     geom_tile(colour = "white") +
-#     geom_text(aes(label = Count), size = 4) +
-#     facet_wrap(~ model, nrow = 1) +
-#     scale_fill_viridis_c(
-#       option = "D", begin = 0.3, end = 0.9, guide = "none"
-#     ) +
-#     scale_x_discrete(position = "top") +
-#     labs(
-#       x = "Clinical MRD",
-#       y = "cfWGS MRD",
-#       title = main_title
-#     ) +
-#     theme_minimal(base_size = 10) +
-#     theme(
-#       strip.text      = element_text(face = "bold"),
-#       axis.text.y     = element_text(size = 9),
-#       axis.text.x     = element_text(size = 9, vjust = 0),
-#       axis.title      = element_text(size = 10),
-#       panel.grid      = element_blank(),
-#       legend.position = "none",
-#       plot.title      = element_text(face = "bold", hjust = 0.5)
-#     )
-# }
-
-# Active confusion-matrix plotting helper used for Extended Data Figure 5E-G
-# and Extended Data Figure 7F-H.
+# Active plotting helper used for Extended Data Figure 5E-G and Extended Data
+# Figure 7F-H. Earlier draft versions of this helper were removed from the
+# active script to keep the manuscript path unambiguous.
 plot_cm <- function(df, main_title,
                     col_low = "#f2f2f2", col_high = "#4a4a4a") {
   
@@ -2486,18 +2451,6 @@ metrics_tbl <- metrics_tbl %>%
                          "Frontline" = "Train",
                          "Non-frontline" = "Test"))
 
-# Example: sentences for Frontline–Maintenance
-# maint_sents <- metrics_tbl %>%
-#   filter(Cohort == "Frontline", Timepoint == "Maintenance") %>%
-#   rowwise() %>% mutate(sentence = row_to_sentence(cur_data())) %>%
-#   ungroup() %>% select(Cohort, Timepoint, Pred_Label, Comparator, sentence)
-
-# Example: sentences for Non-frontline (aggregated)
-# nf_sents <- metrics_tbl %>%
-#   filter(Cohort == "Non-frontline") %>%
-#   rowwise() %>% mutate(sentence = row_to_sentence(cur_data())) %>%
-#   ungroup() %>% select(Cohort, Timepoint, Pred_Label, Comparator, sentence)
-
 # Export workbook using the historical filename. The final manuscript copy is
 # staged below as Supplementary Table 10.
 writexl::write_xlsx(list("All_Call_Metrics" = metrics_tbl),
@@ -2521,25 +2474,6 @@ ms_copy_artifact(
   description = "All call metrics against clinical metrics workbook used as Supplementary Table 10.",
   script_name = "3_2_Plot_optimal_cutoff_and_clinical_concordance.R"
 )
-
-
-# Example: filter to the Combined Model column if it’s named "Blood_plus_fragment_call"
-# metrics_tbl %>% filter(Pred_Column == "Blood_plus_fragment_call")
-
-# Example: export the full table
-# writexl::write_xlsx(list("All_Call_Metrics" = metrics_tbl),
-#   path = file.path(outdir, "All_call_metrics_by_cohort_timepoint.xlsx"))
-
-# Example: make sentences for all rows at Maintenance for Frontline
-# maint_sentences <- metrics_tbl %>%
-#   filter(Cohort == "Frontline", Timepoint == "Maintenance") %>%
-#   rowwise() %>%
-#   mutate(sentence = row_to_sentence(cur_data())) %>%
-#   ungroup() %>%
-#   select(Cohort, Timepoint, Pred_Label, Comparator, sentence)
-
-
-
 
 
 

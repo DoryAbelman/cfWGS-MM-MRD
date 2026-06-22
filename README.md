@@ -209,7 +209,7 @@ Scripts are numbered to indicate execution order. Run them sequentially from a w
 | `2_1_Clinical_Demographics_Table.R` | Build Table 1 (patient demographics, disease characteristics by cohort). | Master feature table from `2_0`. | `table1_categorical_updated_final.docx`, `cohort_assignment_table.rds` |
 | `2_1_Part2_Cohort_Swim_Plot.R` | Generate the treatment-timeline swim plot and privacy-protected event table. | `tidy_treatments.csv`, M4 and IMMAGINE chemotherapy tables. | Figure 1A component; Supplementary Table 1 event table. |
 | `2_2_Baseline_demographics_by_WGS_heatmap_updated.R` | Create the baseline integrated alteration heatmap (BM overlaid with cfDNA; mutations, CNAs, translocations) and disease-feature catalog. | `Final_aggregate_table*.rds`, cohort assignment, CNA/translocation/mutation RDS files. | Extended Data Figure 1 component; Supplementary Table 1A. |
-| `2_3_Feature_Concordance_And_Mutation_Counts.R` | Compute FISH-WGS concordance; summarise baseline mutation counts by cohort; build concordance and feature-correlation exports. | Master feature table, cohort assignments, mutation export RDS. | Extended Data Figure 2 components; Supplementary Tables 2 and 3. |
+| `2_3_Feature_Concordance_And_Mutation_Counts.R` | Compute FISH-WGS concordance; summarise baseline mutation counts by cohort; build concordance and feature-correlation exports. BAM archive/unarchive helper tables are support-only and run only when `CFWGS_RUN_BAM_ARCHIVE_DIAGNOSTICS=true`. | Master feature table, cohort assignments, mutation export RDS. Optional BAM diagnostic mode also reads `All_bam_storage_locations.xlsx`. | Extended Data Figure 2 components; Supplementary Tables 2 and 3. Optional BAM diagnostic files are written under `Output_tables_2025_updated/support_only_bam_archive_diagnostics/` and are not copied to `final_manuscript_objects/`. |
 | `2_4_Longitudinal_features_analysis.R` | Summarise how cfWGS features change over time; generate longitudinal mutation, CNA, and fragmentomics panels. | Master feature table, cohort assignments. | Figure 2 components; Extended Data Figures 3 and 4 source panels. |
 
 ### Stage 3 - Model training, model application, and validation
@@ -217,10 +217,10 @@ Scripts are numbered to indicate execution order. Run them sequentially from a w
 | Script | Purpose | Key inputs | Key outputs |
 |--------|---------|------------|-------------|
 | `3_1_Optimize_cfWGS_thresholds.R` | **Core model analysis.** Train or load elastic-net classifiers using 5x5 nested cross-validation on BM-derived, blood-derived, and fragmentomics features. Evaluate ROC/AUC, calibration, and sensitivity/specificity at fixed operating points. Skipped by default by the command-line runners because these artifacts are cache-sensitive preserved reproducibility outputs during routine test-cohort expansion. | Master feature table, clonoSEQ/MFC ground-truth labels. | Figure 3A-B and Figure 4A-B components; Extended Data Figures 5A-C, 7A-C/E, and 9A-F; Supplementary Tables 4-6; preserved model and metric RDS files. |
-| `3_1_A_Process_and_optimize_EasyM.R` | Process EasyM (proteomic MRD) quantitative data; optimise clearance thresholds at each timepoint; generate EasyM-vs-cfWGS comparison tables and Kaplan-Meier plots. | EasyM CSV files from clinical collaborators; cfWGS call table from `3_1`. | EasyM optimised-call CSV, landmark-analysis figures, concordance tables. |
+| `3_1_A_Process_and_optimize_EasyM.R` | Process EasyM (proteomic MRD) quantitative data and export the optimized EasyM call/threshold tables required by `3_2` and `4_1`. | EasyM CSV files from clinical collaborators; cfWGS call table from `3_1`. | Required intermediate CSVs: `EasyM_all_samples_with_optimized_calls.csv` and `EasyM_threshold_values_by_timepoint.csv`; support-only landmark-analysis tables/figures. |
 | `3_1_part2_Apply_cfWGS_thresholds_to_dilution_series.R` | Apply trained models and thresholds to the dilution-series samples to establish the LOD (limit of detection) for each feature and combined model. | Saved models/thresholds from `3_1`; fragmentomics and MRDetect dilution-series outputs. | Figure 3C component; Extended Data Figures 5D and 7D; Supplementary Table 7. |
 | `3_2_Plot_optimal_cutoff_and_clinical_concordance.R` | Generate tumour-informed cfWGS clinical-concordance figures: assay positivity, model-vs-clinical assay comparisons, calibration/decision-curve support, and contingency tables. | `all_patients_with_BM_and_blood_calls_updated*.rds`, threshold table. | Figure 3D-E and Figure 4C-D components; Extended Data Figures 5E-G and 7F-H; Supplementary Tables 8 and 10. |
-| `3_3_Plot_optimal_cutoff_tumor_naive_calls_and_clinical_concordance.R` | Same clinical-concordance figure family as `3_2`, but for the **tumour-naive** blood cfDNA z-score model. | `all_patients_with_BM_and_blood_calls_updated*.rds`, threshold table. | Tumour-naive clinical-concordance panels and support tables. |
+| `archive/support_analysis/3_3_Plot_optimal_cutoff_tumor_naive_calls_and_clinical_concordance.R` | Archived tumour-naive blood cfDNA support/sensitivity analysis. This is not required for routine manuscript regeneration because the final clinical-concordance figures/tables are produced by `3_2`. | `all_patients_with_BM_and_blood_calls_updated*.rds`, threshold table. | Support-only tumour-naive review outputs; not copied to `final_manuscript_objects/`. |
 
 ### Stage 4 - Clinical outcome analyses
 
@@ -228,7 +228,7 @@ Scripts are numbered to indicate execution order. Run them sequentially from a w
 |--------|---------|------------|-------------|
 | `4_1_Survival_Analysis.R` | Kaplan-Meier PFS curves stratified by MRD status at landmark timepoints (Post-ASCT, 1yr Maintenance). Calculate sensitivity of each assay for detecting future relapse. | `all_patients_with_BM_and_blood_calls_updated*.rds`, EasyM calls, `Censor_dates_per_patient_for_PFS_updated.rds`. | Figure 3F and Figure 4E components; Extended Data Figures 6 and 8; Supplementary Table 9. |
 | `4_2_Compare_subclonal_evolution.R` | Identify emergent CNA events between baseline and relapse cfDNA samples. The final Extended Data Figure 10 genome-wide CNA tracks come from an external ichorCNA plotting workflow; this script provides repo-side supporting event outputs. | `All_feature_data_August2025.rds`, cohort assignments. | `Emergent_CNA_events.csv` and subclonal-evolution support outputs for Extended Data Figure 10. |
-| `4_3_cfWGS_vs_EasyM_Proteomic_MRD_Comparison.R` | Generate supplemental analyses directly comparing cfWGS tumour-informed calls vs EasyM at paired post-ASCT and 1-year maintenance timepoints. | cfWGS call table, EasyM quantitative and binary CSVs, PFS censor dates. | Supplemental EasyM comparison figures and concordance tables. |
+| `archive/support_analysis/4_3_cfWGS_vs_EasyM_Proteomic_MRD_Comparison.R` | Archived cfWGS-vs-EasyM support/sensitivity analysis. This is not required for routine manuscript regeneration because final EasyM call generation is handled by `3_1_A`, and final survival/relapse EasyM panels are handled by `4_1`. | cfWGS call table, EasyM quantitative and binary CSVs, PFS censor dates. | Support-only EasyM comparison figures/tables; not copied to `final_manuscript_objects/`. |
 
 ---
 
@@ -250,7 +250,8 @@ Scripts are numbered to indicate execution order. Run them sequentially from a w
 
 ```
 Final_Scripts/
-├── 0_1_*.R … 4_3_*.R      ← numbered analysis scripts (primary pipeline)
+├── 0_1_*.R … 4_2_*.R      ← active numbered analysis scripts (primary manuscript pipeline)
+├── archive/support_analysis/ ← non-required support/sensitivity scripts retained for audit
 ├── config.R                ← package list and path configuration
 ├── helpers.R               ← shared utility functions
 ├── manuscript_output_helpers.R ← direct manuscript-output helper for numbered scripts

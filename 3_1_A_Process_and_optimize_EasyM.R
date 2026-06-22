@@ -1,38 +1,50 @@
 ## ============================================================
 ## SCRIPT PURPOSE: Process and Optimize EasyM Proteomic MRD Data
 ## ============================================================
-# This script performs comprehensive analysis of EasyM (proteomic MRD assay) data
-# in comparison with cfWGS-based MRD detection for multiple myeloma patients.
+# This active intermediate script processes EasyM proteomic MRD data from the
+# clinical collaborator files and creates the EasyM call table required by
+# downstream manuscript-output scripts.
 #
-# KEY OUTPUTS:
-# 1. Optimized clearance thresholds for EasyM at each timepoint
-# 2. Agreement tables comparing EasyM vs cfWGS calls
-# 3. Survival analyses (PFS) stratified by MRD status
-# 4. Combined risk stratification using both modalities
-# 5. Patient-level tables showing MRD status at each timepoint
+# Manuscript outputs created/updated:
+#   - None directly. This script does not copy a final figure/table into
+#     final_manuscript_objects/ because no current manuscript artifact is mapped
+#     directly to this script in docs/manuscript_artifact_source_map.tsv.
 #
-# WORKFLOW:
-# Section 0: Setup and configuration
-# Section 1: Helper functions for data processing
-# Section 2: Load and process EasyM quantitative and binary data
-# Section 3: Generate EasyM-only descriptive plots
-# Section 4: Merge EasyM with cfWGS data
-# Section 5: Survival analysis and Kaplan-Meier curves
-# Section 6: Landmark analyses with threshold optimization
-# Section 7: Export comprehensive results tables
+# Required downstream role:
+#   - 3_2_Plot_optimal_cutoff_and_clinical_concordance.R uses the optimized
+#     EasyM calls and thresholds for Figure 3E, Figure 4C, Figure 4D, and
+#     Supplementary Table 8.
+#   - 4_1_Survival_Analysis.R uses the optimized EasyM calls for the survival
+#     and relapse-detection panels in Figure 3F/Figure 4E and Extended Data
+#     Figures 6/8.
+#
+# Key outputs consumed downstream:
+#   - Output_EasyM_MRD_analysis_2025/EasyM_all_samples_with_optimized_calls.csv
+#   - Output_EasyM_MRD_analysis_2025/EasyM_threshold_values_by_timepoint.csv
+#   - Output_EasyM_MRD_analysis_2025/landmark_analyses/
+#
+# Support-only outputs:
+#   The EasyM-only plots, exploratory landmark tables, optimized cutoff RDS
+#   files, and joint risk summaries are retained for audit and interpretation.
+#   They are not final manuscript artifacts unless the source map is updated to
+#   assign a specific figure/table to them.
+#
+# Workflow:
+#   0. Setup and output directories.
+#   1. Helper functions for robust IO, data shaping, and survival summaries.
+#   2. Load EasyM quantitative and binary source files.
+#   3. Generate EasyM-only descriptive support plots.
+#   4. Merge EasyM with cfWGS calls/probabilities.
+#   5. Run descriptive landmark survival/comparison analyses.
+#   6. Derive EasyM optimized thresholds and agreement summaries.
+#   7. Export the downstream EasyM call table and threshold reference table.
 #
 # How to run:
 #   Rscript Scripts_2025/Final_Scripts/3_1_A_Process_and_optimize_EasyM.R
-#
-# Manuscript outputs created/updated:
-#   - None directly in the current mapped manuscript set. This upstream/support
-#     script processes EasyM/proteomic MRD thresholds and comparisons used by
-#     later clinical-concordance and survival analyses.
-## ============================================================
+# ============================================================
 # Pipeline status:
-#   Active supplementary/support analysis. This script is retained in the
-#   command-line pipeline, but it is not currently mapped to a named final
-#   manuscript figure or table in docs/manuscript_artifact_source_map.tsv.
+#   Active required intermediate. Keep this script in the command-line pipeline
+#   even though it does not directly own a final manuscript figure/table.
 #
 
 ## ============================================================
@@ -46,9 +58,10 @@ suppressPackageStartupMessages({
 })
 
 ## ---- Project paths ----
-# Input: Raw EasyM data from clinical collaborators
-# Output: Processed tables and figures for manuscript
-proj_dir <- "../Aimee_MRD_clinical_manuscript/Data from Aimee MRD/"   # update if needed
+# Input: project-relative raw EasyM data from clinical collaborators.
+# Output: processed EasyM call/threshold tables used by 3_2 and 4_1, plus
+# support-only figures/tables for audit.
+easym_input_dir <- "Aimee additional data"
 
 # Main output directory for all results
 # Using descriptive name focusing on analysis type (cfWGS/EasyM MRD) rather than specific meetings
@@ -178,9 +191,10 @@ theme_mrd <- theme_bw(base_size = 16) +
 # 2. Binary: MRD positive (100) vs negative (0) calls
 # Both are measured longitudinally across treatment visits
 
-## Update filenames here if EasyM tables are named differently
-EasyM_quant_path <- file.path(proj_dir, "RAPID NOVOR VALUES with values with relapse.csv")
-EasyM_bin_path   <- file.path(proj_dir, "RAPID NOVOR pos-neg with relapse.csv")
+## EasyM source files are staged inside the repository/project so command-line
+## and Code Ocean runs do not depend on user-specific sibling folders.
+EasyM_quant_path <- file.path(easym_input_dir, "RAPID NOVOR VALUES with values with relapse.csv")
+EasyM_bin_path   <- file.path(easym_input_dir, "RAPID NOVOR pos-neg with relapse.csv")
 
 EasyM_values_raw <- read_csv_safely(EasyM_quant_path)
 EasyM_pos_raw    <- read_csv_safely(EasyM_bin_path)
@@ -2147,14 +2161,20 @@ sentence <- with(counts, glue(
 cat(sentence, "\n")
 
 ## ============================================================
-## FINAL EXPORT: Comprehensive EasyM table for script 3_2
+## FINAL INTERMEDIATE EXPORT: EasyM table for 3_2 and 4_1
 ## ============================================================
-# Create the MAIN table you'll use in 3_2 with:
+# Create the MAIN EasyM table used by downstream manuscript-output scripts:
 # 1. ALL EasyM measurements (not just landmark pairs)
 # 2. Raw EasyM values
 # 3. Clinician's binary calls (original)
 # 4. Optimized threshold-based calls (per timepoint)
 # 5. Log10 and z-score transformed values
+#
+# Downstream consumers:
+#   - 3_2 loads this file for the Figure 3E/Figure 4C/Figure 4D EasyM panels
+#     and Supplementary Table 8 source workbook.
+#   - 4_1 loads this file for EasyM comparisons in the survival and
+#     relapse-detection analyses.
 
 EasyM_comprehensive <- dat %>%
   mutate(
@@ -2307,11 +2327,11 @@ cat("KEY OUTPUT FILES FOR DOWNSTREAM ANALYSIS:\n")
 cat("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n")
 
 # Main export table
-main_export <- file.path(out_dir, "tables", "EasyM_all_samples_with_optimized_calls.csv")
+main_export <- file.path(out_dir, "EasyM_all_samples_with_optimized_calls.csv")
 cat(sprintf("1. Comprehensive EasyM table with optimized calls:\n   ├─ Path: %s\n\n", main_export))
 
 # Threshold reference
-threshold_export <- file.path(out_dir, "tables", "EasyM_threshold_values_by_timepoint.csv")
+threshold_export <- file.path(out_dir, "EasyM_threshold_values_by_timepoint.csv")
 cat(sprintf("2. Threshold values reference:\n   ├─ Path: %s\n\n", threshold_export))
 
 # Landmark analyses directory
@@ -2326,7 +2346,8 @@ cat("✓ Other timepoints:         Optimized via log-rank (exploratory - new)\n\
 
 cat("NEXT STEPS:\n")
 cat("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
-cat("→ Load 'EasyM_all_samples_with_optimized_calls.csv' in script 3_2\n")
-cat("→ Use 'EasyM_optimized_binary' column for primary comparisons vs clinician calls\n\n")
+cat("→ 3_2 loads EasyM_all_samples_with_optimized_calls.csv for EasyM panels in Figure 3E, Figure 4C, and Figure 4D\n")
+cat("→ 4_1 loads EasyM_all_samples_with_optimized_calls.csv for EasyM survival and relapse-detection summaries\n")
+cat("→ Use EasyM_optimized_binary for manuscript-facing EasyM binary comparisons\n\n")
 
 ## End of script

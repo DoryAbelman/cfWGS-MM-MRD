@@ -1,13 +1,24 @@
 # =============================================================================
 # 3_3_Plot_optimal_cutoff_tumor_naive_calls_and_clinical_concordance.R
 # Project:  cfWGS MRD detection (M4 / SPORE / IMMAGINE)
-# How to run:
-#   Rscript Scripts_2025/Final_Scripts/3_3_Plot_optimal_cutoff_tumor_naive_calls_and_clinical_concordance.R
+# Archive status:
+#   This script is preserved for auditability and optional tumor-naive support
+#   review. It is not part of the routine manuscript-generation command-line
+#   pipeline.
+#
+# Optional support run:
+#   Rscript Scripts_2025/Final_Scripts/archive/support_analysis/3_3_Plot_optimal_cutoff_tumor_naive_calls_and_clinical_concordance.R
 #
 # Manuscript outputs created/updated:
-#   - None directly in the current mapped manuscript set. This support script
-#     generates tumor-naive clinical concordance outputs for comparison and
-#     sensitivity review.
+#   - None directly in the current mapped manuscript set.
+#
+# Pipeline role:
+#   This is an archived support/sensitivity analysis for the tumor-naive blood
+#   cfWGS strategy. It intentionally does not copy files into
+#   final_manuscript_objects/ because docs/manuscript_artifact_source_map.tsv
+#   does not currently assign any final manuscript panel or table to this
+#   script. Outputs are written to clearly labeled support folders under
+#   Output_figures_2025/ and Output_tables_2025/ for review.
 #
 # Author:   Dory Abelman
 # Date:     May 2025
@@ -33,11 +44,19 @@
 #   - Output_tables_2025/selected_combo_thresholds_<date>.rds
 #
 # Outputs:
-#   - Output_figures_2025/Fig3_3_TumorNaive_MRD_Panel.png
-#   - Output_figures_2025/Fig3_3_TumorNaive_BloodDualThresholds.png
-#   - Output_figures_2025/Fig3_3_Calibration*.png
-#   - Output_figures_2025/tbl_TumorNaive_*_contingency.png
-#   - Output_tables_2025/Source_data_3_3_*.csv
+#   Primary support figures:
+#     - Output_figures_2025/Fig_PB_cfDNA_positivity_by_tech_updated.png
+#     - Output_figures_2025/Fig_PB_cfDNA_positivity_by_tech_later_line.png
+#
+#   Tumor-naive exploratory support figures:
+#     - Output_figures_2025/tumor_naive_support/FigX_*.png
+#
+#   Support tables:
+#     - Output_tables_2025/Positivity_by_Landmark_TimePoint_PB_cfDNA_Frontline_updated.csv
+#     - Output_tables_2025/Positivity_All_TimePoints_PB_cfDNA_NonFrontline_updated.csv
+#     - Output_tables_2025/Frontline_PB_cfDNA_*_Concordance.csv
+#     - Output_tables_2025/Frontline_PB_cfDNA_*_PPV_NPV.csv
+#     - Output_tables_2025/Tumor_naive_discordance_tables/*.csv
 #
 # Dependencies:
 #   dplyr, tidyr, ggplot2, pROC, patchwork, janitor, gt, glue,
@@ -46,9 +65,10 @@
 #
 # =============================================================================
 # Pipeline status:
-#   Active supplementary/support analysis. This script is retained in the
-#   command-line pipeline, but it is not currently mapped to a named final
-#   manuscript figure or table in docs/manuscript_artifact_source_map.tsv.
+#   Archived support analysis. Run this only when specifically reviewing
+#   tumor-naive blood cfWGS behavior. It is not a final manuscript-output owner
+#   unless the artifact source map is updated to assign specific final panels or
+#   tables to this script.
 #
 
 # -------- 0.  Load packages --------------------------------------------------
@@ -73,15 +93,53 @@ library(purrr)    # functional iteration over model/list columns
 # -------- 1.  Read processed data & thresholds ------------------------------
 outdir   <- "Output_tables_2025"
 OUTPUT_DIR_FIGURES    <- "Output_figures_2025"
+SUPPORT_FIGURE_DIR <- file.path(OUTPUT_DIR_FIGURES, "tumor_naive_support")
+dir.create(outdir, recursive = TRUE, showWarnings = FALSE)
+dir.create(OUTPUT_DIR_FIGURES, recursive = TRUE, showWarnings = FALSE)
+dir.create(SUPPORT_FIGURE_DIR, recursive = TRUE, showWarnings = FALSE)
 local_sass_cache <- file.path(outdir, ".sass-cache")
+local_r_cache <- file.path(outdir, ".r-cache")
 dir.create(local_sass_cache, recursive = TRUE, showWarnings = FALSE)
-Sys.setenv(SASS_CACHE = normalizePath(local_sass_cache, mustWork = FALSE))
+dir.create(local_r_cache, recursive = TRUE, showWarnings = FALSE)
+Sys.setenv(
+  SASS_CACHE = normalizePath(local_sass_cache, mustWork = FALSE),
+  XDG_CACHE_HOME = normalizePath(local_r_cache, mustWork = FALSE),
+  R_USER_CACHE_DIR = normalizePath(local_r_cache, mustWork = FALSE)
+)
 dat      <- readRDS(file.path(outdir, "all_patients_with_BM_and_blood_calls_updated2.rds"))
 PATH_MODEL_LIST       <- file.path(outdir, "selected_combo_models_2025-06-17.rds")
 PATH_THRESHOLD_LIST   <- file.path(outdir, "selected_combo_thresholds_2025-06-17.rds")
 
 selected_models <- readRDS(PATH_MODEL_LIST)
 selected_thr    <- readRDS(PATH_THRESHOLD_LIST)
+
+write_support_csv <- function(x, filename) {
+  # Keep historical support-table filenames stable while making each export
+  # visibly intentional in the command-line log.
+  path <- file.path(outdir, filename)
+  readr::write_csv(x, path)
+  message("Support table written: ", path)
+  invisible(path)
+}
+
+write_support_csv_path <- function(x, path) {
+  # Use for support tables that intentionally live in a nested audit folder.
+  dir.create(dirname(path), recursive = TRUE, showWarnings = FALSE)
+  readr::write_csv(x, path)
+  message("Support table written: ", path)
+  invisible(path)
+}
+
+save_support_plot <- function(plot, filename, width, height, dpi = 500, dir = OUTPUT_DIR_FIGURES) {
+  # All non-final support plots are written into explicit output folders rather
+  # than the project root, so Code Ocean/GitHub users can find generated review
+  # artifacts without hunting through the working directory.
+  dir.create(dir, recursive = TRUE, showWarnings = FALSE)
+  path <- file.path(dir, filename)
+  ggplot2::ggsave(filename = path, plot = plot, width = width, height = height, dpi = dpi)
+  message("Support figure written: ", path)
+  invisible(path)
+}
 
 
 #### Rescore based on new established limit in the dilution serires 
@@ -282,15 +340,15 @@ non_tbl <- dat %>%
   )
 
 
-## Export
-readr::write_csv(
+## Export support positivity tables
+write_support_csv(
   front_tbl,
-  file.path(outdir, "Positivity_by_Landmark_TimePoint_PB_cfDNA_Frontline_updated.csv")
+  "Positivity_by_Landmark_TimePoint_PB_cfDNA_Frontline_updated.csv"
 )
 
-readr::write_csv(
+write_support_csv(
   non_tbl,
-  file.path(outdir, "Positivity_All_TimePoints_PB_cfDNA_NonFrontline_updated.csv")
+  "Positivity_All_TimePoints_PB_cfDNA_NonFrontline_updated.csv"
 )
 
 
@@ -416,12 +474,11 @@ p_front_grouped <- ggplot(front_tbl,
             size     = 3.5)
 
 # 4) save
-ggsave(
-    filename = file.path(OUTPUT_DIR_FIGURES, "Fig_PB_cfDNA_positivity_by_tech_updated.png"),
-  plot     = p_front_grouped,
-  width    = 6,
-  height   = 4,
-  dpi      = 500
+save_support_plot(
+  plot = p_front_grouped,
+  filename = "Fig_PB_cfDNA_positivity_by_tech_updated.png",
+  width = 6,
+  height = 4
 )
 
 
@@ -468,12 +525,11 @@ p_non_grouped <- ggplot(non_tbl,
             size     = 3.5)
 
 # 4) save
-ggsave(
-  filename = file.path(OUTPUT_DIR_FIGURES, "Fig_PB_cfDNA_positivity_by_tech_later_line.png"),
-  plot     = p_front_grouped,
-  width    = 6,
-  height   = 4,
-  dpi      = 500
+save_support_plot(
+  plot = p_non_grouped,
+  filename = "Fig_PB_cfDNA_positivity_by_tech_later_line.png",
+  width = 6,
+  height = 4
 )
 
 
@@ -770,33 +826,33 @@ bind_rows(ppv_mfc)
 
 ## Export 
 # 1. Export post-ASCT pairwise concordance (frontline PB_cfDNA)
-readr::write_csv(
+write_support_csv(
   post_conc,
-  file.path(outdir, "Frontline_PB_cfDNA_PostASCT_Pairwise_Concordance.csv")
+  "Frontline_PB_cfDNA_PostASCT_Pairwise_Concordance.csv"
 )
 
 # 2. Export maintenance-timepoint pairwise concordance (frontline PB_cfDNA)
-readr::write_csv(
+write_support_csv(
   maint_conc,
-  file.path(outdir, "Frontline_PB_cfDNA_Maintenance_Pairwise_Concordance.csv")
+  "Frontline_PB_cfDNA_Maintenance_Pairwise_Concordance.csv"
 )
 
 # 3. Export frontline positivity counts by test & landmark (Post_ASCT + Maintenance)
-readr::write_csv(
+write_support_csv(
   pos_tbl,
-  file.path(outdir, "Frontline_PB_cfDNA_Positivity_PostASCT_and_Maintenance.csv")
+  "Frontline_PB_cfDNA_Positivity_PostASCT_and_Maintenance.csv"
 )
 
 # 4. Export PPV/NPV at Post-ASCT for Blood_zscore_only_sites_call
-readr::write_csv(
+write_support_csv(
   ppv_post,
-  file.path(outdir, "Frontline_PB_cfDNA_PostASCT_PPV_NPV.csv")
+  "Frontline_PB_cfDNA_PostASCT_PPV_NPV.csv"
 )
 
 # 5. Export PPV/NPV at Maintenance for Blood_zscore_only_sites_call
-readr::write_csv(
+write_support_csv(
   ppv_maint,
-  file.path(outdir, "Frontline_PB_cfDNA_Maintenance_PPV_NPV.csv")
+  "Frontline_PB_cfDNA_Maintenance_PPV_NPV.csv"
 )
 
 
@@ -904,9 +960,9 @@ dat <- dat %>%
   )
 
 # 4) Save the augmented dat
-readr::write_csv(
+write_support_csv(
   dat,
-  file.path(outdir, "dat_with_fragment_and_DARs_outlier_flags_scored.csv")
+  "dat_with_fragment_and_DARs_outlier_flags_scored.csv"
 )
 
 
@@ -978,11 +1034,10 @@ combined_discord_tbl <- dat %>%
 
 combined_discord_tbl_slim <- combined_discord_tbl %>% filter(category != "concordant")
 
-# 3.  (Optional) write out to CSV ------------------------------------------
-write.csv(
+# 3.  Write out to CSV ------------------------------------------------------
+write_support_csv_path(
   combined_discord_tbl,
-  file.path(outdir_discordances, "combined_discordance_table_blood_calls.csv"),
-  row.names = FALSE
+  file.path(outdir_discordances, "combined_discordance_table_blood_calls.csv")
 )
 
 
@@ -1027,11 +1082,10 @@ combined_discord_tbl_non_frontline <- dat %>%
   arrange(Patient, Comparator)
 
 
-## Export 
-write.csv(
+## Export
+write_support_csv_path(
   combined_discord_tbl_non_frontline,
-  file.path(outdir_discordances, "combined_discordance_table_all_timepoints.csv"),
-  row.names = FALSE
+  file.path(outdir_discordances, "combined_discordance_table_all_timepoints.csv")
 )
 
 
@@ -1186,12 +1240,12 @@ roc_panel <- function(df, prob_col, title_txt, col = "#0072B2") {
   )
   
   ggplot(df_roc, aes(fpr, tpr)) +
-    geom_line(size = 1, colour = col) +
+    geom_line(linewidth = 1, colour = col) +
     geom_abline(linetype = "dashed") +
     annotate("text", x = 0.6, y = 0.2,
              label = paste0("AUC = ", round(auc_val, 3))) +
     labs(title = title_txt,
-         x = "1 – Specificity", y = "Sensitivity") +
+         x = "1 - Specificity", y = "Sensitivity") +
     theme_classic()
 }
 
@@ -1299,8 +1353,13 @@ fig_panel <- (pA | pB) / (pC | pD) +
 
 print(fig_panel)
 
-ggsave("FigX_cfWGS_MRD_Panel.png", fig_panel,
-       width = 12, height = 8, dpi = 500)
+save_support_plot(
+  fig_panel,
+  filename = "FigX_cfWGS_MRD_Panel.png",
+  width = 12,
+  height = 8,
+  dir = SUPPORT_FIGURE_DIR
+)
 
 ## Show for blood seperately with senseitivity or accuracy 
 # ────────────────────────────────────────────────────────────────────────────
@@ -1350,7 +1409,7 @@ auc_s <- as.numeric(pROC::auc(roc_s))
 auc_a <- as.numeric(pROC::auc(roc_a))
 
 pD2 <- ggplot(df_roc, aes(x = fpr, y = tpr, color = method)) +
-  geom_line(size = 1) +
+  geom_line(linewidth = 1) +
   geom_abline(linetype = "dashed") +
   annotate("text", x = 0.6, y = 0.2,
            label = paste0("sens>=0.9 AUC=", round(auc_s, 3)),
@@ -1362,7 +1421,7 @@ pD2 <- ggplot(df_roc, aes(x = fpr, y = tpr, color = method)) +
                                 "accuracy"  = "#0072B2")) +
   labs(
     title = "D) ROC: Blood MRD call",
-    x = "1 – Specificity", y = "Sensitivity", color = "Rule"
+    x = "1 - Specificity", y = "Sensitivity", color = "Rule"
   ) +
   theme_classic()
 
@@ -1376,8 +1435,13 @@ fig_panel2 <- (pA | pB2) / (pC | pD2) +
 
 print(fig_panel2)
 
-ggsave("FigX_cfWGS_MRD_BloodDualThresholds.png",
-       fig_panel2, width = 12, height = 8, dpi = 500)
+save_support_plot(
+  fig_panel2,
+  filename = "FigX_cfWGS_MRD_BloodDualThresholds.png",
+  width = 12,
+  height = 8,
+  dir = SUPPORT_FIGURE_DIR
+)
 
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -1518,10 +1582,10 @@ p_long <- ggplot(dat_long,
 
 # ---------------------------------------------------------------------------
 #  SAVE ALL  -----------------------------------------------------------------
-ggsave("FigX_Calibration.png",          p_cal,   width = 5, height = 5, dpi = 500)
-ggsave("FigX_DecisionCurve.png",        p_dca,   width = 6, height = 4, dpi = 500)
-ggsave("FigX_Waterfall.png",            p_water, width = 7, height = 4, dpi = 500)
-ggsave("FigX_LongitudinalSpaghetti.png",p_long,  width = 7, height = 4, dpi = 500)
+save_support_plot(p_cal, "FigX_Calibration.png", width = 5, height = 5, dir = SUPPORT_FIGURE_DIR)
+save_support_plot(p_dca, "FigX_DecisionCurve.png", width = 6, height = 4, dir = SUPPORT_FIGURE_DIR)
+save_support_plot(p_water, "FigX_Waterfall.png", width = 7, height = 4, dir = SUPPORT_FIGURE_DIR)
+save_support_plot(p_long, "FigX_LongitudinalSpaghetti.png", width = 7, height = 4, dir = SUPPORT_FIGURE_DIR)
 
 
 
@@ -1623,7 +1687,7 @@ p_long_bm <- ggplot(dat_bm_long,
 
 # ---------------------------------------------------------------------------
 # 7.  Save all BM plots ------------------------------------------------------
-ggsave("FigX_Calibration_BM.png",          p_cal_bm,   width = 5, height = 5, dpi = 500)
-ggsave("FigX_DecisionCurve_BM.png",        p_dca_bm,   width = 6, height = 4, dpi = 500)
-ggsave("FigX_Waterfall_BM.png",            p_water_bm, width = 7, height = 4, dpi = 500)
-ggsave("FigX_LongitudinalSpaghetti_BM.png",p_long_bm,  width = 7, height = 4, dpi = 500)
+save_support_plot(p_cal_bm, "FigX_Calibration_BM.png", width = 5, height = 5, dir = SUPPORT_FIGURE_DIR)
+save_support_plot(p_dca_bm, "FigX_DecisionCurve_BM.png", width = 6, height = 4, dir = SUPPORT_FIGURE_DIR)
+save_support_plot(p_water_bm, "FigX_Waterfall_BM.png", width = 7, height = 4, dir = SUPPORT_FIGURE_DIR)
+save_support_plot(p_long_bm, "FigX_LongitudinalSpaghetti_BM.png", width = 7, height = 4, dir = SUPPORT_FIGURE_DIR)
