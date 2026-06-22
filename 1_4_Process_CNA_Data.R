@@ -76,6 +76,11 @@
 # Author: Dory Abelman
 # Date:   2025-05-26
 # =============================================================================
+# Pipeline status:
+#   Active upstream dependency. This script does not directly create a named
+#   final manuscript figure/table, but downstream scripts depend on its cleaned
+#   outputs for figure, table, or model generation.
+#
 
 
 # Load Libraries:

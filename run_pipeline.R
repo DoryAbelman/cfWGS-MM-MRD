@@ -1,11 +1,12 @@
 # =============================================================================
 # run_pipeline.R
 #
-# Command-line runner for the original numbered cfWGS-MM-MRD scripts.
+# Command-line runner for the numbered cfWGS-MM-MRD analysis scripts.
 #
-# This file intentionally lives beside the original scripts and runs those
-# scripts directly. It does not replace the original analysis code. The separate
-# reproducible_workflow/ directory is used as a provenance/validation harness.
+# This file intentionally lives beside the numbered analysis scripts and runs
+# them directly. Scientific logic remains in those stage scripts; this runner
+# only selects the script range, applies cache-sensitive guardrails, records
+# logs/manifests, and reports which manuscript outputs each stage affects.
 #
 # Usage from the project root:
 #   Rscript Scripts_2025/Final_Scripts/run_pipeline.R
@@ -16,11 +17,11 @@
 #   Rscript run_pipeline.R --execute --from 2_0 --to 2_4
 #
 # Purpose:
-#   Dry-run or execute the original numbered scripts in source-pipeline order,
+#   Dry-run or execute the numbered scripts in source-pipeline order,
 #   with guardrails for cache-sensitive/model-training stages.
 #
 # Manuscript outputs created/updated:
-#   - None directly. This support runner documents and executes the original
+#   - None directly. This support runner documents and executes the numbered
 #     numbered script order but does not itself contain scientific analysis.
 # =============================================================================
 

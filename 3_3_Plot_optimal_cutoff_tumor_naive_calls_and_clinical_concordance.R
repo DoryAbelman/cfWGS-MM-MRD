@@ -45,6 +45,11 @@
 #   Must be run AFTER 3_1_Optimize_cfWGS_thresholds.R
 #
 # =============================================================================
+# Pipeline status:
+#   Active supplementary/support analysis. This script is retained in the
+#   command-line pipeline, but it is not currently mapped to a named final
+#   manuscript figure or table in docs/manuscript_artifact_source_map.tsv.
+#
 
 # -------- 0.  Load packages --------------------------------------------------
 library(dplyr)
@@ -72,8 +77,8 @@ local_sass_cache <- file.path(outdir, ".sass-cache")
 dir.create(local_sass_cache, recursive = TRUE, showWarnings = FALSE)
 Sys.setenv(SASS_CACHE = normalizePath(local_sass_cache, mustWork = FALSE))
 dat      <- readRDS(file.path(outdir, "all_patients_with_BM_and_blood_calls_updated2.rds"))
-PATH_MODEL_LIST       <- "~/Documents/Thesis_work/R/M4/Projects/High_risk_MM_baselinbe_relapse_marrow/Output_tables_2025/selected_combo_models_2025-06-17.rds"
-PATH_THRESHOLD_LIST   <- "~/Documents/Thesis_work/R/M4/Projects/High_risk_MM_baselinbe_relapse_marrow/Output_tables_2025/selected_combo_thresholds_2025-06-17.rds"
+PATH_MODEL_LIST       <- file.path(outdir, "selected_combo_models_2025-06-17.rds")
+PATH_THRESHOLD_LIST   <- file.path(outdir, "selected_combo_thresholds_2025-06-17.rds")
 
 selected_models <- readRDS(PATH_MODEL_LIST)
 selected_thr    <- readRDS(PATH_THRESHOLD_LIST)

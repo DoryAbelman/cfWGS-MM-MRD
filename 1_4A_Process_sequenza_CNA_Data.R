@@ -96,6 +96,11 @@
 # Author: Dory Abelman
 # Date:   2025-10-06
 # =============================================================================
+# Pipeline status:
+#   Active upstream dependency. This script does not directly create a named
+#   final manuscript figure/table, but downstream scripts depend on its cleaned
+#   outputs for figure, table, or model generation.
+#
 
 
 
@@ -134,7 +139,7 @@ call_from_CNt_AB <- function(CNt, A, B) {
     is.na(CNt)               ~ NA_character_,
     CNt == 0                 ~ "HOMD",
     CNt == 1                 ~ "HETD",
-    CNt == 2 & !is.na(B) & B == 0 ~ "CNLOH",        # not used downstream
+    CNt == 2 & !is.na(B) & B == 0 ~ "CNLOH",        # retained for CNA audit tables
     CNt == 3                 ~ "GAIN",
     CNt >= 4 & CNt < 6       ~ "AMP",
     CNt >= 6                 ~ "HLAMP",

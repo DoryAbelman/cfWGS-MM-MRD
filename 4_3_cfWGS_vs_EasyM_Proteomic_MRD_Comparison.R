@@ -37,6 +37,11 @@
 ##   Must be run AFTER 3_1_Optimize_cfWGS_thresholds.R
 ##
 ################################################################################
+# Pipeline status:
+#   Active supplementary/support analysis. This script is retained in the
+#   command-line pipeline, but it is not currently mapped to a named final
+#   manuscript figure or table in docs/manuscript_artifact_source_map.tsv.
+#
 
 ## ── 0.  SETUP ────────────────────────────────────────────────────────────────
 suppressPackageStartupMessages({

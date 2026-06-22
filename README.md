@@ -16,6 +16,20 @@ The workflow is intended to be end-to-end from staged raw/protected inputs throu
 
 ## Quick start
 
+Check that required local inputs are staged inside the project before running
+the analysis:
+
+```sh
+Rscript Scripts_2025/Final_Scripts/prepare_local_inputs.R --check
+```
+
+If the required files are available in another local mirror, copy missing inputs
+into the project while preserving the relative paths expected by the scripts:
+
+```sh
+Rscript Scripts_2025/Final_Scripts/prepare_local_inputs.R --source-dir /path/to/staged_inputs --copy-missing
+```
+
 Dry-run the numbered source pipeline from the project root:
 
 ```sh
@@ -74,6 +88,9 @@ Scripts_2025/Final_Scripts/final_manuscript_objects/manuscript_output_index.tsv
 Scripts_2025/Final_Scripts/final_manuscript_objects/script_output_index.tsv
 ```
 
+For GitHub or Code Ocean packaging, use
+[`CODE_OCEAN_UPLOAD_CHECKLIST.md`](CODE_OCEAN_UPLOAD_CHECKLIST.md).
+
 ## Manuscript figure/table ownership
 
 The numbered scripts are still organized by analysis question, not by final
@@ -127,6 +144,7 @@ Rscript Scripts_2025/Final_Scripts/run_pipeline.R --execute --only 2_1_part2
 Check packages without running analysis:
 
 ```sh
+Rscript Scripts_2025/Final_Scripts/prepare_local_inputs.R --check
 Rscript Scripts_2025/Final_Scripts/run_pipeline.R --check-packages
 ```
 
@@ -221,6 +239,7 @@ Scripts are numbered to indicate execution order. Run them sequentially from a w
 | `setup_packages.R` | Checks and loads R packages required by the pipeline. It stops with a package-specific error if anything is missing. |
 | `config.R` | Complete package list and common directory path constants (`clinical_data_dir`, `wgs_results_dir`, `output_tables_dir`). Update paths here before running. |
 | `helpers.R` | Shared utility functions used across scripts (e.g. `clean_sample_id()` for standardising sample identifiers). |
+| `prepare_local_inputs.R` | Local/Code Ocean preflight utility. It checks that required protected/de-identified inputs are staged under project-relative paths and can copy missing files/directories from a local source mirror with `--source-dir ... --copy-missing`. |
 | `manuscript_output_helpers.R` | Shared utilities used inside numbered scripts to copy/save final manuscript figure, table, and source-data components into `final_manuscript_objects/` with audited manuscript labels. |
 | `validate_manuscript_outputs.R` | Command-line validator for the direct manuscript-output tree. It checks coverage against `docs/manuscript_artifact_source_map.tsv`, verifies organized paths, and writes `manuscript_output_validation_report.tsv`. |
 | `pipeline_metadata.R` | Reads `docs/manuscript_artifact_source_map.tsv` and builds script-to-artifact crosswalks used by the command-line runner and documentation. |
@@ -240,6 +259,7 @@ Final_Scripts/
 ├── final_manuscript_objects/ ← manuscript-labeled outputs created at run time
 ├── run_manuscript_workflow.R ← one-command manuscript workflow orchestrator
 ├── setup_packages.R        ← one-shot package checker/loader
+├── prepare_local_inputs.R  ← local input staging/check utility
 └── README.md               ← this file
 ```
 
@@ -254,7 +274,7 @@ Final_Scripts/
 
 **Steps**
 
-1. Obtain the staged raw/protected input files (see [Data availability](#data-availability)) and place them in the directory structure expected by each script. Paths and key inputs are documented in the relevant script headers and in the tables above.
+1. Obtain the staged raw/protected input files (see [Data availability](#data-availability)) and place them in the directory structure expected by each script. Paths and key inputs are documented in the relevant script headers and in the tables above. Use `prepare_local_inputs.R --check` to verify the local staging before running the analysis, or `prepare_local_inputs.R --source-dir /path/to/staged_inputs --copy-missing` to copy missing inputs from a local mirror.
 2. Update `config.R` with your local path for `clinical_data_dir`, `wgs_results_dir`, and `output_tables_dir`.
 3. Dry-run the command-line sequence:
    ```sh
@@ -264,7 +284,7 @@ Final_Scripts/
    ```sh
    Rscript Scripts_2025/Final_Scripts/run_pipeline.R --execute
    ```
-   Each script runs in a fresh R process from the project root and writes its outputs to the legacy output locations such as `Output_tables_2025/` and `Final Tables and Figures/`.
+   Each script runs in a fresh R process from the project root and writes its outputs to the historical analysis locations such as `Output_tables_2025/` and `Final Tables and Figures/`.
 5. Inspect direct manuscript-facing exports:
    ```sh
    find Scripts_2025/Final_Scripts/final_manuscript_objects -maxdepth 4 -type f

@@ -38,6 +38,11 @@
 # Author:    Dory Abelman
 # Last update: August 2025
 ###############################################################################
+# Pipeline status:
+#   Active in the command-line pipeline. This script creates or stages the
+#   manuscript output(s) listed above into final_manuscript_objects/ when the
+#   required upstream inputs are available.
+#
 
 ## ---- 0. USER SETTINGS -------------------------------------------------------
 in_rds        <- "Jan2025_exported_data/All_feature_data_August2025.rds"      # or "All_feature_data.csv"

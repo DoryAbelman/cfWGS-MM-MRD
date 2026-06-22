@@ -8,11 +8,11 @@
 #   table, source-data, or helper object into one standardized output tree.
 #
 # Why this exists:
-#   The legacy scripts already create the correct scientific objects, but many
-#   outputs have historical filenames that do not clearly say which manuscript
-#   figure/table they support. The final pipeline should make that mapping
-#   explicit inside the script that creates each object, rather than relying on a
-#   separate post-hoc collector.
+#   The numbered analysis scripts create the scientific objects used in the
+#   manuscript, but many outputs have historical filenames that do not clearly
+#   say which manuscript figure/table they support. The final pipeline should
+#   make that mapping explicit inside the script that creates each object,
+#   rather than relying on a separate post-hoc collector.
 #
 # Output root:
 #   Scripts_2025/Final_Scripts/final_manuscript_objects/

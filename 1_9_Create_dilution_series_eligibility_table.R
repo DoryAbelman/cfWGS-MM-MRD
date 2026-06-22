@@ -31,6 +31,11 @@
 #        For each eligible pair, a plan for 10^-1 to 10^-6 target fractions
 #        with 3 technical replicates per level.
 # =============================================================================
+# Pipeline status:
+#   Active upstream dependency. This script does not directly create a named
+#   final manuscript figure/table, but downstream scripts depend on its cleaned
+#   outputs for figure, table, or model generation.
+#
 
 suppressPackageStartupMessages({
   library(readr)

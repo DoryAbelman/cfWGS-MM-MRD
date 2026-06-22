@@ -100,7 +100,12 @@
 #   • Supplementary_Table_*.csv (formatted for manuscript)
 #   • Final Tables and Figures/*.png (manuscript-ready figures)
 #
-# ============================================================================="
+# =============================================================================
+# Pipeline status:
+#   Active but cache-sensitive. The command-line runner skips this script by
+#   default during routine regeneration and test-cohort expansion. Use
+#   --include-cache-sensitive only for deliberate model recomputation.
+#
 
 # -----------------------------------------------------------------------------
 # 1. Setup & Package Loading
@@ -255,7 +260,13 @@ make_sparse_xy <- function(df, predictors) {
 }
 
 # -----------------------------------------------------------------------------
-# 4. Univariate Threshold Optimization - not used in final manuscript
+# 4. Exploratory univariate/ridge threshold screening
+#
+# Manuscript role:
+#   Retained for provenance and model-development audit only. These exploratory
+#   thresholds are not the manuscript-reported model results; the active
+#   manuscript model performance comes from the nested cross-validation and
+#   downstream scoring sections later in this script.
 # -----------------------------------------------------------------------------
 
 # 3.  Train ridge‐penalized combos ------------------------------------------
@@ -381,7 +392,12 @@ print(results)
 
 
 # -----------------------------------------------------------------------------
-# 5. Single 5-fold CV - not used in manuscript but for testing only 
+# 5. Legacy single 5-fold CV model-screening block
+#
+# Manuscript role:
+#   Retained for provenance because it records earlier candidate feature-set
+#   screening. It is not the source of the final manuscript performance values;
+#   the nested-CV section below is the active model-analysis section.
 # -----------------------------------------------------------------------------
 
 #### See if different combination of features would be better
@@ -530,7 +546,12 @@ saveRDS(model_list,
 
 
 # -----------------------------------------------------------------------------
-# 6. Repeated CV - not used in manuscript but for testing only 
+# 6. Repeated-CV model-screening block
+#
+# Manuscript role:
+#   Retained to document the intermediate model-selection path. Final reported
+#   values are taken from the later nested-CV/scoring/export sections that write
+#   the manuscript figures and Supplementary Tables 4-6.
 # -----------------------------------------------------------------------------
 
 ###### Now do a repeated 5x5 cross validation to improve generalizability 
@@ -6971,9 +6992,15 @@ for (cmb in wanted) {
 
 
 
-#### NON-MANUSCRIPT EXPLORATORY CODE
-#### Below here is testing/diagnostic ROC smoothing code. It is not used for
-#### active manuscript figures, tables, thresholds, or reported model metrics.
+#### Optional exploratory diagnostics
+#### Below here is diagnostic ROC smoothing/sample-count code. It is excluded
+#### from active manuscript figures, tables, thresholds, and reported model
+#### metrics. Keep disabled during command-line manuscript regeneration unless
+#### an analyst is intentionally auditing exploratory diagnostics.
+
+run_non_manuscript_diagnostics <- FALSE
+
+if (isTRUE(run_non_manuscript_diagnostics)) {
 
 ### Now try smoothed 
 # ── 1. Compute binormal-smoothed ROC curves ────────────────────────────────
@@ -7085,3 +7112,4 @@ dat %>%
   filter(!is.na(MRD_truth)) %>%
   distinct(Sample_Code, Cohort) %>%
   count(Cohort, name = "n_samples_with_blood_only")
+}

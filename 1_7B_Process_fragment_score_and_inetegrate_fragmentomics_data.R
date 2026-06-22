@@ -31,6 +31,11 @@
 #     integrates fragmentomics features used by model training, longitudinal
 #     summaries, and dilution-series comparisons.
 # ──────────────────────────────────────────────────────────────────────────────
+# Pipeline status:
+#   Active upstream dependency. This script does not directly create a named
+#   final manuscript figure/table, but downstream scripts depend on its cleaned
+#   outputs for figure, table, or model generation.
+#
 
 ### PREPARE SESSION ################################################################################
 library(BoutrosLab.plotting.general)
@@ -61,13 +66,25 @@ first_nonmissing <- function(x) {
   x[[1]]
 }
 
-source('session.functions.R')
+session_functions_path <- c(
+  "session.functions.R",
+  file.path("..", "..", "session.functions.R")
+)
+session_functions_path <- session_functions_path[file.exists(session_functions_path)][1]
+if (is.na(session_functions_path)) {
+  stop(
+    "Could not find session.functions.R. Run from the project root or stage the helper at the project root.",
+    call. = FALSE
+  )
+}
+source(session_functions_path)
+rm(session_functions_path)
 
 
 ### SET PATHS #######################################################################################
-input.dir <- '~/Documents/Thesis_work/R/M4/Projects/High_risk_MM_baselinbe_relapse_marrow/Fragmentomics_data'
-pon.dir   <- '~/Documents/Thesis_work/R/M4/Projects/High_risk_MM_baselinbe_relapse_marrow/Fragmentomics_data/Normals'
-out.dir   <- '~/Documents/Thesis_work/R/M4/Projects/High_risk_MM_baselinbe_relapse_marrow/Results_Fragmentomics/Insert_size'
+input.dir <- "Fragmentomics_data"
+pon.dir   <- file.path("Fragmentomics_data", "Normals")
+out.dir   <- file.path("Results_Fragmentomics", "Insert_size")
 dir.create(out.dir, recursive = TRUE, showWarnings = FALSE)
 
 

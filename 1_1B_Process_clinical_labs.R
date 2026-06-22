@@ -26,6 +26,11 @@
 # Author:    Dory Abelman
 # Date:      May 2025
 # ==============================================================================
+# Pipeline status:
+#   Active upstream dependency. This script does not directly create a named
+#   final manuscript figure/table, but downstream scripts depend on its cleaned
+#   outputs for figure, table, or model generation.
+#
 
 # Load only the packages actually used below
 library(dplyr)       # data manipulation

@@ -32,6 +32,11 @@
 # Author:  Dory Abelman
 # Updated: 2025-06-06
 # ──────────────────────────────────────────────────────────────────────────────
+# Pipeline status:
+#   Active upstream dependency. This script does not directly create a named
+#   final manuscript figure/table, but downstream scripts depend on its cleaned
+#   outputs for figure, table, or model generation.
+#
 
 ### 0.  PACKAGES & HELPER FUNCTIONS  ############################################
 suppressPackageStartupMessages({
@@ -43,10 +48,18 @@ suppressPackageStartupMessages({
   library(GeneCycle)   # for periodogram()
 })
 
-# (If you have any custom functions in session.functions.R, load them here:)
-if (file.exists("session.functions.R")) {
-  source("session.functions.R")
+# Optional project helper. This script keeps the key helper functions it needs
+# below, so absence of session.functions.R should not block dilution-series
+# processing. If the helper is staged, source it for consistency with 1_7A/B.
+session_functions_path <- c(
+  "session.functions.R",
+  file.path("..", "..", "session.functions.R")
+)
+session_functions_path <- session_functions_path[file.exists(session_functions_path)][1]
+if (!is.na(session_functions_path)) {
+  source(session_functions_path)
 }
+rm(session_functions_path)
 
 # Compute a z-score of x versus the vector y
 calculate.zscore <- function(x, y) {
@@ -92,22 +105,22 @@ clean_sample <- function(x) {
 # Point these to your *dilution-series* folders:
 
 # 1a) Nucleosome-accessibility input (cfWGS for dilution series)
-nuc_input.dir <- "~/Documents/Thesis_work/R/M4/Projects/High_risk_MM_baselinbe_relapse_marrow/Fragmentomics_data/Dilution_series"
+nuc_input.dir <- file.path("Fragmentomics_data", "Dilution_series")
 
 # 1b) Nucleosome-accessibility PON folder (healthy controls)
-nuc_pon.dir   <- "~/Documents/Thesis_work/R/M4/Projects/High_risk_MM_baselinbe_relapse_marrow/Fragmentomics_data/Normals"
+nuc_pon.dir   <- file.path("Fragmentomics_data", "Normals")
 
 # 1c) Insert-size + FS input (dilution series)
-ins_fs.dir    <- "~/Documents/Thesis_work/R/M4/Projects/High_risk_MM_baselinbe_relapse_marrow/Fragmentomics_data/Dilution_series"
+ins_fs.dir    <- file.path("Fragmentomics_data", "Dilution_series")
 
 # 1d) Combined clinical CSV (used for joining Sample → Bam, Patient, Date…)
-clinical.csv  <- "~/Documents/Thesis_work/R/M4/Projects/High_risk_MM_baselinbe_relapse_marrow/Fragmentomics_data/Dilution_series/Metadata_dilution_series.csv"
+clinical.csv  <- file.path("Fragmentomics_data", "Dilution_series", "Metadata_dilution_series.csv")
 
 # 1e) If you have additional dilution series metadata file (e.g. dilution percentages), put it here:
 meta.csv      <- clinical.csv
 
 # 1f) Output folder for dilution series results
-out.dir       <- "~/Documents/Thesis_work/R/M4/Projects/High_risk_MM_baselinbe_relapse_marrow/Results_Fragmentomics/Dilution_series"
+out.dir       <- file.path("Results_Fragmentomics", "Dilution_series")
 if (!dir.exists(out.dir)) dir.create(out.dir, recursive = TRUE)
 
 

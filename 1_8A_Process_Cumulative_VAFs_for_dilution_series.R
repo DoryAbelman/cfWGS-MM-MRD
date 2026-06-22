@@ -37,6 +37,11 @@
 # Usage:
 #   Rscript 1_8A_Process_Cumulative_VAFs_for_dilution_series.R
 # =============================================================================
+# Pipeline status:
+#   Active upstream dependency. This script does not directly create a named
+#   final manuscript figure/table, but downstream scripts depend on its cleaned
+#   outputs for figure, table, or model generation.
+#
 
 # ──────────────────────────────────────────────────────────────────────────────
 # 1) Load libraries
@@ -157,26 +162,42 @@ colnames(all_files) <- gsub("\\s+", "_", colnames(all_files))
 colnames(all_files) <- gsub("\\.", "_", colnames(all_files))
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# 6) OPTIONAL: Swap mis‐labeled columns (sites_detected ↔ reads_detected ↔ total_reads)
-#    (only needed if you used an older parser version that mis-assigned these)
-# ──────────────────────────────────────────────────────────────────────────────
-
-# Temporarily store each column
-temp_sites <- all_files$sites_detected
-temp_reads <- all_files$reads_detected
-temp_total <- all_files$total_reads
-
-# Reassign them in the correct order
-all_files <- all_files %>%
-  mutate(
-    sites_detected = temp_reads,
-    reads_detected = temp_total,
-    total_reads    = temp_sites
+# -----------------------------------------------------------------------------
+# 6) MRDetect parser compatibility correction
+# -----------------------------------------------------------------------------
+#
+# The dilution-series MRDetect CSV files used for the manuscript were generated
+# by the same parser version as the main-sample files. That parser assigned
+# three count columns in the wrong order, so the manuscript analysis corrects
+# that ordering before calculating detection-rate features. Keep this TRUE for
+# the preserved manuscript input set. If future MRDetect CSVs are produced by a
+# corrected parser, set this to FALSE only after confirming the input column
+# definitions against parser documentation.
+apply_mrdetect_parser_column_correction <- TRUE
+required_mrdetect_count_cols <- c("sites_detected", "reads_detected", "total_reads")
+missing_mrdetect_count_cols <- setdiff(required_mrdetect_count_cols, names(all_files))
+if (length(missing_mrdetect_count_cols) > 0) {
+  stop(
+    "MRDetect count columns are missing after column-name standardization: ",
+    paste(missing_mrdetect_count_cols, collapse = ", "),
+    call. = FALSE
   )
+}
 
-# Remove the temporary objects
-rm(temp_sites, temp_reads, temp_total)
+if (isTRUE(apply_mrdetect_parser_column_correction)) {
+  temp_sites <- all_files$sites_detected
+  temp_reads <- all_files$reads_detected
+  temp_total <- all_files$total_reads
+
+  all_files <- all_files %>%
+    mutate(
+      sites_detected = temp_reads,
+      reads_detected = temp_total,
+      total_reads    = temp_sites
+    )
+
+  rm(temp_sites, temp_reads, temp_total)
+}
 
 
 

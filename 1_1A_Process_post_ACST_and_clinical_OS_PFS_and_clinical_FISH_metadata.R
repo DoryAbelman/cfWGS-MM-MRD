@@ -41,6 +41,11 @@
 #  Required packages:
 #    tidyverse, readxl, lubridate, janitor, purrr, glue
 # ──────────────────────────────────────────────────────────────────────────────
+# Pipeline status:
+#   Active upstream dependency. This script does not directly create a named
+#   final manuscript figure/table, but downstream scripts depend on its cleaned
+#   outputs for figure, table, or model generation.
+#
 
 
 # ─── 0.  Library loading & file checks ────────────────────────────────────────

@@ -26,3 +26,5 @@ pipeline_logs/20260617_144955/run_manifest.tsv
 AGENTS.md
 /outputs
 /final_manuscript_objects
+/archive
+local_input_check_report.tsv

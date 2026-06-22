@@ -57,6 +57,11 @@
 #   rsID calls are removed before overlap calculations so the plotted values
 #   reflect somatic tumour mutation recovery rather than common polymorphisms.
 # ──────────────────────────────────────────────────────────────────────────────
+# Pipeline status:
+#   Active in the command-line pipeline. This script creates or stages the
+#   manuscript output(s) listed above into final_manuscript_objects/ when the
+#   required upstream inputs are available.
+#
 
 
 ### Load libraries 

@@ -8,7 +8,7 @@
 #   the original numbered-script organization.
 #
 # What this script does:
-#   1. Dry-runs or executes the original numbered source-pipeline scripts.
+#   1. Dry-runs or executes the numbered source-pipeline scripts.
 #   2. Refreshes the stage-ordered script-to-artifact map.
 #   3. Validates the direct manuscript-output tree in final_manuscript_objects/.
 #   4. Optionally runs the separate reproducible_workflow generation/validation
@@ -18,7 +18,7 @@
 #   - Dry-run is the default.
 #   - The cache-sensitive nested-CV/model-training script is skipped unless
 #     --include-cache-sensitive is explicitly supplied.
-#   - Scientific logic remains in the original numbered scripts. This file only
+#   - Scientific logic remains in the numbered analysis scripts. This file only
 #     orchestrates command-line execution and validation.
 #
 # Typical use from the project root:
@@ -69,11 +69,9 @@ parse_args <- function(args = commandArgs(trailingOnly = TRUE)) {
       "  --execute                  Run numbered scripts instead of dry-run.\n",
       "  --skip-source              Skip numbered-script execution; validate existing outputs only.\n",
       "  --run-reference-workflow   Also run run_analysis.R --mode generate and --mode validate.\n",
-      "  --stage-reference-copy     Also run organize_manuscript_outputs.R as a legacy/reference copy step.\n",
       "  --include-cache-sensitive  Include cache-sensitive model/nested-CV training stages.\n",
       "  --from ID --to ID          Run a contiguous numbered-script range, e.g. --from 2_0 --to 2_4.\n",
       "  --only ID                  Run one numbered script ID, e.g. --only 4_1.\n",
-      "  --output-dir PATH          Legacy reference-copy folder when --stage-reference-copy is supplied.\n",
       "  --check-packages           Check package availability before stage execution.\n",
       "  --keep-going               Continue after a numbered-script failure where possible.\n",
       "  --help, -h                 Show this help text.\n",
@@ -86,14 +84,12 @@ parse_args <- function(args = commandArgs(trailingOnly = TRUE)) {
     skip_source = "--skip-source" %in% args,
     refresh_frozen = "--refresh-frozen" %in% args,
     run_reference_workflow = "--run-reference-workflow" %in% args,
-    stage_reference_copy = "--stage-reference-copy" %in% args,
     include_cache_sensitive = "--include-cache-sensitive" %in% args,
     keep_going = "--keep-going" %in% args,
     check_packages = "--check-packages" %in% args,
     from = parse_flag_value(args, "--from"),
     to = parse_flag_value(args, "--to"),
-    only = parse_flag_value(args, "--only"),
-    output_dir = parse_flag_value(args, "--output-dir", "Scripts_2025/Final_Scripts/outputs/manuscript")
+    only = parse_flag_value(args, "--only")
   )
 }
 
@@ -122,13 +118,6 @@ source_pipeline_args <- function(args) {
   out <- add_optional_value_arg(out, "--from", args$from)
   out <- add_optional_value_arg(out, "--to", args$to)
   out <- add_optional_value_arg(out, "--only", args$only)
-  out
-}
-
-organize_args <- function(args) {
-  out <- character()
-  if (isTRUE(args$execute)) out <- c(out, "--execute")
-  out <- add_optional_value_arg(out, "--output-dir", args$output_dir)
   out
 }
 
@@ -223,22 +212,10 @@ main <- function() {
     log_file = log_file
   )
 
-  if (isTRUE(args$stage_reference_copy)) {
-    run_rscript(
-      project_root = project_root,
-      script_path = file.path("Scripts_2025", "Final_Scripts", "organize_manuscript_outputs.R"),
-      args = organize_args(args),
-      label = "legacy/reference manuscript output staging",
-      log_file = log_file
-    )
-  } else {
-    message_log(
-      "Skipping legacy organize_manuscript_outputs.R staging. ",
-      "Direct outputs are in Scripts_2025/Final_Scripts/final_manuscript_objects/. ",
-      "Add --stage-reference-copy only if you need the older outputs/manuscript copy.",
-      log_file = log_file
-    )
-  }
+  message_log(
+    "Direct manuscript outputs are in Scripts_2025/Final_Scripts/final_manuscript_objects/.",
+    log_file = log_file
+  )
 
   stage_paths <- fs_write_stage_artifact_map(project_root)
   message_log("Stage-ordered map: ", stage_paths$md, log_file = log_file)

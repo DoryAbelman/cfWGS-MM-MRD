@@ -20,9 +20,9 @@
 #   • Build “MM_DARs_chromatin_activation_data.csv” and save.
 #
 # Assumptions & file paths:
-#   • input.dir ← "~/…/Fragmentomics_data"
-#   • pon.dir   ← "~/…/Fragmentomics_data/Normals"
-#   • out.dir   ← "~/…/Results_Fragmentomics/"
+#   • input.dir <- "Fragmentomics_data"
+#   • pon.dir   <- "Fragmentomics_data/Normals"
+#   • out.dir   <- "Results_Fragmentomics"
 #   • Clinical CSVs in working dir:
 #        – combined_clinical_data_updated_April2025.csv
 #        – Final_aggregate_table_cfWGS_features_with_clinical_and_demographics_updated3.csv
@@ -38,6 +38,11 @@
 # Author: Dory Abelman
 # Last updated: 2025-05-23
 # ──────────────────────────────────────────────────────────────────────────────
+# Pipeline status:
+#   Active upstream dependency. This script does not directly create a named
+#   final manuscript figure/table, but downstream scripts depend on its cleaned
+#   outputs for figure, table, or model generation.
+#
 
 
 ### PREPARE SESSION ################################################################################
@@ -49,11 +54,23 @@ library(readr)
 library(stringr)
 library(data.table)
 
-source('session.functions.R')
+session_functions_path <- c(
+  "session.functions.R",
+  file.path("..", "..", "session.functions.R")
+)
+session_functions_path <- session_functions_path[file.exists(session_functions_path)][1]
+if (is.na(session_functions_path)) {
+  stop(
+    "Could not find session.functions.R. Run from the project root or stage the helper at the project root.",
+    call. = FALSE
+  )
+}
+source(session_functions_path)
+rm(session_functions_path)
 
-input.dir <- '~/Documents/Thesis_work/R/M4/Projects/High_risk_MM_baselinbe_relapse_marrow/Fragmentomics_data'
-pon.dir   <- '~/Documents/Thesis_work/R/M4/Projects/High_risk_MM_baselinbe_relapse_marrow/Fragmentomics_data/Normals'
-out.dir   <- '~/Documents/Thesis_work/R/M4/Projects/High_risk_MM_baselinbe_relapse_marrow/Results_Fragmentomics'
+input.dir <- "Fragmentomics_data"
+pon.dir   <- file.path("Fragmentomics_data", "Normals")
+out.dir   <- "Results_Fragmentomics"
 
 if (!dir.exists(out.dir)) {
   dir.create(out.dir, recursive = TRUE)

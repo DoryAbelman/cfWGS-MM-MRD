@@ -25,8 +25,8 @@
 #
 # Outputs:
 #   • Word: table1_clinical_categorical_updated_final_3.docx
-#   • Word: baseline_characteristics_updated.docx
-#   • Exploratory cohort/fragmentomics audit output printed to console
+#   • Optional Word helper: baseline_characteristics_updated.docx
+#   • Optional exploratory cohort/fragmentomics audit output printed to console
 #
 # Dependencies:
 #   library(tidyverse)
@@ -54,6 +54,11 @@
 # Author: Dory Abelman
 # Date:   2025-05-26
 # =============================================================================
+# Pipeline status:
+#   Active in the command-line pipeline. This script creates or stages the
+#   manuscript output(s) listed above into final_manuscript_objects/ when the
+#   required upstream inputs are available.
+#
 
 # -----------------------------------------------------------
 # 0.  PACKAGES  (install once, then keep only library() lines)
@@ -437,12 +442,14 @@ if (file.exists(table1_final_pdf)) {
   )
 }
 
-### Exploratory/legacy continuous Table 1 companion
+### Optional continuous Table 1 companion
 # This block is retained from the original script for traceability, but it is
-# not the mapped final manuscript Table 1. It writes
-# `baseline_characteristics_updated.docx` and should be treated as a helper or
-# sensitivity output unless the manuscript table mapping is intentionally
-# changed.
+# not the mapped final manuscript Table 1. Set the flag below to TRUE only when
+# you intentionally want to regenerate the historical continuous-variable helper
+# table (`baseline_characteristics_updated.docx`).
+export_exploratory_continuous_table1 <- FALSE
+
+if (isTRUE(export_exploratory_continuous_table1)) {
 # ------------------------- 2.1  Convert continuous vars to numeric
 vars_cont <- c(
   "AGE", "dFLC", "Albumin", "B2_micro", "Calcium",
@@ -496,13 +503,18 @@ doc <- read_docx() %>%
   body_end_section_portrait()
 
 print(doc, target = "baseline_characteristics_updated.docx")
+}
 
 
 
 ### Exploratory fragmentomics/clinical MRD audit
-# This is not used to make a manuscript figure or table. It lists possible
-# additional non-IMG/non-SPORE patients with fragmentomics plus clinical MRD
-# data who are not in the current cohort assignment file.
+# This optional audit does not create a manuscript figure or table. It lists
+# possible additional non-IMG/non-SPORE patients with fragmentomics plus
+# clinical MRD data who are not in the current cohort assignment file. Keep
+# FALSE for the manuscript pipeline; set TRUE during cohort-expansion review.
+run_fragmentomics_clinical_mrd_audit <- FALSE
+
+if (isTRUE(run_fragmentomics_clinical_mrd_audit)) {
 
 # Define which columns count as “clinical MRD”
 clinical_mrd_cols <- c(
@@ -540,6 +552,9 @@ new_possible_patients <- setdiff(non_img_spore_patients, cohort_df$Patient)
 cat("Patients with FS+clinical MRD, not in cohort_df, and not IMG/SPORE:\n")
 print(new_possible_patients)
 cat("Total:", length(new_possible_patients), "patients\n")
+}
 
 
-### Don't use since not enough gains for added complexity
+### Archived idea: excluded from the manuscript workflow
+# The original working script had considered adding more complexity after this
+# point, but that path is excluded from all final manuscript figure/table outputs.

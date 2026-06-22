@@ -62,6 +62,11 @@
 # Author: Dory Abelman
 # Date:   2025-05-26
 # =============================================================================
+# Pipeline status:
+#   Active upstream dependency. This script does not directly create a named
+#   final manuscript figure/table, but downstream scripts depend on its cleaned
+#   outputs for figure, table, or model generation.
+#
 
 # Load required libraries
 library(maftools)
@@ -141,13 +146,13 @@ myeloma_genes <- c(
 
 #### FIRST Load in BM Data
 
-# Define the directory containing the BM MAF files. The original OneDrive path is
-# preserved, but a project-local fallback is used for command-line/reviewer runs.
+# Define the directory containing the BM MAF files. The public command-line
+# workflow expects these files to be staged inside the project tree so the
+# script does not depend on a user-specific mounted drive.
 bm_maf_source <- resolve_maf_files(
   label = "BM",
   env_var = "CFWGS_BM_MAF_DIR",
   candidate_dirs = c(
-    "~/OneDrive - University of Toronto/Project data/cfWGS project data/MAF files/BM/",
     "Ultima data comparison/OncoKB annotated mafs"
   )
 )
@@ -372,14 +377,13 @@ rm(combined_maf)  # Drop the duplicate BM object to free memory before loading b
 
 #### Next load in PB cfDNA Data
 
-# Define the directory containing the blood/cfDNA MAF files. The original
-# OneDrive path is preserved, but a project-local fallback is used for
-# command-line/reviewer runs.
+# Define the directory containing the blood/cfDNA MAF files. The public
+# command-line workflow expects these files to be staged inside the project tree
+# so the script does not depend on a user-specific mounted drive.
 blood_maf_source <- resolve_maf_files(
   label = "Blood",
   env_var = "CFWGS_BLOOD_MAF_DIR",
   candidate_dirs = c(
-    "~/OneDrive - University of Toronto/Project data/cfWGS project data/MAF files/Blood/",
     "Ultima data comparison/OncoKB annotated mafs/Plasma_mafs"
   )
 )

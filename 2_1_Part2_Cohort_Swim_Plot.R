@@ -41,6 +41,11 @@
 # Last update: May 2025
 # =============================================================================
 #### Now make swim plot 
+# Pipeline status:
+#   Active in the command-line pipeline. This script creates or stages the
+#   manuscript output(s) listed above into final_manuscript_objects/ when the
+#   required upstream inputs are available.
+#
 
 library(tidyverse)
 library(readxl)
@@ -2864,9 +2869,12 @@ print(p_symbols)
 
 
 
-#### Legend-only testing/export block
+#### Optional standalone legend export
 # This block is not used to make the mapped Figure 1A component. It is retained
 # only as a helper for exporting standalone legends during manual assembly.
+export_standalone_swimplot_legend <- FALSE
+
+if (isTRUE(export_standalone_swimplot_legend)) {
 # 1. Dummy data for chemo colours
 df_chemo <- data.frame(
   chemo_group = factor(names(chemo_cols), levels = names(chemo_cols)),
@@ -2934,4 +2942,7 @@ if (requireNamespace("cowplot", quietly = TRUE)) {
          width = 8, height = 2, dpi = 300)
 } else {
   message("Skipping optional standalone swim-plot legend export because cowplot is not installed.")
+}
+} else {
+  message("Skipping optional standalone swim-plot legend export; Figure 1A uses the main swim-plot output.")
 }

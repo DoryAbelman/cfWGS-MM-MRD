@@ -49,6 +49,11 @@
 #   limit on detecting CNAs and structural variants in plasma.
 #
 # ==============================================================================
+# Pipeline status:
+#   Active in the command-line pipeline. This script creates or stages the
+#   manuscript output(s) listed above into final_manuscript_objects/ when the
+#   required upstream inputs are available.
+#
 
 library(tidyverse)   # dplyr, tidyr, readr, etc.
 library(purrr)       # for pmap_dfr

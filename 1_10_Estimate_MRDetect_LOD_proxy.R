@@ -40,6 +40,11 @@
 #   audit analytical sensitivity and explain why low-informative-read samples
 #   have weaker detection limits.
 #
+# ## Pipeline status
+# Active upstream dependency. This script does not directly create a named final
+# manuscript figure/table, but downstream MRDetect sensitivity summaries can use
+# the LOD proxy fields that it adds.
+#
 # ## Main input
 # - MRDetect_output_winter_2025/Processed_R_outputs/
 #   All_detection_rates_baseline_and_controls_Feb2026.csv

@@ -2,11 +2,11 @@
 # pipeline_metadata.R
 #
 # Purpose:
-# Shared metadata helpers for the original numbered cfWGS-MM-MRD scripts.
+# Shared metadata helpers for the numbered cfWGS-MM-MRD scripts.
 #
 # These helpers intentionally do not perform any scientific analysis. They read
 # the source pipeline plan and manuscript artifact source map so command-line
-# tools can report what each original script does and which manuscript outputs
+# tools can report what each numbered script does and which manuscript outputs
 # it affects.
 #
 # Manuscript outputs created/updated:

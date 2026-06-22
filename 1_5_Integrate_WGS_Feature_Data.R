@@ -57,6 +57,11 @@
 # Author: Dory Abelman
 # Date:   2025-05-26
 # =============================================================================
+# Pipeline status:
+#   Active upstream dependency. This script does not directly create a named
+#   final manuscript figure/table, but downstream scripts depend on its cleaned
+#   outputs for figure, table, or model generation.
+#
 
 # Load libraries
 library(dplyr)
@@ -96,9 +101,9 @@ tumor_fraction     <- read_tsv("Oct 2024 data/tumor_fraction_cfWGS.txt")
 
 # Load mutation MAF objects.
 # The upstream mutation-processing script (1_2_Process_Mutation_Data.R) writes
-# project-local combined MAF files. These local files are preferred so the
-# command-line pipeline can run without a user-specific OneDrive mount. The
-# historical external paths are kept only as fallbacks for old local checkouts.
+# project-local combined MAF files. The command-line manuscript workflow expects
+# those local files to be present after Stage 1_2 so this script does not depend
+# on a user-specific external drive or workstation path.
 resolve_first_existing <- function(label, candidates) {
   hit <- candidates[file.exists(candidates)][1]
   if (is.na(hit)) {
@@ -115,8 +120,7 @@ resolve_first_existing <- function(label, candidates) {
 blood_maf_path <- resolve_first_existing(
   "combined cfDNA/blood MAF",
   c(
-    "combined_maf_temp_blood_Jan2025.maf",
-    "~/OneDrive - University of Toronto/Project data/cfWGS project data/R outputs/combined_maf_temp_blood_Jan2025.maf"
+    "combined_maf_temp_blood_Jan2025.maf"
   )
 )
 bm_maf_path <- resolve_first_existing(
@@ -143,20 +147,20 @@ maf_object_bm    <- read.maf(bm_maf_path)
 # throughout all downstream scripts (1_5 onward).
 cna_seq_renamed <- cna_data_sequenza %>% select(-Sample) %>%
   rename(Sample = Bam_clean_tmp) %>%
-  # align columns to legacy CNA table if needed
+  # Align columns to the ichorCNA-derived table before row-binding.
   select(any_of(names(cna_data)))
 
-# 2) Drop legacy rows that are present in Sequenza
+# 2) Drop ichorCNA rows that are superseded by Sequenza
 # Where both callers processed the same BAM, Sequenza calls take
 # precedence; the ichorCNA row is dropped to prevent duplicate Sample
 # keys in the merged CNA table. Samples unique to ichorCNA (cfDNA cases) are retained via bind_rows.
 overlap_samples <- intersect(cna_data$Sample, cna_seq_renamed$Sample)
 
-cna_legacy_filtered <- cna_data %>%
+cna_ichor_filtered <- cna_data %>%
   filter(!Sample %in% overlap_samples)
 
 # 3) Combine CNA calls (Sequenza takes precedence)
-cna_combined <- bind_rows(cna_legacy_filtered, cna_seq_renamed)
+cna_combined <- bind_rows(cna_ichor_filtered, cna_seq_renamed)
 
 # (Optional) In case of any lingering duplicates, keep first occurrence
 # cna_combined <- cna_combined %>% distinct(Sample, .keep_all = TRUE)
@@ -211,7 +215,7 @@ FISH_ichor <- readRDS(file.path(export_dir, "FISH_probe_calls_bin_cytoband_ichor
 FISH_sequenza <- FISH_sequenza %>% select(-Sample) %>%
   rename(Sample = Bam_clean_tmp) 
 
-# 2) Drop legacy rows that are present in Sequenza
+# 2) Drop ichorCNA probe rows that are superseded by Sequenza
 overlap_samples <- intersect(FISH_ichor$Sample, FISH_sequenza$Sample)
 
 FISH_ichor_filtered <- FISH_ichor %>%

@@ -27,6 +27,11 @@
 #     feature table used by downstream model and concordance scripts.
 #
 # =============================================================================
+# Pipeline status:
+#   Active upstream dependency. This script does not directly create a named
+#   final manuscript figure/table, but downstream scripts depend on its cleaned
+#   outputs for figure, table, or model generation.
+#
 
 
 suppressPackageStartupMessages({

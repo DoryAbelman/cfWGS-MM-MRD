@@ -57,6 +57,11 @@
 ##  Updated: February 2026
 ##  
 ################################################################################
+# Pipeline status:
+#   Active in the command-line pipeline. This script creates or stages the
+#   manuscript output(s) listed above into final_manuscript_objects/ when the
+#   required upstream inputs are available.
+#
 
 ## ── 0. SETUP: Load Packages and Configure Paths ──────────────────────────────
 ##
@@ -206,7 +211,9 @@ cat(sprintf("  ✓ Sample data: %d samples from %d patients loaded\n",
             nrow(dat), n_distinct(dat$Patient)))
 
 # FILTER TO FRONTLINE COHORT
-# Primary analysis uses only patients in frontline/induction-to-transplant cohort
+# Primary landmark survival analyses use only patients in the frontline/
+# induction-to-transplant cohort. The full all-cohort table is reloaded later
+# for the separate non-frontline/test-cohort time-window analysis.
 dat <- dat %>% filter(Cohort == "Frontline")
 
 cat(sprintf("  ✓ Filtered to Frontline cohort: %d samples from %d patients\n", 
@@ -660,7 +667,15 @@ for(tp in tps) {
 }
 
 
-## Redo with CI 
+## Optional KM confidence-interval sensitivity exports
+##
+## The final manuscript KM panels use the no-CI exports above. The original
+## working script also generated CI variants while evaluating plot style. Those
+## files are useful for audit/QC but are not mapped to final manuscript panels,
+## so they are disabled during the standard command-line manuscript run.
+export_optional_km_ci_panels <- FALSE
+
+if (isTRUE(export_optional_km_ci_panels)) {
 # 5) Loop
 for(tp in tps) {
   #  nice_tp <- tp_labels[tp] %||% tp   # fall back to tp if no mappiht
@@ -890,14 +905,22 @@ for(tp in tps) {
     )
   }
 }
+}
 
  
 
 
 
-#### Redo but show the plot starting from diagnosis
-### To complex since the default risk table doesn't support delayed entry - skipped
-### delayed entry (a.k.a. left truncation) to avoid immortal-bias
+#### Optional delayed-entry/from-diagnosis KM sensitivity export
+### This block evaluates an alternative time scale: months since diagnosis
+### rather than months since MRD assessment. It uses delayed entry
+### (left truncation) so patients do not contribute risk time before their MRD
+### assessment. The final manuscript panels use the simpler and more directly
+### interpretable "time since MRD assessment" scale above, so these exports are
+### disabled by default.
+export_optional_km_from_diagnosis_panels <- FALSE
+
+if (isTRUE(export_optional_km_from_diagnosis_panels)) {
 # pretty p-value
 fmt_p <- function(p) {
   if (is.na(p)) return("p = NA")
@@ -1037,6 +1060,7 @@ for (tp in tps) {
     combined <- ggarrange(km$plot, km$table, ncol = 1, heights = c(3,1))
     ggsave(fname, plot = combined, width = 7, height = 7, dpi = dpi_target)
   }
+}
 }
 
 
@@ -1589,13 +1613,18 @@ ms_copy_artifact(
 cat("  ✓ Saved blood-subset sensitivity barplot\n\n")
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 17. NON-FRONTLINE COHORT: Time-Window Prediction Analysis
-# (Non-annotated cohort with time-window predictions from 3_1_A)
+# 17. FRONTLINE LANDMARK SURVIVAL SUMMARIES FOR ED6/ED8
 # ─────────────────────────────────────────────────────────────────────────────
-
-## Time-window analysis: Prediction of relapse within specific time windows
-## Using models trained on frontline cohort, evaluate on non-frontline subjects
-## Subset to post-transplant and BM-cfWGS tested
+#
+# Role in manuscript:
+#   The data frame `survival_df` was filtered to the Frontline cohort near the
+#   top of the script. The blocks below compute descriptive 24-month RFS,
+#   median RFS, Cox HRs, rank correlations, and power diagnostics at the
+#   one-year-maintenance and post-ASCT landmarks. These summaries feed the ED6B
+#   and ED8B hazard-ratio source tables/plots generated later in this script and
+#   print analyst-facing prose checks to the console. They are not the
+#   non-frontline/test-cohort time-window analysis; that begins in the separate
+#   "Time-window prediction performance in Non-frontline cohort" section below.
 
 # Filter to 1-year maintenance timepoint with BM-cfWGS result
 df_km <- survival_df %>%
@@ -1725,7 +1754,7 @@ ci_lo_clonoSEQ   <- cox_clonoSEQ$conf.low
 ci_hi_clonoSEQ   <- cox_clonoSEQ$conf.high
 
 
-## check EasyM (Proteomic MRD)
+## EasyM proteomic MRD summary at one-year maintenance
 # Filter to subjects with EasyM data at 1-year maintenance
 df_km_easym <- df_km %>%
   filter(
@@ -1770,7 +1799,7 @@ rho1 <- ct1$estimate; p1 <- ct1$p.value
 ct2 <- cor.test(df_km$Flow_pct_cells, df_km$Time_to_event, method = "spearman")
 rho2 <- ct2$estimate; p2 <- ct2$p.value
 
-## 5. Power diagnostics ----
+## Power diagnostics for one-year maintenance BM landmark summary ----
 d      <- sum(df_km$Relapsed_Binary)
 prop_p <- mean(df_km$BM_zscore_only_detection_rate_call==1)
 zα     <- qnorm(1-0.05/2); zβ <- qnorm(0.80)
@@ -1807,7 +1836,7 @@ n_easym <- df_km %>%
   distinct(Patient) %>%
   nrow()
 
-## 6. Draft paragraph ----
+## Analyst-facing prose check for one-year maintenance BM landmark summary ----
 paragraph <- glue(
   "After one year of maintenance therapy, among patients with cfWGS available (n={n_cfWGS}), ",
   "BM-cfWGS MRD-negative patients had {round(rfs_neg_cf)}% relapse-free survival at 24 months ",
@@ -1881,7 +1910,7 @@ metrics_1yr <- tibble(
 
 
 
-### Redo for post-transplant 
+### Post-ASCT BM landmark summary
 ## 1. Subset to post-transplant & BM-cfWGS tested ----
 df_km <- survival_df %>%
   filter(
@@ -1952,7 +1981,7 @@ hr_fl      <- cox_fl$estimate
 ci_lo_fl   <- cox_fl$conf.low
 ci_hi_fl   <- cox_fl$conf.high
 
-## Check clonoSEQ 
+## clonoSEQ summary at post-ASCT
 # fit the Kaplan–Meier curve
 df_km_clonoSEQ <- df_km %>%
   filter(
@@ -1989,7 +2018,7 @@ ci_lo_clonoSEQ   <- cox_clonoSEQ$conf.low
 ci_hi_clonoSEQ   <- cox_clonoSEQ$conf.high
 
 
-## check EasyM (Proteomic MRD)
+## EasyM proteomic MRD summary at post-ASCT
 # Filter to subjects with EasyM data at post-transplant
 df_km_easym <- df_km %>%
   filter(
@@ -2036,7 +2065,7 @@ rho1 <- ct1$estimate; p1 <- ct1$p.value
 ct2 <- cor.test(df_km$Flow_pct_cells, df_km$Time_to_event, method = "spearman")
 rho2 <- ct2$estimate; p2 <- ct2$p.value
 
-## 5. Power diagnostics ----
+## Power diagnostics for post-ASCT BM landmark summary ----
 d      <- sum(df_km$Relapsed_Binary)
 prop_p <- mean(df_km$BM_zscore_only_detection_rate_call==1)
 zα     <- qnorm(1-0.05/2); zβ <- qnorm(0.80)
@@ -2073,7 +2102,7 @@ n_easym <- df_km %>%
   distinct(Patient) %>%
   nrow()
 
-## 6. Draft paragraph ----
+## Analyst-facing prose check for post-ASCT BM landmark summary ----
 paragraph <- glue(
   "At post-transplant, BM-cfWGS (n={n_cfWGS}) MRD-negative patients had ",
   "{round(rfs_neg_cf)}% relapse-free survival at 24 months versus ",
@@ -2162,8 +2191,8 @@ saveRDS(
 
 
 
-##### Now get the stats on cfWGS from blood derived muts as well 
-#### Now get other results and do power analysis 
+##### Blood/cfDNA sites-model landmark summaries for Extended Data Figure 8B
+#### These mirror the BM landmark summaries above using the blood/cfDNA sites model.
 
 ## 1. Subset to post-transplant & Blood-cfWGS tested ----
 df_km <- survival_df %>%
@@ -2172,7 +2201,7 @@ df_km <- survival_df %>%
     !is.na(Blood_zscore_only_sites_call)
   )
 
-## 2. 24-month RFS by cfWGS BM ----
+## 2. 24-month RFS by blood/cfDNA sites model ----
 fit_cf <- survfit(
   Surv(Time_to_event, Relapsed_Binary) ~ Blood_zscore_only_sites_call,
   data = df_km
@@ -2194,7 +2223,7 @@ hr_cf      <- cox_cf$estimate
 ci_lo_cf   <- cox_cf$conf.low
 ci_hi_cf   <- cox_cf$conf.high
 
-## 2a) Median RFS by cfWGS BM (days → months) ----
+## 2a) Median RFS by blood/cfDNA sites model (days to months) ----
 med_cf <- surv_median(fit_cf)$median
 med_neg_cf <- med_cf[1] / 30.44
 med_pos_cf <- med_cf[2] / 30.44
@@ -2308,7 +2337,7 @@ rho1 <- ct1$estimate; p1 <- ct1$p.value
 ct2 <- cor.test(df_km$Flow_pct_cells, df_km$Time_to_event, method = "spearman")
 rho2 <- ct2$estimate; p2 <- ct2$p.value
 
-## 5. Power diagnostics ----
+## Power diagnostics for one-year maintenance blood/cfDNA sites summary ----
 d      <- sum(df_km$Relapsed_Binary)
 prop_p <- mean(df_km$Blood_zscore_only_sites_call==1)
 zα     <- qnorm(1-0.05/2); zβ <- qnorm(0.80)
@@ -2414,7 +2443,7 @@ metrics_1yr <- tibble(
 
 
 
-### Redo for post-transplant 
+### Post-ASCT blood/cfDNA sites-model landmark summary
 ## 1. Subset to post-transplant & Blood-cfWGS tested ----
 df_km <- survival_df %>%
   filter(
@@ -2422,7 +2451,7 @@ df_km <- survival_df %>%
     !is.na(Blood_zscore_only_sites_call)
   )
 
-## 2. 24-month RFS by cfWGS BM ----
+## 2. 24-month RFS by blood/cfDNA sites model ----
 fit_cf <- survfit(
   Surv(Time_to_event, Relapsed_Binary) ~ Blood_zscore_only_sites_call,
   data = df_km
@@ -2444,7 +2473,7 @@ hr_cf      <- cox_cf$estimate
 ci_lo_cf   <- cox_cf$conf.low
 ci_hi_cf   <- cox_cf$conf.high
 
-## 2a) Median RFS by cfWGS BM (days → months) ----
+## 2a) Median RFS by blood/cfDNA sites model (days to months) ----
 med_cf <- surv_median(fit_cf)$median
 med_neg_cf <- med_cf[1] / 30.44
 med_pos_cf <- med_cf[2] / 30.44
@@ -2558,7 +2587,7 @@ rho1 <- ct1$estimate; p1 <- ct1$p.value
 ct2 <- cor.test(df_km$Flow_pct_cells, df_km$Time_to_event, method = "spearman")
 rho2 <- ct2$estimate; p2 <- ct2$p.value
 
-## 5. Power diagnostics ----
+## Power diagnostics for post-ASCT blood/cfDNA sites summary ----
 d      <- sum(df_km$Relapsed_Binary)
 prop_p <- mean(df_km$Blood_zscore_only_sites_call==1)
 zα     <- qnorm(1-0.05/2); zβ <- qnorm(0.80)
@@ -2591,7 +2620,7 @@ n_easym_blood <- df_km %>%
   filter(!is.na(EasyM_optimized_binary)) %>%
   distinct(Patient) %>% nrow()
 
-## 6. Draft paragraph ----
+## Analyst-facing prose check for post-ASCT blood/cfDNA sites summary ----
 paragraph <- glue(
   "At post-transplant, Blood-cfWGS MRD-negative patients had ",
   "{round(rfs_neg_cf)}% relapse-free survival at 24 months versus ",
@@ -2679,7 +2708,7 @@ saveRDS(
 
 
 
-#### Now redo with the combined model for blood 
+#### Blood/cfDNA combined-model landmark summaries
 
 ## 1. Subset to post-transplant & Blood-cfWGS tested ----
 df_km <- survival_df %>%
@@ -2688,7 +2717,7 @@ df_km <- survival_df %>%
     !is.na(Blood_plus_fragment_call)
   )
 
-## 2. 24-month RFS by cfWGS BM ----
+## 2. 24-month RFS by blood/cfDNA combined model ----
 fit_cf <- survfit(
   Surv(Time_to_event, Relapsed_Binary) ~ Blood_plus_fragment_call,
   data = df_km
@@ -2710,7 +2739,7 @@ hr_cf      <- cox_cf$estimate
 ci_lo_cf   <- cox_cf$conf.low
 ci_hi_cf   <- cox_cf$conf.high
 
-## 2a) Median RFS by cfWGS BM (days → months) ----
+## 2a) Median RFS by blood/cfDNA combined model (days to months) ----
 med_cf <- surv_median(fit_cf)$median
 med_neg_cf <- med_cf[1] / 30.44
 med_pos_cf <- med_cf[2] / 30.44
@@ -2793,7 +2822,7 @@ rho1 <- ct1$estimate; p1 <- ct1$p.value
 ct2 <- cor.test(df_km$Flow_pct_cells, df_km$Time_to_event, method = "spearman")
 rho2 <- ct2$estimate; p2 <- ct2$p.value
 
-## 5. Power diagnostics ----
+## Power diagnostics for one-year maintenance blood/cfDNA combined summary ----
 d      <- sum(df_km$Relapsed_Binary)
 prop_p <- mean(df_km$Blood_plus_fragment_call==1)
 zα     <- qnorm(1-0.05/2); zβ <- qnorm(0.80)
@@ -2887,7 +2916,7 @@ metrics_1yr <- tibble(
 
 
 
-### Redo for post-transplant 
+### Post-ASCT blood/cfDNA combined-model landmark summary
 ## 1. Subset to post-transplant & Blood-cfWGS tested ----
 df_km <- survival_df %>%
   filter(
@@ -2895,7 +2924,7 @@ df_km <- survival_df %>%
     !is.na(Blood_plus_fragment_call)
   )
 
-## 2. 24-month RFS by cfWGS BM ----
+## 2. 24-month RFS by blood/cfDNA combined model ----
 fit_cf <- survfit(
   Surv(Time_to_event, Relapsed_Binary) ~ Blood_plus_fragment_call,
   data = df_km
@@ -3029,13 +3058,13 @@ n_clonoSEQ_blood <- df_km %>%
   filter(!is.na(Adaptive_Binary)) %>%
   distinct(Patient) %>% nrow()
 
-## 6. Draft paragraph ----
+## Analyst-facing prose check for post-ASCT blood/cfDNA combined summary ----
 paragraph <- glue(
   "At post-transplant, Blood-cfWGS MRD-negative patients had ",
   "{round(rfs_neg_cf)}% relapse-free survival at 24 months versus ",
   "{round(rfs_pos_cf)}% for MRD-positive patients ",
   "(HR = {round(hr_cf,2)}; 95% CI [{round(ci_lo_cf,2)}–{round(ci_hi_cf,2)}]). ",
-  "Median RFS by BM-cfWGS was {round(med_neg_cf,1)} vs {round(med_pos_cf,1)} months. ",
+  "Median RFS by Blood-cfWGS combined model was {round(med_neg_cf,1)} vs {round(med_pos_cf,1)} months. ",
   "For MFC, MRD-negative patients had {round(rfs_neg_fl)}% RFS at 24 months versus ",
   "{round(rfs_pos_fl)}% for MRD-positive patients ",
   "(HR = {round(hr_fl,2)}; 95% CI [{round(ci_lo_fl,2)}–{round(ci_hi_fl,2)}]), ",
@@ -3852,7 +3881,7 @@ ggsave(file.path("Final Tables and Figures/Fig_4D_time_to_relapse_infinity_no_re
        p_time_inf, width = 5.5, height = 4.5, dpi = 600)
 
 
-## Try different legend layout 
+## Manuscript layout for Extended Data Figure 6K
 library(cowplot)    # get_legend()
 library(patchwork)  # easy assembly
 
@@ -3975,8 +4004,7 @@ time_to_relapse_BM <- plot_df2
 
 
 
-### Redo now for blood derived muts 
-### Now redo for blood-derived muts
+### Extended Data Figure 8 bottom-left/bottom-right blood-derived time-to-relapse panels
 df <- survival_df %>%                           # <- your tibble
   # keep samples beyond baseline / diagnosis
   filter(!str_detect(timepoint_info, regex("Diagnosis|Baseline", TRUE))) %>%
@@ -4180,8 +4208,10 @@ ms_copy_artifact(
 )
 
 
-## Way Trevor was thinking 
-### Instead change the scale to match what Trevor was thinking 
+## Intermediate blood/cfDNA time-to-relapse scale check
+### This plot is retained as an intermediate check. The manuscript-facing
+### Extended Data Figure 8 bottom-right panel is exported from the infinity-axis
+### layout below.
 df_plot <- df %>%
   mutate(days_before_event = months_before_event * 30.44) %>%   # months → days
   group_by(Patient) %>%
@@ -4348,7 +4378,7 @@ annot_text <- sprintf("All relapse samples:\nρ=%.2f, p=%s\nPre-relapse only:\n�
                       rho_all, pval_all_str,
                       rho_pre, pval_pre_str)
 
-## See range
+## Sanity check probability range before applying retained axis limits
 plot_df2 %>%
   summarise(
     min   = min(Blood_zscore_only_sites_prob, na.rm = TRUE),
@@ -4430,7 +4460,7 @@ ggsave(file.path("Final Tables and Figures/Fig_4_D_time_to_relapse_infinity_no_r
 
 time_to_relapse_blood <- plot_df2
 
-## Check what is not included
+## Sanity check rows outside retained plotting limits
 plot_df2 %>%
   filter(
     is.na(Blood_zscore_only_sites_prob) | is.na(days_plot) |
@@ -4440,9 +4470,7 @@ plot_df2 %>%
 
 
 
-### Do different legend layout 
-
-## Try different legend layout 
+### Manuscript layout for Extended Data Figure 8 bottom-right panel
 
 # --- 1) build the main plot *without* a legend (legend handled below) ---
 p_main <-  ggplot(plot_df2,
@@ -4571,8 +4599,9 @@ ms_copy_artifact(
 
 
 
-### Now evaluate on non-frontline too 
-## Re-introdue dat since previously limited 
+### Non-frontline/test-cohort time-window evaluation
+## Reintroduce the full all-cohort table because the previous sections limited
+## `dat` and `survival_df` to Cohort == "Frontline".
 dat <- readRDS(dat_rds) %>%
   mutate(
     Patient        = as.character(Patient),
@@ -5566,9 +5595,12 @@ cat(glue(
 
 
 
-### Maybe follow up with Esteban to see if clinical or biochemical progression since don't know for non-frontline
-### Leave as blank for now
-# Filter out patients whose ID starts with "IMG-" or "SPORE-"
+### Analyst note on non-frontline progression labels
+# The non-frontline/test-cohort timing summaries above use the curated
+# progression dates available in `Relapse dates cfWGS updated2.csv`. They do
+# not further distinguish clinical versus biochemical progression unless that
+# distinction is present in the staged input file. No additional patient
+# filtering is applied here.
 
 # ═════════════════════════════════════════════════════════════════════════════
 # FINAL SUMMARY: Script Output and Results
@@ -5607,16 +5639,22 @@ cat(glue(
 # SECONDARY ANALYSES
 # ─────────────────────────────────────────────────────────────────────────────
 #
-# 4. NON-FRONTLINE COHORT TIME-WINDOW ANALYSES
+# 4. FRONTLINE LANDMARK RFS/HAZARD-RATIO SUMMARIES
 #    - 24-month RFS by cfWGS BM at 1-year maintenance
 #    - Median RFS and hazard ratios by assay
 #    - Comparable metrics for Flow, clonoSEQ, EasyM
 #
-# 5. SPEARMAN CORRELATION ANALYSIS
+# 5. NON-FRONTLINE/TEST-COHORT TIME-WINDOW ANALYSES
+#    - Sensitivity, specificity, PPV, and NPV across fixed relapse windows
+#    - BM cfWGS subset results used for Extended Data Figure 6I
+#    - Blood cfWGS subset results used for Extended Data Figure 8D
+#    - Cleaned workbook exported as Supplementary Table 9
+#
+# 6. SPEARMAN CORRELATION ANALYSIS
 #    - Pairwise correlations between assays
 #    - Both full cohort and subset analyses
 #
-# 6. NARRATIVE SUMMARY STATISTICS
+# 7. NARRATIVE SUMMARY STATISTICS
 #    - Patient/sample counts and demographics
 #    - Timing analysis: Days from baseline to collection/relapse
 #    - Nadir timing and relapse progression timing

@@ -56,6 +56,11 @@
 # Author:    Dory Abelman
 # Last edit: 2025-05-26
 # ==============================================================================
+# Pipeline status:
+#   Active in the command-line pipeline. This script creates or stages the
+#   manuscript output(s) listed above into final_manuscript_objects/ when the
+#   required upstream inputs are available.
+#
 
 
 # Load required libraries
@@ -2246,10 +2251,14 @@ saveRDS(supp_concordance_summary,   out_rds)
 
 
 
-####### Supplementary code
-### NON-MANUSCRIPT SUPPORT ONLY:
-### The code below prints draft narrative paragraphs for manual review. It does
-### not create an active manuscript figure, table, or source-data file.
+####### Supplementary Table 1A support and narrative audit summaries
+### Role in manuscript:
+###   This tail section contains two different types of work:
+###   1. Console-only narrative summaries that help audit/interpret baseline
+###      concordance results. These printed paragraphs are not manuscript
+###      source files.
+###   2. The active disease-associated feature catalog exported below and staged
+###      as Supplementary Table 1A by ms_copy_artifact().
 
 # --- Step 8. Generate Summary Paragraphs -------------------------------------
 # Example paragraphs (you can further modify the text based on your desired style)
@@ -2752,7 +2761,7 @@ discord_tbl <- merged_mut |>
          Reason) |>
   arrange(cohort, Reason, desc(TF_CF))
 
-print(discord_tbl, n = Inf)   # or View()
+print(discord_tbl, n = Inf)
 
 ###############################################################################
 ##  C.  COHORT × TF‑BAND SUMMARY  ----------------------------------------------

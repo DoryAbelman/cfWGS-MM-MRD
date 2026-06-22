@@ -22,29 +22,43 @@
 # Date:     May 28, 2025
 # Updated Feb 2026
 #
-# Purpose:
-#   1. Read the processed dataset produced by `optimize_cfWGS_thresholds.R`
-#      (contains *_prob and *_call columns plus selected threshold table).
-#   2. Generate all publication‑quality visualisations:
-#        • Density plots and smoothed ROC curves for BM and blood models
-#        • Dual‑threshold blood panels
-#        • Calibration curves
-#        • Decision‑curve analysis
-#        • Water‑fall and longitudinal (“spaghetti”) plots
-#   3. Build and save contingency tables (gt images) for BM and blood rules.
-#   4. Save all figures (PNG, 300–500 dpi) to the `Output_tables_2025/` folder.
+# Script purpose:
+#   1. Read the processed cfWGS call/probability table produced by
+#      3_1_Optimize_cfWGS_thresholds.R.
+#   2. Join EasyM MRD measurements where available.
+#   3. Compare BM-informed and blood/cfDNA-informed cfWGS calls with clinical
+#      MRD comparators (MFC, clonoSEQ, and EasyM).
+#   4. Generate the manuscript-facing concordance plots, confusion-matrix
+#      panels, and supplementary concordance workbooks listed above.
 #
-# Inputs  (produced by the analysis script):
-#   • Output_tables_2025/all_patients_with_BM_and_blood_calls.rds
-#   • Output_tables_2025/STable_selected_thresholds.csv
+# Execution note:
+#   The historical working filenames in this script do not always match final
+#   manuscript numbering. The authoritative mapping is the `ms_copy_artifact()`
+#   block beside each final output. Those blocks copy the final figures/tables
+#   into final_manuscript_objects/ using names such as Figure_3D,
+#   Figure_4D, Extended_Data_Figure_7F, and Supplementary_Table_10.
+#
+# Inputs:
+#   • Output_tables_2025/all_patients_with_BM_and_blood_calls_updated5.rds
+#     from 3_1_Optimize_cfWGS_thresholds.R.
+#   • Output_EasyM_MRD_analysis_2025/EasyM_all_samples_with_optimized_calls.csv
+#     from 3_1_A_Process_and_optimize_EasyM.R, when EasyM comparison panels are
+#     available.
+#   • Optional preserved model/threshold RDS files in Output_tables_2025/ for
+#     model-definition labels and benchmarking; this script does not refit
+#     models.
 #
 # Outputs:
-#   • FigX_cfWGS_MRD_Panel.png
-#   • FigX_cfWGS_MRD_BloodDualThresholds.png
-#   • FigX_Calibration*.png, FigX_DecisionCurve*.png, …
-#   • tbl_*_contingency.png (gt images)
+#   Historical working outputs are written to Output_figures_2025/,
+#   Output_tables_2025/, and Final Tables and Figures/. Final manuscript
+#   outputs are copied into final_manuscript_objects/ by artifact ID.
 #
 # =============================================================================
+# Pipeline status:
+#   Active in the command-line pipeline. This script creates or stages the
+#   manuscript output(s) listed above into final_manuscript_objects/ when the
+#   required upstream inputs are available.
+#
 
 # ===========================================================================
 # SECTION 0: SETUP
@@ -89,7 +103,7 @@ rm(.manuscript_helper)
 
 outdir <- "Output_tables_2025"
 OUTPUT_DIR_FIGURES <- "Output_figures_2025"
-OUTPUT_DIR_EASYМ <- "Output_EasyM_MRD_analysis_2025"  # Output from script 3_1_A
+OUTPUT_DIR_EASYM <- "Output_EasyM_MRD_analysis_2025"  # Output from script 3_1_A
 
 # ─────────────────────────────────────────────────────────────────────────
 # SOURCE DATA EXPORT SETUP
@@ -114,9 +128,12 @@ cat("\nLoading cfWGS data from prior analysis...\n")
 dat <- readRDS(file.path(outdir, "all_patients_with_BM_and_blood_calls_updated5.rds"))
 cat(sprintf("✓ Loaded %d rows from cfWGS dataset\n", nrow(dat)))
 
-# Model and threshold definitions (if needed for benchmarking)
-PATH_MODEL_LIST <- "~/Documents/Thesis_work/R/M4/Projects/High_risk_MM_baselinbe_relapse_marrow/Output_tables_2025/selected_combo_models_2025-09-17.rds"
-PATH_THRESHOLD_LIST <- "~/Documents/Thesis_work/R/M4/Projects/High_risk_MM_baselinbe_relapse_marrow/Output_tables_2025/selected_combo_thresholds_2025-09-17.rds"
+# Optional model and threshold definitions used only for labels/benchmarking.
+# Keep these paths project-relative for Code Ocean portability. The scored calls
+# and probabilities are read from all_patients_with_BM_and_blood_calls_updated5.rds;
+# this script does not retrain the models.
+PATH_MODEL_LIST <- file.path(outdir, "selected_combo_models_2025-09-17.rds")
+PATH_THRESHOLD_LIST <- file.path(outdir, "selected_combo_thresholds_2025-09-17.rds")
 
 if (file.exists(PATH_MODEL_LIST)) {
   selected_models <- readRDS(PATH_MODEL_LIST)
@@ -146,7 +163,7 @@ if (file.exists(PATH_THRESHOLD_LIST)) {
 
 cat("\nLoading EasyM data from script 3_1_A...\n")
 
-EasyM_file <- file.path(OUTPUT_DIR_EASYМ, "EasyM_all_samples_with_optimized_calls.csv")
+EasyM_file <- file.path(OUTPUT_DIR_EASYM, "EasyM_all_samples_with_optimized_calls.csv")
 EasyM_thresholds <- NULL
 
 if (file.exists(EasyM_file)) {
@@ -182,7 +199,7 @@ if (file.exists(EasyM_file)) {
               sum(dat$threshold_method == "clinician", na.rm = TRUE)))
   
   # Load threshold reference table
-  threshold_ref_file <- file.path(OUTPUT_DIR_EASYМ, "tables", "EasyM_threshold_values_by_timepoint.csv")
+  threshold_ref_file <- file.path(OUTPUT_DIR_EASYM, "tables", "EasyM_threshold_values_by_timepoint.csv")
   if (file.exists(threshold_ref_file)) {
     EasyM_thresholds <- readr::read_csv(threshold_ref_file, show_col_types = FALSE)
     cat(sprintf("✓ Loaded threshold reference: %d timepoints\n", nrow(EasyM_thresholds)))
@@ -237,7 +254,8 @@ dat <- dat %>%
 
 # ---------------------------------------------------------------------------
 #  3.  FRONTLINE cohort: positivity by landmark - BM-derived mutations -------
-# Show binary positivity + EasyM clearance-optimized probability
+# Figure 3D input table: positivity rates for cfWGS, clinical MRD assays, and
+# EasyM at the frontline landmark timepoints.
 front_tbl <- dat %>%
   filter(
     Cohort == "Frontline",
@@ -270,8 +288,9 @@ front_tbl <- dat %>%
     )
   )
 
-## Get double negatives 
-# Reshape to long format for all methods including both EasyM approaches
+# Analyst note: quantify patients who are negative at both frontline landmark
+# timepoints by clinical assays and by BM-informed cfWGS. These values support
+# manuscript text but are not separately staged as a figure/table artifact.
 front_long <- dat %>%
   filter(
     Cohort == "Frontline",
@@ -307,18 +326,18 @@ neg_both_tbl <- front_long %>%
   ) %>%
   filter(all_neg)
 
-# Pull sets of patients
+# Pull method-specific patient sets for overlap summaries.
 neg_sets <- split(neg_both_tbl$Patient, neg_both_tbl$Technology)
 
 mfc_neg   <- neg_sets[["MFC"]]
 seq_neg   <- neg_sets[["clonoSEQ"]]
 cfwgs_neg <- neg_sets[["cfWGS"]]
 
-# Overlaps
+# Overlaps between clinical-assay-negative and cfWGS-negative sets.
 mfc_also_cfwgs <- intersect(mfc_neg, cfwgs_neg)
 seq_also_cfwgs <- intersect(seq_neg, cfwgs_neg)
 
-# Build sentences
+# Build analyst-facing prose snippets for manuscript text checks.
 mfc_sentence <- sprintf(
   "Of %d patients that were negative at both timepoints by MFC, %d (%.1f%%) were also negative by cfWGS.",
   length(mfc_neg),
@@ -336,13 +355,13 @@ seq_sentence <- sprintf(
 mfc_sentence
 seq_sentence
 
-## Counts 
+# Analyst note: paired-assay availability counts used to verify the sample
+# denominators that appear in concordance text.
 tp_labels <- c(
   "Post-ASCT" = "post-ASCT",
   "Maintenance-1yr" = "1-year maintenance"
 )
 
-# 1) Counts per landmark timepoint
 front_counts <- dat %>%
   filter(Cohort == "Frontline", !is.na(landmark_tp)) %>%
   mutate(
@@ -370,7 +389,9 @@ concord_sentence <- front_counts %>%
 concord_sentence
 
 # ---------------------------------------------------------------------------
-#  4.  NON‑FRONTLINE cohort: pooled positivity -------------------------------
+#  4.  NON-FRONTLINE cohort: pooled positivity -------------------------------
+# Figure 3D test-cohort input table: positivity rates pooled across eligible
+# non-frontline follow-up samples.
 non_tbl <- dat %>%
   mutate(landmark_tp = "All timepoints") %>%
   filter(!timepoint_info %in% c("Baseline", "Diagnosis")) %>% 
@@ -402,7 +423,7 @@ non_tbl <- dat %>%
   )
 
 
-## Export
+# Export source tables used by the BM-informed positivity panels.
 readr::write_csv(
   front_tbl,
   file.path(outdir, "Positivity_by_Landmark_TimePoint_BoneMarrow_Frontline_updated5.csv")
@@ -414,7 +435,9 @@ readr::write_csv(
 )
 
 
-### Decide if to restrict for 3 or keep as just 2
+# Sanity check: count complete versus partially paired assay availability.
+# The figure keeps samples with cfWGS plus at least one clinical MRD comparator,
+# matching the manuscript denominator rather than requiring all three assays.
 dat %>%
   filter(Cohort == "Frontline", !is.na(landmark_tp)) %>%
   group_by(landmark_tp) %>%
@@ -505,7 +528,7 @@ p_front_grouped <- ggplot(front_tbl,
             vjust    = -0.4,
             size     = 3.5)
 
-# 4) save
+# Save the first standalone frontline BM positivity plot for provenance.
 ggsave(
     filename = file.path(OUTPUT_DIR_FIGURES, "Fig_BM_positivity_by_tech_updated5.png"),
   plot     = p_front_grouped,
@@ -523,8 +546,9 @@ readr::write_csv(
 )
 
 
-## Edit theme - figure 4I
-# Updated custom palette to match the two-tone “teal → green” plus grey
+# Intermediate BM positivity plot retained for historical/provenance output.
+# The final manuscript-staged BM positivity component is the faceted Figure 3D
+# panel built below.
 custom_cols <- c(
   "Post-ASCT"       = "#31688E",  # deep teal-blue leaning toward purple
   "Maintenance-1yr" = "#35B779",  # bright forest green
@@ -541,7 +565,7 @@ p_front_grouped <- ggplot(front_tbl,
            colour   = "black",
            size     = 0.3) +
   
-  # ② manual fill so it matches your other panels
+  # Manual fill to match the manuscript color palette.
   scale_fill_manual(
     name   = "Timepoint",
     values = custom_cols,
@@ -585,9 +609,9 @@ ggsave(
 
 
 # ---------------------------------------------------------------------------
-#  2. Now create NON‑FRONTLINE plot ----------------------------------------------------
+#  2. Build non-frontline/test-cohort BM positivity plot ----------------------
 
-# 1) Clean and re-factor your time-point column
+# Clean and re-factor the timepoint column for consistent plotting.
 non_tbl <- non_tbl %>%
   # 1) normalize that unicode hyphen to the ASCII hyphen-minus
   mutate(
@@ -599,7 +623,7 @@ non_tbl <- non_tbl %>%
                         levels = c("cfWGS", "clonoSEQ", "MFC", "EasyM (opt)", "EasyM (any)"))
   )
 
-# 2) Rebuild the grouped barplot for frontline
+# Build a standalone non-frontline/test-cohort plot for provenance.
 p_non_grouped <- ggplot(non_tbl, 
                           aes(x    = Technology,
                               y    = pos_rate * 100,
@@ -631,7 +655,8 @@ p_non_grouped <- ggplot(non_tbl,
             vjust    = -0.4,
             size     = 3.5)
 
-# 4) save
+# Save the first standalone non-frontline/test-cohort BM positivity plot for
+# provenance.
 ggsave(
   filename = file.path(OUTPUT_DIR_FIGURES, "Fig_BM_positivity_by_tech_later_line5.png"),
   plot     = p_non_grouped,
@@ -649,7 +674,7 @@ readr::write_csv(
 )
 
 
-## Updated theme 
+# Intermediate themed non-frontline/test-cohort plot retained for provenance.
 p_non_grouped <- ggplot(non_tbl, 
                           aes(x    = Technology,
                               y    = pos_rate * 100,
@@ -660,7 +685,7 @@ p_non_grouped <- ggplot(non_tbl,
            colour   = "black",
            size     = 0.3) +
   
-  # ② manual fill so it matches your other panels
+  # Manual fill to match the manuscript color palette.
   scale_fill_manual(
     name   = "Timepoint",
     values = custom_cols,
@@ -703,13 +728,13 @@ ggsave(
 # (Already exported above; same data as Fig_BM_positivity_by_tech_later_line5)
 
 
-### Do a facetted figure with both 
-# 1) Combine the two tables into one and add a Cohort column
+# Main Figure 3D: combine training/frontline and test/non-frontline tables into
+# one faceted BM-informed positivity panel.
 front_tbl2 <- front_tbl  %>% mutate(Cohort = "Training Cohort")
 non_tbl2   <- non_tbl    %>% mutate(Cohort = "Test Cohort")
 combo_tbl  <- bind_rows(front_tbl2, non_tbl2)
 
-# Set order
+# Set display order for cohorts, timepoints, and technologies.
 combo_tbl <- combo_tbl %>%
   mutate(
     Cohort      = factor(Cohort,    levels = c("Training Cohort","Test Cohort")),
@@ -721,7 +746,7 @@ combo_tbl <- combo_tbl %>%
                         levels = c("cfWGS", "clonoSEQ", "MFC", "EasyM (opt)", "EasyM (any)"))
   )
 
-# 3) Single facetted plot
+# Single faceted plot used as the final Figure 3D component.
 p_pos_by_tech <- ggplot(combo_tbl, 
                         aes(x    = Technology,
                             y    = pos_rate * 100,
@@ -739,7 +764,7 @@ p_pos_by_tech <- ggplot(combo_tbl,
             size     = 2.5,
             family   = "sans") +
   
-  # ③ manual fill so it matches your other panels
+  # Manual fill to match the manuscript color palette.
   scale_fill_manual(
     name   = "Timepoint",
     values = custom_cols,
@@ -772,8 +797,8 @@ p_pos_by_tech <- ggplot(combo_tbl,
     legend.position = "top"
   )
 
-## Used in manuscript
-# 4) Save
+# Save the final Figure 3D working PNG before staging it to the manuscript
+# output directory.
 ggsave(
   filename = file.path(OUTPUT_DIR_FIGURES, "Fig_4I_BM_positivity_by_tech_facet7.png"),
   plot     = p_pos_by_tech,
@@ -815,9 +840,11 @@ readr::write_csv(
 
 
 
-### Now redo using blood derived muts
-## See number available 
-# 1) Counts per landmark timepoint
+# Main Figure 4C: repeat the positivity-rate analysis using blood/cfDNA-derived
+# mutation lists and the blood cfWGS model calls.
+#
+# Analyst note: count paired assay availability at each frontline landmark
+# timepoint before building the plot.
 front_counts <- dat %>%
   filter(Cohort == "Frontline", !is.na(landmark_tp)) %>%
   mutate(
@@ -851,7 +878,7 @@ front_tbl <- dat %>%
     !is.na(Blood_zscore_only_sites_call),
     !is.na(Flow_Binary) | !is.na(Adaptive_Binary)
   ) %>%
-  ## Add the screen column
+  # Add the blood screening-threshold call used in Figure 4C.
   mutate(
     Blood_zscore_screen_call  = as.integer(Blood_zscore_only_sites_prob >= 0.380)
   ) %>%
@@ -885,8 +912,9 @@ front_tbl <- dat %>%
 #    )
 #  )
 
-## Get double negatives 
-# Reshape to long format for all three methods
+# Analyst note: quantify patients negative at both landmark timepoints by
+# clinical assays and by blood/cfDNA-informed cfWGS. These values support
+# manuscript text but are not separately staged as a figure/table artifact.
 front_long <- dat %>%
   filter(
     Cohort == "Frontline",
@@ -962,7 +990,7 @@ non_tbl <- dat %>%
     !is.na(Blood_zscore_only_detection_rate_call),
     !is.na(MRD_truth) # restrict to only ones with MRD for fair comparison
   ) %>%
-  ## Add the screen column 
+  # Add the blood screening-threshold call used in Figure 4C.
   mutate(
     Blood_zscore_screen_call  = as.integer(Blood_zscore_only_sites_prob >= 0.380)
   ) %>%
@@ -993,28 +1021,29 @@ non_tbl <- dat %>%
   )
 
 
-# 1) Clean and re-factor your time-point column
+# Clean and re-factor the frontline timepoint column for plotting.
 front_tbl <- front_tbl %>%
-  # 1) normalize that unicode hyphen to the ASCII hyphen-minus
+  # Normalize unicode hyphen to ASCII hyphen-minus for consistent rendering.
   mutate(
     landmark_tp = str_replace_all(landmark_tp, "\u2011", "-")
   ) %>%
-  # 2) now convert to a factor with Post-ASCT first
+  # Convert to a factor with Post-ASCT first.
   mutate(
     landmark_tp = factor(landmark_tp,
                          levels = c("Post-ASCT", "Maintenance-1yr"))
   )
 
-# 1) Clean and re-factor your time-point column
+# Clean and re-factor the non-frontline/test-cohort timepoint column.
 non_tbl <- non_tbl %>%
-  # 1) normalize that unicode hyphen to the ASCII hyphen-minus
+  # Normalize unicode hyphen to ASCII hyphen-minus for consistent rendering.
   mutate(
     landmark_tp = str_replace_all(landmark_tp, "\u2011", "-")
   ) 
 
 
 
-# 3) Single facetted plot
+# Combine training/frontline and test/non-frontline tables into one faceted
+# blood/cfDNA-informed positivity panel.
 front_tbl_blood <- front_tbl  %>% mutate(Cohort = "Training Cohort")
 non_tbl_blood   <- non_tbl    %>% mutate(Cohort = "Test Cohort")
 combo_tbl  <- bind_rows(front_tbl_blood, non_tbl_blood)
@@ -1038,9 +1067,9 @@ combo_tbl <- combo_tbl %>%
     
   )
 
-## Make sentence
-# --- CONFIG ---
-fig_ref   <- "Figure 3D"
+# Analyst note: build prose snippets for checking the Figure 4C percentages
+# against the plotted denominators.
+fig_ref   <- "Figure 4C"
 cohort_in <- "Training Cohort"                    # change if you want the Test Cohort
 
 # Helper: fetch row for a (timepoint, technology, cohort) and format "XX% (a/b)"
@@ -1068,7 +1097,6 @@ build_sentence <- function(df, tp, fig = fig_ref) {
   )
 }
 
-# --- RUN ---
 tp1 <- "Post-ASCT"
 tp2 <- "Maintenance-1yr"
 
@@ -1096,7 +1124,7 @@ p_pos_by_tech <- ggplot(combo_tbl,
             size     = 2.5,
             family   = "sans") +
   
-  # ③ manual fill so it matches your other panels
+  # Manual fill to match the manuscript color palette.
   scale_fill_manual(
     name   = "Timepoint",
     values = custom_cols,
@@ -1129,7 +1157,8 @@ p_pos_by_tech <- ggplot(combo_tbl,
     legend.position = "top"
   )
 
-# 4) Save
+# Save the final Figure 4C working PNG before staging it to the manuscript
+# output directory.
 ggsave(
   filename = file.path(OUTPUT_DIR_FIGURES, "Fig_5I_Blood_positivity_by_tech_facet_updated6.png"),
   plot     = p_pos_by_tech,
@@ -1161,7 +1190,8 @@ ms_copy_artifact(
 
 
 
-### Now get the important metrics 
+# Concordance and PPV/NPV summaries for BM-informed calls. These tables support
+# manuscript text and downstream supplementary-table construction.
 # ---------------------------------------------------------------------------
 # 1.  Helper to compute pairwise concordance ---------------------------------
 pair_concord <- function(df, test_a, test_b) {
@@ -1225,7 +1255,8 @@ pos_tbl <- front %>%
     .groups = "drop"
   )
 
-## for non-frontline 
+# Non-frontline/test-cohort BM concordance summary, aggregated across eligible
+# follow-up samples.
 non <- dat %>% filter(Cohort == "Non-frontline") %>% filter(!is.na(BM_zscore_only_detection_rate_call)) %>% filter(timepoint_info != "Baseline") %>% 
   filter(timepoint_info != "Diagnosis")
 
@@ -1261,8 +1292,8 @@ ppv_npv <- function(df, pred_col = "BM_zscore_only_detection_rate_call") {
   )
 }
 
-## To get the PPV and NPV 
-# Now can run:
+# PPV/NPV versus the combined clinical MRD truth for the two frontline
+# landmark timepoints.
 ppv_post  <- ppv_npv(pa %>% filter(!is.na(MRD_truth)))
 ppv_maint <- ppv_npv(ma %>% filter(!is.na(MRD_truth)))
 
@@ -1330,8 +1361,10 @@ stats_out <- list(
 print(stats_out)
 
 # ---------------------------------------------------------------------------
-# 7.  (OPTIONAL)  Auto‑generate paragraph -----------------------------------
-write_para <- TRUE   # set TRUE if you want it printed
+# 7.  Manuscript-text denominator check --------------------------------------
+# Print a paragraph-style summary so analysts can cross-check values in the
+# manuscript text. This does not create a final manuscript artifact.
+write_para <- TRUE
 
 if (write_para) {
   # helpers to pull numbers
@@ -1382,7 +1415,9 @@ if (write_para) {
 }
 
 
-### Get PPV and NPV seperately across technologies rather than on MRD truth
+# Assay-specific PPV/NPV summaries.
+# These compare cfWGS to each clinical assay separately, rather than to the
+# combined MRD truth variable.
 # 1.  General PPV/NPV helper that takes any truth column  -------------------
 ppv_npv_any <- function(df, pred_col = "BM_zscore_only_detection_rate_call", truth_col) {
   tbl <- table(
@@ -1409,18 +1444,18 @@ ppv_npv_any <- function(df, pred_col = "BM_zscore_only_detection_rate_call", tru
   )
 }
 
-# 2.  Filter post-ASCT FRONTLINE samples -------------------------------
+# 2.  Filter post-ASCT frontline samples -------------------------------
 pa <- dat %>%
   filter(Cohort == "Frontline", landmark == "Post_ASCT")
 
-# 3.  Compute PPV/NPV vs. clonoSEQ  --------------------------------------
+# 3.  Compute PPV/NPV versus clonoSEQ  ----------------------------------
 ppv_clono <- ppv_npv_any(
   df        = pa %>% filter(!is.na(Adaptive_Binary)),
   pred_col  = "BM_zscore_only_detection_rate_call",
   truth_col = "Adaptive_Binary"
 )
 
-# 4.  Compute PPV/NPV vs. MFC  ------------------------------------------
+# 4.  Compute PPV/NPV versus MFC  ---------------------------------------
 ppv_mfc <- ppv_npv_any(
   df        = pa %>% filter(!is.na(Flow_Binary)),
   pred_col  = "BM_zscore_only_detection_rate_call",
@@ -1431,7 +1466,7 @@ ppv_mfc <- ppv_npv_any(
 bind_rows(ppv_clono, ppv_mfc)
 
 
-## Now for maintenance 
+# Repeat assay-specific PPV/NPV at the frontline maintenance landmark.
 pa <- dat %>%
   filter(Cohort == "Frontline", landmark == "Maintenance")
 ppv_clono <- ppv_npv_any(
@@ -1447,7 +1482,7 @@ ppv_mfc <- ppv_npv_any(
 
 bind_rows(ppv_clono, ppv_mfc)
 
-## Now for non-frontline 
+# Repeat assay-specific PPV/NPV for the non-frontline/test cohort.
 pa <- dat %>%
   filter(Cohort == "Non-frontline") %>% filter(timepoint_info != "Diagnosis")
 
@@ -1460,7 +1495,7 @@ ppv_mfc <- ppv_npv_any(
 bind_rows(ppv_mfc)
 
 
-### Make big paragraph
+# Manuscript-text denominator check for assay-specific PPV/NPV summaries.
 # ---- compact wrappers to fetch %PPV/%NPV for a timepoint vs a given truth assay ----
 get_ppvnpv <- function(df, landmark_value, truth_col) {
   tmp <- df %>%
@@ -1492,7 +1527,8 @@ and with MFC in {C}/{D} ({BB}%) samples (PPV = {fmt_pct0(ppvnpv_maint_mfc['PPV']
 cat(para2)
 
 
-## Export 
+# Export BM-informed concordance helper tables used for review and source-data
+# tracing. Final manuscript-staged workbooks are generated later in this script.
 # 1. Export post-ASCT pairwise concordance (frontline BM)
 readr::write_csv(
   post_conc,
@@ -1526,7 +1562,8 @@ readr::write_csv(
 
 
 
-#### Now make contingency table 
+# Extended Data Figure 5E-G: BM-informed confusion-matrix inputs against the
+# combined clinical MRD truth.
 # helper: build a tidy 2 × 2 contingency table ----------------------------
 make_ct <- function(df,
                     pred  = "BM_zscore_only_detection_rate_call",   # cfWGS
@@ -1571,7 +1608,7 @@ ct_maint <- front %>%
 # 3.  NON-FRONTLINE – all baseline / follow-up samples --------------------
 ct_nonfront <- non %>% make_ct()
 
-# 4.  Export  ----------------------------------------------------
+# Export compact contingency-table workbook for traceability.
 writexl::write_xlsx(
   list(
     "Contingency_Post_ASCT"     = ct_post_ASCT,
@@ -1581,8 +1618,7 @@ writexl::write_xlsx(
   path = file.path(outdir, "cfWGS_vs_MRD_truth_contingency_tables3.xlsx")
 )
 
-### Now do to MFC and clonoSEQ seperately 
-# build the six tables -----------------------------------------------------
+# Build comparator-specific BM contingency tables against MFC and clonoSEQ.
 ct_post_Flow   <- front  %>% filter(landmark=="Post_ASCT") %>% 
   make_ct(truth = "Flow_Binary")
 ct_post_Clono  <- front  %>% filter(landmark=="Post_ASCT") %>% 
@@ -1607,8 +1643,8 @@ writexl::write_xlsx(
 )
 
 
-## Now plot the contingency tables 
-## A.  Helper: turn a 1-row TP/FP/FN/TN tibble into a long tibble
+# Plotting helper for Extended Data Figure 5E-G: turn a one-row TP/FP/FN/TN
+# table into the long format expected by ggplot.
 ct_to_long <- function(ct_row, label){
   with(ct_row, tibble(
     Obs  = rep(c("neg","pos"), each = 2),          # rows
@@ -1642,7 +1678,8 @@ cm_non <- ct_to_long(ct_non_Flow, "Flow (MFC)")
 ## C.  A small plotting helper (avoids repeated code)
 ## ───────────────────────────────────────────────────────────────
 
-## Old function
+# Archived plotting helper retained for provenance only. It is not used for
+# manuscript-staged outputs.
 # plot_cm <- function(df, main_title){
 #   df <- df %>%
 #     mutate(
@@ -1676,7 +1713,8 @@ cm_non <- ct_to_long(ct_non_Flow, "Flow (MFC)")
 #     )
 # }
 
-## Updated 
+# Active confusion-matrix plotting helper used for Extended Data Figure 5E-G
+# and Extended Data Figure 7F-H.
 plot_cm <- function(df, main_title,
                     col_low = "#f2f2f2", col_high = "#4a4a4a") {
   
@@ -1785,7 +1823,9 @@ readr::write_csv(
   file.path(outdir_source_data, "Fig4_confmat_nonfront5_source_data.csv")
 )
 
-## As one 
+# Auxiliary combined BM layout retained for provenance. This is not staged as a
+# final manuscript artifact; the final ED5E-G components are copied separately
+# by the `ms_copy_artifact()` calls above.
 combined_cm <- (p_post  +
                   theme(
                     panel.spacing = unit(1, "lines"),
@@ -1820,7 +1860,7 @@ combined_cm <- (p_post  +
 #)
 
 
-# save
+# Save auxiliary stacked BM layout.
 ggsave("Final Tables and Figures/Fig4J_confusion_matrices_all_three_4.png",
        combined_cm,
        width  = 4,
@@ -1832,7 +1872,8 @@ ggsave("Final Tables and Figures/Fig4J_confusion_matrices_all_three_4.png",
 # ══════════════════════════════════════════════════════════════════════════
 # (Source data already exported individually above)
 
-## Side by side 
+# Auxiliary side-by-side BM layout retained for provenance. This is not staged
+# as a final manuscript artifact.
 combined_cm <- (p_post +
                   theme(
                     panel.spacing = unit(1, "lines"),
@@ -1861,7 +1902,7 @@ combined_cm <- (p_post +
   )
 
 
-# save
+# Save auxiliary side-by-side BM layout.
 ggsave("Final Tables and Figures/Fig4J_confusion_matrices_all_three_side_by_side4.png",
        combined_cm,
        width  = 15,
@@ -1878,7 +1919,7 @@ ggsave("Final Tables and Figures/Fig4J_confusion_matrices_all_three_side_by_side
 
 
 
-### Now do for the blood samples 
+# Extended Data Figure 7F-H: blood/cfDNA-informed confusion-matrix inputs.
 front_blood <- dat %>% filter(Cohort == "Frontline", !is.na(landmark)) %>% filter(!is.na(Blood_zscore_only_sites_call))
 non_blood <- dat %>% filter(Cohort == "Non-frontline") %>% filter(!is.na(Blood_zscore_only_sites_call)) %>% filter(!timepoint_info %in% c("Diagnosis", "Baseline"))
 
@@ -1930,7 +1971,7 @@ ct_maint <- front_blood %>%
 # 3.  NON-FRONTLINE – all baseline / follow-up samples --------------------
 ct_nonfront <- non_blood %>% make_ct()
 
-# 4.  Export  ----------------------------------------------------
+# Export compact blood contingency-table workbook for traceability.
 writexl::write_xlsx(
   list(
     "Contingency_Post_ASCT"     = ct_post_ASCT,
@@ -1940,8 +1981,8 @@ writexl::write_xlsx(
   path = file.path(outdir, "cfWGS_vs_MRD_truth_contingency_tables_blood3.xlsx")
 )
 
-### Now do to MFC and clonoSEQ seperately 
-# build the six tables -----------------------------------------------------
+# Build comparator-specific blood/cfDNA contingency tables against MFC and
+# clonoSEQ.
 ct_post_Flow   <- front_blood  %>% filter(landmark=="Post_ASCT") %>% 
   make_ct(truth = "Flow_Binary")
 ct_post_Clono  <- front_blood  %>% filter(landmark=="Post_ASCT") %>% 
@@ -1966,7 +2007,8 @@ writexl::write_xlsx(
 )
 
 
-# format the sentence you quoted (rounded like your example)
+# Format an analyst-facing prose check using rounded manuscript-style
+# percentages.
 fmt_pct <- function(x) sprintf("%.0f%%", 100*x)
 
 post_sentence <- glue(
@@ -1991,8 +2033,7 @@ maint_sentence <- glue(
 
 maint_sentence
 
-## Now plot the contingency tables 
-## A.  Helper: turn a 1-row TP/FP/FN/TN tibble into a long tibble
+# Rebuild long-format confusion-matrix rows for the blood/cfDNA panels.
 ct_to_long <- function(ct_row, label){
   with(ct_row, tibble(
     Obs  = rep(c("neg","pos"), each = 2),          # rows
@@ -2086,7 +2127,9 @@ readr::write_csv(
   file.path(outdir_source_data, "Fig5_confmat_nonfront_blood_updated6_source_data.csv")
 )
 
-## As one 
+# Auxiliary combined blood layout retained for provenance. This is not staged
+# as a final manuscript artifact; the final ED7F-H components are copied
+# separately by the `ms_copy_artifact()` calls above.
 combined_cm <- (p_post  +
                   theme(
                     panel.spacing = unit(1, "lines"),
@@ -2121,7 +2164,7 @@ combined_cm <- (p_post  +
 #)
 
 
-# save
+# Save auxiliary stacked blood layout.
 ggsave("Final Tables and Figures/Fig5J_confusion_matrices_all_three_blood.png",
        combined_cm,
        width  = 4,
@@ -2130,9 +2173,10 @@ ggsave("Final Tables and Figures/Fig5J_confusion_matrices_all_three_blood.png",
 
 
 
-### Redo blood with the fragment combined model 
-
-### Now do for the blood samples 
+# Supplementary analysis: repeat the blood confusion-matrix summaries using the
+# blood plus fragmentomics combined model. These outputs are not currently
+# staged as final manuscript figure panels, but the metrics support exploratory
+# checks and Supplementary Table 10 construction.
 front_blood <- dat %>% filter(Cohort == "Frontline", !is.na(landmark)) %>% filter(!is.na(Blood_plus_fragment_call))
 non_blood <- dat %>% filter(Cohort == "Non-frontline") %>% filter(!is.na(Blood_plus_fragment_call)) %>% filter(!timepoint_info %in% c("Diagnosis", "Baseline"))
 
@@ -2184,7 +2228,7 @@ ct_maint <- front_blood %>%
 # 3.  NON-FRONTLINE – all baseline / follow-up samples --------------------
 ct_nonfront <- non_blood %>% make_ct()
 
-# 4.  Export  ----------------------------------------------------
+# Export compact combined-model contingency-table workbook for traceability.
 writexl::write_xlsx(
   list(
     "Contingency_Post_ASCT"     = ct_post_ASCT,
@@ -2194,8 +2238,7 @@ writexl::write_xlsx(
   path = file.path(outdir, "cfWGS_vs_MRD_truth_contingency_tables_blood2_fragment_combined.xlsx")
 )
 
-### Now do to MFC and clonoSEQ seperately 
-# build the six tables -----------------------------------------------------
+# Build comparator-specific combined-model contingency tables.
 ct_post_Flow   <- front_blood  %>% filter(landmark=="Post_ASCT") %>% 
   make_ct(truth = "Flow_Binary")
 ct_post_Clono  <- front_blood  %>% filter(landmark=="Post_ASCT") %>% 
@@ -2220,7 +2263,8 @@ writexl::write_xlsx(
 )
 
 
-# format the sentence you quoted (rounded like your example)
+# Format an analyst-facing prose check using rounded manuscript-style
+# percentages.
 fmt_pct <- function(x) sprintf("%.0f%%", 100*x)
 
 post_sentence <- glue(
@@ -2249,7 +2293,8 @@ maint_sentence
 
 
 
-### Just make for everything - PPV/NPV to clinical
+# Supplementary Table 10: all cfWGS/fragmentomics call metrics against clinical
+# comparators across frontline landmarks and non-frontline/test-cohort samples.
 ## ── Config ─────────────────────────────────────────────────────────────
 TP_FRONTLINE <- c("Post_ASCT", "Maintenance")
 COMPARATORS  <- c(MFC = "Flow_Binary", clonoSEQ = "Adaptive_Binary")
@@ -2262,7 +2307,8 @@ pretty_pred <- function(col) {
   }
 }
 
-# your mapping vector
+# Human-readable labels for the model/call columns exported in Supplementary
+# Table 10.
 techs <- c(
   BM_zscore_only_sites_call            = "BM Sites Z-score",
   BM_zscore_only_detection_rate_call   = "BM cVAF Z-score",
@@ -2432,7 +2478,7 @@ row_to_sentence <- function(row) {
   )
 }
 
-## ── Run ─────────────────────────────────────────────────────────────────
+# Build the final Supplementary Table 10 metrics table.
 metrics_tbl <- build_metrics_frontline_vs_nonfront(dat)
 
 metrics_tbl <- metrics_tbl %>%
@@ -2452,7 +2498,8 @@ metrics_tbl <- metrics_tbl %>%
 #   rowwise() %>% mutate(sentence = row_to_sentence(cur_data())) %>%
 #   ungroup() %>% select(Cohort, Timepoint, Pred_Label, Comparator, sentence)
 
-# Export
+# Export workbook using the historical filename. The final manuscript copy is
+# staged below as Supplementary Table 10.
 writexl::write_xlsx(list("All_Call_Metrics" = metrics_tbl),
                     path = file.path(outdir, "Supplementary_Table_9_All_call_metrics_against_clinical_metrics.xlsx"))
 
@@ -2497,18 +2544,22 @@ ms_copy_artifact(
 
 
 # ------------------------------------------------------------------------------
-# SECTION: CHARACTERISTICS OF MISCLASSIFIED SAMPLES
+# SECTION: SUPPLEMENTARY TABLE 8 - DISCORDANCE AND CONCORDANCE SOURCE WORKBOOK
 # ------------------------------------------------------------------------------
+# This section builds the row-level BM and blood/cfDNA comparison tables used in
+# Supplementary Table 8. Rows include both concordant and discordant comparisons,
+# plus baseline mutation counts and selected fragmentomics quality/context fields
+# that help interpret discordant cases.
 
-### Look at characteristics of the samples that were misclassified
-
-### Add baseline mutation count 
-# For each patient, pull the BM and blood mutation counts from their first “Diagnosis” or “Baseline” sample,
-# then join those baseline counts back onto every row for that patient.
+# Add baseline mutation counts.
+# For each patient, pull the BM and blood mutation counts from their first
+# diagnosis/baseline sample, then join those baseline counts back onto every
+# row for that patient.
 baseline_counts <- dat %>%
   # Keep only diagnosis/baseline visits
   filter(timepoint_info %in% c("Diagnosis", "Baseline")) %>%
-  # Ensure we pick the earliest by date (in case a patient has both “Diagnosis” and “Baseline” or multiple baseline rows)
+  # Use the earliest diagnosis/baseline date when multiple baseline-like rows
+  # exist for the same patient.
   arrange(Patient, Date) %>%
   group_by(Patient) %>%
   slice_min(order_by = Date, n = 1, with_ties = FALSE) %>%
@@ -2520,11 +2571,12 @@ baseline_counts <- dat %>%
     Blood_MutCount_Baseline = Blood_Mutation_Count
   )
 
-# Now merge those baseline counts back onto the full dataset
+# Merge those baseline counts back onto the full dataset.
 dat <- dat %>%
   left_join(baseline_counts, by = "Patient")
 
-# Inspect the new columns
+# Analyst-facing preview of the new columns. This is printed during command-line
+# execution for QC but is not exported as a manuscript artifact.
 dat %>%
   select(Patient, timepoint_info, BM_Mutation_Count, BM_MutCount_Baseline,
          Blood_Mutation_Count, Blood_MutCount_Baseline) %>%
@@ -2535,8 +2587,9 @@ dat %>%
 
 
 
-### Add in the expected positions of fragmentomics data in healthy controls 
-# 1) Load the cut-offs tables
+# Add fragmentomics outlier flags using healthy-control reference ranges.
+# These flags help annotate whether discordant samples also have unusual
+# fragmentomics features.
 fs_cutoffs_tbl <- read_csv(
   file.path(outdir, "FS_cutoffs_table.csv"),
   col_types = cols(
@@ -2559,20 +2612,18 @@ mm_ranges <- read_csv(
   )
 )
 
-# 2) Turn those into named vectors for easy lookup
+# Turn cutoffs into named vectors for easy lookup during mutation.
 lower_fs <- fs_cutoffs_tbl$Lower_Cutoff
 upper_fs <- fs_cutoffs_tbl$Upper_Cutoff
 
-# pick the guassian bounds from mm_ranges
+# Use the Gaussian healthy-control bounds from the MM-DARs reference table.
 emp_ranges <- mm_ranges %>%
   select(metric, lower = lower_gaussian, upper = upper_gaussian)
 
 lower_mm <- setNames(emp_ranges$lower, emp_ranges$metric)
 upper_mm <- setNames(emp_ranges$upper, emp_ranges$metric)
 
-# ────────────────────────────────────────────────────────────────────────────
-# 3) Flag outliers in dat
-# ────────────────────────────────────────────────────────────────────────────
+# Flag outliers in the working data table.
 dat <- dat %>%
   # 3a. FS outlier
   mutate(
@@ -2592,33 +2643,28 @@ dat <- dat %>%
     )
   )
 
-# 4) Save the augmented dat
+# Save the augmented data table for traceability and downstream auditing.
 readr::write_csv(
   dat,
   file.path(outdir, "dat_with_fragment_and_DARs_outlier_flags.csv")
 )
 
 
-#### Now report on 
-# Columns you definitely need for inspection
+# Columns retained in the discordance workbook for sample identity and
+# interpretation.
 id_cols   <- c("Patient", "Date", "Sample_Code", "Timepoint", "timepoint_info")
 
-# Columns that explain why calls differ
-aux_cols  <- c("Adaptive_Frequency",              # clonoSEQ cumulative VAF (rename to your actual column name)
+# Columns that help explain why cfWGS and clinical calls differ.
+aux_cols  <- c("Adaptive_Frequency",              # clonoSEQ cumulative VAF
                "Flow_pct_cells", grep("^BM.*(_prob|_call)$", names(dat), value = TRUE),
                "FS", "Mean.Coverage", "detect_rate_BM", "zscore_BM", 
                "WGS_Tumor_Fraction_Blood_plasma_cfDNA",
                "BM_MutCount_Baseline", "Blood_MutCount_Baseline", "FS_outlier", "Mean.Coverage_outlier")
 
-# Make sure they exist
+# Warn if any expected explanatory columns are absent.
 missing <- setdiff(aux_cols, names(dat))
 if (length(missing)) warning("These columns are missing: ", paste(missing, collapse = ", "))
-
-
-
-### Now do one big table with everything discordant
-
-# 2.  Build one combined table ---------------------------------------------
+# BM-informed frontline comparison table for Supplementary Table 8.
 combined_discord_tbl <- dat %>%
   filter(
     !is.na(BM_zscore_only_detection_rate_call),
@@ -2648,20 +2694,20 @@ combined_discord_tbl <- dat %>%
     )
   ) %>%
   select(
-    all_of(id_cols),     # Patient, Sample_Code, Timepoint, timepoint_info
-    Cohort,              # frontline vs non-frontline
-    landmark,            # e.g. "Post_ASCT" or "Maintenance"
-    Comparator,          # "clonoSEQ" or "MFC"
-    category,            # your discordance/concordance label
+    all_of(id_cols),
+    Cohort,
+    landmark,
+    Comparator,
+    category,
     Relapsed,
     Num_days_to_closest_relapse,
-    all_of(aux_cols)     # all the cfWGS, clonoSEQ & MFC metrics you specified
+    all_of(aux_cols)
   ) %>%
   arrange(landmark, Patient, Comparator)
 
 combined_discord_tbl_slim <- combined_discord_tbl %>% filter(category != "concordant")
 
-# 3.  (Optional) write out to CSV ------------------------------------------
+# Export a CSV companion for audit/review.
 write.csv(
   combined_discord_tbl,
   file.path(outdir, "Supplementary_Table_combined_discordance_table_BM2.csv"),
@@ -2670,7 +2716,8 @@ write.csv(
 
 
 
-### Do for non-frontline now at all timepoints
+# BM-informed non-frontline/test-cohort comparison table for Supplementary
+# Table 8, aggregated across eligible timepoints.
 combined_discord_tbl_non_frontline <- dat %>%
   filter(
     !is.na(BM_zscore_only_detection_rate_call),
@@ -2700,18 +2747,18 @@ combined_discord_tbl_non_frontline <- dat %>%
     )
   ) %>%
   select(
-    all_of(id_cols),     # Patient, Sample_Code, Timepoint, timepoint_info
-    Cohort,              # frontline vs non-frontline
-    Comparator,          # "clonoSEQ" or "MFC"
-    category,            # your discordance/concordance label
+    all_of(id_cols),
+    Cohort,
+    Comparator,
+    category,
     Relapsed,
     Num_days_to_closest_relapse,
-    all_of(aux_cols)     # all the cfWGS, clonoSEQ & MFC metrics you specified
+    all_of(aux_cols)
   ) %>%
   arrange(Patient, Comparator)
 
 
-## Export 
+# Export a CSV companion for audit/review.
 write.csv(
   combined_discord_tbl_non_frontline,
   file.path(outdir, "Supplementary_Table_combined_discordance_table_BM_non_frontline2.csv"),
@@ -2722,12 +2769,14 @@ write.csv(
 
 
 
-### Now check what is associated with discordance 
+# Supplementary analysis: exploratory association checks for BM-informed
+# discordance direction. These regression summaries are printed for analyst QC
+# and are not staged as final manuscript tables.
 
 # 1)  Flag discordance (1 = discordant, 0 = concordant) ----------------------
 tbl <- combined_discord_tbl 
 
-# Select numeric predictors you want to test -----------------------------
+# Numeric predictors assessed in the exploratory discordance models.
 num_vars <- c(
   "Adaptive_Frequency",
   "Flow_pct_cells",
@@ -2754,7 +2803,7 @@ tbl <- tbl %>%
   )
 
 
-# 3) Quick descriptive summary by direction
+# Descriptive summary by discordance direction.
 tbl %>%
   group_by(direction) %>%
   summarise(
@@ -2806,7 +2855,8 @@ safe_tidy_glm <- function(model, conf.level = 0.95, exponentiate = TRUE) {
   wald
 }
 
-# 5) Fit pooled logistic models
+# Fit pooled logistic models. Interpret cautiously because discordance strata
+# are small and may show complete/quasi-complete separation.
 glm_missed   <- fit_disc_model("is_missed")   # 1 = missed, 0 = else
 glm_captured <- fit_disc_model("is_captured") # 1 = captured, 0 = else
 
@@ -2817,7 +2867,7 @@ tidy_captured <- safe_tidy_glm(glm_captured)
 print(tidy_missed)
 print(tidy_captured)
 
-# 7) (Optional) By comparator breakdown -----------------------
+# Optional comparator-stratified exploratory models.
 by_comp <- tbl %>%
   group_by(Comparator) %>%
   nest() %>%
@@ -2835,15 +2885,13 @@ print(by_comp)
 
 
 
-### Show discordance of blood-derived muts 
-### Now do one big table with everything discordant
-aux_cols  <- c("Adaptive_Frequency",              # clonoSEQ cumulative VAF (rename to your actual column name)
-               "Flow_pct_cells",                     # MFC % cells; rename if needed
+# Blood/cfDNA-informed frontline comparison table for Supplementary Table 8.
+aux_cols  <- c("Adaptive_Frequency",              # clonoSEQ cumulative VAF
+               "Flow_pct_cells",                  # MFC percent tumor cells
                "FS", "Mean.Coverage",  grep("^Blood.*(_prob|_call)$", names(dat), value = TRUE),
                "WGS_Tumor_Fraction_Blood_plasma_cfDNA",
                "BM_MutCount_Baseline", "Blood_MutCount_Baseline", "FS_outlier", "Mean.Coverage_outlier")
 
-# 2.  Build one combined table ---------------------------------------------
 combined_discord_tbl2 <- dat %>%
   filter(
     !is.na(Blood_zscore_only_sites_call),
@@ -2873,20 +2921,20 @@ combined_discord_tbl2 <- dat %>%
     )
   ) %>%
   select(
-    all_of(id_cols),     # Patient, Sample_Code, Timepoint, timepoint_info
-    Cohort,              # frontline vs non-frontline
-    landmark,            # e.g. "Post_ASCT" or "Maintenance"
-    Comparator,          # "clonoSEQ" or "MFC"
-    category,            # your discordance/concordance label
+    all_of(id_cols),
+    Cohort,
+    landmark,
+    Comparator,
+    category,
     Relapsed,
     Num_days_to_closest_relapse,
-    all_of(aux_cols)     # all the cfWGS, clonoSEQ & MFC metrics you specified
+    all_of(aux_cols)
   ) %>%
   arrange(landmark, Patient, Comparator)
 
 combined_discord_tbl_slim <- combined_discord_tbl2 %>% filter(category != "concordant")
 
-# 3.  (Optional) write out to CSV ------------------------------------------
+# Export a CSV companion for audit/review.
 write.csv(
   combined_discord_tbl2,
   file.path(outdir, "Supplementary_Table_combined_discordance_table_Blood2.csv"),
@@ -2895,7 +2943,8 @@ write.csv(
 
 
 
-### Do for non-frontline now at all timepoints
+# Blood/cfDNA-informed non-frontline/test-cohort comparison table for
+# Supplementary Table 8, aggregated across eligible timepoints.
 combined_discord_tbl_non_frontline2 <- dat %>%
   filter(
     !is.na(Blood_zscore_only_sites_call),
@@ -2925,34 +2974,34 @@ combined_discord_tbl_non_frontline2 <- dat %>%
     )
   ) %>%
   select(
-    all_of(id_cols),     # Patient, Sample_Code, Timepoint, timepoint_info
-    Cohort,              # frontline vs non-frontline
-    Comparator,          # "clonoSEQ" or "MFC"
-    category,            # your discordance/concordance label
+    all_of(id_cols),
+    Cohort,
+    Comparator,
+    category,
     Relapsed,
     Num_days_to_closest_relapse,
-    all_of(aux_cols)     # all the cfWGS, clonoSEQ & MFC metrics you specified
+    all_of(aux_cols)
   ) %>%
   arrange(Patient, Comparator)
 
 
-## Export 
+# Export a CSV companion for audit/review.
 write.csv(
   combined_discord_tbl_non_frontline2,
   file.path(outdir, "Supplementary_Table_combined_discordance_table_blood_non_frontline2.csv"),
   row.names = FALSE
 )
 
-
-
-### Create full supplementary table 
+# Create the final multi-sheet Supplementary Table 8 workbook.
 library(openxlsx)
 
-# --- 0) Load ID map
+# Load de-identified patient ID map and baseline dates for exported workbook
+# columns.
 id_map <- readRDS("id_map.rds") %>% distinct(Patient, New_ID)
 
 Baseline_dates <- read_csv("Final Tables and Figures/Baseline dates for samples.csv")
-# Make a joinable version that uses the same Patient key as your output (New_ID if available)
+# Make a joinable version using the same Patient key as the exported workbook
+# when a de-identified New_ID is available.
 baseline_join <- Baseline_dates %>%
   # assume columns: patient (original ID) and start (baseline date); adapt if needed
   mutate(start = as_date(start)) %>%
@@ -2960,7 +3009,9 @@ baseline_join <- Baseline_dates %>%
   mutate(Patient = coalesce(New_ID, patient)) %>%
   select(Patient, start)
 
-# --- 1) Prep helper: rename, remap Patient, add days_from_dx, drop raw dates --
+# Prepare each sheet: rename clinical assay columns, remap patient IDs, add
+# days/months from diagnosis, and remove raw date/sample-code fields before
+# export.
 prepare_tbl <- function(df, id_map, baseline_join){
   if (is.null(df)) stop("Input table is NULL.")
   
@@ -2996,13 +3047,13 @@ prepare_tbl <- function(df, id_map, baseline_join){
     as.data.frame(check.names = FALSE)
 }
 
-# --- 2) Build the four tables ----------------------------------------------
+# Build the four workbook sheets: BM/blood by training/test cohort.
 BM_Train    <- prepare_tbl(combined_discord_tbl,                id_map, baseline_join)
 BM_Test     <- prepare_tbl(combined_discord_tbl_non_frontline,  id_map, baseline_join)
 Blood_Train <- prepare_tbl(combined_discord_tbl2,               id_map, baseline_join)
 Blood_Test  <- prepare_tbl(combined_discord_tbl_non_frontline2, id_map, baseline_join)
 
-# --- 3) Write workbook ------------------------------------------------------
+# Write the final workbook with filters and readable column widths.
 add_sheet_with_style <- function(wb, sheet_name, data) {
   addWorksheet(wb, sheet_name)
   if (is.null(ncol(data)) || is.na(ncol(data)) || ncol(data) == 0) {
@@ -3042,13 +3093,16 @@ ms_copy_artifact(
   script_name = "3_2_Plot_optimal_cutoff_and_clinical_concordance.R"
 )
 
-
-
-### Now make figure showing LOD of each
-
-## 4L: LOD of cfWGS vs MFC/clonoSEQ discordances
-
-# 1.  Build plotting data  (front-line only, both comparators)  ───────────────
+# ------------------------------------------------------------------------------
+# SECTION: MAIN FIGURE 3E AND MAIN FIGURE 4D - PROBABILITY VS CLINICAL ASSAYS
+# ------------------------------------------------------------------------------
+# This section compares cfWGS model probabilities with quantitative clinical
+# MRD assay values. The historical working filenames include "Fig4K/Fig5K",
+# but the final manuscript-staged outputs are:
+#   - Figure 3E: BM-informed cfWGS probability vs MFC, clonoSEQ, and EasyM
+#   - Figure 4D: blood/cfDNA-informed cfWGS probability vs MFC, clonoSEQ, and EasyM
+#
+# LOD/reference constants used for plotting.
 lod_cfWGS   <- 0.00011   # 0.011 % 
 lod_cfWGS_blood   <- 0.00061   # 0.061 %
 
@@ -3059,7 +3113,8 @@ shape_pal <- c(
   `not detected` = 4    # open cross
 )
 
-# 2.  Build the plotting data  ────────────────────────────────────────────────
+# Figure 3E input: build BM-informed plotting data for frontline landmark
+# samples with at least one quantitative clinical comparator.
 plot_df <- dat %>%
   mutate(Flow_pct_cells = Flow_pct_cells/100) %>% # to be consistent
   filter(
@@ -3076,16 +3131,15 @@ plot_df <- dat %>%
   drop_na(x_val) %>%
   rowwise() %>%
   mutate(
-    # First, recode your comparator names so you can match them later:
+    # Recode comparator names to match plot labels and facet levels.
     Comparator = recode(Comparator,
                         Adaptive_Frequency = "clonoSEQ",
                         Flow_pct_cells     = "MFC"),
     
-    # Now build ref_binary by looking at x_val for zeros:
+    # Build reference binary calls from the original assay-specific binary
+    # columns, while treating clonoSEQ zero frequency as not detected.
     ref_binary = case_when(
-      # If this is a clonoSEQ row with x_val == 0, it must be “not detected”
       Comparator == "clonoSEQ" & x_val == 0 ~ 0L,
-      # Otherwise use the original binary calls
       Comparator == "clonoSEQ" ~ Adaptive_Binary,
       Comparator == "MFC"      ~ Flow_Binary,
       TRUE                     ~ NA_integer_
@@ -3109,7 +3163,7 @@ plot_df <- dat %>%
     Num_days_to_closest_relapse, Flow_Binary, Adaptive_Binary
   )
 
-# 2) Add shape & relapse flags
+# Add detection-pattern and relapse-within-1-year labels for plotting.
 plot_df2 <- plot_df %>%
   mutate(
     shape_cat = case_when(
@@ -3126,19 +3180,15 @@ plot_df2 <- plot_df %>%
     )
   )
 
-
-#### Clean version 
-# ------------------------------------------------------------
-# 1.  Tidy / recode (same as you already have)
-# ------------------------------------------------------------
+# Normalize labels before plotting.
 hyphen_rx <- "[\u2010\u2011\u2012\u2013\u2014\u2212]"  # all the usual dash culprits
 
 plot_df2 <- plot_df2 %>%
   mutate(
-    # normalize dashes and whitespace
+    # Normalize dashes and whitespace.
     landmark_tp = str_replace_all(landmark_tp, hyphen_rx, "-") |> trimws(),
     
-    # now factor with ASCII hyphens
+    # Factor with ASCII hyphens so facet order is deterministic.
     landmark_timepoint = factor(
       landmark_tp,
       levels = c("Post-ASCT", "Maintenance-1yr")
@@ -3152,12 +3202,11 @@ plot_df2 <- plot_df2 %>%
   )
 
 
-## See what is missing 
+# QC check: any rows with missing detection-pattern labels should be reviewed.
 plot_df2 %>% filter(is.na(shape_cat)) %>% select(Patient, Comparator, cfwgs_bin, ref_binary)
 
-# ------------------------------------------------------------
-# 2.  Palette for detection pattern (your choice of colours)
-# ------------------------------------------------------------
+# Historical detection-pattern palette retained for provenance; the active plot
+# below uses relapse status for point fill.
 detect_cols <- c(
   `cfWGS only`      = "#1b9e77",
   `Comparator only` = "#d95f02",
@@ -3165,17 +3214,12 @@ detect_cols <- c(
   `Neither`         = "#999999"
 )
 
-# Updated colors
+# Viridis palette retained from the original plotting workflow.
 library(viridisLite)
 
-# grab a 5‑colour Viridis ramp
 pal5 <- viridis(5, option = "D") 
 
-# pick:
-#  • darkest purple    = cfWGS only
-#  • deep blue         = Comparator only
-#  • mid‑green (mix)   = Both
-#  • bright yellow     = Neither or grey 
+# Assign colors to detection-pattern categories.
 detect_cols <- c(
   `cfWGS only`      = pal5[1],   "#440154FF",
   `Comparator only` = pal5[2],   "#31688EFF",
@@ -3184,7 +3228,7 @@ detect_cols <- c(
 )
 
 
-## Get correlations
+# Correlations annotated in the BM-informed clinical-comparator panel.
 corr_df <- plot_df2 %>%
   group_by(landmark_timepoint, Comparator) %>%
   summarize(
@@ -3194,14 +3238,13 @@ corr_df <- plot_df2 %>%
   ) %>%
   mutate(
     label = sprintf("ρ = %.2f\np = %.2f", rho, p),
-    x = 0.035,   # choose x/y annotation positions for your data
+    x = 0.035,
     y = 0.99
   )
 
 
-# ------------------------------------------------------------
-# 3.  Build the plot (shape fixed to 21: filled circle with outline)
-# ------------------------------------------------------------
+# Build the historical two-comparator BM panel. The final manuscript panel adds
+# EasyM below and is staged as Figure 3E.
 p_scatter_simple <- ggplot(plot_df2,
                            aes(x = x_plot, y = y_plot,
                                fill   = relapse_cat)) +  
@@ -3237,7 +3280,7 @@ p_scatter_simple <- ggplot(plot_df2,
   # start from a white‐background theme with borders
   theme_bw(base_size = 11) +    
   
-  ## add color 
+  # Color points by relapse within one year.
   scale_fill_manual(
     name = "Relapse ≤1 year",
     values = c(
@@ -3247,14 +3290,14 @@ p_scatter_simple <- ggplot(plot_df2,
     )
   ) +
   
-  ## add text
+  # Add Spearman correlation labels.
   geom_text(
     data = corr_df,
     aes(x = x, y = y, label = label),
     hjust = 0, vjust = 1, size = 2.5,
     inherit.aes = FALSE
   ) +
-  # now tweak:
+  # Final theme adjustments.
   theme(
     # draw a thin black border around each facet
     panel.border      = element_rect(colour = "black", fill = NA, size = 0.5),
@@ -3271,7 +3314,6 @@ p_scatter_simple <- ggplot(plot_df2,
     axis.title        = element_text(size = 11),
     axis.text.x       = element_text(angle = 30, hjust = 1),
     
-    # any other theme tweaks you like…
     plot.title        = element_text(face = "bold", hjust = 0.5),
     legend.position   = "right",
     legend.title      = element_text(face = "bold", size = 9),
@@ -3281,7 +3323,7 @@ p_scatter_simple <- ggplot(plot_df2,
 
 p_scatter_simple
 
-# Save plot to publication-quality resolution
+# Save the historical two-comparator BM panel for provenance.
 ggsave("Final Tables and Figures/Fig4K_cfWGS_vs_MFC_clonoSEQ_clean_BM_muts_updated4.png",
        p_scatter_simple,
        width  = 6.5, height = 5, dpi = 600)
@@ -3290,17 +3332,17 @@ ggsave("Final Tables and Figures/Fig4K_cfWGS_vs_MFC_clonoSEQ_clean_BM_muts_updat
 # ===========================================================================
 # SECTION 3B: SCATTER PLOTS WITH EASYМ ADDED AS THIRD COLUMN (BM-DERIVED)
 # ===========================================================================
-# Extended version of the scatter plot with EasyM as additional comparator column
+# Final Figure 3E version: add EasyM as a third comparator column.
 
-# Load EasyM data and merge into dat
+# Load EasyM data and merge into the working cfWGS table.
 cat("\n=== Loading EasyM data for scatter plots ===\n")
-EasyM_data_file <- file.path(OUTPUT_DIR_EASYМ, "EasyM_all_samples_with_optimized_calls.csv")
+EasyM_data_file <- file.path(OUTPUT_DIR_EASYM, "EasyM_all_samples_with_optimized_calls.csv")
 
 if (file.exists(EasyM_data_file)) {
   EasyM_dat <- readr::read_csv(EasyM_data_file, show_col_types = FALSE)
   
-  # Create a clean working copy of dat with EasyM merged
-  # First, remove any existing EasyM_value columns from dat to avoid .x/.y suffixes
+  # Remove any existing EasyM_value columns before joining to avoid .x/.y
+  # suffixes in command-line runs.
   dat_prep <- dat %>%
     select(-starts_with("EasyM_value"))
   
@@ -3317,7 +3359,8 @@ if (file.exists(EasyM_data_file)) {
               sum(!is.na(dat_with_easym$EasyM_value))))
 } else {
   warning("EasyM data file not found - EasyM columns will be empty")
-  # If EasyM file missing, just create column as all NA
+  # If EasyM data are absent, create an all-NA column so downstream code fails
+  # gracefully by producing empty EasyM facets rather than stopping.
   dat_with_easym <- dat %>%
     select(-starts_with("EasyM_value")) %>%
     mutate(EasyM_value = NA_real_)
@@ -3325,18 +3368,18 @@ if (file.exists(EasyM_data_file)) {
 
 # Load EasyM thresholds by timepoint (for reference lines)
 easyM_thresholds <- readr::read_csv(
-  file.path(OUTPUT_DIR_EASYМ, "EasyM_threshold_values_by_timepoint.csv"),
+  file.path(OUTPUT_DIR_EASYM, "EasyM_threshold_values_by_timepoint.csv"),
   show_col_types = FALSE
 )
 
-# Build plot data with EasyM as additional comparator (BM-derived mutations)
+# Build Figure 3E plotting data with EasyM as an additional comparator.
 plot_df_with_easym <- bind_rows(
-  # Original clonoSEQ and MFC data - convert Comparator to character first
+  # Original clonoSEQ and MFC rows.
   plot_df2 %>%
     mutate(Comparator = as.character(Comparator)) %>%
     select(Patient, Sample_Code, landmark_timepoint, Comparator, 
            x_plot, y_plot, relapse_cat, Num_days_to_closest_relapse),
-  # Add EasyM comparator rows (using dat_with_easym which has EasyM data merged)
+  # EasyM comparator rows.
   dat_with_easym %>%
     mutate(Flow_pct_cells = Flow_pct_cells/100) %>%
     filter(
@@ -3348,8 +3391,8 @@ plot_df_with_easym <- bind_rows(
     mutate(
       Comparator = "EasyM",
       x_val = EasyM_value,
-      # Cap EasyM at 100% (1.0) and set minimum floor for plotting
-      x_plot = pmin(pmax(EasyM_value, 1e-6), 1.0),  # Cap EasyM at 100% (1.0)
+      # Cap EasyM at 100% and set a minimum floor for log-scale plotting.
+      x_plot = pmin(pmax(EasyM_value, 1e-6), 1.0),
       y_plot = if_else(BM_zscore_only_detection_rate_prob <= 1e-5, 
                        1e-5, BM_zscore_only_detection_rate_prob),
       landmark_tp = str_replace_all(landmark_tp, hyphen_rx, "-") |> trimws(),
@@ -3366,19 +3409,16 @@ plot_df_with_easym <- bind_rows(
            x_plot, y_plot, relapse_cat, Num_days_to_closest_relapse)
 )
 
-# Set Comparator factor order: clonoSEQ, MFC, EasyM (so EasyM appears on the right)
-# AND ensure landmark_timepoint factor has correct order: Post-ASCT before Maintenance-1yr
+# Set comparator and timepoint factor order so the panel layout is stable.
 plot_df_with_easym <- plot_df_with_easym %>%
   mutate(
-    # First trim any whitespace
+    # Trim whitespace before applying explicit factor levels.
     Comparator = str_trim(as.character(Comparator)),
-    # Then set factor with explicit levels
     Comparator = factor(Comparator, levels = c("clonoSEQ", "MFC", "EasyM"), ordered = FALSE),
-    # Ensure landmark_timepoint factor has correct level order
     landmark_timepoint = factor(landmark_timepoint, levels = c("Post-ASCT", "Maintenance-1yr"))
   )
 
-# Calculate correlations for all three comparators
+# Calculate Spearman correlations for all three comparators.
 corr_df_with_easym <- plot_df_with_easym %>%
   group_by(landmark_timepoint, Comparator) %>%
   summarize(
@@ -3390,11 +3430,11 @@ corr_df_with_easym <- plot_df_with_easym %>%
     label = sprintf("ρ = %.2f\np = %.2f", rho, p),
     x = 0.035,
     y = 0.99,
-    # CRITICAL: Ensure Comparator has same factor levels as plot data
+    # Match comparator factor levels to the plot data.
     Comparator = factor(Comparator, levels = c("clonoSEQ", "MFC", "EasyM"))
   )
 
-# Map EasyM thresholds by timepoint for reference lines
+# Map EasyM thresholds by timepoint for reference lines.
 # Timepoint codes: 05 = Post-ASCT (Post-Transplant), 07 = Maintenance-1yr (1-Year Maintenance)
 easyM_threshold_lines <- easyM_thresholds %>%
   filter(Timepoint %in% c("05", "07")) %>%
@@ -3404,15 +3444,16 @@ easyM_threshold_lines <- easyM_thresholds %>%
       Timepoint == "07" ~ "Maintenance-1yr",
       TRUE ~ NA_character_
     ),
-    # Convert percentage (0-100 scale) to proportion (0-1 scale) for plotting
+    # Convert percentage (0-100 scale) to proportion (0-1 scale).
     xintercept = Threshold_raw_percent / 100,
     Comparator = "EasyM",
-    # CRITICAL: Ensure Comparator is a factor with correct levels
+    # Match comparator factor levels to the plot data.
     Comparator = factor(Comparator, levels = c("clonoSEQ", "MFC", "EasyM"))
   ) %>%
   select(landmark_timepoint, Comparator, xintercept)
 
-# FORCE landmark_timepoint factor ordering right before plot
+# Re-apply factor ordering directly before plotting to avoid ordering drift from
+# row binding or joins.
 plot_df_with_easym <- plot_df_with_easym %>%
   mutate(landmark_timepoint = factor(landmark_timepoint, levels = c("Post-ASCT", "Maintenance-1yr")))
 
@@ -3422,13 +3463,13 @@ corr_df_with_easym <- corr_df_with_easym %>%
 easyM_threshold_lines <- easyM_threshold_lines %>%
   mutate(landmark_timepoint = factor(landmark_timepoint, levels = c("Post-ASCT", "Maintenance-1yr")))
 
-# Build plot with EasyM column added
+# Build the final Figure 3E panel with EasyM added.
 p_scatter_with_easym_bm <- ggplot(plot_df_with_easym,
                                    aes(x = x_plot, y = y_plot,
                                        fill = relapse_cat)) +
-  # Reference lines for thresholds
+  # Reference lines for cfWGS and comparator thresholds.
   geom_hline(yintercept = 0.4215524, linetype = "dashed", colour = "grey80") +
-  # cfWGS threshold (horizontal line) - only for clonoSEQ and MFC, NOT for EasyM
+  # Clinical-comparator LOD line for clonoSEQ and MFC facets.
   geom_vline(aes(xintercept = xintercept), linetype = "dashed", colour = "grey80",
              data = data.frame(
                landmark_timepoint = factor(rep(c("Post-ASCT", "Maintenance-1yr"), 2),
@@ -3437,14 +3478,14 @@ p_scatter_with_easym_bm <- ggplot(plot_df_with_easym,
                                    levels = c("clonoSEQ", "MFC", "EasyM")),
                xintercept = lod_clonoMF
              )) +
-  # EasyM thresholds (per timepoint)
+  # EasyM thresholds by landmark timepoint.
   geom_vline(aes(xintercept = xintercept), linetype = "dashed", colour = "grey80",
              data = easyM_threshold_lines) +
   
   # Points
   geom_point(shape = 21, size = 2, alpha = 0.9, colour = "black") +
   
-  # Colors for relapse status
+  # Color points by relapse within one year.
   scale_fill_manual(
     name = "Relapse ≤1 year",
     values = c(
@@ -3453,7 +3494,7 @@ p_scatter_with_easym_bm <- ggplot(plot_df_with_easym,
     )
   ) +
   
-  # Log scale for X axis with independent scales per comparator
+  # Log-scale x-axis with fixed labels across comparators.
   scale_x_log10(
     breaks = c(1e-6, 1e-5, 1e-4, 1e-3, 1e-2, 1e-1, 1),
     labels = c("Not detected", "0.001%", "0.01%", "0.1%", "1%", "10%", "100%"),
@@ -3465,7 +3506,7 @@ p_scatter_with_easym_bm <- ggplot(plot_df_with_easym,
     labels = scales::percent_format(accuracy = 1)
   ) +
   
-  # Facet: rows = timepoint, cols = comparator
+  # Facet rows by timepoint and columns by comparator.
   facet_grid(rows = vars(landmark_timepoint),
              cols = vars(Comparator),
              drop = FALSE,
@@ -3502,7 +3543,8 @@ p_scatter_with_easym_bm <- ggplot(plot_df_with_easym,
 
 p_scatter_with_easym_bm
 
-# Save
+# Save the final Figure 3E working PNG before staging it to the manuscript
+# output directory.
 ggsave("Final Tables and Figures/Fig4K_cfWGS_vs_MFC_clonoSEQ_EasyM_BM_muts_updated5.png",
        p_scatter_with_easym_bm,
        width = 8.5, height = 5, dpi = 600)
@@ -3533,9 +3575,11 @@ readr::write_csv(
 
 
 # ===========================================================================
-# SECTION 4: CROSS-PLATFORM CONCORDANCE VISUALIZATIONS
+# SECTION 4: AUXILIARY CROSS-PLATFORM EASYM VISUALIZATIONS
 # ===========================================================================
-# Generate scatter plots comparing EasyM residual M-protein to cfWGS probabilities
+# Generate auxiliary scatter plots comparing EasyM residual M-protein directly
+# to cfWGS probabilities. These are source/QC outputs and are not currently
+# staged as final manuscript figure panels.
 
 # ---------------------------------------------------------------------------
 # SUBSECTION 4.1: EasyM vs Bone Marrow cfWGS Model
@@ -3649,14 +3693,14 @@ p_easym_bm <- ggplot(plot_df_easym_bm,
 
 p_easym_bm
 
-# Save
+# Save the auxiliary EasyM-vs-BM probability plot for provenance.
 ggsave("Final Tables and Figures/FigS_EasyM_vs_BM_cfWGS_prob.png",
        p_easym_bm,
        width = 5, height = 6, dpi = 600)
 
 
-#### Now redo for blood-derived muts
-# 2.  Build the plotting data  ────────────────────────────────────────────────
+# Figure 4D input: repeat the probability-vs-comparator workflow using
+# blood/cfDNA-derived mutation lists and blood cfWGS model probabilities.
 plot_df <- dat %>%
   mutate(Flow_pct_cells = Flow_pct_cells/100) %>% # to be consistent
   filter(
@@ -3673,16 +3717,15 @@ plot_df <- dat %>%
   drop_na(x_val) %>%
   rowwise() %>%
   mutate(
-    # First, recode your comparator names so you can match them later:
+    # Recode comparator names to match plot labels and facet levels.
     Comparator = recode(Comparator,
                         Adaptive_Frequency = "clonoSEQ",
                         Flow_pct_cells     = "MFC"),
     
-    # Now build ref_binary by looking at x_val for zeros:
+    # Build reference binary calls from assay-specific binary columns, treating
+    # clonoSEQ zero frequency as not detected.
     ref_binary = case_when(
-      # If this is a clonoSEQ row with x_val == 0, it must be “not detected”
       Comparator == "clonoSEQ" & x_val == 0 ~ 0L,
-      # Otherwise use the original binary calls
       Comparator == "clonoSEQ" ~ Adaptive_Binary,
       Comparator == "MFC"      ~ Flow_Binary,
       TRUE                     ~ NA_integer_
@@ -3706,7 +3749,7 @@ plot_df <- dat %>%
     Num_days_to_closest_relapse, Flow_Binary, Adaptive_Binary
   )
 
-# 2) Add shape & relapse flags
+# Add detection-pattern and relapse-within-1-year labels for plotting.
 plot_df2 <- plot_df %>%
   mutate(
     shape_cat = case_when(
@@ -3723,19 +3766,15 @@ plot_df2 <- plot_df %>%
     )
   )
 
-
-#### Clean version 
-# ------------------------------------------------------------
-# 1.  Tidy / recode 
-# ------------------------------------------------------------
+# Normalize labels before plotting.
 hyphen_rx <- "[\u2010\u2011\u2012\u2013\u2014\u2212]"  # all the usual dash culprits
 
 plot_df2 <- plot_df2 %>%
   mutate(
-    # normalize dashes and whitespace
+    # Normalize dashes and whitespace.
     landmark_tp = str_replace_all(landmark_tp, hyphen_rx, "-") |> trimws(),
     
-    # now factor with ASCII hyphens
+    # Factor with ASCII hyphens so facet order is deterministic.
     landmark_timepoint = factor(
       landmark_tp,
       levels = c("Post-ASCT", "Maintenance-1yr")
@@ -3749,11 +3788,11 @@ plot_df2 <- plot_df2 %>%
   )
 
 
-## See what is missing 
+# QC check: any rows with missing detection-pattern labels should be reviewed.
 plot_df2 %>% filter(is.na(shape_cat)) %>% select(Patient, Comparator, cfwgs_bin, ref_binary)
 
 # ------------------------------------------------------------
-# 2.  Palette for detection pattern (your choice of colours)
+# 2.  Palette for detection pattern.
 # ------------------------------------------------------------
 detect_cols <- c(
   `cfWGS only`      = "#1b9e77",
@@ -3762,17 +3801,12 @@ detect_cols <- c(
   `Neither`         = "#999999"
 )
 
-# Updated colors
+# Viridis palette retained from the original plotting workflow.
 library(viridisLite)
 
-# grab a 5‑colour Viridis ramp
 pal5 <- viridis(5, option = "D") 
 
-# pick:
-#  • darkest purple    = cfWGS only
-#  • deep blue         = Comparator only
-#  • mid‑green (mix)   = Both
-#  • bright yellow     = Neither or grey 
+# Assign colors to detection-pattern categories.
 detect_cols <- c(
   `cfWGS only`      = pal5[1],   "#440154FF",
   `Comparator only` = pal5[2],   "#31688EFF",
@@ -3781,7 +3815,7 @@ detect_cols <- c(
 )
 
 
-## Get correlations
+# Correlations annotated in the blood/cfDNA-informed clinical-comparator panel.
 corr_df <- plot_df2 %>%
   group_by(landmark_timepoint, Comparator) %>%
   summarize(
@@ -3791,14 +3825,13 @@ corr_df <- plot_df2 %>%
   ) %>%
   mutate(
     label = sprintf("ρ = %.2f\np = %.2f", rho, p),
-    x = 0.035,   # choose x/y annotation positions for your data
+    x = 0.035,
     y = 0.99
   )
 
 
-# ------------------------------------------------------------
-# 3.  Build the plot (shape fixed to 21: filled circle with outline)
-# ------------------------------------------------------------
+# Build the historical two-comparator blood/cfDNA panel. The final manuscript
+# panel adds EasyM below and is staged as Figure 4D.
 p_scatter_simple_blood <- ggplot(plot_df2,
                                  aes(x = x_plot, y = y_plot,
                                      fill   = relapse_cat)) +  
@@ -3806,7 +3839,7 @@ p_scatter_simple_blood <- ggplot(plot_df2,
   # 0.5166693 is the Youden's J optimal probability threshold for the blood combo
   # model (maximises sensitivity + specificity simultaneously). Derived from the
   # ROC analysis in 3_1_Optimize_cfWGS_thresholds.R and stored in selected_thr.
-  geom_hline(yintercept = 0.5166693,   linetype = "dashed", colour = "grey80") + # youden threshold of the used model
+  geom_hline(yintercept = 0.5166693,   linetype = "dashed", colour = "grey80") +
   geom_vline(xintercept = lod_clonoMF, linetype = "dashed", colour = "grey80") +
   
   # points
@@ -3837,7 +3870,7 @@ p_scatter_simple_blood <- ggplot(plot_df2,
   # start from a white‐background theme with borders
   theme_bw(base_size = 11) +    
   
-  ## add color 
+  # Color points by relapse within one year.
   scale_fill_manual(
     name = "Relapse ≤1 year",
     values = c(
@@ -3847,14 +3880,14 @@ p_scatter_simple_blood <- ggplot(plot_df2,
     )
   ) +
   
-  ## add text
+  # Add Spearman correlation labels.
   geom_text(
     data = corr_df,
     aes(x = x, y = y, label = label),
     hjust = 0, vjust = 1, size = 2.5,
     inherit.aes = FALSE
   ) +
-  # now tweak:
+  # Final theme adjustments.
   theme(
     # draw a thin black border around each facet
     panel.border      = element_rect(colour = "black", fill = NA, size = 0.5),
@@ -3871,7 +3904,6 @@ p_scatter_simple_blood <- ggplot(plot_df2,
     axis.title        = element_text(size = 11),
     axis.text.x       = element_text(angle = 30, hjust = 1),
     
-    # any other theme tweaks you like…
     plot.title        = element_text(face = "bold", hjust = 0.5),
     legend.position   = "right",
     legend.title      = element_text(face = "bold", size = 9),
@@ -3881,7 +3913,7 @@ p_scatter_simple_blood <- ggplot(plot_df2,
 
 p_scatter_simple_blood
 
-# save
+# Save the historical two-comparator blood/cfDNA panel for provenance.
 ggsave("Final Tables and Figures/Fig5K_cfWGS_vs_MFC_clonoSEQ_clean_Blood_muts_updated3.png",
        p_scatter_simple_blood,
        width  = 6.5, height = 5, dpi = 600)
@@ -3890,17 +3922,19 @@ ggsave("Final Tables and Figures/Fig5K_cfWGS_vs_MFC_clonoSEQ_clean_Blood_muts_up
 # ===========================================================================
 # SECTION 3C: SCATTER PLOTS WITH EASYМ ADDED AS THIRD COLUMN (BLOOD-DERIVED)
 # ===========================================================================
-# Extended version of the blood scatter plot with EasyM as additional comparator column
+# Final Figure 4D version: add EasyM as a third comparator column.
 
-# Ensure EasyM data is available (use dat_with_easym from Section 3B if available)
+# Ensure EasyM data are available, reusing the merged table from the BM section
+# when possible.
 if (!exists("dat_with_easym")) {
   cat("\n=== Loading EasyM data for blood scatter plots ===\n")
-  EasyM_data_file <- file.path(OUTPUT_DIR_EASYМ, "EasyM_all_samples_with_optimized_calls.csv")
+  EasyM_data_file <- file.path(OUTPUT_DIR_EASYM, "EasyM_all_samples_with_optimized_calls.csv")
   
   if (file.exists(EasyM_data_file)) {
     EasyM_dat <- readr::read_csv(EasyM_data_file, show_col_types = FALSE)
     
-    # First, remove any existing EasyM_value columns from dat to avoid .x/.y suffixes
+    # Remove any existing EasyM_value columns before joining to avoid .x/.y
+    # suffixes in command-line runs.
     dat_prep <- dat %>%
       select(-starts_with("EasyM_value"))
     
@@ -3917,18 +3951,18 @@ if (!exists("dat_with_easym")) {
                 sum(!is.na(dat_with_easym$EasyM_value))))
   } else {
     warning("EasyM data file not found - EasyM columns will be empty")
-    # If EasyM file missing, just create column as all NA
+    # If EasyM data are absent, create an all-NA column so downstream code fails
+    # gracefully by producing empty EasyM facets rather than stopping.
     dat_with_easym <- dat %>%
       select(-starts_with("EasyM_value")) %>%
       mutate(EasyM_value = NA_real_)
   }
 }
 
-# Build plot data with EasyM as additional comparator (blood-derived mutations)
-# Note: Blood-specific LOD threshold
+# Blood-specific comparator LOD floor used for plotting.
 lod_blood <- 1e-5
 
-# Map EasyM thresholds by timepoint for reference lines (same as BM section)
+# Map EasyM thresholds by timepoint for reference lines.
 easyM_threshold_lines_blood <- easyM_thresholds %>%
   filter(Timepoint %in% c("05", "07")) %>%
   mutate(
@@ -3937,21 +3971,21 @@ easyM_threshold_lines_blood <- easyM_thresholds %>%
       Timepoint == "07" ~ "Maintenance-1yr",
       TRUE ~ NA_character_
     ),
-    # Convert percentage (0-100 scale) to proportion (0-1 scale) for plotting
+    # Convert percentage (0-100 scale) to proportion (0-1 scale).
     xintercept = Threshold_raw_percent / 100,
     Comparator = "EasyM",
-    # CRITICAL: Ensure Comparator is a factor with correct levels
+    # Match comparator factor levels to the plot data.
     Comparator = factor(Comparator, levels = c("clonoSEQ", "MFC", "EasyM"))
   ) %>%
   select(landmark_timepoint, Comparator, xintercept)
 
 plot_df_blood_with_easym <- bind_rows(
-  # Original clonoSEQ and MFC data - convert Comparator to character first
+  # Original clonoSEQ and MFC rows.
   plot_df2 %>%
     mutate(Comparator = as.character(Comparator)) %>%
     select(Patient, Sample_Code, landmark_timepoint, Comparator,
            x_plot, y_plot, relapse_cat, Num_days_to_closest_relapse),
-  # Add EasyM comparator rows (using dat_with_easym which has EasyM data merged)
+  # EasyM comparator rows.
   dat_with_easym %>%
     mutate(Flow_pct_cells = Flow_pct_cells/100) %>%
     filter(
@@ -3963,7 +3997,7 @@ plot_df_blood_with_easym <- bind_rows(
     mutate(
       Comparator = "EasyM",
       x_val = EasyM_value,
-      # Cap EasyM at 100% (1.0) and set minimum floor for plotting
+      # Cap EasyM at 100% and set a minimum floor for log-scale plotting.
       x_plot = pmin(pmax(EasyM_value, 1e-6), 1.0),
       y_plot = if_else(Blood_zscore_only_sites_prob <= 1e-5,
                        1e-5, Blood_zscore_only_sites_prob),
@@ -3981,19 +4015,16 @@ plot_df_blood_with_easym <- bind_rows(
            x_plot, y_plot, relapse_cat, Num_days_to_closest_relapse)
 )
 
-# Set Comparator factor order: clonoSEQ, MFC, EasyM (so EasyM appears on the right)
-# AND ensure landmark_timepoint factor has correct order: Post-ASCT before Maintenance-1yr
+# Set comparator and timepoint factor order so the panel layout is stable.
 plot_df_blood_with_easym <- plot_df_blood_with_easym %>%
   mutate(
-    # First trim any whitespace
+    # Trim whitespace before applying explicit factor levels.
     Comparator = str_trim(as.character(Comparator)),
-    # Then set factor with explicit levels
     Comparator = factor(Comparator, levels = c("clonoSEQ", "MFC", "EasyM"), ordered = FALSE),
-    # Ensure landmark_timepoint factor has correct level order
     landmark_timepoint = factor(landmark_timepoint, levels = c("Post-ASCT", "Maintenance-1yr"))
   )
 
-# Calculate correlations for blood with EasyM
+# Calculate Spearman correlations for all three comparators.
 corr_df_blood_with_easym <- plot_df_blood_with_easym %>%
   group_by(landmark_timepoint, Comparator) %>%
   summarize(
@@ -4005,11 +4036,12 @@ corr_df_blood_with_easym <- plot_df_blood_with_easym %>%
     label = sprintf("ρ = %.2f\np = %.2f", rho, p),
     x = 0.035,
     y = 0.99,
-    # CRITICAL: Ensure Comparator has same factor levels as plot data
+    # Match comparator factor levels to the plot data.
     Comparator = factor(Comparator, levels = c("clonoSEQ", "MFC", "EasyM"))
   )
 
-# FORCE landmark_timepoint factor ordering right before plot
+# Re-apply factor ordering directly before plotting to avoid ordering drift from
+# row binding or joins.
 plot_df_blood_with_easym <- plot_df_blood_with_easym %>%
   mutate(landmark_timepoint = factor(landmark_timepoint, levels = c("Post-ASCT", "Maintenance-1yr")))
 
@@ -4019,13 +4051,13 @@ corr_df_blood_with_easym <- corr_df_blood_with_easym %>%
 easyM_threshold_lines_blood <- easyM_threshold_lines_blood %>%
   mutate(landmark_timepoint = factor(landmark_timepoint, levels = c("Post-ASCT", "Maintenance-1yr")))
 
-# Build plot with EasyM column added (blood-derived mutations)
+# Build the final Figure 4D panel with EasyM added.
 p_scatter_with_easym_blood <- ggplot(plot_df_blood_with_easym,
                                       aes(x = x_plot, y = y_plot,
                                           fill = relapse_cat)) +
-  # Reference lines for thresholds
+  # Reference lines for cfWGS and comparator thresholds.
   geom_hline(yintercept = 0.4215524, linetype = "dashed", colour = "grey80") +
-  # Blood cfWGS threshold (horizontal line) - only for clonoSEQ and MFC, NOT for EasyM
+  # Clinical-comparator LOD line for clonoSEQ and MFC facets.
   geom_vline(
     data = data.frame(
       landmark_timepoint = factor(rep(c("Post-ASCT", "Maintenance-1yr"), 2),
@@ -4037,7 +4069,7 @@ p_scatter_with_easym_blood <- ggplot(plot_df_blood_with_easym,
     aes(xintercept = xintercept),
     linetype = "dashed", colour = "grey80"
   ) +
-  # EasyM thresholds (per timepoint)
+  # EasyM thresholds by landmark timepoint.
   geom_vline(
     data = easyM_threshold_lines_blood,
     aes(xintercept = xintercept),
@@ -4047,7 +4079,7 @@ p_scatter_with_easym_blood <- ggplot(plot_df_blood_with_easym,
   # Points
   geom_point(shape = 21, size = 2, alpha = 0.9, colour = "black") +
 
-  # Colors for relapse status
+  # Color points by relapse within one year.
   scale_fill_manual(
     name = "Relapse ≤1 year",
     values = c(
@@ -4056,7 +4088,7 @@ p_scatter_with_easym_blood <- ggplot(plot_df_blood_with_easym,
     )
   ) +
 
-  # Log scale for X axis with independent scales per comparator
+  # Log-scale x-axis with fixed labels across comparators.
   scale_x_log10(
     breaks = c(1e-6, 1e-5, 1e-4, 1e-3, 1e-2, 1e-1, 1),
     labels = c("Not detected", "0.001%", "0.01%", "0.1%", "1%", "10%", "100%"),
@@ -4068,7 +4100,7 @@ p_scatter_with_easym_blood <- ggplot(plot_df_blood_with_easym,
     labels = scales::percent_format(accuracy = 1)
   ) +
 
-  # Facet: rows = timepoint, cols = comparator
+  # Facet rows by timepoint and columns by comparator.
   facet_grid(rows = vars(landmark_timepoint),
              cols = vars(Comparator),
              as.table = TRUE) +
@@ -4104,7 +4136,8 @@ p_scatter_with_easym_blood <- ggplot(plot_df_blood_with_easym,
 
 p_scatter_with_easym_blood
 
-# Save
+# Save the final Figure 4D working PNG before staging it to the manuscript
+# output directory.
 ggsave("Final Tables and Figures/Fig5K_cfWGS_vs_MFC_clonoSEQ_EasyM_Blood_muts_updated5.png",
        p_scatter_with_easym_blood,
        width = 8.5, height = 5, dpi = 600)
@@ -4260,100 +4293,45 @@ readr::write_csv(
 # ===========================================================================
 # COMPLETION SUMMARY AND OUTPUT DOCUMENTATION
 # ===========================================================================
-# Script execution complete. Below is a summary of generated outputs.
-#
-# ─────────────────────────────────────────────────────────────────────────
-# VERSIONING AND SOURCE DATA EXPORTS
-# ─────────────────────────────────────────────────────────────────────────
-# All output files have been versioned to prevent overwriting previous runs:
-#
-# POSITIVITY TABLES:
-#   • Positivity_by_Landmark_TimePoint_BoneMarrow_Frontline_updated5.csv
-#   • Positivity_All_TimePoints_BoneMarrow_NonFrontline_updated5.csv
-#
-# CONCORDANCE & PPV/NPV TABLES:
-#   • Frontline_BoneMarrow_PostASCT_Pairwise_Concordance3.csv
-#   • Frontline_BoneMarrow_Maintenance_Pairwise_Concordance3.csv
-#   • Frontline_BoneMarrow_Positivity_PostASCT_and_Maintenance3.csv
-#   • Frontline_BoneMarrow_PostASCT_PPV_NPV3.csv
-#   • Frontline_BoneMarrow_Maintenance_PPV_NPV3.csv
-#
-# FIGURES & SOURCE DATA:
-#   All figures now have versioned names and corresponding source data exports
-#   to "Output_tables_2025/source_data/" directory:
-#
-#   BM Positivity Figures:
-#     • Fig_BM_positivity_by_tech_updated5.png + source_data.csv
-#     • Fig_4I_BM_positivity_by_tech_updated5.png (same data as updated5)
-#     • Fig_BM_positivity_by_tech_later_line5.png + source_data.csv
-#     • Fig_4I_BM_positivity_by_tech_updated_non_frontline6.png
-#     • Fig_4I_BM_positivity_by_tech_facet6.png + source_data.csv
-#
-#   BM Confusion Matrices:
-#     • Fig4_confmat_post_ASCT_updated5.png + source_data.csv
-#     • Fig4_confmat_maintenance5.png + source_data.csv
-#     • Fig4_confmat_nonfront5.png + source_data.csv
-#     • Fig4J_confusion_matrices_all_three_4.png (combined vertical)
-#     • Fig4J_confusion_matrices_all_three_side_by_side4.png (combined horizontal)
-#
-#   Blood (cfWGS) Confusion Matrices:
-#     • Fig5_confmat_post_ASCT_blood_updated6.png + source_data.csv
-#     • Fig5_confmat_maintenance_blood_updated6.png + source_data.csv
-#     • Fig5_confmat_nonfront_blood_updated6.png + source_data.csv
-#
-#   EasyM vs Blood Scatter:
-#     • FigS_EasyM_vs_Blood_cfWGS_prob_updated6.png + source_data.csv
-#
-# Source data files include all rows/observations shown in each figure,
-# with relevant grouping variables and identifiers for reproducibility.
-# ─────────────────────────────────────────────────────────────────────────
+# Command-line completion summary. The historical working files remain in their
+# original output folders for traceability. Final manuscript-facing copies are
+# staged by `ms_copy_artifact()` into final_manuscript_objects/.
 
 cat("\n", strrep("=", 80), "\n")
 cat("SCRIPT 3_2 COMPLETED SUCCESSFULLY\n")
 cat(strrep("=", 80), "\n\n")
 
-cat("VISUALIZATION OUTPUTS\n")
-cat("────────────────────────────────────────────────────────────────────────────\n")
-cat("All figures saved to: Final Tables and Figures/\n")
-cat("Resolution: 300-600 dpi (publication-quality)\n\n")
+cat("FINAL MANUSCRIPT ARTIFACTS STAGED BY THIS SCRIPT\n")
+cat("----------------------------------------------------------------------------\n")
+cat("  Figure 3D: BM-informed positivity by technology and cohort\n")
+cat("  Figure 3E: BM-informed cfWGS probability vs MFC, clonoSEQ, and EasyM\n")
+cat("  Figure 4C: blood/cfDNA-informed positivity by technology and cohort\n")
+cat("  Figure 4D: blood/cfDNA-informed cfWGS probability vs MFC, clonoSEQ, and EasyM\n")
+cat("  Extended Data Figure 5E-G: BM-informed clinical-comparator confusion matrices\n")
+cat("  Extended Data Figure 7F-H: blood/cfDNA-informed clinical-comparator confusion matrices\n")
+cat("  Supplementary Table 8: row-level model comparisons to clinical metrics\n")
+cat("  Supplementary Table 10: all call metrics against clinical comparators\n\n")
 
-cat("KEY FIGURES GENERATED:\n")
-cat("  1. Positivity rate comparisons (cfWGS, EasyM clinician, EasyM optimized)\n")
-cat("     by treatment phase (Post-ASCT, Maintenance-1yr)\n")
-cat("  2. Scatter plots: EasyM M-protein (%) vs cfWGS BM probability\n")
-cat("     - Colored by relapse status (≤365d vs >365d from that timepoint)\n")
-cat("     - Faceted by treatment timepoint\n")
-cat("     - Includes Spearman correlation coefficients\n")
-cat("  3. Scatter plots: EasyM M-protein (%) vs cfWGS blood probability\n")
-cat("     - Same stratification and coloring scheme\n")
-cat("  4. Contingency tables: cfWGS binary calls vs other modalities\n")
-cat("     - Agreement metrics (percent, kappa)\n\n")
-
-cat("DATA INTEGRATION NOTES\n")
-cat("────────────────────────────────────────────────────────────────────────────\n")
-cat(sprintf("✓ cfWGS samples: n = %d rows\n", nrow(dat)))
+cat("DATA INTEGRATION CHECKS\n")
+cat("----------------------------------------------------------------------------\n")
+cat(sprintf("  cfWGS rows loaded: %d\n", nrow(dat)))
 cat(sprintf(
-  "✓ EasyM samples merged: n = %d (%.1f%% matched)\n",
+  "  EasyM rows merged: %d (%.1f%% of cfWGS rows)\n",
   sum(!is.na(dat$EasyM_value)),
   100 * sum(!is.na(dat$EasyM_value)) / nrow(dat)
 ))
 cat(sprintf(
-  "  - Using optimized thresholds: %d\n",
+  "  EasyM optimized-threshold rows: %d\n",
   sum(dat$threshold_method == "optimized", na.rm = TRUE)
 ))
 cat(sprintf(
-  "  - Using clinician calls: %d\n",
+  "  EasyM clinician-call rows: %d\n",
   sum(dat$threshold_method == "clinician", na.rm = TRUE)
 ))
 cat("\n")
 
-cat("METHODOLOGY REMINDER\n")
-cat("────────────────────────────────────────────────────────────────────────────\n")
-cat("EasyM calls use two approaches per timepoint:\n")
-cat("  • CLINICIAN: Original MRD+/- classifications from EasyM assay\n")
-cat("  • OPTIMIZED: Data-driven threshold (log-rank chi-square optimization)\n")
-cat("\n")
-cat("Primary timepoints with optimized thresholds:\n")
+cat("EASYM THRESHOLD REFERENCE\n")
+cat("----------------------------------------------------------------------------\n")
 threshold_summary_tbl <- NULL
 if (exists("EasyM_thresholds", inherits = FALSE) && !is.null(EasyM_thresholds)) {
   threshold_summary_tbl <- EasyM_thresholds
@@ -4373,20 +4351,12 @@ if (!is.null(threshold_summary_tbl) && nrow(threshold_summary_tbl) > 0) {
     tp <- row$Timepoint
     cut <- if (!is.na(threshold_col)) row[[threshold_col]] else NA_real_
     if (is.na(cut)) {
-      cat(sprintf("  • TP%s: threshold value column not found\n", tp))
+      cat(sprintf("  TP%s: threshold value column not found\n", tp))
     } else {
-      cat(sprintf("  • TP%s: Threshold = %.4f%%\n", tp, cut))
+      cat(sprintf("  TP%s: threshold = %.4f%%\n", tp, cut))
     }
   }
 } else {
   cat("  (Threshold table not available)\n")
 }
 cat("\n")
-
-cat("NEXT STEPS\n")
-cat("────────────────────────────────────────────────────────────────────────────\n")
-cat("→ Review scatter plots for concordance patterns between EasyM and cfWGS\n")
-cat("→ Check correlation strength and clinical outcome associations by timepoint\n")
-cat("→ Assess agreement metrics: clinician vs optimized threshold approaches\n")
-cat("→ Use positivity rate comparisons to contextualize detection sensitivities\n")
-cat("→ Prepare figures for manuscript and supplementary materials\n\n")

@@ -29,6 +29,11 @@
 #     script processes EasyM/proteomic MRD thresholds and comparisons used by
 #     later clinical-concordance and survival analyses.
 ## ============================================================
+# Pipeline status:
+#   Active supplementary/support analysis. This script is retained in the
+#   command-line pipeline, but it is not currently mapped to a named final
+#   manuscript figure or table in docs/manuscript_artifact_source_map.tsv.
+#
 
 ## ============================================================
 ## 0) Setup

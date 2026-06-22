@@ -58,6 +58,11 @@
 # Author: Dory Abelman
 # Date:   2025-05-26
 # =============================================================================
+# Pipeline status:
+#   Active upstream dependency. This script does not directly create a named
+#   final manuscript figure/table, but downstream scripts depend on its cleaned
+#   outputs for figure, table, or model generation.
+#
 
 
 
@@ -75,7 +80,19 @@ library(GenomicRanges)
 library(pbapply)
 
 
-source("GENIUSVariantAnalysis_Functions.R")
+genius_helper_path <- c(
+  "GENIUSVariantAnalysis_Functions.R",
+  file.path("..", "..", "GENIUSVariantAnalysis_Functions.R")
+)
+genius_helper_path <- genius_helper_path[file.exists(genius_helper_path)][1]
+if (is.na(genius_helper_path)) {
+  stop(
+    "Could not find GENIUSVariantAnalysis_Functions.R. Run from the project root or stage the helper at the project root.",
+    call. = FALSE
+  )
+}
+source(genius_helper_path)
+rm(genius_helper_path)
 
 
 ### Add clinical metadata for sample/patient annotation

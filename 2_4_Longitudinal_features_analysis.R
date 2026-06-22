@@ -33,6 +33,11 @@
 #   - CSV tables in 'Output_tables_2025'
 #   - PDF figures: longitudinal pairs, spaghetti, correlation plots
 # ===============================================================================
+# Pipeline status:
+#   Active in the command-line pipeline. This script creates or stages the
+#   manuscript output(s) listed above into final_manuscript_objects/ when the
+#   required upstream inputs are available.
+#
 
 suppressPackageStartupMessages({
   library(tidyverse)
@@ -2099,7 +2104,14 @@ ms_copy_artifact(
 
 
 
-#### Below here is testing and old code no longer needed 
+#### Active longitudinal cfDNA and fragmentomics manuscript panels
+#
+# The historical comments below originally described this as testing/old code,
+# but this section is part of the active manuscript workflow. It generates the
+# cfDNA mutation and fragmentomics longitudinal panels that are mapped by
+# ms_copy_artifact() calls to Main Figure 2C and Extended Data Figure 3B-C.
+# Some filenames still contain older draft figure labels; the manuscript
+# artifact map and ms_copy_artifact() calls below are the authoritative labels.
 
 ## Now work on blood muts
 # 1. Pivot to long form

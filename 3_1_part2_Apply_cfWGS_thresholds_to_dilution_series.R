@@ -52,6 +52,11 @@
 # Author:    Dory Abelman
 # Last update: September 2025
 # ==============================================================================
+# Pipeline status:
+#   Active in the command-line pipeline. This script creates or stages the
+#   manuscript output(s) listed above into final_manuscript_objects/ when the
+#   required upstream inputs are available.
+#
 
 library(dplyr)
 library(tidyr)
@@ -79,12 +84,14 @@ source(.manuscript_helper)
 rm(.manuscript_helper)
 
 # ── 1. FILE PATHS ───────────────────────────────────────────────────────────
-PATH_MODEL_LIST       <- "~/Documents/Thesis_work/R/M4/Projects/High_risk_MM_baselinbe_relapse_marrow/Output_tables_2025/selected_combo_models_2025-09-17.rds"
-PATH_THRESHOLD_LIST   <- "~/Documents/Thesis_work/R/M4/Projects/High_risk_MM_baselinbe_relapse_marrow/Output_tables_2025/selected_combo_thresholds_2025-09-17.rds"
-PATH_DILUTION_FRAGMENTOMICS         <- "~/Documents/Thesis_work/R/M4/Projects/High_risk_MM_baselinbe_relapse_marrow/Results_Fragmentomics/Dilution_series/key_fragmentomics_info_dilution_series.rds"
-PATH_DILUTION_PROCESSED_MRDetect    <- "~/Documents/Thesis_work/R/M4/Projects/High_risk_MM_baselinbe_relapse_marrow/MRDetect_output_winter_2025/Processed_R_outputs/cfWGS_Winter2025Dilution_series_May2025_with_zscore.rds"
-PATH_DILUTION_CLINICAL  <- "~/Documents/Thesis_work/R/M4/Projects/High_risk_MM_baselinbe_relapse_marrow/Fragmentomics_data/Dilution_series/Metadata_dilution_series.csv"
-PATH_TUMOR_FRACTION <- "~/Documents/Thesis_work/R/M4/Projects/High_risk_MM_baselinbe_relapse_marrow/Fragmentomics_data/Dilution_series/tumor_fraction_dilution_series.txt" # To add
+# Keep paths project-relative so the script runs in Code Ocean or on a new
+# workstation after the expected input folders are staged.
+PATH_MODEL_LIST       <- file.path("Output_tables_2025", "selected_combo_models_2025-09-17.rds")
+PATH_THRESHOLD_LIST   <- file.path("Output_tables_2025", "selected_combo_thresholds_2025-09-17.rds")
+PATH_DILUTION_FRAGMENTOMICS <- file.path("Results_Fragmentomics", "Dilution_series", "key_fragmentomics_info_dilution_series.rds")
+PATH_DILUTION_PROCESSED_MRDetect <- file.path("MRDetect_output_winter_2025", "Processed_R_outputs", "cfWGS_Winter2025Dilution_series_May2025_with_zscore.rds")
+PATH_DILUTION_CLINICAL <- file.path("Fragmentomics_data", "Dilution_series", "Metadata_dilution_series.csv")
+PATH_TUMOR_FRACTION <- file.path("Fragmentomics_data", "Dilution_series", "tumor_fraction_dilution_series.txt")
 
 OUTPUT_DIR            <- "Dilution_Series_Scoring_2025"
 OUTPUT_DIR_TABLES     <- "Output_tables_2025"
