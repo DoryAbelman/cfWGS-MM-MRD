@@ -65,6 +65,36 @@ Each copied/saved file is recorded in
 artifact ID, final figure/table label, source path, destination path, checksum,
 and generating script.
 
+For manuscript text updates after adding samples or rerunning the pipeline, the
+workflow also writes a section-organized number workbook to:
+
+```text
+Scripts_2025/Final_Scripts/manuscript_writing/
+```
+
+The key files are:
+
+```text
+manuscript_numbers_by_section.tsv
+manuscript_numbers_by_section.xlsx
+manuscript_numbers_by_section.md
+manuscript_draft_paragraph_index.tsv
+manuscript_numeric_paragraph_review.tsv
+manuscript_paragraph_metric_audit.tsv
+by_section/
+```
+
+`manuscript_numbers_by_section.*` is the main manuscript update helper. It lists
+the section, statistic label, formatted value, numerator/denominator when
+relevant, source file/script, related figure or table, update trigger, and
+caveats.
+
+The paragraph review/audit files extract number-containing paragraphs from the
+working DOCX drafts and link them to pipeline-derived metric rows where
+possible. Rows without an exact match are flagged for manual source-table
+review. The `by_section/` folder contains smaller TSVs for section-by-section
+manuscript updates.
+
 Validate the organized manuscript-output tree:
 
 ```sh
@@ -129,7 +159,9 @@ Rscript Scripts_2025/Final_Scripts/run_manuscript_workflow.R --execute --skip-so
 `run_manuscript_workflow.R` dry-runs by default. With `--execute`, it runs the
 numbered `Final_Scripts` pipeline through `run_pipeline.R`, refreshes the
 stage-ordered script/artifact map, and validates the direct manuscript outputs
-under `Scripts_2025/Final_Scripts/final_manuscript_objects/`.
+under `Scripts_2025/Final_Scripts/final_manuscript_objects/`. It also refreshes
+the manuscript-writing number exports under
+`Scripts_2025/Final_Scripts/manuscript_writing/`.
 
 The source pipeline skips cache-sensitive nested-CV/model training unless
 `--include-cache-sensitive` is explicitly supplied.
@@ -242,6 +274,7 @@ Scripts are numbered to indicate execution order. Run them sequentially from a w
 | `prepare_local_inputs.R` | Local/Code Ocean preflight utility. It checks that required protected/de-identified inputs are staged under project-relative paths and can copy missing files/directories from a local source mirror with `--source-dir ... --copy-missing`. |
 | `manuscript_output_helpers.R` | Shared utilities used inside numbered scripts to copy/save final manuscript figure, table, and source-data components into `final_manuscript_objects/` with audited manuscript labels. |
 | `validate_manuscript_outputs.R` | Command-line validator for the direct manuscript-output tree. It checks coverage against `docs/manuscript_artifact_source_map.tsv`, verifies organized paths, and writes `manuscript_output_validation_report.tsv`. |
+| `5_0_Build_Manuscript_Text_Number_Exports.R` | Builds the manuscript-writing helper workbook/TSV/Markdown under `manuscript_writing/`. It indexes the working DOCX drafts and gathers section-organized values from current pipeline outputs so manuscript prose can be updated after adding samples. |
 | `pipeline_metadata.R` | Reads `docs/manuscript_artifact_source_map.tsv` and builds script-to-artifact crosswalks used by the command-line runner and documentation. |
 
 ---
@@ -256,8 +289,10 @@ Final_Scripts/
 ├── helpers.R               ← shared utility functions
 ├── manuscript_output_helpers.R ← direct manuscript-output helper for numbered scripts
 ├── validate_manuscript_outputs.R ← direct manuscript-output validator
+├── 5_0_Build_Manuscript_Text_Number_Exports.R ← manuscript text-number export helper
 ├── pipeline_metadata.R      ← shared script/output metadata helpers
 ├── final_manuscript_objects/ ← manuscript-labeled outputs created at run time
+├── manuscript_writing/      ← section-organized manuscript text-number exports
 ├── run_manuscript_workflow.R ← one-command manuscript workflow orchestrator
 ├── setup_packages.R        ← one-shot package checker/loader
 ├── prepare_local_inputs.R  ← local input staging/check utility

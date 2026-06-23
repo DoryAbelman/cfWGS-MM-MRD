@@ -11,7 +11,9 @@
 #   1. Dry-runs or executes the numbered source-pipeline scripts.
 #   2. Refreshes the stage-ordered script-to-artifact map.
 #   3. Validates the direct manuscript-output tree in final_manuscript_objects/.
-#   4. Optionally runs the separate reproducible_workflow generation/validation
+#   4. Builds the manuscript-writing number workbook from current outputs and
+#      the working manuscript DOCX drafts.
+#   5. Optionally runs the separate reproducible_workflow generation/validation
 #      harness when --run-reference-workflow is supplied.
 #
 # Guardrails:
@@ -30,8 +32,8 @@
 # Manuscript outputs created/updated:
 #   - None directly. This top-level orchestration script coordinates numbered
 #     source-stage execution, artifact-map refresh, validation, and manuscript
-#     export staging while preserving the numbered scripts as the scientific
-#     source of truth.
+#     export staging, including the manuscript-writing number workbook, while
+#     preserving the numbered scripts as the scientific source of truth.
 # =============================================================================
 
 timestamp <- function() format(Sys.time(), "%Y-%m-%d %H:%M:%S")
@@ -212,8 +214,19 @@ main <- function() {
     log_file = log_file
   )
 
+  run_rscript(
+    project_root = project_root,
+    script_path = file.path("Scripts_2025", "Final_Scripts", "5_0_Build_Manuscript_Text_Number_Exports.R"),
+    label = "manuscript-writing number exports",
+    log_file = log_file
+  )
+
   message_log(
     "Direct manuscript outputs are in Scripts_2025/Final_Scripts/final_manuscript_objects/.",
+    log_file = log_file
+  )
+  message_log(
+    "Manuscript-writing number exports are in Scripts_2025/Final_Scripts/manuscript_writing/.",
     log_file = log_file
   )
 
