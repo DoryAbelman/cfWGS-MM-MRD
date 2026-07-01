@@ -17,7 +17,7 @@
 #   1. Read all MRDetect CSV outputs.
 #   2. Annotate each record with source file, sample metadata, and z-scores
 #      based on CHARM_healthy controls.
-#   3. Filter to cfDNA timepoints (Diagnosis/Baseline/Progression) and export
+#   3. Filter to cfDNA timepoints and export
 #      both raw and z-scored tables for downstream plotting.
 #
 # Dependencies:
@@ -63,6 +63,13 @@ library(scales)
 #library(conflicted)
 library(lubridate)
 
+.helpers_path <- file.path("Scripts_2025", "Final_Scripts", "helpers.R")
+if (!file.exists(.helpers_path)) {
+  .helpers_path <- "helpers.R"
+}
+source(.helpers_path)
+rm(.helpers_path)
+
 # resolve common conflicts
 #conflicted::conflicts_prefer("dplyr::mutate")
 #conflicted::conflicts_prefer("dplyr::filter")
@@ -86,19 +93,44 @@ if (!dir.exists(outdir)) {
 # 3) Read and combine all CSVs, label with ‘source_file’, ‘Mut_source’ & ‘Filter_source’
 # ──────────────────────────────────────────────────────────────────────────────
 csv_files <- list.files(input_root, pattern = "\\.csv$", full.names = TRUE)
+spring2026_mrdetect_files <- spring2026_revision_files(
+  "MRDetect_outputs",
+  "^MRDetect_all_RESULTS_combined_with_source[.]csv$"
+)
+csv_files <- unique(c(csv_files, spring2026_mrdetect_files))
+if (!length(csv_files)) {
+  stop("No MRDetect CSV files found in historical or Spring 2026 revision inputs.", call. = FALSE)
+}
 
 read_and_label <- function(file) {
-  df <- read_csv(file)
-  df$source_file <- basename(file)
+  df <- read_csv(file, show_col_types = FALSE)
+  if (!"filename" %in% names(df)) {
+    if ("source_file" %in% names(df)) {
+      df$filename <- df$source_file
+    } else {
+      df$filename <- basename(file)
+    }
+  }
+  if (!"source_file" %in% names(df)) {
+    df$source_file <- basename(file)
+  }
+  df$input_source_file <- basename(file)
   return(df)
 }
 all_files <- bind_rows(lapply(csv_files, read_and_label))
 
 all_files <- all_files %>%
+  filter(
+    !str_detect(source_file, "^M4CHIP_"),
+    !str_detect(filename, "^M4CHIP_"),
+    !str_detect(input_source_file, "dilution_series")
+  )
+
+all_files <- all_files %>%
   mutate(
     Mut_source = case_when(
-      str_detect(source_file, "BM_muts")    ~ "BM_cells",
-      str_detect(source_file, "Blood_muts") ~ "Blood",
+      str_detect(input_source_file, "BM_muts") | str_detect(source_file, "BM_muts") ~ "BM_cells",
+      str_detect(input_source_file, "Blood_muts") | str_detect(source_file, "Blood_muts") ~ "Blood",
       TRUE                                   ~ NA_character_
     ),
     Filter_source = case_when(
@@ -117,7 +149,8 @@ all_files <- all_files %>%
     # 3) strip “.mutect2…” and “.fil…” from the VCF string itself
     VCF_clean = VCF %>%
       str_remove("\\.mutect2.*") %>%
-      str_remove("\\.fil.*")
+      str_remove("\\.fil.*") %>%
+      str_remove("\\.somatic.*")
   )
 
 # fix one truncated VCF_clean
@@ -134,7 +167,10 @@ all_files <- all_files %>%
 # ──────────────────────────────────────────────────────────────────────────────
 # 4) Load clinical metadata and unify ‘VCF_clean’ naming
 # ──────────────────────────────────────────────────────────────────────────────
-cfWGS_metadata <- read_csv("combined_clinical_data_updated_April2025.csv") %>%
+cfWGS_metadata <- read_combined_clinical_metadata_with_revision(
+  "combined_clinical_data_updated_April2025.csv",
+  include_revision_extra = TRUE
+) %>%
   mutate(
     VCF_clean_merge = str_remove(Bam, "\\.filter.*"),
     # correct internal PG→WG for those five patient‐specific IDs
@@ -150,6 +186,50 @@ cfWGS_metadata <- read_csv("combined_clinical_data_updated_April2025.csv") %>%
       VCF_clean_merge
     )
   )
+
+spring2026_panel_metadata <- cfWGS_metadata %>%
+  filter(!is.na(mutect2_pair_id), nzchar(mutect2_pair_id)) %>%
+  transmute(
+    VCF_clean = mutect2_pair_id,
+    VCF_panel_patient = Patient,
+    VCF_panel_sample_id = Sample_ID,
+    VCF_panel_sample_type = Sample_type,
+    VCF_panel_timepoint_info = timepoint_info
+  ) %>%
+  distinct(VCF_clean, .keep_all = TRUE)
+
+if (nrow(spring2026_panel_metadata) > 0) {
+  all_files <- all_files %>%
+    left_join(spring2026_panel_metadata, by = "VCF_clean") %>%
+    mutate(
+      Mut_source = case_when(
+        VCF_panel_sample_type == "BM_cells" ~ "BM_cells",
+        VCF_panel_sample_type == "Blood_plasma_cfDNA" ~ "Blood",
+        TRUE ~ Mut_source
+      ),
+      VCF_panel_is_allowed_panel_timepoint = case_when(
+        is.na(VCF_panel_timepoint_info) ~ TRUE,
+        VCF_panel_timepoint_info %in% c("Baseline", "Diagnosis") ~ TRUE,
+        TRUE ~ FALSE
+      )
+    )
+
+  excluded_disallowed_panel <- all_files %>%
+    filter(
+      !is.na(VCF_panel_timepoint_info),
+      !VCF_panel_is_allowed_panel_timepoint
+    )
+  if (nrow(excluded_disallowed_panel) > 0) {
+    readr::write_csv(
+      excluded_disallowed_panel,
+      file.path(outdir, "spring2026_mrdetect_excluded_disallowed_vcf_panels.csv")
+    )
+  }
+
+  all_files <- all_files %>%
+    filter(VCF_panel_is_allowed_panel_timepoint) %>%
+    select(-VCF_panel_is_allowed_panel_timepoint)
+}
 
 # ──────────────────────────────────────────────────────────────────────────────
 # 5) Standardize column names: replace spaces & dots with underscores
@@ -219,6 +299,7 @@ if (isTRUE(apply_mrdetect_parser_column_correction)) {
 all_files <- all_files %>%
   mutate(
     Study = case_when(
+      is_xplus_charm_healthy_bam(BAM) ~ "XPLUS_CHARM_healthy",
       str_detect(BAM, "^TFRI")       ~ "M4",
       str_detect(BAM, "^MY")         ~ "MyP",
       str_detect(BAM, "^EGA")        ~ "Landau",
@@ -240,6 +321,21 @@ tmp_meta <- cfWGS_metadata %>%
 
 Merged_MRDetect <- all_files %>%
   left_join(tmp_meta, by = c("VCF_clean" = "VCF_clean_merge"))
+
+if ("mutect2_pair_id" %in% names(tmp_meta)) {
+  tmp_meta_pair <- tmp_meta %>%
+    filter(!is.na(mutect2_pair_id), nzchar(mutect2_pair_id)) %>%
+    distinct(mutect2_pair_id, .keep_all = TRUE)
+
+  pair_joined <- all_files %>%
+    left_join(tmp_meta_pair, by = c("VCF_clean" = "mutect2_pair_id"))
+
+  fill_cols <- intersect(names(Merged_MRDetect), names(pair_joined))
+  metadata_cols <- setdiff(fill_cols, names(all_files))
+  for (col in metadata_cols) {
+    Merged_MRDetect[[col]] <- dplyr::coalesce(Merged_MRDetect[[col]], pair_joined[[col]])
+  }
+}
 
 ## Fix issue with ones that don't copy over
 
@@ -310,7 +406,11 @@ Merged_MRDetect <- Merged_MRDetect %>%
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# 11) Subset to cfDNA timepoints only (Baseline/Diagnosis/Progression)
+# 11) Subset to cfDNA timepoints only.
+# The queried BAM may be a longitudinal cfDNA sample, but the tumor-mutation VCF
+# panel above is restricted to Diagnosis/Baseline labels. Relapse-context samples
+# that are the baseline for a follow-up series should be labelled Baseline in the
+# metadata before entering this analysis.
 # ──────────────────────────────────────────────────────────────────────────────
 Merged_MRDetect_cfDNA <- Merged_MRDetect %>%
   filter(Sample_type_Bam == "Blood_plasma_cfDNA",

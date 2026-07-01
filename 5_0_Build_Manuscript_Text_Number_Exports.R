@@ -32,7 +32,7 @@
 ##    - Scripts_2025/Final_Scripts/script_index.tsv
 ##    - combined_clinical_data_updated_April2025.csv
 ##    - cohort_assignment_table_updated.rds
-##    - Output_tables_2025/all_patients_with_BM_and_blood_calls_updated5.rds
+##    - Output_tables_2025/all_patients_with_BM_and_blood_calls_updated6.rds
 ##    - Exported_data_tables_clinical/*PFS*/relapse/follow-up tables
 ##    - Final Tables and Figures / Output_tables_2025 model and time-window CSVs
 ##
@@ -82,6 +82,8 @@ script_dir <- dirname(script_path)
 project_root <- normalizePath(file.path(script_dir, "..", ".."), mustWork = TRUE)
 out_dir <- file.path(script_dir, "manuscript_writing")
 dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
+
+source(file.path(script_dir, "helpers.R"))
 
 project_path <- function(...) file.path(project_root, ...)
 
@@ -348,7 +350,11 @@ write_tsv(numeric_paragraph_review, file.path(out_dir, "manuscript_numeric_parag
 ################################################################################
 
 clinical_path <- project_path("combined_clinical_data_updated_April2025.csv")
-clinical <- read_csv_if_exists(clinical_path)
+clinical <- if (file.exists(clinical_path)) {
+  read_combined_clinical_metadata_with_revision(clinical_path)
+} else {
+  NULL
+}
 if (!is.null(clinical)) {
   add_rows(new_row(
     "Results",
@@ -458,7 +464,7 @@ if (!is.null(cohort_df) && all(c("Patient", "Cohort") %in% names(cohort_df))) {
 ## cfWGS/clinical call table numbers
 ################################################################################
 
-calls_path <- project_path("Output_tables_2025", "all_patients_with_BM_and_blood_calls_updated5.rds")
+calls_path <- project_path("Output_tables_2025", "all_patients_with_BM_and_blood_calls_updated6.rds")
 calls <- read_rds_if_exists(calls_path)
 if (!is.null(calls)) {
   add_rows(new_row(
@@ -1115,7 +1121,7 @@ source_file_hints_for_category <- function(candidate_source_hint) {
   if ("clinical concordance outputs" %in% categories) {
     hints <- c(
       hints,
-      "Output_tables_2025/all_patients_with_BM_and_blood_calls_updated5.rds",
+      "Output_tables_2025/all_patients_with_BM_and_blood_calls_updated6.rds",
       "Final Tables and Figures/Supplementary_Table_8_model_comparisons_to_clinical_metrics3.xlsx",
       "Figures_Exported/Tables_exported/Renamed/Supplementary_Table_10_All_call_metrics_against_clinical_metrics.xlsx"
     )

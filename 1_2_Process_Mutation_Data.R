@@ -90,6 +90,13 @@ library(scales)
 library(stringr)
 library(purrr)
 
+.helpers_path <- file.path("Scripts_2025", "Final_Scripts", "helpers.R")
+if (!file.exists(.helpers_path)) {
+  .helpers_path <- "helpers.R"
+}
+source(.helpers_path)
+rm(.helpers_path)
+
 support_plot_dir <- file.path("Final Tables and Figures", "mutation_processing_support")
 dir.create(support_plot_dir, recursive = TRUE, showWarnings = FALSE)
 
@@ -170,7 +177,11 @@ bm_maf_source <- resolve_maf_files(
   )
 )
 maf_directory <- bm_maf_source$directory
-maf_files <- bm_maf_source$files
+maf_files <- unique(c(
+  bm_maf_source$files,
+  spring2026_revision_maf_files("BM_cells")
+))
+message("BM MAF files after adding Spring 2026 revision inputs: ", length(maf_files))
 
 # Read each MAF file (BM) into a dataframe and correct column types.
 # Each MAF begins with meta-comment lines prefixed "#"; comment="#" skips them so
@@ -323,7 +334,9 @@ combined_maf <- bind_rows(dfs)
 rm(dfs)  # Free memory; dfs can be several hundred MB for large cohorts
 
 # Load in the patient info 
-metada_df_mutation_comparison <- read_csv("combined_clinical_data_updated_April2025.csv")
+metada_df_mutation_comparison <- read_combined_clinical_metadata_with_revision(
+  "combined_clinical_data_updated_April2025.csv"
+)
 
 # Add a Tumor_Sample_Barcode column to metada_df_mutation_comparison
 # The BAM filename (e.g. TFRIM4_0001_Bm_P_WG_FZ-01.filter.deduped.recalibrated.bam)
@@ -401,7 +414,11 @@ blood_maf_source <- resolve_maf_files(
   )
 )
 maf_directory <- blood_maf_source$directory
-maf_files <- blood_maf_source$files
+maf_files <- unique(c(
+  blood_maf_source$files,
+  spring2026_revision_maf_files("Blood_plasma_cfDNA")
+))
+message("Blood/plasma MAF files after adding Spring 2026 revision inputs: ", length(maf_files))
 
 # Read each PB cfDNA MAF file into a dataframe using identical col_types as the
 # BM block above.  The Blood/ directory contains plasma cfDNA samples only;

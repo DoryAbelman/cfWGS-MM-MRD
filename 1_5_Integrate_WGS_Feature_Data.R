@@ -86,6 +86,13 @@ library(stringr)
 library(readxl)
 library(maftools)
 
+.helpers_path <- file.path("Scripts_2025", "Final_Scripts", "helpers.R")
+if (!file.exists(.helpers_path)) {
+  .helpers_path <- "helpers.R"
+}
+source(.helpers_path)
+rm(.helpers_path)
+
 # Define export directories.
 export_dir <- "Jan2025_exported_data"
 support_table_dir <- file.path("Output_tables_2025", "feature_integration_support")
@@ -125,7 +132,9 @@ require_files(
 # Load clinical metadata.
 # This table provides the patient, timepoint, sample type, and BAM identifiers
 # needed to connect genomic caller outputs back to the manuscript cohorts.
-metada_df_mutation_comparison <- read_csv("combined_clinical_data_updated_April2025.csv") %>%
+metada_df_mutation_comparison <- read_combined_clinical_metadata_with_revision(
+  "combined_clinical_data_updated_April2025.csv"
+) %>%
   mutate(
     Tumor_Sample_Barcode = Bam %>%
       str_remove_all("_PG|_WG") %>%
@@ -145,7 +154,22 @@ metada_df_mutation_comparison <- read_csv("combined_clinical_data_updated_April2
 cna_data           <- readRDS(file.path(export_dir, "cna_data_ichorCNA.rds"))
 cna_data_sequenza <- readRDS(file.path(export_dir, "cna_data_from_sequenza_400_updated.rds"))
 translocation_data <- readRDS(file.path(export_dir, "translocation_data_cytoband_updated.rds"))
-tumor_fraction     <- read_tsv("Oct 2024 data/tumor_fraction_cfWGS.txt")
+tumor_fraction <- read_tsv("Oct 2024 data/tumor_fraction_cfWGS.txt")
+spring2026_ichor_params <- spring2026_revision_files(
+  "",
+  "^Ichor_CNA_combined_params_summary_tumor_fraction_sex[.]tsv$"
+)[1]
+if (!is.na(spring2026_ichor_params) && file.exists(spring2026_ichor_params)) {
+  spring2026_tumor_fraction <- read_tsv(spring2026_ichor_params, show_col_types = FALSE) %>%
+    filter(!str_detect(file, "^M4CHIP_")) %>%
+    transmute(
+      Bam = str_remove(file, "[.]params[.]txt$"),
+      Tumor_fraction = suppressWarnings(as.numeric(tumor_fraction)),
+      Ploidy = suppressWarnings(as.numeric(ploidy))
+    )
+  tumor_fraction <- bind_rows(tumor_fraction, spring2026_tumor_fraction) %>%
+    distinct(Bam, .keep_all = TRUE)
+}
 
 # Load mutation MAF objects.
 # The upstream mutation-processing script (1_2_Process_Mutation_Data.R) writes

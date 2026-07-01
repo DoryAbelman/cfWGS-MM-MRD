@@ -83,6 +83,13 @@ if (!file.exists(.manuscript_helper)) {
 source(.manuscript_helper)
 rm(.manuscript_helper)
 
+.helpers_path <- file.path("Scripts_2025", "Final_Scripts", "helpers.R")
+if (!file.exists(.helpers_path)) {
+  .helpers_path <- "helpers.R"
+}
+source(.helpers_path)
+rm(.helpers_path)
+
 # ──────────────────────────────────────────────────────────────────────────────
 # 1. FILE PATHS & SETUP
 # ──────────────────────────────────────────────────────────────────────────────
@@ -197,7 +204,7 @@ max_flag_or_na <- function(x) {
 # 4. LOAD CLINICAL & FEATURE DATA
 # ──────────────────────────────────────────────────────────────────────────────
 
-combined_clinical <- read_csv(clinical_csv_path, show_col_types = FALSE)
+combined_clinical <- read_combined_clinical_metadata_with_revision(clinical_csv_path)
 All_feature_data   <- readRDS(features_rds_path)
 
 all_patients <- combined_clinical %>% distinct(Patient) %>% pull(Patient)

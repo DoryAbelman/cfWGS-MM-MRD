@@ -86,6 +86,13 @@ library(circlize)
 library(GenomicRanges)
 library(pbapply)
 
+.helpers_path <- file.path("Scripts_2025", "Final_Scripts", "helpers.R")
+if (!file.exists(.helpers_path)) {
+  .helpers_path <- "helpers.R"
+}
+source(.helpers_path)
+rm(.helpers_path)
+
 support_table_dir <- file.path("Output_tables_2025", "translocation_processing_support")
 support_figure_dir <- file.path("Output_figures_2025", "translocation_processing_support")
 dir.create(support_table_dir, recursive = TRUE, showWarnings = FALSE)
@@ -130,12 +137,14 @@ source(genius_helper_path)
 rm(genius_helper_path)
 
 
-### Add clinical metadata for sample/patient annotation
-# This script still uses the historical Feb 2025 clinical CSV because that is
-# what the original translocation feature table was built from. Do not switch to
-# a later clinical file without checking whether downstream feature values change.
-# Load in the patient info 
-metada_df_mutation_comparison <- read_csv("combined_clinical_data_updated_Feb5_2025.csv")
+### Add clinical metadata for sample/patient annotation.
+# Spring 2026 revision samples are independent test-cohort additions and are
+# loaded through the same metadata projection used by mutation, CNA, MRDetect,
+# and fragmentomics scripts. The final confirmed translocation matrix still
+# requires IGV review (Looks_real == 1) before new calls are promoted.
+metada_df_mutation_comparison <- read_combined_clinical_metadata_with_revision(
+  "combined_clinical_data_updated_Feb5_2025.csv"
+)
 cohort_df <- readRDS("cohort_assignment_table_updated.rds")
 
 # Add a Tumor_Sample_Barcode column to metada_df_mutation_comparison
@@ -157,6 +166,10 @@ cfWGS_res_filtered_f <- list.files(cfWGS_res_dir,
                                    pattern = "_filtered.tsv",  
                                    recursive = T,
                                    full.names = T)
+cfWGS_res_filtered_f <- unique(c(
+  cfWGS_res_filtered_f,
+  spring2026_revision_files("Ig_caller_all_filtered_outputs", "_filtered[.]tsv$")
+))
 
 cfWGS_res_filtered <- data.frame()
 
@@ -1065,6 +1078,21 @@ filtered_df <- Ig_caller_df_cfWGS_filtered_aggressive2 %>%
     Patient %in% cohort_df$Patient,
     Common_MM_translocation == 1
   )
+
+spring2026_revision_metadata_for_igv <- load_spring2026_revision_metadata(required = FALSE)
+if (!is.null(spring2026_revision_metadata_for_igv)) {
+  spring2026_igv_candidates <- filtered_df %>%
+    filter(.data$Sample_ID %in% spring2026_revision_metadata_for_igv$Sample_ID) %>%
+    mutate(
+      manual_review_status = "candidate_requires_IGV_review_before_feature_matrix",
+      final_matrix_status = "not_promoted_until_Looks_real_1_in_reviewed_xlsm"
+    ) %>%
+    arrange(.data$Patient, .data$Sample_ID, desc(.data$IGCaller_Score))
+  readr::write_csv(
+    spring2026_igv_candidates,
+    support_path("spring2026_IgCaller_common_MM_translocation_candidates_for_IGV_review.csv")
+  )
+}
 
 write.table(
   filtered_df,

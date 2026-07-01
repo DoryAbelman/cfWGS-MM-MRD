@@ -68,6 +68,13 @@ if (is.na(session_functions_path)) {
 source(session_functions_path)
 rm(session_functions_path)
 
+.helpers_path <- file.path("Scripts_2025", "Final_Scripts", "helpers.R")
+if (!file.exists(.helpers_path)) {
+  .helpers_path <- "helpers.R"
+}
+source(.helpers_path)
+rm(.helpers_path)
+
 input.dir <- "Fragmentomics_data"
 pon.dir   <- file.path("Fragmentomics_data", "Normals")
 out.dir   <- "Results_Fragmentomics"
@@ -77,7 +84,9 @@ if (!dir.exists(out.dir)) {
 }
 
 ### Load clinical tables ############################################################################
-combined_clinical_data_updated <- read_csv("combined_clinical_data_updated_April2025.csv")
+combined_clinical_data_updated <- read_combined_clinical_metadata_with_revision(
+  "combined_clinical_data_updated_April2025.csv"
+)
 
 ### READ NUCLEOSOME-ACCESSIBILITY DISTANCE FILES ####################################################
 # GRIFFIN outputs one "nucleosome_accessibility_distances.tsv" per sample.
@@ -89,6 +98,13 @@ combined_clinical_data_updated <- read_csv("combined_clinical_data_updated_April
 results.files <- list.files(path = input.dir,
                             pattern = "nucleosome_accessibility_distances.tsv",
                             full.names = TRUE)
+results.files <- unique(c(
+  results.files,
+  spring2026_revision_files(
+    "Fragmentomics_Pipeeline_Suite_all_outputs",
+    "^2026-06-25_cfWGS_MM_fragmentomics_Revisions_Spring2026_nucleosome_accessibility_distances[.]tsv$"
+  )
+))
 pon.files <- rev(sort(
   list.files(path = pon.dir,
              pattern = "nucleosome_accessibility_distances.tsv",
@@ -119,6 +135,11 @@ tmp <- combined_clinical_data_updated %>%
     ),
     Cohort = dplyr::coalesce(Study, Study.x, Study.y)
   )
+tmp <- bind_rows(
+  tmp,
+  tmp %>% mutate(Merge_ID = str_replace(Merge_ID, "^IMG", "MyP"))
+) %>%
+  distinct(Merge_ID, Bam, Patient, Sample_ID, .keep_all = TRUE)
 
 sample_metadata <- tmp %>%
   dplyr::select(Sample = Merge_ID, Bam, Patient, Date_of_sample_collection) %>%

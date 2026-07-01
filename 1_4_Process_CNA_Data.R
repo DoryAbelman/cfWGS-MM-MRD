@@ -102,6 +102,13 @@ library(GenomicRanges)
 library(IRanges)
 library(S4Vectors)
 
+.helpers_path <- file.path("Scripts_2025", "Final_Scripts", "helpers.R")
+if (!file.exists(.helpers_path)) {
+  .helpers_path <- "helpers.R"
+}
+source(.helpers_path)
+rm(.helpers_path)
+
 export_dir <- "Jan2025_exported_data"
 support_table_dir <- file.path("Output_tables_2025", "ichor_cna_processing_support")
 dir.create(export_dir, recursive = TRUE, showWarnings = FALSE)
@@ -126,7 +133,9 @@ first_existing_file <- function(paths, description) {
 
 ## Load clinical info
 # Load in the patient info 
-metada_df_mutation_comparison <- read_csv("combined_clinical_data_updated_April2025.csv")
+metada_df_mutation_comparison <- read_combined_clinical_metadata_with_revision(
+  "combined_clinical_data_updated_April2025.csv"
+)
 
 # Add a Tumor_Sample_Barcode column to metada_df_mutation_comparison
 metada_df_mutation_comparison <- metada_df_mutation_comparison %>%
@@ -158,6 +167,12 @@ seg_files <- if (dir.exists(seg_dir)) {
 } else {
   character()
 }
+spring2026_seg_files <- spring2026_revision_files(
+  "iChorCNA_All_CNA_Seg",
+  "[.]seg$"
+)
+spring2026_seg_files <- spring2026_seg_files[!grepl("^M4CHIP_", basename(spring2026_seg_files))]
+seg_files <- unique(c(seg_files, spring2026_seg_files))
 
 combined_seg_cache_rds <- support_file("Oct_2024_combined_corrected_calls.rds")
 combined_seg_cache_csv <- support_file("Oct_2024_combined_corrected_calls.csv")

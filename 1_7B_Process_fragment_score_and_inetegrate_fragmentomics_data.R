@@ -80,6 +80,13 @@ if (is.na(session_functions_path)) {
 source(session_functions_path)
 rm(session_functions_path)
 
+.helpers_path <- file.path("Scripts_2025", "Final_Scripts", "helpers.R")
+if (!file.exists(.helpers_path)) {
+  .helpers_path <- "helpers.R"
+}
+source(.helpers_path)
+rm(.helpers_path)
+
 
 ### SET PATHS #######################################################################################
 input.dir <- "Fragmentomics_data"
@@ -99,6 +106,13 @@ dir.create(out.dir, recursive = TRUE, showWarnings = FALSE)
 results.files <- list.files(path = input.dir,
                             pattern = "insert_size_summary.tsv",
                             full.names = TRUE)
+results.files <- unique(c(
+  results.files,
+  spring2026_revision_files(
+    "Fragmentomics_Pipeeline_Suite_all_outputs",
+    "^2026-06-25_cfWGS_MM_fragmentomics_Revisions_Spring2026_insert_size_summary[.]tsv$"
+  )
+))
 pon.files <- rev(sort(
   list.files(path = pon.dir,
              pattern = "insert_size_summary.tsv",
@@ -114,7 +128,9 @@ pon_insert <- pon.files %>%
   bind_rows()
 
 # Load clinical tables
-combined_clinical <- read_csv("combined_clinical_data_updated_April2025.csv")
+combined_clinical <- read_combined_clinical_metadata_with_revision(
+  "combined_clinical_data_updated_April2025.csv"
+)
 
 # Construct a “Merge_ID” for joining
 tmp.clin <- combined_clinical %>%
@@ -125,6 +141,11 @@ tmp.clin <- combined_clinical %>%
       str_replace(Sample_ID, "_Blood_plasma_cfDNA", "-P")
     )
   )
+tmp.clin <- bind_rows(
+  tmp.clin,
+  tmp.clin %>% mutate(Merge_ID = str_replace(Merge_ID, "^IMG", "MyP"))
+) %>%
+  distinct(Merge_ID, Patient, Sample_ID, .keep_all = TRUE)
 
 # Standardize cfWGS_insert sample names, then join to clinical keys
 cfWGS_insert <- cfWGS_insert %>%
@@ -265,6 +286,13 @@ write_csv(
 fs.files <- list.files(path = input.dir,
                        pattern = "fragment_scores.tsv",
                        full.names = TRUE)
+fs.files <- unique(c(
+  fs.files,
+  spring2026_revision_files(
+    "Fragmentomics_Pipeeline_Suite_all_outputs",
+    "^2026-06-25_cfWGS_MM_fragmentomics_Revisions_Spring2026_fragment_scores[.]tsv$"
+  )
+))
 pon.fs.files <- rev(sort(
   list.files(path = pon.dir,
              pattern = "fragment_scores.tsv",

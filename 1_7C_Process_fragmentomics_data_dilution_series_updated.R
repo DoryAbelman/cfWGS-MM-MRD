@@ -61,6 +61,13 @@ if (!is.na(session_functions_path)) {
 }
 rm(session_functions_path)
 
+.helpers_path <- file.path("Scripts_2025", "Final_Scripts", "helpers.R")
+if (!file.exists(.helpers_path)) {
+  .helpers_path <- "helpers.R"
+}
+source(.helpers_path)
+rm(.helpers_path)
+
 # Compute a z-score of x versus the vector y
 calculate.zscore <- function(x, y) {
   (x - mean(y, na.rm = TRUE)) / sd(y, na.rm = TRUE)
@@ -125,7 +132,7 @@ if (!dir.exists(out.dir)) dir.create(out.dir, recursive = TRUE)
 
 
 ### 2.  LOAD CLINICAL TABLE   ##################################
-combined_clinical <- read_csv(clinical.csv, show_col_types = FALSE)
+combined_clinical <- read_dilution_metadata_with_spring2026(clinical.csv)
 
 
 ### 3.  READ & PROCESS NUCLEOSOME-ACCESSIBILITY (cfWGS + PON)  ##################
@@ -134,6 +141,13 @@ combined_clinical <- read_csv(clinical.csv, show_col_types = FALSE)
 results.files <- list.files(path = nuc_input.dir,
                             pattern = "nucleosome_accessibility_distances.tsv$",
                             full.names = TRUE)
+results.files <- unique(c(
+  results.files,
+  spring2026_revision_files(
+    "Fragmentomics_Pipeeline_Suite_all_outputs",
+    "^2026-06-25_cfWGS_MM_fragmentomics_Revisions_Spring2026_PWGVAL_Dilution_series_nucleosome_accessibility_distances[.]tsv$"
+  )
+))
 
 # 3b) List PON (healthy) files; we only need the first one if they’re identical format
 pon.files <- rev(sort(
@@ -167,6 +181,17 @@ cfWGS.data <- cfWGS.data %>%
   ) %>%
   left_join(combined_clinical, by = c("Sample" = "Merge")) %>%
   mutate(Cohort = "cfWGS")
+
+unmatched_dilution_samples <- cfWGS.data %>%
+  filter(is.na(Bam)) %>%
+  distinct(Sample) %>%
+  arrange(Sample)
+if (nrow(unmatched_dilution_samples) > 0) {
+  write_csv(
+    unmatched_dilution_samples,
+    file.path(out.dir, "spring2026_unmatched_dilution_fragmentomics_samples.csv")
+  )
+}
 
 # 3g) Mark PON samples as “HBC” (healthy bank controls)
 pon.data <- pon.data %>%
@@ -460,6 +485,13 @@ mm_dars_small <- results.data %>%
 ins.files <- list.files(path = ins_fs.dir,
                         pattern = "insert_size_summary.tsv$",
                         full.names = TRUE)
+ins.files <- unique(c(
+  ins.files,
+  spring2026_revision_files(
+    "Fragmentomics_Pipeeline_Suite_all_outputs",
+    "^2026-06-25_cfWGS_MM_fragmentomics_Revisions_Spring2026_PWGVAL_Dilution_series_insert_size_summary[.]tsv$"
+  )
+))
 
 insert_df <- ins.files %>%
   lapply(read_tsv, show_col_types = FALSE) %>%
@@ -471,6 +503,13 @@ insert_df <- ins.files %>%
 fs.files <- list.files(path = ins_fs.dir,
                        pattern = "fragment_scores.tsv$",
                        full.names = TRUE)
+fs.files <- unique(c(
+  fs.files,
+  spring2026_revision_files(
+    "Fragmentomics_Pipeeline_Suite_all_outputs",
+    "^2026-06-25_cfWGS_MM_fragmentomics_Revisions_Spring2026_PWGVAL_Dilution_series_fragment_scores[.]tsv$"
+  )
+))
 
 fs_df <- fs.files %>%
   lapply(read_tsv, show_col_types = FALSE) %>%

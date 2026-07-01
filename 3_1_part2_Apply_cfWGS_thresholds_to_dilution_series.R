@@ -83,6 +83,13 @@ if (!file.exists(.manuscript_helper)) {
 source(.manuscript_helper)
 rm(.manuscript_helper)
 
+.helpers_path <- file.path("Scripts_2025", "Final_Scripts", "helpers.R")
+if (!file.exists(.helpers_path)) {
+  .helpers_path <- "helpers.R"
+}
+source(.helpers_path)
+rm(.helpers_path)
+
 # ── 1. FILE PATHS ───────────────────────────────────────────────────────────
 # Keep paths project-relative so the script runs in Code Ocean or on a new
 # workstation after the expected input folders are staged.
@@ -111,21 +118,30 @@ blood_obj <- readRDS("nested_blood_validation_updated4_run2.rds")
 # ── 3. LOAD AND ASSEMBLE DILUTION SERIES DATA ────────────────────────────────
 frag_df     <- read_rds(PATH_DILUTION_FRAGMENTOMICS)
 mrdetect_df <- read_rds(PATH_DILUTION_PROCESSED_MRDetect)
-clinical_df <- read_csv(PATH_DILUTION_CLINICAL)
-tumor_fraction_dilution <- read_tsv(PATH_TUMOR_FRACTION)
+clinical_df <- read_dilution_metadata_with_spring2026(PATH_DILUTION_CLINICAL)
+tumor_fraction_dilution <- read_dilution_tumor_fraction_with_spring2026(PATH_TUMOR_FRACTION)
 
 # A) Combine features into one table 
 
 # Merge based on BAM (make sure both are character columns)
 mrdetect_df <- mrdetect_df %>%
   left_join(
-    clinical_df %>% dplyr::select(BAM, Merge),
+    clinical_df %>% dplyr::select(BAM, Merge_lookup = Merge),
     by = "BAM"
-  )
+  ) %>%
+  mutate(
+    Merge = coalesce(.data$Merge, .data$Merge_lookup),
+    VCF_Timepoint_for_dilution_filter = coalesce(
+      as.character(.data$Timepoint),
+      as.character(.data$Timepoint.x),
+      as.character(.data$Timepoint.y)
+    )
+  ) %>%
+  dplyr::select(-Merge_lookup)
 
 # ── Filter MRDetect df to only timepoint 0 (diagnosis) and select/rename ─────────
 mrdetect_wide <- mrdetect_df %>%
-  filter(Timepoint %in% c("01")) %>%
+  filter(VCF_Timepoint_for_dilution_filter %in% c("01")) %>%
   filter(!is.na(Patient_Bam)) %>% # omit healthy controls since not plotted 
   dplyr::select(
     Patient,
@@ -165,13 +181,42 @@ tumor_fraction_dilution <- tumor_fraction_dilution %>%
   left_join(clinical_df, by = c("BAM_full" = "Bam"))
 
 # ── Join everything together ─────────────────────────────────────────────
-dilution_df <- mrdetect_wide %>%
+dilution_base <- frag_df %>%
+  rename(Merge = Sample) %>%
   left_join(
-    frag_df,
-    by = c("Merge" = "Sample", "Patient" = "Patient")
+    clinical_df %>%
+      dplyr::select(
+        BAM,
+        Merge,
+        Patient,
+        Sample_ID,
+        dilution_series,
+        timepoint_info,
+        Sample_type,
+        Metadata_LOD = LOD
+      ) %>%
+      distinct(),
+    by = c("Bam" = "BAM", "Merge", "Patient", "Sample_ID")
   )
 
-dilution_df <- dilution_df %>%
+dilution_df <- dilution_base %>%
+  left_join(
+    mrdetect_wide,
+    by = c("Merge", "Patient")
+  ) %>%
+  mutate(
+    mrdetect_status = if_else(
+      is.na(.data$detect_rate_BM) & is.na(.data$detect_rate_blood),
+      "missing_mrdetect",
+      "available"
+    ),
+    mrdetect_missing_reason = case_when(
+      .data$mrdetect_status == "available" ~ NA_character_,
+      .data$dilution_series == "PWGVAL_M4CHIP" ~
+        "No PWGVAL query BAM rows against matching VA/TFRIM4 mutation panels in loaded MRDetect outputs",
+      TRUE ~ "No matching MRDetect row after dilution metadata join"
+    )
+  ) %>%
   rename(Sample = Merge)
 
 tumor_fraction_dilution <- tumor_fraction_dilution %>% dplyr::select(-Bam) %>%
@@ -243,12 +288,21 @@ orig_full    <- 1.300    # the original “100%” point
 
 dilution_df <- dilution_df %>%
   mutate(
-    LOD_updated = (LOD / orig_full) * baseline_vaf +
-      (1 - LOD / orig_full) * neg_vaf
+    LOD_original = LOD,
+    is_pwgval_dilution = coalesce(.data$dilution_series == "PWGVAL_M4CHIP", FALSE),
+    LOD_updated = if_else(
+      .data$is_pwgval_dilution,
+      .data$LOD,
+      (.data$LOD / orig_full) * baseline_vaf + (1 - .data$LOD / orig_full) * neg_vaf
+    ),
+    LOD_update_method = if_else(
+      .data$is_pwgval_dilution,
+      "PWGVAL workbook TF_Dilution retained",
+      "historical VA-02 dilution VAF recalibration"
+    )
   )
 
 ## For consistency
-dilution_df$LOD_original <- dilution_df$LOD
 dilution_df$LOD <- dilution_df$LOD_updated
 
 # ── 7. SAVE SCORED DILUTION SERIES ──────────────────────────────────────────

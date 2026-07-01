@@ -695,7 +695,16 @@ evidence_summary <- dat_base %>%
 ###### PART 2: See mutation overlap based on the specific base change 
 mutation_data_total <- readRDS("Jan2025_exported_data/mutation_export_updated_more_info2.rds")
 All_feature_data <- readRDS("Jan2025_exported_data/All_feature_data_Sep2025_updated2.rds")
-combined_clinical_data_updated <- read.csv("combined_clinical_data_updated_April2025.csv")
+.helpers_path <- file.path("Scripts_2025", "Final_Scripts", "helpers.R")
+if (!file.exists(.helpers_path)) {
+  .helpers_path <- "helpers.R"
+}
+source(.helpers_path)
+rm(.helpers_path)
+
+combined_clinical_data_updated <- read_combined_clinical_metadata_with_revision(
+  "combined_clinical_data_updated_April2025.csv"
+)
 
 
 # 1) Annotate your mutation table with clinical metadata

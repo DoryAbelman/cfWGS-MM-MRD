@@ -87,10 +87,142 @@ if (!file.exists(.manuscript_helper)) {
 source(.manuscript_helper)
 rm(.manuscript_helper)
 
+.helpers_path <- file.path("Scripts_2025", "Final_Scripts", "helpers.R")
+if (!file.exists(.helpers_path)) {
+  .helpers_path <- "helpers.R"
+}
+source(.helpers_path)
+rm(.helpers_path)
+
+baseline_heatmap_timepoints <- c("Diagnosis", "Baseline")
+heatmap_study_colors <- c(
+  "M4" = "#984ea3",
+  "MyC" = "#ff7f00",
+  "SPORE" = "#a65628",
+  "IMMAGINE_revision_OICR" = "#ff7f00"
+)
+spring2026_revision_metadata_for_heatmap <- load_spring2026_revision_metadata(required = FALSE)
+spring2026_revision_sample_ids_for_heatmap <- if (is.null(spring2026_revision_metadata_for_heatmap)) {
+  character()
+} else {
+  unique(spring2026_revision_metadata_for_heatmap$Sample_ID)
+}
+
+write_spring2026_heatmap_exclusion_audit <- function(data, compartment) {
+  if (!length(spring2026_revision_sample_ids_for_heatmap) || !"Sample_ID" %in% names(data)) {
+    return(invisible(NULL))
+  }
+  audit <- data %>%
+    filter(
+      .data$Sample_ID %in% spring2026_revision_sample_ids_for_heatmap,
+      !.data$timepoint_info %in% baseline_heatmap_timepoints
+    ) %>%
+    distinct(
+      Sample_ID,
+      Patient,
+      Sample_type,
+      Timepoint,
+      timepoint_info,
+      Tumor_Sample_Barcode,
+      Bam,
+      .keep_all = TRUE
+    ) %>%
+    mutate(
+      heatmap_compartment = compartment,
+      exclusion_reason = "not Diagnosis/Baseline after Spring 2026 metadata overrides"
+    )
+  if (!nrow(audit)) return(invisible(NULL))
+  audit_dir <- "Output_tables_2025"
+  if (!dir.exists(audit_dir)) dir.create(audit_dir, recursive = TRUE, showWarnings = FALSE)
+  audit_path <- file.path(audit_dir, "spring2026_heatmap_excluded_nonbaseline_samples.csv")
+  audit <- audit %>% mutate(across(everything(), as.character))
+  existing <- if (file.exists(audit_path)) {
+    readr::read_csv(audit_path, show_col_types = FALSE) %>%
+      mutate(across(everything(), as.character))
+  } else {
+    NULL
+  }
+  readr::write_csv(
+    bind_rows(existing, audit) %>%
+      distinct(heatmap_compartment, Sample_ID, Tumor_Sample_Barcode, .keep_all = TRUE),
+    audit_path
+  )
+  invisible(NULL)
+}
+
+deduplicate_spring2026_heatmap_baselines <- function(data, compartment) {
+  required <- c("Patient", "Sample_type", "timepoint_info", "Study")
+  if (!all(required %in% names(data))) return(data)
+  if (!any(data$Study == "IMMAGINE_revision_OICR", na.rm = TRUE)) return(data)
+
+  date_available <- if ("Date_of_sample_collection" %in% names(data)) {
+    !is.na(data$Date_of_sample_collection)
+  } else {
+    rep(FALSE, nrow(data))
+  }
+  tf_available <- if ("Tumor_Fraction" %in% names(data)) {
+    !is.na(data$Tumor_Fraction)
+  } else {
+    rep(FALSE, nrow(data))
+  }
+
+  ranked <- data %>%
+    mutate(
+      .row_id = row_number(),
+      .prefer_spring2026 = Study == "IMMAGINE_revision_OICR",
+      .has_collection_date = date_available,
+      .has_tumor_fraction = tf_available
+    ) %>%
+    group_by(Patient, Sample_type, timepoint_info) %>%
+    mutate(
+      .n_baseline_rows = n(),
+      .has_spring2026_baseline = any(.prefer_spring2026, na.rm = TRUE)
+    ) %>%
+    ungroup() %>%
+    arrange(
+      Patient,
+      Sample_type,
+      timepoint_info,
+      desc(.has_spring2026_baseline),
+      desc(.prefer_spring2026),
+      desc(.has_collection_date),
+      desc(.has_tumor_fraction),
+      .row_id
+    )
+
+  keep <- ranked %>%
+    group_by(Patient, Sample_type, timepoint_info) %>%
+    mutate(.keep_row = if_else(.n_baseline_rows > 1 & .has_spring2026_baseline, row_number() == 1L, TRUE)) %>%
+    ungroup()
+
+  removed <- keep %>%
+    filter(!.keep_row) %>%
+    mutate(
+      heatmap_compartment = compartment,
+      exclusion_reason = "duplicate Diagnosis/Baseline heatmap row; Spring 2026 revision row preferred"
+    )
+
+  if (nrow(removed)) {
+    audit_dir <- "Output_tables_2025"
+    if (!dir.exists(audit_dir)) dir.create(audit_dir, recursive = TRUE, showWarnings = FALSE)
+    readr::write_csv(
+      removed %>%
+        select(-starts_with(".")) %>%
+        mutate(across(everything(), as.character)),
+      file.path(audit_dir, paste0("spring2026_heatmap_duplicate_baselines_removed_", compartment, ".csv"))
+    )
+  }
+
+  keep %>%
+    filter(.keep_row) %>%
+    arrange(.row_id) %>%
+    select(-starts_with("."))
+}
+
 
 ### Load data 
 # 0. clinical metadata
-metada_df_mutation_comparison <- read_csv(
+metada_df_mutation_comparison <- read_combined_clinical_metadata_with_revision(
   "combined_clinical_data_updated_April2025.csv"
 ) %>%
   # recreate the “clean” BAM key that all your joins rely on
@@ -376,14 +508,17 @@ mutation_matrix <- mutation_data %>%
 combined_data_heatmap_BM <- mutation_matrix %>%
   full_join(CNA_translocation, by = "Tumor_Sample_Barcode")
 
-# 1e. Filter for Baseline/Progression and BM cells; reformat timepoint labels
+# 1e. Filter for baseline BM cells; reformat Diagnosis as Baseline for display.
+# Relapse/progression-context samples are included only if the curated metadata
+# labels them as Baseline before this point.
+write_spring2026_heatmap_exclusion_audit(combined_data_heatmap_BM, "BM_cells")
 combined_data_heatmap_BM <- combined_data_heatmap_BM %>%
   mutate(
-    timepoint_info = ifelse(timepoint_info == "Relapse", "Progression", timepoint_info),
     timepoint_info = ifelse(timepoint_info == "Diagnosis", "Baseline", timepoint_info)
   ) %>%
-  filter(timepoint_info %in% c("Baseline", "Progression")) %>%
-  filter(Sample_type %in% c("BM_cells"))
+  filter(timepoint_info == "Baseline") %>%
+  filter(Sample_type %in% c("BM_cells")) %>%
+  deduplicate_spring2026_heatmap_baselines("BM_cells")
 
 # 1f. Replace NAs: for mutation columns use "No Mutation" and for CNA/translocation use 0
 existing_cols <- intersect(myeloma_genes, colnames(combined_data_heatmap_BM))
@@ -449,13 +584,14 @@ mutation_matrix_blood <- mutation_matrix_blood %>%
 combined_data_heatmap_blood <- mutation_matrix_blood %>%
   full_join(CNA_translocation, by = "Tumor_Sample_Barcode")
 
+write_spring2026_heatmap_exclusion_audit(combined_data_heatmap_blood, "Blood_plasma_cfDNA")
 combined_data_heatmap_blood <- combined_data_heatmap_blood %>%
   mutate(
-    timepoint_info = ifelse(timepoint_info == "Relapse", "Progression", timepoint_info),
     timepoint_info = ifelse(timepoint_info == "Diagnosis", "Baseline", timepoint_info)
   ) %>%
-  filter(timepoint_info %in% c("Baseline", "Progression")) %>%
-  filter(Sample_type %in% c("Blood_plasma_cfDNA"))
+  filter(timepoint_info == "Baseline") %>%
+  filter(Sample_type %in% c("Blood_plasma_cfDNA")) %>%
+  deduplicate_spring2026_heatmap_baselines("Blood_plasma_cfDNA")
 
 # 2d. Replace NAs for mutation columns and for CNA/translocation columns
 existing_cols_blood <- intersect(myeloma_genes, colnames(combined_data_heatmap_blood))
@@ -554,7 +690,7 @@ top_annotation_BM <- HeatmapAnnotation(
   Study = combined_data_heatmap_BM$Study,
   col = list(
     Timepoint = c("Baseline" = "#377eb8", "Progression" = "#e41a1c"),
-    Study = c("M4" = "#984ea3", "MyC" = "#ff7f00", "SPORE" = "#a65628")
+    Study = heatmap_study_colors
   ),
   Tumor_Fraction = anno_points(
     combined_data_heatmap_BM$Tumor_Fraction,
@@ -688,7 +824,7 @@ top_annotation_blood <- HeatmapAnnotation(
   Study = combined_data_heatmap_blood$Study,
   col = list(
     Timepoint = c("Baseline" = "#377eb8", "Progression" = "#e41a1c"),
-    Study = c("M4" = "#984ea3", "MyC" = "#ff7f00", "SPORE" = "#a65628")
+    Study = heatmap_study_colors
   ),
   Tumor_Fraction = anno_points(
     combined_data_heatmap_blood$Tumor_Fraction,

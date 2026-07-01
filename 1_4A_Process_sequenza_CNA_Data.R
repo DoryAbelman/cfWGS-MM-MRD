@@ -126,9 +126,18 @@ library(GenomicRanges)
 library(readxl)
 library(dplyr)           # reattach after Bioconductor packages so bare verbs are tidyverse verbs
 
+.helpers_path <- file.path("Scripts_2025", "Final_Scripts", "helpers.R")
+if (!file.exists(.helpers_path)) {
+  .helpers_path <- "helpers.R"
+}
+source(.helpers_path)
+rm(.helpers_path)
+
 ## Load clinical info
 # Load in the patient info 
-metada_df_mutation_comparison <- read_csv("combined_clinical_data_updated_April2025.csv")
+metada_df_mutation_comparison <- read_combined_clinical_metadata_with_revision(
+  "combined_clinical_data_updated_April2025.csv"
+)
 
 # Add a Tumor_Sample_Barcode column to metada_df_mutation_comparison
 metada_df_mutation_comparison <- metada_df_mutation_comparison %>%
@@ -273,6 +282,22 @@ pp_table <- pp_table |>
   ) |>
   arrange(Sample)
 
+spring2026_ploidy_file <- spring2026_revision_files(
+  "DNA_pipeline_suite_Sequenza_outputs",
+  "Sequenza_ploidy_purity[.]tsv$"
+)[1]
+if (!is.na(spring2026_ploidy_file) && file.exists(spring2026_ploidy_file)) {
+  spring2026_pp <- readr::read_tsv(spring2026_ploidy_file, show_col_types = FALSE) %>%
+    transmute(
+      Sample = as.character(Sample),
+      Purity = round(suppressWarnings(as.numeric(cellularity)), 4),
+      Ploidy = round(suppressWarnings(as.numeric(ploidy)), 3)
+    )
+  pp_table <- bind_rows(pp_table, spring2026_pp) %>%
+    distinct(Sample, .keep_all = TRUE) %>%
+    arrange(Sample)
+}
+
 write.table(
   pp_table,
   support_file("sequenza_purity_ploidy_estimates.txt"),
@@ -362,6 +387,84 @@ for (i in seq_along(seg_files)) {
   seg_df <- seg_calls %>% dplyr::select(chr, start, end, Call)
   colnames(seg_df)[4] <- sample_name
   seg_data_list[[i]] <- seg_df
+}
+
+spring2026_segment_file <- spring2026_revision_files(
+  "DNA_pipeline_suite_Sequenza_outputs",
+  "Sequenza_segments[.]tsv$"
+)[1]
+if (!is.na(spring2026_segment_file) && file.exists(spring2026_segment_file)) {
+  spring2026_segments <- readr::read_tsv(spring2026_segment_file, show_col_types = FALSE)
+  required_spring_cols <- c("Sample", "chromosome", "start.pos", "end.pos", "CNt", "A", "B")
+  missing_spring_cols <- setdiff(required_spring_cols, names(spring2026_segments))
+  if (length(missing_spring_cols)) {
+    stop(
+      "Spring 2026 Sequenza segment table is missing columns: ",
+      paste(missing_spring_cols, collapse = ", "),
+      call. = FALSE
+    )
+  }
+
+  spring_samples <- sort(unique(spring2026_segments$Sample))
+  existing_samples <- names(seg_data_list)
+  for (sample_name in setdiff(spring_samples, existing_samples)) {
+    df <- spring2026_segments %>% filter(Sample == sample_name)
+    seg_core <- df %>%
+      dplyr::transmute(
+        chr   = stringr::str_remove(chromosome, "^chr"),
+        start = suppressWarnings(as.numeric(start.pos)),
+        end   = suppressWarnings(as.numeric(end.pos)),
+        CNt   = suppressWarnings(as.numeric(CNt)),
+        A     = suppressWarnings(as.numeric(A)),
+        B     = suppressWarnings(as.numeric(B))
+      ) %>%
+      dplyr::mutate(seg_len = pmax(end - start + 1, 1))
+
+    ploidy_conf <- unname(ploidy_map[sample_name])
+    if (!is.finite(ploidy_conf)) {
+      df_auto <- seg_core %>%
+        dplyr::filter(chr %in% as.character(1:22)) %>%
+        dplyr::mutate(CNt_round = round(CNt))
+      est_ploidy <- wmode(df_auto$CNt_round, df_auto$seg_len)
+      baseline_int <- ifelse(is.na(est_ploidy), NA_real_, pmax(1, round(est_ploidy)))
+      source_tag <- "spring2026_segments_fallback"
+    } else {
+      baseline_int <- pmax(1, round(ploidy_conf))
+      source_tag <- "spring2026_ploidy_purity"
+    }
+
+    ploidy_list[[length(ploidy_list) + 1L]] <- tibble::tibble(
+      Sample = sample_name,
+      ploidy_conf = ifelse(is.finite(ploidy_conf), ploidy_conf, NA_real_),
+      baseline_int = baseline_int,
+      baseline_src = source_tag
+    )
+
+    if (is.na(baseline_int)) {
+      seg_calls <- seg_core %>%
+        dplyr::mutate(Call = call_from_CNt_AB(CNt, A, B))
+    } else {
+      seg_calls <- seg_core %>%
+        dplyr::mutate(
+          Call = dplyr::case_when(
+            !is.finite(CNt)                    ~ NA_character_,
+            CNt == 0                           ~ "HOMD",
+            CNt == 1                           ~ "HETD",
+            CNt >= baseline_int + 3            ~ "HLAMP",
+            CNt >  baseline_int + 1            ~ "AMP",
+            CNt >  baseline_int                ~ "GAIN",
+            CNt <  baseline_int                ~ "LOSS",
+            CNt == baseline_int & !is.na(B) & B == 0 ~ "CNLOH",
+            CNt == baseline_int                ~ "NEUT",
+            TRUE                               ~ NA_character_
+          )
+        )
+    }
+
+    seg_df <- seg_calls %>% dplyr::select(chr, start, end, Call)
+    colnames(seg_df)[4] <- sample_name
+    seg_data_list[[sample_name]] <- seg_df
+  }
 }
 
 combined_seg_data <- purrr::reduce(seg_data_list, dplyr::full_join, by = c("chr","start","end")) %>%

@@ -58,6 +58,13 @@ library(patchwork)
 library(scales)
 library(conflicted)
 
+.helpers_path <- file.path("Scripts_2025", "Final_Scripts", "helpers.R")
+if (!file.exists(.helpers_path)) {
+  .helpers_path <- "helpers.R"
+}
+source(.helpers_path)
+rm(.helpers_path)
+
 # resolve common conflicts
 conflicted::conflicts_prefer(
   dplyr::mutate,
@@ -85,19 +92,64 @@ if (!dir.exists(outdir)) {
 # 3) Read and combine all CSVs, label with ‘source_file’, ‘Mut_source’ & ‘Filter_source’
 # ──────────────────────────────────────────────────────────────────────────────
 csv_files <- list.files(input_root, pattern = "\\.csv$", full.names = TRUE)
+spring2026_dilution_mrdetect_files <- spring2026_revision_files(
+  "MRDetect_outputs",
+  "^MRDetect_all_RESULTS_combined_with_source_dilution_series[.]csv$"
+)
+spring2026_combined_mrdetect_files <- spring2026_revision_files(
+  "MRDetect_outputs",
+  "^MRDetect_all_RESULTS_combined_with_source[.]csv$"
+)
+csv_files <- unique(c(
+  csv_files,
+  spring2026_dilution_mrdetect_files,
+  spring2026_combined_mrdetect_files
+))
+if (!length(csv_files)) {
+  stop("No dilution-series MRDetect CSV files found in historical or Spring 2026 revision inputs.", call. = FALSE)
+}
 
 read_and_label <- function(file) {
-  df <- read_csv(file)
-  df$source_file <- basename(file)
+  df <- read_csv(file, show_col_types = FALSE)
+  if (!"filename" %in% names(df)) {
+    if ("source_file" %in% names(df)) {
+      df$filename <- df$source_file
+    } else {
+      df$filename <- basename(file)
+    }
+  }
+  if (!"source_file" %in% names(df)) {
+    df$source_file <- basename(file)
+  }
+  df$input_source_file <- basename(file)
   return(df)
 }
 all_files <- bind_rows(lapply(csv_files, read_and_label))
 
+pwgval_dilution_metadata_for_mrdetect <- load_spring2026_pwgval_dilution_metadata(required = FALSE)
+pwgval_dilution_bams <- if (is.null(pwgval_dilution_metadata_for_mrdetect)) {
+  character()
+} else {
+  unique(pwgval_dilution_metadata_for_mrdetect$BAM)
+}
+
+if (length(spring2026_combined_mrdetect_files) > 0 && length(pwgval_dilution_bams) > 0) {
+  spring2026_combined_basenames <- basename(spring2026_combined_mrdetect_files)
+  all_files <- all_files %>%
+    filter(
+      !.data$input_source_file %in% spring2026_combined_basenames |
+        .data$BAM %in% pwgval_dilution_bams |
+        str_detect(.data$BAM, "^M4CHIP_") |
+        str_detect(.data$source_file, "^M4CHIP_") |
+        str_detect(.data$filename, "^M4CHIP_")
+    )
+}
+
 all_files <- all_files %>%
   mutate(
     Mut_source = case_when(
-      str_detect(source_file, "BM_muts")    ~ "BM_cells",
-      str_detect(source_file, "Blood_muts") ~ "Blood",
+      str_detect(input_source_file, "BM_muts") | str_detect(source_file, "BM_muts") ~ "BM_cells",
+      str_detect(input_source_file, "Blood_muts") | str_detect(source_file, "Blood_muts") ~ "Blood",
       TRUE                                   ~ NA_character_
     ),
     Filter_source = case_when(
@@ -116,8 +168,88 @@ all_files <- all_files %>%
     # 3) strip “.mutect2…” and “.fil…” from the VCF string itself
     VCF_clean = VCF %>%
       str_remove("\\.mutect2.*") %>%
-      str_remove("\\.fil.*")
+      str_remove("\\.fil.*") %>%
+      str_remove("\\.somatic.*")
   )
+
+extract_mrdetect_panel_patient <- function(x) {
+  dplyr::case_when(
+    stringr::str_detect(x, "VA-09") ~ "VA-09",
+    stringr::str_detect(x, "VA-12") ~ "VA-12",
+    stringr::str_detect(x, "VA-13") ~ "VA-13",
+    stringr::str_detect(x, "IMG-[0-9]+") ~ stringr::str_extract(x, "IMG-[0-9]+"),
+    TRUE ~ NA_character_
+  )
+}
+
+if (length(pwgval_dilution_bams) > 0) {
+  pwgval_bam_patient_lookup <- pwgval_dilution_metadata_for_mrdetect %>%
+    transmute(
+      BAM,
+      PWGVAL_dilution_patient = .data$Patient,
+      PWGVAL_dilution_sample_id = .data$Sample_ID,
+      PWGVAL_dilution_LOD = .data$LOD
+    ) %>%
+    distinct(BAM, .keep_all = TRUE)
+
+  all_files <- all_files %>%
+    mutate(
+      is_pwgval_m4chip_query_bam = .data$BAM %in% pwgval_dilution_bams | str_detect(.data$BAM, "^M4CHIP_"),
+      VCF_panel_patient_for_dilution = extract_mrdetect_panel_patient(.data$VCF),
+      VCF_panel_matches_PWGVAL_patient = NA
+    ) %>%
+    left_join(pwgval_bam_patient_lookup, by = "BAM") %>%
+    mutate(
+      VCF_panel_matches_PWGVAL_patient = if_else(
+        .data$is_pwgval_m4chip_query_bam,
+        !is.na(.data$PWGVAL_dilution_patient) &
+          !is.na(.data$VCF_panel_patient_for_dilution) &
+          .data$VCF_panel_patient_for_dilution == .data$PWGVAL_dilution_patient,
+        NA
+      ),
+      PWGVAL_panel_match_audit_note = case_when(
+        !.data$is_pwgval_m4chip_query_bam ~ NA_character_,
+        .data$VCF_panel_matches_PWGVAL_patient ~
+          "PWGVAL queried BAM matched to same-patient VA/TFRIM4 mutation panel",
+        is.na(.data$PWGVAL_dilution_patient) ~
+          "M4CHIP/PWGVAL-like queried BAM is absent from PWGVAL dilution metadata",
+        is.na(.data$VCF_panel_patient_for_dilution) ~
+          "Could not infer mutation-panel patient from MRDetect source filename",
+        TRUE ~
+          "Excluded from PWGVAL dilution scoring because queried BAM patient and mutation-panel patient differ"
+      )
+    )
+
+  pwgval_panel_match_audit <- all_files %>%
+    filter(.data$is_pwgval_m4chip_query_bam) %>%
+    select(
+      input_source_file,
+      source_file,
+      BAM,
+      VCF,
+      VCF_clean,
+      PWGVAL_dilution_patient,
+      PWGVAL_dilution_sample_id,
+      PWGVAL_dilution_LOD,
+      VCF_panel_patient_for_dilution,
+      VCF_panel_matches_PWGVAL_patient,
+      PWGVAL_panel_match_audit_note
+    ) %>%
+    arrange(BAM, VCF)
+
+  if (nrow(pwgval_panel_match_audit) > 0) {
+    readr::write_csv(
+      pwgval_panel_match_audit,
+      file.path(outdir, "spring2026_pwgval_mrdetect_panel_match_audit.csv")
+    )
+  }
+
+  all_files <- all_files %>%
+    filter(
+      !.data$is_pwgval_m4chip_query_bam |
+        .data$VCF_panel_matches_PWGVAL_patient %in% TRUE
+    )
+}
 
 # fix one truncated VCF_clean
 all_files <- all_files %>%
@@ -133,7 +265,10 @@ all_files <- all_files %>%
 # ──────────────────────────────────────────────────────────────────────────────
 # 4) Load clinical metadata and unify ‘VCF_clean’ naming
 # ──────────────────────────────────────────────────────────────────────────────
-cfWGS_metadata <- read_csv("combined_clinical_data_updated_April2025.csv") %>%
+cfWGS_metadata <- read_combined_clinical_metadata_with_revision(
+  "combined_clinical_data_updated_April2025.csv",
+  include_revision_extra = TRUE
+) %>%
   mutate(
     VCF_clean_merge = str_remove(Bam, "\\.filter.*"),
     # correct internal PG→WG for those five patient‐specific IDs
@@ -149,6 +284,22 @@ cfWGS_metadata <- read_csv("combined_clinical_data_updated_April2025.csv") %>%
       VCF_clean_merge
     )
   )
+
+spring2026_panel_metadata <- cfWGS_metadata %>%
+  filter(!is.na(mutect2_pair_id), nzchar(mutect2_pair_id)) %>%
+  transmute(
+    VCF_clean = mutect2_pair_id,
+    VCF_panel_patient = Patient,
+    VCF_panel_sample_id = Sample_ID,
+    VCF_panel_sample_type = Sample_type,
+    VCF_panel_timepoint_info = timepoint_info
+  ) %>%
+  distinct(VCF_clean, .keep_all = TRUE)
+
+if (nrow(spring2026_panel_metadata) > 0) {
+  all_files <- all_files %>%
+    left_join(spring2026_panel_metadata, by = "VCF_clean")
+}
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -207,6 +358,7 @@ if (isTRUE(apply_mrdetect_parser_column_correction)) {
 all_files <- all_files %>%
   mutate(
     Study = case_when(
+      is_xplus_charm_healthy_bam(BAM) ~ "XPLUS_CHARM_healthy",
       str_detect(BAM, "^TFRI")       ~ "M4",
       str_detect(BAM, "^MY")         ~ "MyP",
       str_detect(BAM, "^EGA")        ~ "Landau",
@@ -214,6 +366,7 @@ all_files <- all_files %>%
       str_detect(BAM, "^HCC\\-")      ~ "HCC_healthy",
       str_detect(BAM, "^TGL")        ~ "CHARM_healthy",
       str_detect(BAM, "^SPORE")      ~ "SPORE",
+      str_detect(BAM, "^M4CHIP_")    ~ "M4",
       TRUE                            ~ NA_character_
     )
   )
@@ -227,8 +380,8 @@ all_files <- all_files %>%
     Mut_source = ifelse(
       is.na(Mut_source) | Mut_source == "",
       case_when(
-        grepl("-O-DNA", VCF_clean) ~ "BM_cells",
-        grepl("-P-DNA", VCF_clean) ~ "Blood",
+        grepl("-O-DNA|_Bm_", VCF_clean) ~ "BM_cells",
+        grepl("-P-DNA|_Pl_", VCF_clean) ~ "Blood",
         TRUE                        ~ Mut_source
       ),
       Mut_source
@@ -247,14 +400,94 @@ tmp_meta <- cfWGS_metadata %>%
 Merged_MRDetect_dilution <- all_files %>%
   left_join(tmp_meta, by = c("VCF_clean" = "VCF_clean_merge"))
 
+if ("mutect2_pair_id" %in% names(tmp_meta)) {
+  tmp_meta_pair <- tmp_meta %>%
+    filter(!is.na(mutect2_pair_id), nzchar(mutect2_pair_id)) %>%
+    distinct(mutect2_pair_id, .keep_all = TRUE)
+
+  pair_joined <- all_files %>%
+    left_join(tmp_meta_pair, by = c("VCF_clean" = "mutect2_pair_id"))
+
+  fill_cols <- intersect(names(Merged_MRDetect_dilution), names(pair_joined))
+  metadata_cols <- setdiff(fill_cols, names(all_files))
+  for (col in metadata_cols) {
+    Merged_MRDetect_dilution[[col]] <- dplyr::coalesce(
+      Merged_MRDetect_dilution[[col]],
+      pair_joined[[col]]
+    )
+  }
+}
+
+if ("VCF_panel_sample_type" %in% names(Merged_MRDetect_dilution)) {
+  Merged_MRDetect_dilution <- Merged_MRDetect_dilution %>%
+    mutate(
+      Mut_source = case_when(
+        VCF_panel_sample_type == "BM_cells" ~ "BM_cells",
+        VCF_panel_sample_type == "Blood_plasma_cfDNA" ~ "Blood",
+        TRUE ~ Mut_source
+      ),
+      VCF_panel_is_allowed_panel_timepoint = case_when(
+        is.na(VCF_panel_timepoint_info) ~ TRUE,
+        VCF_panel_timepoint_info %in% c("Baseline", "Diagnosis") ~ TRUE,
+        TRUE ~ FALSE
+      )
+    )
+
+  excluded_disallowed_dilution_panel <- Merged_MRDetect_dilution %>%
+    filter(
+      !is.na(VCF_panel_timepoint_info),
+      !VCF_panel_is_allowed_panel_timepoint
+    )
+  if (nrow(excluded_disallowed_dilution_panel) > 0) {
+    readr::write_csv(
+      excluded_disallowed_dilution_panel,
+      file.path(outdir, "spring2026_pwgval_mrdetect_excluded_disallowed_vcf_panels.csv")
+    )
+  }
+
+  Merged_MRDetect_dilution <- Merged_MRDetect_dilution %>%
+    filter(VCF_panel_is_allowed_panel_timepoint) %>%
+    select(-VCF_panel_is_allowed_panel_timepoint)
+}
+
 # ──────────────────────────────────────────────────────────────────────────────
 # 9) Add BAM‐level sample info (Sample_ID, Patient, Sample_type, timepoint_info)
 # ──────────────────────────────────────────────────────────────────────────────
-bam_info <- read.csv("Metadata_dilution_series.csv")
+bam_info <- read_dilution_metadata_with_spring2026("Metadata_dilution_series.csv")
 
 # 3. Join back into the main Merged_MRDetect_dilution table
 Merged_MRDetect_dilution <- Merged_MRDetect_dilution %>%
   left_join(bam_info, by = "BAM")
+
+if ("Patient.x" %in% names(Merged_MRDetect_dilution)) {
+  Merged_MRDetect_dilution$Patient <- Merged_MRDetect_dilution$Patient.x
+  Merged_MRDetect_dilution$Patient.x <- NULL
+}
+if ("Patient.y" %in% names(Merged_MRDetect_dilution)) {
+  Merged_MRDetect_dilution$Patient_Bam <- dplyr::coalesce(
+    Merged_MRDetect_dilution$Patient_Bam,
+    Merged_MRDetect_dilution$Patient.y
+  )
+  Merged_MRDetect_dilution$Patient.y <- NULL
+}
+
+pwgval_mrdetect_availability <- bam_info %>%
+  filter(.data$dilution_series == "PWGVAL_M4CHIP") %>%
+  distinct(BAM, Patient_Bam, LOD, Sample_ID, Merge) %>%
+  mutate(
+    present_in_mrdetect_results = .data$BAM %in% unique(all_files$BAM),
+    audit_note = if_else(
+      .data$present_in_mrdetect_results,
+      "PWGVAL dilution BAM present in loaded MRDetect outputs",
+      "PWGVAL dilution BAM absent from loaded MRDetect outputs"
+    )
+  )
+if (nrow(pwgval_mrdetect_availability) > 0) {
+  readr::write_csv(
+    pwgval_mrdetect_availability,
+    file.path(outdir, "spring2026_pwgval_mrdetect_dilution_availability_audit.csv")
+  )
+}
 
 # ──────────────────────────────────────────────────────────────────────────────
 # 10) Classify matched vs. unmatched plasma; force CHARM_healthy→cfDNA

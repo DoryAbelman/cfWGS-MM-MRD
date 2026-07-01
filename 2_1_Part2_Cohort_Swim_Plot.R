@@ -344,7 +344,16 @@ followup_events <- censor_tbl %>%
 # E. Sample collections (BM vs cfDNA)
 # ─────────────────────────────────────────────────────────────────────────────
 ### Now add all the sample collection dates 
-combined_clinical_data_updated <- read.csv("combined_clinical_data_updated_April2025.csv")
+.helpers_path <- file.path("Scripts_2025", "Final_Scripts", "helpers.R")
+if (!file.exists(.helpers_path)) {
+  .helpers_path <- "helpers.R"
+}
+source(.helpers_path)
+rm(.helpers_path)
+
+combined_clinical_data_updated <- read_combined_clinical_metadata_with_revision(
+  "combined_clinical_data_updated_April2025.csv"
+)
 
 # 1. BM sample collection events
 bm_events <- combined_clinical_data_updated %>%
@@ -2025,7 +2034,7 @@ mrd_cols <- c("MRD+" = "#111111", "MRD-" = "#666666", "Missing" = "#F7F7F7")
 
 
 ## Redo also with the cfWGS MRD 
-cfWGS_MRD <- readRDS("Output_tables_2025/all_patients_with_BM_and_blood_calls_updated5_full.rds")
+cfWGS_MRD <- readRDS("Output_tables_2025/all_patients_with_BM_and_blood_calls_updated6_full.rds")
 
 ## Add it in to the other one
 cfWGS_MRD_1yr <- cfWGS_MRD %>%

@@ -149,7 +149,16 @@ combined_maf <- combined_maf %>%
 
 ## Re-join with info in case issues 
 # Load in the patient info 
-metada_df_mutation_comparison <- read_csv("combined_clinical_data_updated_April2025.csv")
+.helpers_path <- file.path("Scripts_2025", "Final_Scripts", "helpers.R")
+if (!file.exists(.helpers_path)) {
+  .helpers_path <- "helpers.R"
+}
+source(.helpers_path)
+rm(.helpers_path)
+
+metada_df_mutation_comparison <- read_combined_clinical_metadata_with_revision(
+  "combined_clinical_data_updated_April2025.csv"
+)
 
 # Add a Tumor_Sample_Barcode column to metada_df_mutation_comparison
 metada_df_mutation_comparison <- metada_df_mutation_comparison %>%

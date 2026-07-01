@@ -59,6 +59,13 @@ library(tidyverse)
 library(readxl)
 library(gridExtra)
 
+.helpers_path <- file.path("Scripts_2025", "Final_Scripts", "helpers.R")
+if (!file.exists(.helpers_path)) {
+  .helpers_path <- "helpers.R"
+}
+source(.helpers_path)
+rm(.helpers_path)
+
 
 ### Load source tables
 # These inputs are produced by earlier scripts or exported from clinical/MRD
@@ -74,7 +81,9 @@ MRD_cfWGS_blood <- read.csv(file.path("MRDetect_output_winter_2025/Processed_R_o
 
 
 Relapse_dates_M4_clean <- read_csv("Relapse_dates_M4_clean.csv") # Relapse dates
-combined_clinical_data_updated <- read_csv("combined_clinical_data_updated_April2025.csv") ## Aggregated clinical info
+combined_clinical_data_updated <- read_combined_clinical_metadata_with_revision(
+  "combined_clinical_data_updated_April2025.csv"
+) ## Aggregated clinical info
 SPORE_MRD <- read_excel("Clinical data/SPORE/SPORE_pct_flow_extracted.xlsx") %>% filter(!is.na(Patient))
 IMMAGINE_MRD <- read_excel("Clinical data/IMMAGINE/Extracted_clinical_MRD_data.xlsx", sheet = 3)
 
@@ -1460,8 +1469,10 @@ dups <- joined_clean %>%
 # They provide broad mutation burden used later for the relaxed blood evidence
 # helper flag.
 
-## Load in the metadata and try to match to it 
-cfWGS_metadata <- read.csv("combined_clinical_data_updated_April2025.csv")
+## Load in the metadata and try to match to it
+cfWGS_metadata <- read_combined_clinical_metadata_with_revision(
+  "combined_clinical_data_updated_April2025.csv"
+)
 
 # Create a VCF_clean_merge column from the 'Bam' column in cfWGS_metadata
 cfWGS_metadata <- cfWGS_metadata %>%
@@ -1936,6 +1947,108 @@ filled_df <- filled_df %>%
       TRUE ~ NA_integer_
     )
   )
+
+recompute_sample_relapse_fields <- function(df, relapse_dates) {
+  endpoint_map <- df %>%
+    mutate(
+      endpoint_row_id = row_number(),
+      Patient = as.character(Patient),
+      Date = as.Date(Date)
+    ) %>%
+    select(endpoint_row_id, Patient, Date) %>%
+    left_join(
+      relapse_dates %>%
+        transmute(
+          Patient = as.character(Patient),
+          Progression_date = as.Date(Progression_date)
+        ) %>%
+        filter(!is.na(Patient), !is.na(Progression_date)) %>%
+        distinct(),
+      by = "Patient",
+      relationship = "many-to-many"
+    ) %>%
+    mutate(
+      days_to_progression = case_when(
+        is.na(Date) ~ NA_real_,
+        Progression_date > Date ~ as.numeric(Progression_date - Date),
+        Progression_date <= Date & Progression_date >= Date - lubridate::days(35) ~ 0,
+        TRUE ~ NA_real_
+      )
+    ) %>%
+    group_by(endpoint_row_id) %>%
+    summarise(
+      Num_days_to_closest_relapse = suppressWarnings(min(days_to_progression, na.rm = TRUE)),
+      .groups = "drop"
+    ) %>%
+    mutate(
+      Num_days_to_closest_relapse = if_else(
+        is.infinite(Num_days_to_closest_relapse),
+        NA_real_,
+        Num_days_to_closest_relapse
+      ),
+      Relapsed = if_else(!is.na(Num_days_to_closest_relapse), "Yes", "No")
+    )
+
+  df %>%
+    mutate(endpoint_row_id = row_number()) %>%
+    select(-any_of(c("Num_days_to_closest_relapse", "Relapsed"))) %>%
+    left_join(endpoint_map, by = "endpoint_row_id") %>%
+    select(-endpoint_row_id)
+}
+
+revision_metadata_for_endpoint_dates <- load_spring2026_revision_metadata(required = FALSE)
+if (!is.null(revision_metadata_for_endpoint_dates)) {
+  revision_timepoint_date_map <- revision_metadata_for_endpoint_dates %>%
+    transmute(
+      Patient = as.character(Patient),
+      Timepoint = as.character(Timepoint),
+      revision_sample_date = as.Date(Date_of_sample_collection)
+    ) %>%
+    filter(!is.na(Patient), !is.na(Timepoint), !is.na(revision_sample_date)) %>%
+    distinct() %>%
+    group_by(Patient, Timepoint) %>%
+    summarise(
+      n_revision_dates_for_timepoint = n_distinct(revision_sample_date),
+      revision_timepoint_date = if_else(
+        n_revision_dates_for_timepoint == 1L,
+        min(revision_sample_date),
+        as.Date(NA)
+      ),
+      revision_timepoint_dates_all = paste(
+        sort(unique(as.character(revision_sample_date))),
+        collapse = ";"
+      ),
+      .groups = "drop"
+    )
+
+  dir.create(file.path("Output_tables_2025", "endpoint_correctness_audit"),
+             recursive = TRUE, showWarnings = FALSE)
+  readr::write_csv(
+    revision_timepoint_date_map %>%
+      filter(n_revision_dates_for_timepoint > 1),
+    file.path(
+      "Output_tables_2025",
+      "endpoint_correctness_audit",
+      "spring2026_revision_aggregate_timepoint_date_ambiguity.csv"
+    )
+  )
+
+  filled_df <- filled_df %>%
+    left_join(
+      revision_timepoint_date_map %>%
+        select(Patient, Timepoint, revision_timepoint_date),
+      by = c("Patient", "Timepoint")
+    ) %>%
+    mutate(Date = coalesce(as.Date(Date), revision_timepoint_date)) %>%
+    select(-revision_timepoint_date)
+}
+
+# Recompute endpoint fields after all clinical/MRD/WGS joins so every row with
+# Patient + Date uses the same current progression-date source. Some earlier
+# joins carry relapse timing only for rows that originated in a clinical-MRD
+# table; this final pass prevents downstream plots from treating those blanks as
+# "no relapse within window".
+filled_df <- recompute_sample_relapse_fields(filled_df, Relapse_dates_full)
 
 ### Export final aggregate table for downstream manuscript scripts
 # This is the current final output of 2_0.

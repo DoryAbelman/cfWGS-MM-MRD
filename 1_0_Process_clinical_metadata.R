@@ -115,6 +115,13 @@ normalize_clinical_date <- function(x) {
   as.Date(parsed)
 }
 
+max_clinical_date_or_na <- function(x) {
+  x <- as.Date(x)
+  x <- x[!is.na(x)]
+  if (!length(x)) return(as.Date(NA))
+  max(x)
+}
+
 # ─── 2.  Configuration & helper functions (optional) ───────────────────────────
 # [ Single place to change paths ]
 #
@@ -928,6 +935,83 @@ new_rows <- tibble(
 
 Relapse_dates_full <- bind_rows(Relapse_dates_full, new_rows)
 
+oicr_revision_endpoint_path <- file.path(
+  "New OICR Submissions",
+  "derived_metadata",
+  "oicr_revision_repo_style_metadata.csv"
+)
+
+oicr_revision_endpoints <- if (file.exists(oicr_revision_endpoint_path)) {
+  readr::read_csv(oicr_revision_endpoint_path, show_col_types = FALSE) %>%
+    transmute(
+      Patient = as.character(Patient),
+      date_diagnosis = normalize_clinical_date(date_diagnosis),
+      first_progression_date = normalize_clinical_date(first_progression_date),
+      latest_progression_date = normalize_clinical_date(latest_progression_date),
+      relapse_or_censor_date = normalize_clinical_date(relapse_or_censor_date),
+      relapse_or_censor_status = as.character(relapse_or_censor_status)
+    ) %>%
+    distinct()
+} else {
+  tibble(
+    Patient = character(),
+    date_diagnosis = as.Date(character()),
+    first_progression_date = as.Date(character()),
+    latest_progression_date = as.Date(character()),
+    relapse_or_censor_date = as.Date(character()),
+    relapse_or_censor_status = character()
+  )
+}
+
+oicr_revision_progression_dates <- oicr_revision_endpoints %>%
+  mutate(
+    relapse_or_censor_progression_date = if_else(
+      str_detect(str_to_lower(coalesce(relapse_or_censor_status, "")), "relapse|progress"),
+      relapse_or_censor_date,
+      as.Date(NA)
+    )
+  ) %>%
+  select(
+    Patient,
+    first_progression_date,
+    latest_progression_date,
+    relapse_or_censor_progression_date
+  ) %>%
+  pivot_longer(
+    cols = -Patient,
+    names_to = "revision_progression_date_source",
+    values_to = "Progression_date"
+  ) %>%
+  filter(!is.na(Patient), !is.na(Progression_date)) %>%
+  distinct(Patient, Progression_date, .keep_all = TRUE)
+
+dir.create(clinical_support_dir, recursive = TRUE, showWarnings = FALSE)
+write.csv(
+  oicr_revision_endpoints,
+  file.path(clinical_support_dir, "oicr_revision_endpoint_dates_used.csv"),
+  row.names = FALSE
+)
+write.csv(
+  oicr_revision_progression_dates,
+  file.path(clinical_support_dir, "oicr_revision_progression_dates_appended.csv"),
+  row.names = FALSE
+)
+
+Relapse_dates_full <- bind_rows(
+  Relapse_dates_full,
+  oicr_revision_progression_dates %>% select(Patient, Progression_date)
+) %>%
+  distinct(Patient, Progression_date, .keep_all = TRUE)
+
+# Recompute patient-level relapse availability after all manually curated
+# progression dates have been appended. The first `test` object above is built
+# before later David/Esther/Sarah date additions, so using it here would leave
+# newly added relapse patients with stale sample-level `Relapsed = "N"` flags.
+test <- combined_clinical_data_updated %>%
+  mutate(
+    Relapsed = ifelse(Patient %in% Relapse_dates_full$Patient, "Y", "N")
+  )
+
 ## Export relapse dates 
 write.csv(Relapse_dates_full, file = "Relapse dates cfWGS updated.csv", row.names = F)
 write.csv(Relapse_dates_M4_clean, "Relapse_dates_M4_clean.csv", row.names = FALSE)
@@ -1291,7 +1375,7 @@ write.csv(PFS_days, file = "Exported_data_tables_clinical/PFS_days.csv", row.nam
 ### Get the latest date per patient 
 latest_dates <- df_combined %>%
   group_by(Patient) %>%
-  summarise(latest_date = max(Date, na.rm = TRUE))
+  summarise(latest_date = max_clinical_date_or_na(Date), .groups = "drop")
 
 #### Add SPORE to this and IMG 
 # Extract the Patient and 'Status last follow up' from spore_OS_info,
@@ -1324,17 +1408,43 @@ tmp_IMG <- tmp_IMG %>%
     followup_source = "Clinical data/IMMAGINE/Additional_relapse_dates_IMG_from_Esther.xlsx:Date_of_last_followup"
   )
 
+tmp_oicr_revision_followup <- oicr_revision_endpoints %>%
+  rowwise() %>%
+  mutate(
+    latest_date = max_clinical_date_or_na(c(
+      relapse_or_censor_date,
+      latest_progression_date,
+      first_progression_date
+    ))
+  ) %>%
+  ungroup() %>%
+  transmute(
+    Patient,
+    latest_date,
+    followup_source = case_when(
+      str_detect(str_to_lower(coalesce(relapse_or_censor_status, "")), "censor") ~
+        "Spring 2026 OICR revision metadata:relapse_or_censor_date",
+      !is.na(latest_progression_date) ~
+        "Spring 2026 OICR revision metadata:latest_progression_date",
+      !is.na(first_progression_date) ~
+        "Spring 2026 OICR revision metadata:first_progression_date",
+      TRUE ~ "Spring 2026 OICR revision metadata:no endpoint date"
+    )
+  ) %>%
+  filter(!is.na(Patient))
+
 
 # Combine the two tables
 latest_dates <- bind_rows(
   latest_dates %>% mutate(followup_source = "latest clinical/sample date available in combined metadata"),
-  tmp_IMG
+  tmp_IMG,
+  tmp_oicr_revision_followup
 )
 
 latest_dates <- latest_dates %>%
   group_by(Patient) %>%
   summarise(
-    latest_date = max(latest_date, na.rm = TRUE),
+    latest_date = max_clinical_date_or_na(latest_date),
     followup_source = paste(sort(unique(followup_source[!is.na(latest_date)])), collapse = "; "),
     .groups = "drop"
   )
@@ -1374,7 +1484,7 @@ extract_latest <- function(df, pt_col, tp_col, date_col){
               Date = as.Date(.data[[date_col]])) %>% 
     filter(!is.na(Timepoint)) %>% 
     group_by(Patient, Timepoint) %>% 
-    summarise(Date = max(Date, na.rm=TRUE), .groups="drop")
+    summarise(Date = max_clinical_date_or_na(Date), .groups="drop")
 }
 
 # 1) pull from each source
@@ -1391,14 +1501,14 @@ M4_DEMO <- M4_DEMO %>%
          Patient = M4_id) %>%
   select(Patient, Date) %>%
   group_by(Patient) %>%
-  filter(Date == max(Date, na.rm = TRUE)) %>%
+  summarise(Date = max_clinical_date_or_na(Date), .groups = "drop") %>%
   ungroup() %>%
   distinct()
 
 ## Check if later in DEMO file
 other_dates <- bind_rows(d1, d2, d3, d4) %>%
   group_by(Patient) %>%
-  summarise(latest_other_date = max(Date, na.rm = TRUE), .groups = "drop")
+  summarise(latest_other_date = max_clinical_date_or_na(Date), .groups = "drop")
 
 # 2. Compare with M4_DEMO
 more_recent_in_demo <- M4_DEMO %>%
@@ -1412,7 +1522,7 @@ more_recent_in_demo
 # 2) combine and get per-patient max
 latest_dates <- bind_rows(d1, d2, d3, d4, M4_DEMO) %>% 
   group_by(Patient) %>% 
-  summarise(latest_date = max(Date, na.rm=TRUE), .groups="drop")
+  summarise(latest_date = max_clinical_date_or_na(Date), .groups="drop")
 
 # 3) incorporate SPORE follow-up
 spore_dates <- spore_OS_info %>% 
@@ -1420,12 +1530,13 @@ spore_dates <- spore_OS_info %>%
 
 latest_dates <- latest_dates %>% 
   left_join(spore_dates, by="Patient") %>% 
-  bind_rows(tmp_IMG) %>% 
-  mutate(latest_date = pmax(latest_date, status_date, na.rm=TRUE)) %>% 
+  bind_rows(tmp_IMG, tmp_oicr_revision_followup) %>% 
+  rowwise() %>%
+  mutate(latest_date = max_clinical_date_or_na(c(latest_date, status_date))) %>%
+  ungroup() %>%
   select(Patient, latest_date) %>%
   group_by(Patient) %>%
-  filter(latest_date == max(latest_date, na.rm = TRUE)) %>%
-  ungroup() %>%
+  summarise(latest_date = max_clinical_date_or_na(latest_date), .groups = "drop") %>%
   distinct()
 
 
@@ -1569,7 +1680,10 @@ spore_baseline_clean <- spore_baseline_dates %>%
 baseline_dates_all <- bind_rows(
   spore_baseline_clean,
   diagnosis_dates_m4,
-  diagnosis_dates_immagine
+  diagnosis_dates_immagine,
+  oicr_revision_endpoints %>%
+    select(Patient, Diagnosis_date = date_diagnosis) %>%
+    filter(!is.na(Diagnosis_date))
 ) %>%
   distinct() %>%
   filter(!is.na(Diagnosis_date))
