@@ -515,7 +515,7 @@ p_front_grouped <- ggplot(front_tbl,
     limits = c(0, 100)
   ) +
   labs(
-    title = "cfWGS Positivity: Frontline cohort, BM-derived muts",
+    title = "cfWGS Positivity: Training Cohort, BM-derived muts",
     x     = NULL,
     y     = "Positivity rate"
   ) +
@@ -737,7 +737,7 @@ combo_tbl  <- bind_rows(front_tbl2, non_tbl2)
 # Set display order for cohorts, timepoints, and technologies.
 combo_tbl <- combo_tbl %>%
   mutate(
-    Cohort      = factor(Cohort,    levels = c("Training Cohort","Test Cohort")),
+    Cohort      = factor(Cohort,    levels = c("Training Cohort", "Test Cohort")),
     landmark_tp = factor(landmark_tp,
                          levels = c("Post-ASCT",
                                     "Maintenance-1yr",
@@ -1050,7 +1050,7 @@ combo_tbl  <- bind_rows(front_tbl_blood, non_tbl_blood)
 
 combo_tbl <- combo_tbl %>%
   mutate(
-    Cohort      = factor(Cohort,    levels = c("Training Cohort","Test Cohort")),
+    Cohort      = factor(Cohort,    levels = c("Training Cohort", "Test Cohort")),
     landmark_tp = factor(landmark_tp,
                          levels = c("Post-ASCT",
                                     "Maintenance-1yr",
@@ -1070,7 +1070,7 @@ combo_tbl <- combo_tbl %>%
 # Analyst note: build prose snippets for checking the Figure 4C percentages
 # against the plotted denominators.
 fig_ref   <- "Figure 4C"
-cohort_in <- "Training Cohort"                    # change if you want the Test Cohort
+cohort_in <- "Training"                           # change if you want Test
 
 # Helper: fetch row for a (timepoint, technology, cohort) and format "XX% (a/b)"
 pull_fmt <- function(df, tp, tech, cohort = cohort_in, digits = 0) {
@@ -1720,7 +1720,7 @@ plot_cm <- function(df, main_title,
 ## D.  Draw & save the three panels
 ## ───────────────────────────────────────────────────────────────
 p_post   <- plot_cm(cm_post ,  "Confusion Matrix at Post-ASCT (Training Cohort)")
-p_maint  <- plot_cm(cm_maint,  "Confusion Matrix at 1‑Year Maintenance (Training Cohort)")
+p_maint  <- plot_cm(cm_maint,  "Confusion Matrix at 1-Year Maintenance (Training Cohort)")
 p_non    <- plot_cm(cm_non ,   "Confusion Matrix of Test Cohort")
 
 ggsave("Final Tables and Figures/Fig4_confmat_post_ASCT_updated5.png",
@@ -2023,7 +2023,7 @@ cm_non <- ct_to_long(ct_non_Flow, "Flow (MFC)")
 ##  Draw & save the three panels
 ## ───────────────────────────────────────────────────────────────
 p_post   <- plot_cm(cm_post ,  "Confusion Matrix at Post-ASCT (Training Cohort)")
-p_maint  <- plot_cm(cm_maint,  "Confusion Matrix at 1‑Year Maintenance (Training Cohort)")
+p_maint  <- plot_cm(cm_maint,  "Confusion Matrix at 1-Year Maintenance (Training Cohort)")
 p_non    <- plot_cm(cm_non ,   "Confusion Matrix of Test Cohort")
 
 ggsave("Final Tables and Figures/Fig5_confmat_post_ASCT_blood_updated6.png",
@@ -2439,8 +2439,8 @@ metrics_tbl <- build_metrics_frontline_vs_nonfront(dat)
 
 metrics_tbl <- metrics_tbl %>%
   mutate(Cohort = recode(Cohort,
-                         "Frontline" = "Train",
-                         "Non-frontline" = "Test"))
+                         "Frontline" = "Training Cohort",
+                         "Non-frontline" = "Test Cohort"))
 
 # Export workbook using the historical filename. The final manuscript copy is
 # staged below as Supplementary Table 10.

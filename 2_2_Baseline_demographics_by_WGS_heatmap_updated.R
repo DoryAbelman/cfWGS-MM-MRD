@@ -263,6 +263,32 @@ metada_df_mutation_comparison <- read_combined_clinical_metadata_with_revision(
 # Load cohort assignments
 cohort_df <- readRDS("cohort_assignment_table_updated.rds")
 
+# Spring 2026 revision patients are a frozen-training test-cohort expansion.
+# The historical cohort RDS predates these patients, so append rather than
+# retrain/reclassify them. Preserve an existing assignment for any true overlap.
+revision_cohort_df <- spring2026_revision_metadata_for_heatmap %>%
+  distinct(Patient) %>%
+  filter(!is.na(Patient), Patient != "") %>%
+  mutate(Cohort = "Non-frontline")
+cohort_df <- bind_rows(
+  cohort_df,
+  revision_cohort_df %>% filter(!Patient %in% cohort_df$Patient)
+) %>%
+  distinct(Patient, .keep_all = TRUE)
+
+if (length(spring2026_revision_sample_ids_for_heatmap)) {
+  missing_revision_cohort <- setdiff(
+    unique(spring2026_revision_metadata_for_heatmap$Patient),
+    cohort_df$Patient
+  )
+  if (length(missing_revision_cohort)) {
+    stop(
+      "Spring 2026 patients lack heatmap cohort assignments: ",
+      paste(missing_revision_cohort, collapse = ", "), call. = FALSE
+    )
+  }
+}
+
 # Merge into metadata
 metada_df_mutation_comparison <- metada_df_mutation_comparison %>%
   left_join(cohort_df, by = "Patient")
@@ -1103,13 +1129,13 @@ cohort_label <- cohort_df$Cohort[match(patients, cohort_df$Patient)]
 
 # 2. Map to desired labels
 col_cohort <- case_when(
-  cohort_label == "Frontline"      ~ "Train",
-  cohort_label == "Non-frontline" ~ "Test",
+  cohort_label == "Frontline"      ~ "Training Cohort",
+  cohort_label == "Non-frontline" ~ "Test Cohort",
   TRUE                             ~ NA_character_
 )
 
 # 3. Convert to factor with defined levels
-col_cohort <- factor(col_cohort, levels = c("Train", "Test"))
+col_cohort <- factor(col_cohort, levels = c("Training Cohort", "Test Cohort"))
 
 # 4. Check distribution
 table(col_cohort, useNA = "ifany")
@@ -1143,8 +1169,8 @@ ord_df <- ord_df %>%
     
     # map your 'Cohort' to the swim-plot cohort names
     cohort  = recode(Cohort,
-                     "Train" = "Front-line cohort",
-                     "Test"    = "Non-front-line cohort"),
+                     "Training Cohort" = "Front-line cohort",
+                     "Test Cohort"    = "Non-front-line cohort"),
     
     # sample-type flag for the y-axis label
     sample_type = case_when(
@@ -1168,8 +1194,8 @@ write.csv(ord_df, "ordering_df_for_Figure_1.csv", row.names = F)
 # rename  cohort factor levels
 col_cohort_ord <- factor(
   col_cohort_ord,
-  levels = c("Train", "Test"),
-  labels = c("Train", "Test")
+  levels = c("Training Cohort", "Test Cohort"),
+  labels = c("Training Cohort", "Test Cohort")
 )
 
 # 3) re‐order your matrices
@@ -1219,29 +1245,62 @@ bm_mat    <- bm_mat[-bad_ix, , drop = FALSE]
 cfDNA_mat <- cfDNA_mat[-bad_ix, , drop = FALSE]
 
 # 7) build the top‐row annotation
-# 7a) Bring in mutation count dataframe
-#   (assumes you have a data.frame `mut_counts_df` with columns Patient, MutCount)
-# (a) Load your baseline clinical table (if not already loaded)
-#     and keep only one Diagnosis/Baseline row per patient.
-dat_base <- readRDS("Final_aggregate_table_cfWGS_features_with_clinical_and_demographics_updated9.rds") %>%
-  filter(timepoint_info %in% c("Diagnosis","Baseline")) %>%
-  arrange(Patient, timepoint_info) %>%
-  group_by(Patient) %>%
-  slice(1) %>%    # first row
-  ungroup()
-
-# (b) Extract just the patient IDs from your heatmap columns:
+# 7a) Calculate mutation burdens from the same recovered MAF objects used in
+# the oncoprint. The previous annotation read a stale aggregate table that
+# predated Spring 2026, so new test samples appeared as missing even when their
+# MAFs were present.
 patient_ids <- extract_pid(all_cols)
 
-# (c) Pull out the two mutation‐count columns from dat_base
-#     (these names must match exactly what's in your data frame)
-bm_counts    <- dat_base$BM_Mutation_Count[    match(patient_ids, dat_base$Patient) ]
-blood_counts <- dat_base$Blood_Mutation_Count[ match(patient_ids, dat_base$Patient) ]
+count_maf_variants_by_heatmap_column <- function(maf_data, heatmap_metadata) {
+  variant_key <- c(
+    "Tumor_Sample_Barcode", "Chromosome", "Start_Position", "End_Position",
+    "Reference_Allele", "Tumor_Seq_Allele2"
+  )
+  missing_key <- setdiff(variant_key, names(maf_data))
+  if (length(missing_key)) {
+    stop("Cannot calculate mutation counts; missing MAF columns: ",
+         paste(missing_key, collapse = ", "), call. = FALSE)
+  }
+
+  counts <- maf_data %>%
+    distinct(across(all_of(variant_key))) %>%
+    count(Tumor_Sample_Barcode, name = "Mutation_Count")
+
+  heatmap_metadata %>%
+    select(Patient_Timepoint, Tumor_Sample_Barcode) %>%
+    distinct() %>%
+    left_join(counts, by = "Tumor_Sample_Barcode") %>%
+    group_by(Patient_Timepoint) %>%
+    # A retained heatmap column normally maps to one sample. Summing is an
+    # explicit fallback if multiple aliquots remain after baseline deduplication.
+    summarise(
+      Mutation_Count = if (all(is.na(Mutation_Count))) NA_integer_ else sum(Mutation_Count, na.rm = TRUE),
+      .groups = "drop"
+    )
+}
+
+bm_mutation_counts <- count_maf_variants_by_heatmap_column(
+  maf_object_bm@data, combined_data_heatmap_BM
+)
+blood_mutation_counts <- count_maf_variants_by_heatmap_column(
+  maf_object_blood@data, combined_data_heatmap_blood
+)
+
+bm_counts <- bm_mutation_counts$Mutation_Count[
+  match(all_cols, bm_mutation_counts$Patient_Timepoint)
+]
+blood_counts <- blood_mutation_counts$Mutation_Count[
+  match(all_cols, blood_mutation_counts$Patient_Timepoint)
+]
 
 # Export mutation counts table
-mutation_counts_table <- dat_base %>%
-  select(Patient, BM_Mutation_Count, Blood_Mutation_Count) %>%
-  arrange(Patient)
+mutation_counts_table <- tibble(
+  Patient_Timepoint = all_cols,
+  Patient = patient_ids,
+  BM_Mutation_Count = bm_counts,
+  Blood_Mutation_Count = blood_counts
+) %>%
+  arrange(factor(Patient_Timepoint, levels = all_cols))
 
 write_csv(mutation_counts_table, "Output_tables_2025_updated/patient_mutation_counts.csv")
 saveRDS(mutation_counts_table,   "Output_tables_2025_updated/patient_mutation_counts.rds")
@@ -1283,7 +1342,7 @@ top_ha <- HeatmapAnnotation(
     na_col = "grey90"
   ),
   col = list(
-    Cohort = c(`Train` = "#3182bd", `Test` = "#e6550d"),
+    Cohort = c(`Training Cohort` = "#3182bd", `Test Cohort` = "#e6550d"),
     `Samples` = c(
       "Blood only" = "#CC6677",
       "BM only"    = "#1f77b4",
@@ -1352,10 +1411,10 @@ lgd_sampletype <- Legend(
 # legend for samples avaialble 
 lgd_cohort <- Legend(
   title     = "Cohort", 
-  at        = c("Train", "Test"),
+  at        = c("Training Cohort", "Test Cohort"),
   legend_gp = gpar(fill = c(
-    "Train" = "#3182bd",
-    "Test"    = "#e6550d"
+    "Training Cohort" = "#3182bd",
+    "Test Cohort"    = "#e6550d"
   ))
 )
 
@@ -1428,9 +1487,18 @@ dev.off()
 
 #### Now add a star if also found by FISH 
 #### Since so many FISH unknown, not sure if good idea or concentration of effort for now
-dat_baseline <- dat_base %>%
+# FISH remains sourced from the integrated clinical feature table; only the
+# mutation-count annotation above was replaced with direct MAF-derived counts.
+clinical_feature_baseline <- readRDS(
+  "Final_aggregate_table_cfWGS_features_with_clinical_and_demographics_updated9.rds"
+)
+dat_baseline <- clinical_feature_baseline %>%
   # only keep diagnosis / baseline rows
   filter(timepoint_info %in% c("Diagnosis","Baseline")) %>%
+  arrange(Patient, timepoint_info) %>%
+  group_by(Patient) %>%
+  slice(1) %>%
+  ungroup() %>%
   
   # pick exactly the FISH columns that map to your heatmap rows:
   #   • T_4_14   → IGH_FGFR3
@@ -1581,7 +1649,10 @@ lgd_sampletype2 <- Legend(
 )
 
 # save
-png("Final Tables and Figures/Figure_1B_overlay_heatmap_BM_vs_cfDNA_updated_with_FISH_15.png", width = 14, height = 8, units = "in", res = 450)
+png(
+  "Final Tables and Figures/Figure_1B_overlay_heatmap_BM_vs_cfDNA_updated_with_FISH_15.png",
+  width = 14, height = 8, units = "in", res = 450, bg = "white"
+)
 draw(
   overlay_ht_2,
   column_title        = "Oncoprint of Genomic Alterations in Bone Marrow versus cfDNA Samples",
@@ -3217,7 +3288,7 @@ cat("  - Total mutations with VAF data:", nrow(vaf_combined), "\n")
 cat("  - From BM samples:", nrow(vaf_bm), "\n")
 cat("  - From cfDNA samples:", nrow(vaf_blood), "\n")
 cat("  - Genes covered:", n_distinct(vaf_combined$Gene), "\n")
-cat("  - Patients:", n_distinct(vaf_combined$Patient_New_ID), "\n\n")
+cat("  - Patients:", n_distinct(vaf_combined$Patient_id), "\n\n")
 
 # VAF summary statistics by sample type
 vaf_summary <- vaf_combined %>%

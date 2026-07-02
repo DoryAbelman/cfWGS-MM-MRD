@@ -124,6 +124,73 @@ resolve_maf_files <- function(label, env_var, candidate_dirs) {
   )
 }
 
+# During the Spring 2026 update, only the locally staged Ultima MAF subset and
+# the new revision MAFs were available. Rebuilding directly from those folders
+# would silently discard historical samples from the canonical RDS files. Until
+# the complete historical raw-MAF directories are restaged, union the newly
+# parsed calls with the preserved historical snapshots. Variant-level keys make
+# this idempotent: rerunning with a complete raw directory will not duplicate
+# calls already represented in the snapshots.
+merge_historical_mutation_snapshot <- function(current, snapshot_path, compartment) {
+  if (!file.exists(snapshot_path)) {
+    stop(
+      "Required ", compartment, " historical mutation snapshot is missing: ",
+      snapshot_path,
+      ". Supply the complete raw MAF directory or restore this snapshot before rebuilding.",
+      call. = FALSE
+    )
+  }
+
+  historical <- readRDS(snapshot_path)
+  if (inherits(historical, "MAF")) historical <- historical@data
+  if (!is.data.frame(historical)) {
+    stop("Historical mutation snapshot is not a data frame/MAF object: ", snapshot_path, call. = FALSE)
+  }
+
+  key <- c(
+    "Tumor_Sample_Barcode", "Chromosome", "Start_Position", "End_Position",
+    "Reference_Allele", "Tumor_Seq_Allele2", "Hugo_Symbol", "Variant_Classification"
+  )
+  missing_key <- setdiff(key, intersect(names(current), names(historical)))
+  if (length(missing_key)) {
+    stop(
+      "Cannot merge ", compartment, " mutation data; missing variant key columns: ",
+      paste(missing_key, collapse = ", "), call. = FALSE
+    )
+  }
+
+  historical_n <- dplyr::n_distinct(historical$Tumor_Sample_Barcode)
+  current_n <- dplyr::n_distinct(current$Tumor_Sample_Barcode)
+  merged <- bind_rows(historical, current) %>%
+    distinct(across(all_of(key)), .keep_all = TRUE)
+  merged_n <- dplyr::n_distinct(merged$Tumor_Sample_Barcode)
+
+  if (merged_n < max(historical_n, current_n)) {
+    stop(
+      compartment, " mutation merge lost samples unexpectedly (historical=", historical_n,
+      ", current=", current_n, ", merged=", merged_n, ").", call. = FALSE
+    )
+  }
+
+  tibble(
+    compartment = compartment,
+    historical_snapshot = snapshot_path,
+    historical_samples = historical_n,
+    newly_parsed_samples = current_n,
+    merged_samples = merged_n,
+    historical_variants = nrow(historical),
+    newly_parsed_variants = nrow(current),
+    merged_unique_variants = nrow(merged)
+  ) %>%
+    write_csv(file.path("Output_tables_2025", paste0("mutation_recovery_qc_", compartment, ".csv")))
+
+  message(
+    compartment, " mutation recovery: ", historical_n, " historical + ", current_n,
+    " newly parsed samples -> ", merged_n, " merged samples"
+  )
+  merged
+}
+
 
 ### Define the mutation gene list (used for both BM and blood)
 # This curated list covers the most frequently mutated or translocated genes in
@@ -401,6 +468,21 @@ combined_maf_bm_all_muts <- combined_maf
 combined_maf_bm_dx <- combined_maf %>% filter(timepoint_info %in% c("Diagnosis", "Baseline", "Relapse", "Progression"))
 rm(combined_maf)  # Drop the duplicate BM object to free memory before loading blood data
 
+# Interim recovery source: preserved pre-revision BM cohort. This keeps the
+# historical cohort intact while adding calls parsed from the available Spring
+# 2026 MAFs. Replace/restage via CFWGS_BM_MAF_DIR when the full raw set arrives;
+# the variant-key merge remains safe to retain.
+combined_maf_bm_dx <- merge_historical_mutation_snapshot(
+  combined_maf_bm_dx,
+  snapshot_path = "combined_maf_bm_dx_original.rds",
+  compartment = "BM"
+)
+combined_maf_bm_all_muts <- merge_historical_mutation_snapshot(
+  combined_maf_bm_all_muts,
+  snapshot_path = "combined_maf_bm_dx_original.rds",
+  compartment = "BM_all_available"
+)
+
 
 
 
@@ -581,6 +663,15 @@ combined_maf_blood <- combined_maf_blood %>%
 # Join with the metadata dataframe
 
 combined_maf_blood <- left_join(combined_maf_blood, metada_df_mutation_comparison, by = "Tumor_Sample_Barcode")
+
+# Interim recovery source: preserved pre-revision blood/cfDNA cohort. The
+# current object contributes Spring 2026 calls; the snapshot restores historical
+# samples that are absent from the partially staged local raw-MAF directory.
+combined_maf_blood <- merge_historical_mutation_snapshot(
+  combined_maf_blood,
+  snapshot_path = "combined_maf_blood_all_muts.rds",
+  compartment = "Blood"
+)
 
 # Filter rows where timepoint_info is NA and get unique Tumor_Sample_Barcode values
 # Any barcode printed here failed to match the metadata spreadsheet.

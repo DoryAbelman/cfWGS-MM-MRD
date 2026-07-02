@@ -532,6 +532,328 @@ if (USE_PRESERVED_MODELS_ONLY) {
     script_name = "3_1_Optimize_cfWGS_thresholds.R"
   )
 
+  # Rebuild the Figure 3B BM confusion matrices from the same preserved models
+  # applied above. The cache-sensitive branch exits before the historical
+  # plotting block, so these panels must be generated here to keep the manuscript
+  # object tree synchronized with the expanded test cohort without retraining.
+  selected_bm_models <- c(
+    "BM_zscore_only_detection_rate",
+    "BM_base_zscore"
+  )
+  selected_bm_labels <- c(
+    BM_zscore_only_detection_rate = "cVAF model",
+    BM_base_zscore = "Combined model"
+  )
+
+  missing_bm_models <- setdiff(selected_bm_models, names(selected_models))
+  missing_bm_thresholds <- setdiff(selected_bm_models, names(selected_thr))
+  if (length(missing_bm_models) > 0L || length(missing_bm_thresholds) > 0L) {
+    stop(
+      "Cannot regenerate Figure 3B preserved-model confusion matrices. ",
+      "Missing models: ", paste(missing_bm_models, collapse = ", "),
+      "; missing thresholds: ", paste(missing_bm_thresholds, collapse = ", "),
+      call. = FALSE
+    )
+  }
+
+  build_preserved_confusion_df <- function(eval_dat, cohort_label, model_names, model_labels) {
+    purrr::map_dfr(model_names, function(model_name) {
+      prob_col <- paste0(model_name, "_prob")
+      if (!prob_col %in% names(eval_dat)) {
+        stop("Missing preserved-model probability column: ", prob_col, call. = FALSE)
+      }
+
+      model_eval <- eval_dat %>%
+        dplyr::transmute(
+          MRD_truth = as.integer(.data$MRD_truth),
+          prob = as.numeric(.data[[prob_col]])
+        ) %>%
+        dplyr::filter(!is.na(.data$MRD_truth), !is.na(.data$prob)) %>%
+        dplyr::mutate(
+          Obs = factor(dplyr::if_else(.data$MRD_truth == 1L, "pos", "neg"),
+                       levels = c("neg", "pos")),
+          Pred = factor(dplyr::if_else(.data$prob >= selected_thr[[model_name]], "pos", "neg"),
+                        levels = c("neg", "pos"))
+        )
+
+      if (nrow(model_eval) == 0L) {
+        stop(
+          "No evaluable rows for Figure 3B ", cohort_label, " confusion matrix: ",
+          model_name,
+          call. = FALSE
+        )
+      }
+
+      cm <- caret::confusionMatrix(model_eval$Pred, model_eval$Obs, positive = "pos")
+      as_tibble(cm$table) %>%
+        dplyr::rename(Pred = Prediction, Obs = Reference, Count = n) %>%
+        tidyr::complete(
+          Pred = factor(c("neg", "pos"), levels = c("neg", "pos")),
+          Obs = factor(c("neg", "pos"), levels = c("neg", "pos")),
+          fill = list(Count = 0L)
+        ) %>%
+        dplyr::mutate(
+          model = model_labels[[model_name]],
+          model_key = model_name,
+          cohort = cohort_label,
+          threshold = as.numeric(selected_thr[[model_name]]),
+          n_evaluable = nrow(model_eval),
+          n_mrd_positive = sum(model_eval$Obs == "pos"),
+          n_mrd_negative = sum(model_eval$Obs == "neg"),
+          PPV = unname(cm$byClass["Pos Pred Value"]),
+          NPV = unname(cm$byClass["Neg Pred Value"])
+        )
+    }) %>%
+      dplyr::mutate(model = factor(.data$model, levels = unname(model_labels[model_names])))
+  }
+
+  plot_preserved_confusion_df <- function(cm_df, plot_title) {
+    plot_df <- cm_df %>%
+      dplyr::group_by(.data$model) %>%
+      dplyr::mutate(text_col = dplyr::if_else(
+        .data$Count >= 0.7 * max(.data$Count, na.rm = TRUE),
+        "white",
+        "black"
+      )) %>%
+      dplyr::ungroup()
+
+    ggplot(plot_df, aes(x = Pred, y = Obs, fill = Count)) +
+      geom_tile(color = "white", linewidth = 0) +
+      geom_text(aes(label = Count, color = text_col), size = 5, show.legend = FALSE) +
+      facet_wrap(~ model) +
+      scale_fill_gradient(
+        name = "Count",
+        low = "#f2f2f2",
+        high = "#4a4a4a",
+        limits = c(0, max(plot_df$Count, na.rm = TRUE)),
+        oob = scales::squish
+      ) +
+      scale_color_identity() +
+      scale_x_discrete(position = "top") +
+      scale_y_discrete(limits = c("pos", "neg")) +
+      labs(
+        x = "Predicted MRD status",
+        y = "Observed MRD status",
+        title = plot_title
+      ) +
+      theme_minimal(base_size = 10) +
+      theme(
+        strip.text = element_text(face = "bold", size = 10),
+        axis.text.y = element_text(size = 9),
+        axis.text.x = element_text(size = 9, vjust = 0),
+        axis.title = element_text(size = 10),
+        plot.background = element_rect(fill = "white", color = NA),
+        panel.background = element_rect(fill = "white", color = NA),
+        panel.grid = element_blank(),
+        legend.position = "none",
+        plot.title = element_text(face = "bold", hjust = 0.5)
+      )
+  }
+
+  preserved_train_eval <- data_scored_masked %>%
+    dplyr::filter(
+      !.data$timepoint_info %in% c("Baseline", "Diagnosis"),
+      .data$Cohort == "Frontline",
+      !is.na(.data$MRD_truth)
+    )
+
+  figure3b_training_confusion <- build_preserved_confusion_df(
+    preserved_train_eval,
+    cohort_label = "Training Cohort",
+    model_names = selected_bm_models,
+    model_labels = selected_bm_labels
+  )
+  figure3b_test_confusion <- build_preserved_confusion_df(
+    preserved_test_eval,
+    cohort_label = "Test Cohort",
+    model_names = selected_bm_models,
+    model_labels = selected_bm_labels
+  )
+
+  readr::write_csv(
+    dplyr::bind_rows(figure3b_training_confusion, figure3b_test_confusion),
+    file.path(outdir, "preserved_model_current_figure3b_confusion_source_data.csv")
+  )
+
+  figure3b_training_plot <- plot_preserved_confusion_df(
+    figure3b_training_confusion,
+    "Confusion Matrix at Youden Index in Training Cohort"
+  )
+  figure3b_test_plot <- plot_preserved_confusion_df(
+    figure3b_test_confusion,
+    "Confusion Matrix at Youden Index in Test Cohort"
+  )
+
+  ggsave(
+    "Final Tables and Figures/Fig4C_confusion_tables_primary_updated5.png",
+    plot = figure3b_training_plot,
+    width = 5,
+    height = 2.75,
+    dpi = 600,
+    bg = "white"
+  )
+  ggsave(
+    "Final Tables and Figures/Fig4C_confusion_tables_test5.png",
+    plot = figure3b_test_plot,
+    width = 5,
+    height = 2.75,
+    dpi = 600,
+    bg = "white"
+  )
+
+  ms_copy_artifact(
+    source_path = "Final Tables and Figures/Fig4C_confusion_tables_primary_updated5.png",
+    artifact_id = "FIG3B",
+    role = "figure_panel_png_training",
+    description = "BM model training-cohort confusion matrix regenerated by applying preserved February 2026 models to the current cohort.",
+    script_name = "3_1_Optimize_cfWGS_thresholds.R"
+  )
+  ms_copy_artifact(
+    source_path = "Final Tables and Figures/Fig4C_confusion_tables_test5.png",
+    artifact_id = "FIG3B",
+    role = "figure_panel_png_test",
+    description = "BM model test-cohort confusion matrix regenerated by applying preserved February 2026 models to the expanded test cohort.",
+    script_name = "3_1_Optimize_cfWGS_thresholds.R"
+  )
+  ms_copy_artifact(
+    source_path = file.path(outdir, "preserved_model_current_figure3b_confusion_source_data.csv"),
+    artifact_id = "FIG3B",
+    role = "source_data_csv",
+    description = "Source confusion counts for Figure 3B after applying preserved February 2026 BM models to the current cohort.",
+    script_name = "3_1_Optimize_cfWGS_thresholds.R"
+  )
+
+  selected_blood_models <- c("Blood_zscore_only_sites", "Blood_plus_fragment")
+  selected_blood_labels <- c(
+    Blood_zscore_only_sites = "Sites model",
+    Blood_plus_fragment = "Combined model"
+  )
+  missing_blood_models <- setdiff(selected_blood_models, names(selected_models))
+  missing_blood_thresholds <- setdiff(selected_blood_models, names(selected_thr))
+  if (length(missing_blood_models) > 0L || length(missing_blood_thresholds) > 0L) {
+    stop(
+      "Cannot regenerate Figure 4B preserved-model confusion matrices. ",
+      "Missing models: ", paste(missing_blood_models, collapse = ", "),
+      "; missing thresholds: ", paste(missing_blood_thresholds, collapse = ", "),
+      call. = FALSE
+    )
+  }
+
+  figure4b_training_confusion <- build_preserved_confusion_df(
+    preserved_train_eval,
+    cohort_label = "Training Cohort",
+    model_names = selected_blood_models,
+    model_labels = selected_blood_labels
+  )
+  figure4b_test_confusion <- build_preserved_confusion_df(
+    preserved_test_eval,
+    cohort_label = "Test Cohort",
+    model_names = selected_blood_models,
+    model_labels = selected_blood_labels
+  )
+  readr::write_csv(
+    dplyr::bind_rows(figure4b_training_confusion, figure4b_test_confusion),
+    file.path(outdir, "preserved_model_current_figure4b_confusion_source_data.csv")
+  )
+  ggsave(
+    "Final Tables and Figures/Fig5C_confusion_tables_primary_blood6.png",
+    plot = plot_preserved_confusion_df(
+      figure4b_training_confusion,
+      "Confusion Matrix at Youden Index in Training Cohort"
+    ),
+    width = 5, height = 2.75, dpi = 600, bg = "white"
+  )
+  ggsave(
+    "Final Tables and Figures/Fig5C_confusion_tables_test_blood6.png",
+    plot = plot_preserved_confusion_df(
+      figure4b_test_confusion,
+      "Confusion Matrix at Youden Index in Test Cohort"
+    ),
+    width = 5, height = 2.75, dpi = 600, bg = "white"
+  )
+  ms_copy_artifact(
+    source_path = "Final Tables and Figures/Fig5C_confusion_tables_primary_blood6.png",
+    artifact_id = "FIG4B", role = "figure_panel_png_training",
+    description = "Blood model training-cohort confusion matrix regenerated from preserved models.",
+    script_name = "3_1_Optimize_cfWGS_thresholds.R"
+  )
+  ms_copy_artifact(
+    source_path = "Final Tables and Figures/Fig5C_confusion_tables_test_blood6.png",
+    artifact_id = "FIG4B", role = "figure_panel_png_test",
+    description = "Blood model test-cohort confusion matrix regenerated from preserved models.",
+    script_name = "3_1_Optimize_cfWGS_thresholds.R"
+  )
+  ms_copy_artifact(
+    source_path = file.path(outdir, "preserved_model_current_figure4b_confusion_source_data.csv"),
+    artifact_id = "FIG4B", role = "source_data_csv",
+    description = "Source confusion counts for Figure 4B from preserved blood models.",
+    script_name = "3_1_Optimize_cfWGS_thresholds.R"
+  )
+
+  selected_fragmentomics_models <- c(
+    "Fragmentomics_mean_coverage_only_Full",
+    "Fragmentomics_min_Full"
+  )
+  selected_fragmentomics_labels <- c(
+    Fragmentomics_mean_coverage_only_Full = "MM-sites coverage",
+    Fragmentomics_min_Full = "Fragment score + MM-sites"
+  )
+  missing_fragmentomics_models <- setdiff(selected_fragmentomics_models, names(selected_models))
+  missing_fragmentomics_thresholds <- setdiff(selected_fragmentomics_models, names(selected_thr))
+  if (length(missing_fragmentomics_models) > 0L || length(missing_fragmentomics_thresholds) > 0L) {
+    stop(
+      "Cannot regenerate Extended Data Figure 9E/F preserved-model confusion matrices. ",
+      "Missing models: ", paste(missing_fragmentomics_models, collapse = ", "),
+      "; missing thresholds: ", paste(missing_fragmentomics_thresholds, collapse = ", "),
+      call. = FALSE
+    )
+  }
+
+  edfigure9_training_confusion <- build_preserved_confusion_df(
+    preserved_train_eval,
+    cohort_label = "Training Cohort",
+    model_names = selected_fragmentomics_models,
+    model_labels = selected_fragmentomics_labels
+  )
+  edfigure9_test_confusion <- build_preserved_confusion_df(
+    preserved_test_eval,
+    cohort_label = "Test Cohort",
+    model_names = selected_fragmentomics_models,
+    model_labels = selected_fragmentomics_labels
+  )
+  readr::write_csv(
+    dplyr::bind_rows(edfigure9_training_confusion, edfigure9_test_confusion),
+    file.path(outdir, "preserved_model_current_edfigure9_confusion_source_data.csv")
+  )
+  ggsave(
+    "Final Tables and Figures/Supp_Fig9E_confusion_tables_primary_fragmentomics4.png",
+    plot = plot_preserved_confusion_df(
+      edfigure9_training_confusion,
+      "Confusion Matrix at Youden Index in Training Cohort"
+    ),
+    width = 5, height = 2.75, dpi = 600, bg = "white"
+  )
+  ggsave(
+    "Final Tables and Figures/Supp_Fig9F_confusion_tables_val_fragmentomics3.png",
+    plot = plot_preserved_confusion_df(
+      edfigure9_test_confusion,
+      "Confusion Matrix at Youden Index in Test Cohort"
+    ),
+    width = 5, height = 2.75, dpi = 600, bg = "white"
+  )
+  ms_copy_artifact(
+    source_path = "Final Tables and Figures/Supp_Fig9E_confusion_tables_primary_fragmentomics4.png",
+    artifact_id = "EDFIG9E", role = "figure_panel_png",
+    description = "Fragmentomics training-cohort confusion matrix regenerated from preserved models.",
+    script_name = "3_1_Optimize_cfWGS_thresholds.R"
+  )
+  ms_copy_artifact(
+    source_path = "Final Tables and Figures/Supp_Fig9F_confusion_tables_val_fragmentomics3.png",
+    artifact_id = "EDFIG9F", role = "figure_panel_png",
+    description = "Fragmentomics test-cohort confusion matrix regenerated from preserved models.",
+    script_name = "3_1_Optimize_cfWGS_thresholds.R"
+  )
+
   message("Preserved-model cfWGS scoring complete. Wrote all_patients_with_BM_and_blood_calls_updated6*.rds/csv.")
   message("Current preserved-model testing metrics complete. Wrote Supplementary Table 6 source and audit outputs without model retraining.")
   quit(save = "no", status = 0)
@@ -4766,7 +5088,7 @@ roc_plot <- ggplot(roc_df, aes(x = fpr, y = tpr, colour = combo)) +
     x      = "False-positive rate (1 − specificity)",
     y      = "True-positive rate (sensitivity)",
     colour = NULL,              # no title above the legend
-    title  = "Test Samples ROC Curves"
+    title  = "Test Cohort ROC Curves"
   ) +
   theme_bw(14) +
   theme(
@@ -4826,7 +5148,7 @@ perf_plot <- ggplot(perf_df, aes(sens_mean, spec_mean, colour = combo)) +
   labs(
     x     = "Mean sensitivity",
     y     = "Mean specificity",
-    title = "Sensitivity vs. Specificity of cfWGS\nModels in the Test Cohort",
+    title = "Sensitivity vs. Specificity of cfWGS\nModels in Test Cohort",
     colour = NULL
   ) +
   theme_bw(12) +
@@ -6277,7 +6599,7 @@ roc_plot_tmp <- roc_df %>%
     x      = "False-positive rate (1 − specificity)",
     y      = "True-positive rate (sensitivity)",
     colour = NULL,
-    title  = "Full-Cohort ROC (Refit on all Training Samples)"
+    title  = "Full-Cohort ROC (Refit on all Training Cohort Samples)"
   ) +
   theme_bw(12) +
   theme(
@@ -6436,7 +6758,7 @@ roc_plot <- ggplot(roc_df, aes(x = fpr, y = tpr, colour = combo)) +
     x      = "False-positive rate (1 − specificity)",
     y      = "True-positive rate (sensitivity)",
     colour = NULL,              # no title above the legend
-    title  = "Test Samples ROC Curves"
+    title  = "Test Cohort ROC Curves"
   ) +
   theme_bw(14) +
   theme(
@@ -6500,7 +6822,7 @@ perf_plot <- ggplot(perf_df, aes(sens_mean, spec_mean, colour = combo)) +
   labs(
     x     = "Mean sensitivity",
     y     = "Mean specificity",
-    title = "Sensitivity vs. Specificity of cfWGS\nModels in the Test Cohort",
+    title = "Sensitivity vs. Specificity of cfWGS\nModels in Test Cohort",
     colour = NULL
   ) +
   theme_bw(12) +
@@ -7093,7 +7415,7 @@ roc_plot <- ggplot(roc_df, aes(x = fpr, y = tpr, colour = combo)) +
     x      = "False-positive rate (1 − specificity)",
     y      = "True-positive rate (sensitivity)",
     colour = NULL,              # no title above the legend
-    title  = "Test Samples ROC Curves"
+    title  = "Test Cohort ROC Curves"
   ) +
   theme_bw(14) +
   theme(
@@ -7156,7 +7478,7 @@ perf_plot <- ggplot(perf_df, aes(sens_mean, spec_mean, colour = combo)) +
   labs(
     x     = "Mean sensitivity",
     y     = "Mean specificity",
-    title = "Sensitivity vs. Specificity of cfWGS\nModels in the Test Cohort",
+    title = "Sensitivity vs. Specificity of cfWGS\nModels in Test Cohort",
     colour = NULL
   ) +
   theme_bw(12) +

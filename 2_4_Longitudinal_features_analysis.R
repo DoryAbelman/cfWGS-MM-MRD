@@ -27,6 +27,8 @@
 #
 # Key inputs:
 #   - Final_aggregate_table_cfWGS_features_with_clinical_and_demographics_updated9.rds
+#   - Final_aggregate_table_cfWGS_features_with_clinical_and_demographics_updated8.rds
+#     (exact Patient-Date fallback only for missing Mean.Coverage values)
 #   - cohort_assignment_table_updated.rds
 #   - baseline_high_quality_patients_updated.csv
 #   - Jan2025_exported_data/All_feature_data_Sep2025_updated2.rds
@@ -83,6 +85,51 @@ if (!dir.exists(outdir)) dir.create(outdir, recursive = TRUE)
 
 ### Load data
 file <- readRDS("Final_aggregate_table_cfWGS_features_with_clinical_and_demographics_updated9.rds")
+
+# The current aggregate table is authoritative for the longitudinal cohort and
+# MRD features, but some historical rows lost `Mean.Coverage` during the
+# updated9 rebuild. Restore only missing regulatory-coverage values by exact
+# Patient-Date match from the immediately prior aggregate table, without
+# overwriting any non-missing updated9 values. This prevents valid correlations
+# from becoming NA in Extended Data Figure 4 while keeping the repair
+# deterministic and auditable.
+coverage_fallback_path <- "Final_aggregate_table_cfWGS_features_with_clinical_and_demographics_updated8.rds"
+if (file.exists(coverage_fallback_path) && "Mean.Coverage" %in% names(file)) {
+  coverage_fallback <- readRDS(coverage_fallback_path) %>%
+    select(Patient, Date, Mean.Coverage_fallback = Mean.Coverage) %>%
+    mutate(Date = as.Date(Date))
+
+  duplicate_coverage_keys <- coverage_fallback %>%
+    count(Patient, Date, name = "n") %>%
+    filter(n > 1)
+
+  if (nrow(duplicate_coverage_keys) > 0) {
+    stop(
+      "Cannot restore Mean.Coverage: duplicate Patient-Date keys in ",
+      coverage_fallback_path,
+      call. = FALSE
+    )
+  }
+
+  missing_coverage_before <- sum(is.na(file$Mean.Coverage))
+  file <- file %>%
+    mutate(Date = as.Date(Date)) %>%
+    left_join(coverage_fallback, by = c("Patient", "Date")) %>%
+    mutate(
+      Mean.Coverage = coalesce(Mean.Coverage, Mean.Coverage_fallback)
+    ) %>%
+    select(-Mean.Coverage_fallback)
+
+  missing_coverage_after <- sum(is.na(file$Mean.Coverage))
+  message(
+    "Mean.Coverage fallback restored ",
+    missing_coverage_before - missing_coverage_after,
+    " missing Patient-Date values from ",
+    coverage_fallback_path,
+    "."
+  )
+}
+
 cohort_df <- readRDS("cohort_assignment_table_updated.rds")
 
 dat <- file 
@@ -3249,13 +3296,15 @@ p_heatmap_tri <- ggplot(corr_df_tri, aes(x = Metric1, y = Metric2, fill = rho)) 
     guide  = FALSE
   ) +
   
-  # force legend from -1 to +1, with breaks including 1
+  # Spearman rho is bounded by [-1, 1]. Use the full valid range so strong
+  # negative correlations are shown with the low-end viridis color instead of
+  # being censored to the ggplot missing-value grey.
   scale_fill_viridis_c(
     option = "D",
     name   = expression(rho~"(Spearman)"),
-    limits = c(-0.6, 1),
-    breaks = c(-0.5, 0, 0.5, 1),
-    labels = c("-0.5", "0.0", "0.5", "1.0")
+    limits = c(-1, 1),
+    breaks = c(-1, -0.5, 0, 0.5, 1),
+    labels = c("-1.0", "-0.5", "0.0", "0.5", "1.0")
   ) +
   
   coord_equal() +

@@ -485,6 +485,22 @@ build_cfwgs_sample_identity_map <- function(
         dplyr::across(dplyr::all_of(required), as.character),
         Date_of_sample_collection = parse_date_safely(.data$Date_of_sample_collection),
         VCF_clean_merge = sub("[.]filter.*", "", .data$Bam),
+        # Historical M4 BM personalized VCFs were emitted by MRDetect with `_WG_`
+        # in the VCF basename, while some clinical metadata rows retain `_PG_` in
+        # the corresponding BAM basename. Normalize these known submitted baseline
+        # panel keys at the shared identity-map source so revision-aware joins do
+        # not drop previously submitted training rows.
+        VCF_clean_merge = dplyr::if_else(
+          .data$VCF_clean_merge %in% c(
+            "TFRIM4_0031_Bm_P_PG_M4-CA-02-01-O-DNA",
+            "TFRIM4_0032_Bm_P_PG_M4-HP-01-01-O-DNA",
+            "TFRIM4_0033_Bm_P_PG_M4-MJ-06-01-O-DNA",
+            "TFRIM4_0034_Bm_P_PG_M4-VA-02-01-O-DNA",
+            "TFRIM4_0035_Bm_P_PG_M4-VA-06-01-O-DNA"
+          ),
+          stringr::str_replace(.data$VCF_clean_merge, "_PG_", "_WG_"),
+          .data$VCF_clean_merge
+        ),
         identity_norm_patient = spring2026_normalize_patient_alias(.data$Patient),
         identity_primary_key = dplyr::if_else(
           !is.na(.data$identity_norm_patient) &
@@ -906,6 +922,162 @@ spring2026_revision_maf_files <- function(sample_types) {
     any(startsWith(basename(path), paste0(wanted_pairs, ".")))
   }, logical(1))
   sort(files[keep])
+}
+
+spring2026_revision_mutation_counts <- function(
+    sample_types = c("BM_cells", "Blood_plasma_cfDNA"),
+    required = TRUE) {
+  # ## Count broad somatic mutations in the Spring 2026 revision MAFs
+  #
+  # The historical aggregate table obtains broad mutation burden from static
+  # no-rsID count files. Revision samples instead arrive as post-filter MAFs:
+  # PASS_AFgt10pct for BM and PASS_altADge2 for plasma. To preserve the original
+  # no-rsID definition, rows whose dbSNP_RS value begins with "rs" are excluded.
+  # Counts are matched through the authoritative metadata mutect2_pair_id rather
+  # than inferred from patient or timepoint substrings.
+  metadata <- load_spring2026_revision_metadata(required = required)
+  if (is.null(metadata)) return(tibble::tibble())
+
+  require_columns(
+    metadata,
+    c("Patient", "Timepoint", "Sample_ID", "Sample_type", "timepoint_info", "mutect2_pair_id"),
+    "Spring 2026 revision metadata"
+  )
+  metadata <- metadata %>%
+    dplyr::filter(
+      .data$Sample_type %in% sample_types,
+      !is.na(.data$mutect2_pair_id),
+      nzchar(.data$mutect2_pair_id)
+    ) %>%
+    dplyr::distinct(
+      .data$Patient, .data$Timepoint, .data$Sample_ID, .data$Sample_type,
+      .data$timepoint_info,
+      .data$mutect2_pair_id
+    )
+
+  maf_dir <- file.path(spring2026_revision_data_dir(), "MuTect2_All_Mafs")
+  if (!dir.exists(maf_dir)) {
+    if (required) stop("Spring 2026 mutation MAF directory is missing: ", maf_dir, call. = FALSE)
+    return(tibble::tibble())
+  }
+  maf_files <- sort(list.files(maf_dir, pattern = "[.]maf$", full.names = TRUE))
+
+  matched_paths <- vapply(metadata$mutect2_pair_id, function(pair_id) {
+    matches <- maf_files[startsWith(basename(maf_files), paste0(pair_id, "."))]
+    if (length(matches) != 1L) {
+      stop(
+        "Expected exactly one Spring 2026 MAF for mutect2_pair_id ", pair_id,
+        "; found ", length(matches), ".",
+        call. = FALSE
+      )
+    }
+    matches[[1]]
+  }, character(1))
+
+  count_one_maf <- function(path) {
+    maf <- utils::read.delim(
+      path,
+      comment.char = "#",
+      quote = "",
+      check.names = FALSE,
+      stringsAsFactors = FALSE
+    )
+    if (!"dbSNP_RS" %in% names(maf)) {
+      stop("Spring 2026 MAF is missing dbSNP_RS: ", path, call. = FALSE)
+    }
+    keep <- is.na(maf$dbSNP_RS) |
+      maf$dbSNP_RS %in% c("", ".") |
+      !grepl("^rs", maf$dbSNP_RS, ignore.case = TRUE)
+    as.integer(sum(keep))
+  }
+
+  counts <- metadata %>%
+    dplyr::mutate(
+      maf_path = unname(matched_paths),
+      Mutation_Count = vapply(.data$maf_path, count_one_maf, integer(1)),
+      mutation_count_definition = paste(
+        "Rows in the post-filter Spring 2026 MAF after excluding dbSNP_RS values beginning with rs"
+      )
+    )
+
+  duplicate_keys <- counts %>%
+    dplyr::count(.data$Patient, .data$Timepoint, .data$Sample_type) %>%
+    dplyr::filter(.data$n != 1L)
+  if (nrow(duplicate_keys)) {
+    stop(
+      "Spring 2026 mutation counts are not unique by Patient/Timepoint/Sample_type: ",
+      paste(utils::head(paste(duplicate_keys$Patient, duplicate_keys$Timepoint, duplicate_keys$Sample_type, sep = "/"), 10), collapse = ", "),
+      call. = FALSE
+    )
+  }
+  counts
+}
+
+build_baseline_mutation_count_plot_data <- function(dat_base) {
+  # ## Combine historical and revision baseline mutation burdens for plotting
+  #
+  # Some revision patients have valid baseline MAFs but no row in the broad
+  # clinical-feature aggregate. The mutation-count panel only requires mutation
+  # burden and cohort, so it should not discard those scientifically evaluable
+  # samples because unrelated clinical features are unavailable.
+  require_columns(
+    dat_base,
+    c("Patient", "cohort", "BM_Mutation_Count", "Blood_Mutation_Count"),
+    "Baseline mutation-count plotting table"
+  )
+
+  revision_counts <- spring2026_revision_mutation_counts(required = TRUE) %>%
+    dplyr::filter(tolower(.data$timepoint_info) %in% c("baseline", "diagnosis"))
+  revision_patients <- unique(revision_counts$Patient)
+
+  revision_wide <- revision_counts %>%
+    dplyr::mutate(
+      count_column = dplyr::case_when(
+        .data$Sample_type == "BM_cells" ~ "BM_Mutation_Count",
+        .data$Sample_type == "Blood_plasma_cfDNA" ~ "Blood_Mutation_Count",
+        TRUE ~ NA_character_
+      )
+    ) %>%
+    dplyr::filter(!is.na(.data$count_column)) %>%
+    dplyr::select("Patient", "count_column", "Mutation_Count") %>%
+    tidyr::pivot_wider(names_from = "count_column", values_from = "Mutation_Count") %>%
+    dplyr::mutate(Timepoint = "revision_baseline", cohort = "Non-frontline")
+
+  duplicate_revision <- revision_wide %>%
+    dplyr::count(.data$Patient) %>%
+    dplyr::filter(.data$n != 1L)
+  if (nrow(duplicate_revision)) {
+    stop(
+      "Revision mutation-count panel has multiple baseline timepoints for: ",
+      paste(duplicate_revision$Patient, collapse = ", "),
+      call. = FALSE
+    )
+  }
+
+  historical_wide <- dat_base %>%
+    dplyr::filter(!.data$Patient %in% revision_patients) %>%
+    dplyr::select(
+      "Patient", "cohort", "BM_Mutation_Count", "Blood_Mutation_Count"
+    ) %>%
+    dplyr::mutate(Timepoint = NA_character_)
+
+  dplyr::bind_rows(historical_wide, revision_wide) %>%
+    dplyr::select(
+      "Patient", "Timepoint", "cohort",
+      "BM_Mutation_Count", "Blood_Mutation_Count"
+    ) %>%
+    tidyr::pivot_longer(
+      cols = c("BM_Mutation_Count", "Blood_Mutation_Count"),
+      names_to = "Assay",
+      values_to = "MutCount"
+    ) %>%
+    dplyr::mutate(
+      Assay = dplyr::recode(
+        .data$Assay,
+        BM_Mutation_Count = "Bone marrow",
+        Blood_Mutation_Count = "cfDNA"
+      )
+    )
 }
 
 spring2026_revision_files <- function(subdir, pattern) {

@@ -1967,7 +1967,7 @@ p_front <- ggplot() +
     breaks = patient_order$y[patient_order$cohort == "Front-line cohort"],
     labels = patient_order$patient[patient_order$cohort == "Front-line cohort"]
   ) +
-  ggtitle("Front-line cohort") +
+  ggtitle("Training Cohort") +
   theme_minimal(base_size = 9) +
   theme(
     panel.grid.major.y = element_blank(),
@@ -2007,7 +2007,7 @@ p_non <- ggplot() +
     breaks = patient_order$y[patient_order$cohort == "Non-front-line cohort"],
     labels = patient_order$patient[patient_order$cohort == "Non-front-line cohort"]
   ) +
-  ggtitle("Non-front-line cohort") +
+  ggtitle("Test Cohort") +
   guides(colour = FALSE, shape = FALSE) +
   theme_minimal(base_size = 9) +
   theme(
@@ -2182,7 +2182,7 @@ ord_df <- ord_df %>%
     
     # map your 'Cohort' to the swim-plot cohort names
     cohort  = recode(Cohort,
-                     "Train" = "Front-line cohort",
+                     "Training" = "Front-line cohort",
                      "Test"    = "Non-front-line cohort"),
     
     # sample-type flag for the y-axis label
@@ -2235,12 +2235,12 @@ if (length(missing_order_patients)) {
       has_baseline_bm = replace_na(.data$has_baseline_bm, FALSE),
       has_baseline_blood = replace_na(.data$has_baseline_blood, FALSE),
       Sample = paste0(.data$Patient, "_Baseline"),
-      Cohort = if_else(.data$Cohort == "Frontline", "Train", "Test"),
+      Cohort = if_else(.data$Cohort == "Frontline", "Training", "Test"),
       Paired = .data$has_baseline_bm & .data$has_baseline_blood,
       patient = .data$Patient,
       cohort = recode(
         .data$Cohort,
-        "Train" = "Front-line cohort",
+        "Training" = "Front-line cohort",
         "Test" = "Non-front-line cohort"
       ),
       sample_type = case_when(
@@ -2257,7 +2257,7 @@ if (length(missing_order_patients)) {
 
 ord_df <- ord_df %>%
   distinct(.data$patient, .keep_all = TRUE) %>%
-  arrange(factor(.data$Cohort, levels = c("Train", "Test")), desc(.data$TumourFraction), .data$patient)
+  arrange(factor(.data$Cohort, levels = c("Training", "Test")), desc(.data$TumourFraction), .data$patient)
 
 ### ──────────────────────────────────────────────────────────────
 ### 2.  Re-order patients by cohort → descending tumour-fraction
@@ -2265,7 +2265,7 @@ ord_df <- ord_df %>%
 patient_order_combined <- ord_df %>%
   mutate(
     cohort = factor(Cohort,
-                    levels = c("Train", "Test"))
+                    levels = c("Training", "Test"))
   ) %>%
   group_by(cohort) %>%
   mutate(y = row_number()) %>%
@@ -2324,7 +2324,7 @@ ann_tf <- ggplot(patient_order_combined,
 
 # 2) Define your new colour mapping
 cohort_cols <- c(
-  "Train" = "#1f77b4",
+  "Training" = "#1f77b4",
   "Test"  = "#e6550d"
 )
 
@@ -2864,7 +2864,7 @@ assay_cols <- c("MFC", "clonoSEQ", "cfWGS_blood", "cfWGS_BM")
 # --- build ord_df as you already do ---
 ord_df <- dat_1yr %>%
   left_join(cohort_df, by = c("patient" = "Patient")) %>%
-  mutate(Cohort = forcats::fct_relevel(Cohort, c("Train","Frontline","Test","Non-frontline"))) %>%
+  mutate(Cohort = forcats::fct_relevel(Cohort, c("Training","Frontline","Test","Non-frontline"))) %>%
   mutate(
     pmax_val = do.call(pmax, c(across(all_of(assay_cols)), na.rm = TRUE)),
     pmin_val = do.call(pmin, c(across(all_of(assay_cols)), na.rm = TRUE)),
@@ -2893,7 +2893,7 @@ ord_df <- dat_1yr %>%
   select(-pmax_val, -pmin_val)
 
 # make sure Cohort has the right order once
-cohort_levels <- c("Train","Frontline","Test","Non-frontline")
+cohort_levels <- c("Training","Frontline","Test","Non-frontline")
 ord_df <- ord_df %>%
   mutate(Cohort = forcats::fct_relevel(Cohort, cohort_levels))
 
@@ -3208,7 +3208,7 @@ ggsave(file.path(swim_support_dir, "Figure1A_draft_swim_plot_without_annotations
 ### Add back cohort and paired status 
 # 2) Define your new colour mapping
 cohort_cols <- c(
-  "Train" = "#1f77b4",
+  "Training" = "#1f77b4",
   "Test"  = "#e6550d"
 )
 

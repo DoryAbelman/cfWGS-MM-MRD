@@ -89,6 +89,13 @@ if (!file.exists(.manuscript_helper)) {
 source(.manuscript_helper)
 rm(.manuscript_helper)
 
+.helpers_path <- file.path("Scripts_2025", "Final_Scripts", "helpers.R")
+if (!file.exists(.helpers_path)) {
+  .helpers_path <- "helpers.R"
+}
+source(.helpers_path)
+rm(.helpers_path)
+
 file <- readRDS("Final_aggregate_table_cfWGS_features_with_clinical_and_demographics_updated9.rds")
 
 
@@ -245,6 +252,7 @@ if (nrow(dups)) {
 ### Filter to the ones interested in 
 ## Pull from previous export 
 cohort_df <- readRDS("cohort_assignment_table_updated.rds")
+cohort_df <- augment_cohort_assignment_with_spring2026_revision(cohort_df)
 keep_patients <- cohort_df$Patient
 
 ## Keep only interested patients 
@@ -1401,16 +1409,16 @@ format_p <- function(p) {
 
 # Extended Data Figure 2 support - boxplots of baseline BM vs cfDNA mutation counts.
 # Older output filenames in this block may still contain "Figure2" labels.
-plot_df <- dat_base %>%
-  select(cohort, BM_Mutation_Count, Blood_Mutation_Count) %>%
-  pivot_longer(
-    cols      = c(BM_Mutation_Count, Blood_Mutation_Count),
-    names_to  = "Assay",
-    values_to = "MutCount"
-  ) %>%
-  mutate(Assay = recode(Assay,
-                        BM_Mutation_Count    = "Bone marrow",
-                        Blood_Mutation_Count = "cfDNA"))
+plot_df <- build_baseline_mutation_count_plot_data(dat_base)
+
+dir.create(file.path("Output_tables_2025", "clinical_support"), recursive = TRUE, showWarnings = FALSE)
+readr::write_csv(
+  plot_df,
+  file.path(
+    "Output_tables_2025", "clinical_support",
+    "extended_data_figure_2e_mutation_count_plot_audit.csv"
+  )
+)
 
 p1 <- ggplot(plot_df, aes(cohort, MutCount, fill = cohort)) +
   geom_boxplot(outlier.shape = NA, colour = "black", size = 0.6) +
@@ -1428,8 +1436,8 @@ p1 <- ggplot(plot_df, aes(cohort, MutCount, fill = cohort)) +
   ) +
   scale_x_discrete(
     labels = c(
-      "Frontline induction-transplant" = "Training",
-      "Non-frontline"                  = "Test"
+      "Frontline induction-transplant" = "Training Cohort",
+      "Non-frontline"                  = "Test Cohort"
     )
   ) +
   theme_classic(base_size = 11) +
@@ -1460,8 +1468,8 @@ p1 <- ggplot(plot_df, aes(cohort, MutCount, fill = cohort)) +
   scale_fill_manual(values = cohort_cols) +
   scale_x_discrete(
     labels = c(
-      "Frontline induction-transplant" = "Training",
-      "Non-frontline"                  = "Test"
+      "Frontline induction-transplant" = "Training Cohort",
+      "Non-frontline"                  = "Test Cohort"
     )
   ) +
   labs(
@@ -1521,8 +1529,8 @@ p2 <- ggplot(plot_df, aes(cohort, WGS_Tumor_Fraction_Blood_plasma_cfDNA, fill = 
   scale_fill_manual(values = cohort_cols) +
   scale_x_discrete(
     labels = c(
-      "Frontline induction-transplant" = "Training",
-      "Non-frontline"                  = "Test"
+      "Frontline induction-transplant" = "Training Cohort",
+      "Non-frontline"                  = "Test Cohort"
     )
   ) +
   labs(
@@ -1764,8 +1772,8 @@ p_combined <- ggplot(df_long, aes(x = x, y = Blood_Mutation_Count, colour = coho
   scale_color_manual(
     values = cohort_cols,   # your existing colours
     labels = c(
-      "Frontline induction-transplant" = "Training",
-      "Non-frontline"                  = "Test"
+      "Frontline induction-transplant" = "Training Cohort",
+      "Non-frontline"                  = "Test Cohort"
     ),
     name = "Cohort"
   ) +
@@ -2823,8 +2831,8 @@ dat_small <- dat_base_with_FISH %>%
 dat_small <- dat_small %>%
   mutate(
     Cohort = case_when(
-      Cohort == "Frontline induction-transplant" ~ "Train",
-      Cohort == "Non-frontline" ~ "Test",
+      Cohort == "Frontline induction-transplant" ~ "Training Cohort",
+      Cohort == "Non-frontline" ~ "Test Cohort",
       TRUE ~ Cohort  # keep other labels unchanged if any exist
     )
   )

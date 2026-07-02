@@ -17,6 +17,9 @@
 # Outputs:
 #   - Subclonal_evolution_plots.pdf  (per-patient CNA track plots)
 #   - Emergent_CNA_events.csv        (one row per emergent CNA event)
+#   - Final Tables and Figures/Subclonal_evolution_revision_test_cohort_*.csv
+#       (revision/test-cohort sensitivity analysis; does not change the primary
+#        Extended Data Figure 10 denominator)
 #   - Printed text: auto-generated manuscript sentences (stdout)
 #
 # Dependencies:
@@ -68,12 +71,36 @@ if (!file.exists(.manuscript_helper)) {
 source(.manuscript_helper)
 rm(.manuscript_helper)
 
+# Shared Spring 2026 revision metadata helpers. These keep the test-cohort
+# sensitivity analysis aligned with the same metadata authority and exclusion
+# table used by the rest of the revision-aware workflow.
+.shared_helper <- file.path("Scripts_2025", "Final_Scripts", "helpers.R")
+if (!file.exists(.shared_helper)) {
+  .shared_helper <- "helpers.R"
+}
+source(.shared_helper)
+rm(.shared_helper)
+
 ## ---- 2. Load data -----------------------------------------------------------
 all_df <- if (grepl("\\.rds$", in_rds, ignore.case = TRUE)) {
   readRDS(in_rds)
 } else {
   read_csv(in_rds)          # assumes header row
 }
+
+event_cols <- c("del1p", "amp1q", "del13q", "del17p")
+
+require_columns(
+  all_df,
+  c(
+    "Patient", "Sample", "Sample_ID", "Sample_type", "Study",
+    "timepoint_info", "Date_of_sample_collection",
+    "Tumor_Fraction", "Num_days_to_closest_relapse",
+    event_cols
+  ),
+  "Integrated feature table for subclonal CNA analysis"
+)
+require_columns(cohort_df, "Patient", "Cohort assignment table")
 
 ## ---- 3. Keep cfDNA & harmonise flags ----------------------------------------
 cfDNA_df <- all_df %>%
@@ -99,8 +126,6 @@ pts_keep <- cfDNA_df %>%
 cfDNA_df <- cfDNA_df %>% filter(Patient %in% pts_keep)
 
 ## ---- 5. Simple FGA proxy + numeric CNA flags --------------------------------
-event_cols <- c("del1p", "amp1q", "del13q", "del17p")
-
 cfDNA_df <- cfDNA_df %>%
   mutate(across(all_of(event_cols), ~ as.numeric(.x))) %>%   # TRUE → 1, FALSE → 0
   rowwise() %>%
@@ -175,6 +200,321 @@ losses_tbl <- cfDNA_df %>%
 
 edfig10_loss_events_csv <- file.path(outdir, "Emergent_CNA_loss_events.csv")
 write_csv(losses_tbl, edfig10_loss_events_csv)
+
+## ---- 6B. Revision test-cohort CNA sensitivity analysis ----------------------
+# The Spring 2026 OICR revision samples are a test-cohort expansion. They should
+# be evaluated for completeness, but not silently folded into the original
+# Extended Data Figure 10 denominator. This block therefore writes separate,
+# clearly labeled sensitivity outputs using the same binary CNA-change
+# definition as the primary analysis: baseline value subtracted from each
+# relapse/progression value for del1p, amp1q, del13q, and del17p.
+empty_revision_event_tbl <- tibble(
+  Patient = character(),
+  Sample_ID = character(),
+  Sample = character(),
+  Event = character(),
+  baseline_value = numeric(),
+  relapse_value = numeric(),
+  Delta = numeric(),
+  Date_of_sample_collection = as.Date(character()),
+  Num_days_to_closest_relapse = numeric()
+)
+
+make_revision_cna_change_table <- function(revision_cfDNA_df, event_cols) {
+  if (nrow(revision_cfDNA_df) == 0) return(empty_revision_event_tbl)
+
+  baseline_long <- revision_cfDNA_df %>%
+    filter(is_baseline) %>%
+    arrange(Patient, Sample_Date) %>%
+    group_by(Patient) %>%
+    slice(1) %>%
+    ungroup() %>%
+    select(Patient, all_of(event_cols)) %>%
+    pivot_longer(
+      cols = all_of(event_cols),
+      names_to = "Event",
+      values_to = "baseline_value"
+    )
+
+  relapse_long <- revision_cfDNA_df %>%
+    filter(is_relapse) %>%
+    arrange(Patient, Sample_Date) %>%
+    select(
+      Patient, Sample_ID, Sample, Date_of_sample_collection,
+      Num_days_to_closest_relapse, all_of(event_cols)
+    ) %>%
+    pivot_longer(
+      cols = all_of(event_cols),
+      names_to = "Event",
+      values_to = "relapse_value"
+    )
+
+  relapse_long %>%
+    inner_join(baseline_long, by = c("Patient", "Event")) %>%
+    mutate(
+      baseline_value = as.numeric(baseline_value),
+      relapse_value = as.numeric(relapse_value),
+      Delta = relapse_value - baseline_value
+    ) %>%
+    select(
+      Patient, Sample_ID, Sample, Event, baseline_value, relapse_value, Delta,
+      Date_of_sample_collection, Num_days_to_closest_relapse
+    ) %>%
+    arrange(Patient, Sample_ID, Event)
+}
+
+revision_metadata <- load_spring2026_revision_metadata(required = FALSE)
+if (!is.null(revision_metadata)) {
+  require_columns(
+    revision_metadata,
+    c("Patient", "Sample_ID", "Study", "Sample_type", "timepoint_info"),
+    "Spring 2026 revision metadata for subclonal CNA sensitivity analysis"
+  )
+
+  revision_patient_ids <- sort(unique(revision_metadata$Patient))
+  revision_sample_ids <- unique(revision_metadata$Sample_ID)
+
+  revision_all_df <- all_df %>%
+    filter(
+      Study == "IMMAGINE_revision_OICR",
+      Patient %in% revision_patient_ids,
+      Sample_ID %in% revision_sample_ids
+    )
+
+  revision_cfDNA_all <- revision_all_df %>%
+    filter(str_detect(Sample_type, regex("plasma", ignore_case = TRUE))) %>%
+    mutate(
+      is_baseline = timepoint_info %in% c("Diagnosis", "Baseline"),
+      is_relapse = timepoint_info %in% c("Relapse", "Progression"),
+      Sample_Date = as_date(Date_of_sample_collection)
+    )
+
+  revision_evaluability <- tibble(Patient = revision_patient_ids) %>%
+    left_join(
+      revision_all_df %>%
+        group_by(Patient) %>%
+        summarise(
+          feature_rds_rows = dplyr::n(),
+          feature_rds_samples = n_distinct(Sample_ID),
+          .groups = "drop"
+        ),
+      by = "Patient"
+    ) %>%
+    left_join(
+      revision_cfDNA_all %>%
+        group_by(Patient) %>%
+        summarise(
+          plasma_cfDNA_rows = dplyr::n(),
+          baseline_cfDNA_rows = sum(is_baseline, na.rm = TRUE),
+          relapse_cfDNA_rows = sum(is_relapse, na.rm = TRUE),
+          maintenance_cfDNA_rows = sum(timepoint_info == "Maintenance", na.rm = TRUE),
+          has_baseline_cfDNA = any(is_baseline),
+          has_relapse_cfDNA = any(is_relapse),
+          .groups = "drop"
+        ),
+      by = "Patient"
+    ) %>%
+    mutate(
+      across(
+        c(feature_rds_rows, feature_rds_samples, plasma_cfDNA_rows,
+          baseline_cfDNA_rows, relapse_cfDNA_rows, maintenance_cfDNA_rows),
+        ~ replace_na(.x, 0L)
+      ),
+      across(
+        c(has_baseline_cfDNA, has_relapse_cfDNA),
+        ~ replace_na(.x, FALSE)
+      ),
+      evaluable_for_revision_cna_subclonal_analysis =
+        has_baseline_cfDNA & has_relapse_cfDNA,
+      reason_not_evaluable = case_when(
+        evaluable_for_revision_cna_subclonal_analysis ~ NA_character_,
+        plasma_cfDNA_rows == 0 ~ "No plasma cfDNA rows in integrated feature table",
+        !has_baseline_cfDNA & !has_relapse_cfDNA ~ "Missing both baseline and relapse/progression plasma cfDNA",
+        !has_baseline_cfDNA ~ "Missing baseline plasma cfDNA",
+        !has_relapse_cfDNA ~ "Missing relapse/progression plasma cfDNA",
+        TRUE ~ "Not evaluable under current baseline/relapse cfDNA rules"
+      )
+    ) %>%
+    arrange(Patient)
+
+  revision_pts_keep <- revision_evaluability %>%
+    filter(evaluable_for_revision_cna_subclonal_analysis) %>%
+    pull(Patient)
+
+  revision_cfDNA_evaluable <- revision_cfDNA_all %>%
+    filter(Patient %in% revision_pts_keep) %>%
+    mutate(across(all_of(event_cols), ~ as.numeric(.x))) %>%
+    rowwise() %>%
+    mutate(FGA_proxy = sum(c_across(all_of(event_cols)), na.rm = TRUE) /
+             length(event_cols)) %>%
+    ungroup()
+
+  revision_cna_calls <- revision_cfDNA_evaluable %>%
+    select(
+      Patient, Sample_ID, Sample, timepoint_info, Date_of_sample_collection,
+      Num_days_to_closest_relapse, Tumor_Fraction, FGA_proxy, all_of(event_cols)
+    ) %>%
+    arrange(Patient, Date_of_sample_collection, Sample_ID)
+
+  revision_cna_changes <- make_revision_cna_change_table(
+    revision_cfDNA_evaluable,
+    event_cols
+  )
+
+  revision_emergent_tbl <- revision_cna_changes %>%
+    filter(Delta == 1) %>%
+    arrange(Patient, Event, Sample_ID)
+
+  revision_gain_events_tbl <- revision_emergent_tbl
+
+  revision_loss_events_tbl <- revision_cna_changes %>%
+    filter(Delta == -1) %>%
+    arrange(Patient, Event, Sample_ID)
+
+  revision_summary_tbl <- tibble(
+    metric = c(
+      "revision_metadata_rows_after_exclusions",
+      "revision_metadata_patients_after_exclusions",
+      "revision_rows_in_integrated_feature_rds",
+      "revision_patients_in_integrated_feature_rds",
+      "revision_plasma_cfDNA_rows_in_integrated_feature_rds",
+      "revision_patients_evaluable_for_baseline_relapse_cfDNA_cna_change",
+      "revision_relapse_or_progression_samples_evaluated",
+      "revision_emergent_cna_event_rows",
+      "revision_patients_with_emergent_cna_events",
+      "revision_lost_cna_event_rows",
+      "revision_patients_with_lost_cna_events"
+    ),
+    value = as.character(c(
+      nrow(revision_metadata),
+      length(revision_patient_ids),
+      nrow(revision_all_df),
+      n_distinct(revision_all_df$Patient),
+      nrow(revision_cfDNA_all),
+      length(revision_pts_keep),
+      n_distinct(revision_cna_changes$Sample_ID),
+      nrow(revision_emergent_tbl),
+      n_distinct(revision_emergent_tbl$Patient),
+      nrow(revision_loss_events_tbl),
+      n_distinct(revision_loss_events_tbl$Patient)
+    ))
+  ) %>%
+    bind_rows(
+      tibble(
+        metric = "interpretation",
+        value = if (nrow(revision_emergent_tbl) == 0) {
+          "No emergent del1p/amp1q/del13q/del17p CNA events were detected among revision patients evaluable under baseline-plus-relapse/progression plasma cfDNA rules."
+        } else {
+          "Emergent del1p/amp1q/del13q/del17p CNA events were detected among revision patients evaluable under baseline-plus-relapse/progression plasma cfDNA rules."
+        }
+      )
+    )
+
+  revision_evaluability_csv <- file.path(
+    outdir,
+    "Subclonal_evolution_revision_test_cohort_evaluability.csv"
+  )
+  revision_cna_calls_csv <- file.path(
+    outdir,
+    "Subclonal_evolution_revision_test_cohort_cna_calls.csv"
+  )
+  revision_cna_changes_csv <- file.path(
+    outdir,
+    "Subclonal_evolution_revision_test_cohort_cna_changes.csv"
+  )
+  revision_summary_csv <- file.path(
+    outdir,
+    "Subclonal_evolution_revision_test_cohort_summary.csv"
+  )
+  revision_total_events_csv <- file.path(
+    outdir,
+    "Emergent_CNA_event_total_revision_test_cohort.csv"
+  )
+  revision_gain_events_csv <- file.path(
+    outdir,
+    "Emergent_CNA_event_gains_revision_test_cohort.csv"
+  )
+  revision_loss_events_csv <- file.path(
+    outdir,
+    "Emergent_CNA_loss_events_revision_test_cohort.csv"
+  )
+
+  write_csv(revision_evaluability, revision_evaluability_csv)
+  write_csv(revision_cna_calls, revision_cna_calls_csv)
+  write_csv(revision_cna_changes, revision_cna_changes_csv)
+  write_csv(revision_summary_tbl, revision_summary_csv)
+  write_csv(revision_emergent_tbl, revision_total_events_csv)
+  write_csv(revision_gain_events_tbl, revision_gain_events_csv)
+  write_csv(revision_loss_events_tbl, revision_loss_events_csv)
+
+  ms_copy_artifact(
+    source_path = revision_evaluability_csv,
+    artifact_id = "EDFIG10A_B_A",
+    role = "supporting_data_csv",
+    description = "Extended Data Figure 10 revision/test-cohort sensitivity: patient-level evaluability for baseline-plus-relapse/progression plasma cfDNA CNA-change analysis.",
+    script_name = "4_2_Compare_subclonal_evolution.R"
+  )
+
+  ms_copy_artifact(
+    source_path = revision_cna_calls_csv,
+    artifact_id = "EDFIG10A_B_A",
+    role = "supporting_data_csv",
+    description = "Extended Data Figure 10 revision/test-cohort sensitivity: per-sample CNA calls for patients evaluable for baseline-plus-relapse/progression plasma cfDNA CNA-change analysis.",
+    script_name = "4_2_Compare_subclonal_evolution.R"
+  )
+
+  ms_copy_artifact(
+    source_path = revision_cna_changes_csv,
+    artifact_id = "EDFIG10A_B_A",
+    role = "supporting_data_csv",
+    description = "Extended Data Figure 10 revision/test-cohort sensitivity: all baseline-to-relapse CNA deltas before filtering to emergent or lost events.",
+    script_name = "4_2_Compare_subclonal_evolution.R"
+  )
+
+  ms_copy_artifact(
+    source_path = revision_summary_csv,
+    artifact_id = "EDFIG10A_B_A",
+    role = "supporting_data_csv",
+    description = "Extended Data Figure 10 revision/test-cohort sensitivity summary for CNA-change evaluability and event counts.",
+    script_name = "4_2_Compare_subclonal_evolution.R"
+  )
+
+  ms_copy_artifact(
+    source_path = revision_total_events_csv,
+    artifact_id = "EDFIG10A_B_A",
+    role = "supporting_data_csv",
+    description = "Extended Data Figure 10A revision/test-cohort sensitivity: emergent CNA events among evaluable Spring 2026 OICR revision plasma pairs.",
+    script_name = "4_2_Compare_subclonal_evolution.R"
+  )
+
+  ms_copy_artifact(
+    source_path = revision_gain_events_csv,
+    artifact_id = "EDFIG10A_B_B",
+    role = "supporting_data_csv",
+    description = "Extended Data Figure 10B revision/test-cohort sensitivity: gained CNA events among evaluable Spring 2026 OICR revision plasma pairs.",
+    script_name = "4_2_Compare_subclonal_evolution.R"
+  )
+
+  ms_copy_artifact(
+    source_path = revision_loss_events_csv,
+    artifact_id = "EDFIG10A_B_B",
+    role = "supporting_data_csv",
+    description = "Extended Data Figure 10B revision/test-cohort sensitivity: lost CNA events among evaluable Spring 2026 OICR revision plasma pairs.",
+    script_name = "4_2_Compare_subclonal_evolution.R"
+  )
+
+  message(
+    "Revision/test-cohort CNA sensitivity analysis: ",
+    length(revision_pts_keep), " evaluable patients, ",
+    nrow(revision_emergent_tbl), " emergent CNA events, ",
+    nrow(revision_loss_events_tbl), " lost CNA events."
+  )
+} else {
+  warning(
+    "Spring 2026 revision metadata was not available or revision integration is disabled; ",
+    "revision/test-cohort subclonal CNA sensitivity outputs were not generated."
+  )
+}
 
 # MANUSCRIPT OUTPUT: Extended Data Figure 10A/B support data
 # The current final figure panels are externally assembled from ichorCNA

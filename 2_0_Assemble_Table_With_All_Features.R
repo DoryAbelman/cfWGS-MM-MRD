@@ -1742,6 +1742,47 @@ counts_consolidated <- counts_df %>%
     .groups = "drop"
   )
 
+# Add broad mutation burdens for the Spring 2026 test-cohort expansion. These
+# are computed from the supplied post-filter MAFs using the same no-rsID rule as
+# the historical static count files. Revision values take precedence for an
+# overlapping Patient/Timepoint (notably IMG-159), because the revision metadata
+# and MAFs are the current sample authority.
+spring2026_mutation_count_audit <- spring2026_revision_mutation_counts(required = TRUE)
+dir.create(file.path("Output_tables_2025", "clinical_support"), recursive = TRUE, showWarnings = FALSE)
+readr::write_csv(
+  spring2026_mutation_count_audit,
+  file.path(
+    "Output_tables_2025", "clinical_support",
+    "spring2026_revision_mutation_count_audit.csv"
+  )
+)
+
+spring2026_counts_wide <- spring2026_mutation_count_audit %>%
+  select(Patient, Timepoint, Sample_type, Mutation_Count) %>%
+  mutate(
+    count_column = case_when(
+      Sample_type == "BM_cells" ~ "BM_Mutation_Count",
+      Sample_type == "Blood_plasma_cfDNA" ~ "Blood_Mutation_Count",
+      TRUE ~ NA_character_
+    )
+  ) %>%
+  filter(!is.na(count_column)) %>%
+  select(-Sample_type) %>%
+  tidyr::pivot_wider(names_from = count_column, values_from = Mutation_Count)
+
+counts_consolidated <- counts_consolidated %>%
+  full_join(
+    spring2026_counts_wide,
+    by = c("Patient", "Timepoint"),
+    suffix = c("_historical", "_spring2026")
+  ) %>%
+  transmute(
+    Patient,
+    Timepoint,
+    BM_Mutation_Count = coalesce(BM_Mutation_Count_spring2026, BM_Mutation_Count_historical),
+    Blood_Mutation_Count = coalesce(Blood_Mutation_Count_spring2026, Blood_Mutation_Count_historical)
+  )
+
 counts_consolidated <- counts_consolidated %>%
   mutate(Timepoint = if_else(Timepoint == "R-", "R", Timepoint))
 
@@ -2480,6 +2521,141 @@ if (!is.null(revision_metadata_for_endpoint_dates)) {
 # table; this final pass prevents downstream plots from treating those blanks as
 # "no relapse within window".
 filled_df <- recompute_sample_relapse_fields(filled_df, Relapse_dates_full)
+
+## Restore regulatory-coverage fragmentomics values before final updated9 export.
+# `Mean.Coverage` is generated upstream by 1_7A from GRIFFIN
+# nucleosome-accessibility distances and should travel with the same
+# patient-date rows that carry FS/Proportion.Short. During the updated9 cleanup,
+# some historical rows retained FS but lost Mean.Coverage. Restore only missing
+# values by exact Patient-Date match from the immediately prior aggregate table;
+# never overwrite non-missing updated9 values.
+coverage_fallback_path <- "Final_aggregate_table_cfWGS_features_with_clinical_and_demographics_updated8.rds"
+if (file.exists(coverage_fallback_path) && "Mean.Coverage" %in% names(filled_df)) {
+  coverage_fallback <- readRDS(coverage_fallback_path) %>%
+    select(Patient, Date, Mean.Coverage_fallback = Mean.Coverage) %>%
+    mutate(
+      Patient = as.character(Patient),
+      Date = as.Date(Date)
+    ) %>%
+    filter(!is.na(Patient), !is.na(Date))
+
+  duplicate_coverage_keys <- coverage_fallback %>%
+    count(Patient, Date, name = "n") %>%
+    filter(n > 1)
+
+  if (nrow(duplicate_coverage_keys) > 0) {
+    stop(
+      "Cannot restore Mean.Coverage: duplicate Patient-Date keys in ",
+      coverage_fallback_path,
+      call. = FALSE
+    )
+  }
+
+  missing_coverage_before <- sum(is.na(filled_df$Mean.Coverage))
+  filled_df <- filled_df %>%
+    mutate(
+      Patient = as.character(Patient),
+      Date = as.Date(Date)
+    ) %>%
+    left_join(coverage_fallback, by = c("Patient", "Date")) %>%
+    mutate(Mean.Coverage = coalesce(Mean.Coverage, Mean.Coverage_fallback)) %>%
+    select(-Mean.Coverage_fallback)
+
+  missing_coverage_after <- sum(is.na(filled_df$Mean.Coverage))
+  coverage_fallback_audit <- tibble(
+    coverage_fallback_path = coverage_fallback_path,
+    missing_coverage_before = missing_coverage_before,
+    missing_coverage_after = missing_coverage_after,
+    n_restored_patient_date_values = missing_coverage_before - missing_coverage_after,
+    n_rows_with_FS_missing_Mean_Coverage = sum(!is.na(filled_df$FS) & is.na(filled_df$Mean.Coverage))
+  )
+
+  dir.create(file.path("Output_tables_2025", "clinical_support"),
+             recursive = TRUE, showWarnings = FALSE)
+  readr::write_csv(
+    coverage_fallback_audit,
+    file.path("Output_tables_2025", "clinical_support", "updated9_mean_coverage_restoration_audit.csv")
+  )
+
+  message(
+    "Mean.Coverage restored in updated9 export for ",
+    missing_coverage_before - missing_coverage_after,
+    " Patient-Date values from ",
+    coverage_fallback_path,
+    "."
+  )
+}
+
+## Guard submitted BM MRDetect rows against silent source-join regressions.
+# The current table should receive these values from the MRDetect source export,
+# not by copying values out of a prior aggregate. Limit the stop-condition to the
+# submitted frontline BM survival-landmark rows used in Figure 6B so unrelated
+# historical source differences do not mask the regression we are guarding.
+if (file.exists(legacy_submitted_identity_path)) {
+  submitted_bm_mrdetect_keys <- readr::read_csv(
+    legacy_submitted_identity_path,
+    show_col_types = FALSE
+  ) %>%
+    mutate(
+      Patient = as.character(Patient),
+      Sample_Code = as.character(Sample_Code),
+      Study = as.character(Study),
+      timepoint_info = as.character(timepoint_info)
+    ) %>%
+    filter(
+      Study == "M4",
+      timepoint_info %in% c("Post_transplant", "1yr maintenance"),
+      !is.na(Patient),
+      !is.na(Sample_Code),
+      !is.na(Mrd_by_WGS_BM)
+    ) %>%
+    distinct(
+      Patient, Sample_Code,
+      submitted_Timepoint = Timepoint,
+      submitted_timepoint_info = timepoint_info,
+      submitted_Mrd_by_WGS_BM = Mrd_by_WGS_BM,
+      submitted_z_score_detection_rate_BM = z_score_detection_rate_BM
+    )
+
+  submitted_bm_mrdetect_missing <- submitted_bm_mrdetect_keys %>%
+    left_join(
+      filled_df %>%
+        mutate(
+          Patient = as.character(Patient),
+          Sample_Code = as.character(Sample_Code)
+        ) %>%
+        select(
+          Patient, Sample_Code,
+          current_Timepoint = Timepoint,
+          current_timepoint_info = timepoint_info,
+          current_Mrd_by_WGS_BM = Mrd_by_WGS_BM,
+          current_z_score_detection_rate_BM = z_score_detection_rate_BM
+        ),
+      by = c("Patient", "Sample_Code")
+    ) %>%
+    filter(is.na(current_Mrd_by_WGS_BM))
+
+  dir.create(file.path("Output_tables_2025", "clinical_support"),
+             recursive = TRUE, showWarnings = FALSE)
+  readr::write_csv(
+    submitted_bm_mrdetect_missing,
+    file.path(
+      "Output_tables_2025",
+      "clinical_support",
+      "submitted_bm_mrdetect_missing_after_source_join_audit.csv"
+    )
+  )
+
+  if (nrow(submitted_bm_mrdetect_missing) > 0L) {
+    stop(
+      "Submitted BM MRDetect rows are missing after source-level joins. ",
+      "Fix the MRDetect source export/metadata key normalization before scoring. ",
+      "Audit written to Output_tables_2025/clinical_support/",
+      "submitted_bm_mrdetect_missing_after_source_join_audit.csv",
+      call. = FALSE
+    )
+  }
+}
 
 ## Central sample-level scoring/status manifest.
 # This table separates descriptive labels from scoring eligibility. Some legacy

@@ -608,10 +608,10 @@ pal_2 <- c("black", "red")
 # Maps internal names (as stored in timepoint_info column) to plot labels
 tp_labels <- c(
   `diagnosis`          = "Diagnosis",
-  `post_transplant`    = "Post‑ASCT",
+  `post_transplant`    = "Post-ASCT",
   `1yr maintenance`    = "One-Year Maintenance", 
   `post_induction`     = "Post‑Induction",
-  `post_asct`          = "Post‑ASCT",
+  `post_asct`          = "Post-ASCT",
   `maintenance`        = "Maintenance",
   `1yr maint`          = "One-Year Maintenance"
 )
@@ -983,7 +983,7 @@ for (tp in tps_train_test) {
       title = stringr::str_wrap(
         paste0(
           "PFS Stratified by ", assay_lab, " at ", nice_tp,
-          "\nFrontline + non-frontline outcome-available cohorts"
+          "\nTraining Cohort + Test Cohort outcome-available samples"
         ),
         width = 54
       ),
@@ -2283,7 +2283,7 @@ hr_plot_df_blood <- progression_metrics_blood %>%
                    levels = c("cfWGS (Sites Model)", "clonoSEQ", "MFC", "EasyM (Opt)")),
     Landmark = factor(Landmark,
                       levels = c("post_transplant", "1yr_maintenance"),
-                      labels = c("Post‑ASCT", "Maintenance-1yr"))
+                      labels = c("Post-ASCT", "Maintenance-1yr"))
   )
 
 # reshape combined model (cfWGS only)
@@ -2301,7 +2301,7 @@ hr_plot_df_combined <- progression_metrics_blood_combined %>%
                    levels = c("cfWGS (Sites Model)", "cfWGS (Combined Model)", "clonoSEQ", "MFC", "EasyM (Opt)")),
     Landmark = factor(Landmark,
                       levels = c("post_transplant", "1yr_maintenance"),
-                      labels = c("Post‑ASCT", "Maintenance-1yr"))
+                      labels = c("Post-ASCT", "Maintenance-1yr"))
   )
 
 
@@ -2425,7 +2425,7 @@ hr_plot_df_bm <- progression_metrics %>%
                    levels = c("cfWGS", "clonoSEQ", "MFC", "EasyM (Opt)")),
     Landmark = factor(Landmark,
                       levels = c("post_transplant", "1yr_maintenance"),
-                      labels = c("Post‑ASCT", "Maintenance-1yr"))
+                      labels = c("Post-ASCT", "Maintenance-1yr"))
   )
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -2437,16 +2437,41 @@ write_csv(
 )
 cat("  ✓ Exported source data: Supp_Figure_6B (BM HR)\n")
 
-p_hr_bm <- ggplot(hr_plot_df_bm,
+bm_hr_axis_limits <- c(0.04, 300)
+bm_hr_ci_display_limits <- c(0.05, 250)
+bm_hr_breaks <- c(0.05, 0.2, 0.5, 1, 2, 5, 10, 20, 50, 100, 250)
+bm_hr_minor_breaks <- c(
+  0.06, 0.08, 0.1, 0.15, 0.25, 0.3, 0.4, 0.6, 0.8,
+  1.5, 3, 4, 6, 8, 15, 30, 40, 60, 80, 150, 200
+)
+
+hr_plot_df_bm_display <- hr_plot_df_bm %>%
+  mutate(
+    # Display-only caps keep zero/infinite separation intervals visible on a
+    # finite log axis. The uncapped HR/CI values remain in the source-data CSV.
+    CI_low_plot = if_else(
+      is.finite(CI_low) & CI_low > 0,
+      pmax(CI_low, bm_hr_ci_display_limits[1]),
+      bm_hr_ci_display_limits[1]
+    ),
+    CI_high_plot = if_else(
+      is.finite(CI_high) & CI_high > 0,
+      pmin(CI_high, bm_hr_ci_display_limits[2]),
+      bm_hr_ci_display_limits[2]
+    )
+  )
+
+p_hr_bm <- ggplot(hr_plot_df_bm_display,
                   aes(x = HR, y = fct_rev(Landmark), colour = Assay)) +
   # reference line
   geom_vline(xintercept = 1, linetype = "dashed") +
   
   # 1) horizontal CIs
-  geom_errorbarh(
-    aes(xmin = CI_low, xmax = CI_high),
+  geom_errorbar(
+    aes(xmin = CI_low_plot, xmax = CI_high_plot),
     position = position_dodge(width = 0.6),
-    size     = 0.5
+    orientation = "y",
+    linewidth = 0.5
   ) +
   
   # 2) dots at the HR
@@ -2458,17 +2483,9 @@ p_hr_bm <- ggplot(hr_plot_df_bm,
   # log scale axis
   scale_x_log10(
     "Hazard ratio (log scale)",
-    limits       = c(0.19, 250),           # extended to 250 to accommodate ~220 CI
-    breaks       = c(0.2, 0.5, 1, 2, 5, 10, 20, 50, 100, 200, 250),
-    minor_breaks = c(
-      0.25, 0.3, 0.4, 0.6, 0.8,    # between 0.2 & 1
-      1.5,           # between 1 & 2
-      3, 4,          # between 2 & 5
-      6, 8,          # between 5 & 10
-      15, 30,        # between 10 & 50
-      40, 60, 80,    # between 20 & 100
-      150            # between 100 & 200
-    ),
+    limits       = bm_hr_axis_limits,
+    breaks       = bm_hr_breaks,
+    minor_breaks = bm_hr_minor_breaks,
     labels = function(x) {
       sapply(x, function(xx) {
         if (xx > 1) {
@@ -3777,8 +3794,8 @@ plot_train_test_longitudinal_probability <- function(survival_data,
       ),
       cohort_label = dplyr::recode(
         Cohort,
-        "Frontline" = "Frontline/training",
-        "Non-frontline" = "Non-frontline/test",
+        "Frontline" = "Training Cohort",
+        "Non-frontline" = "Test Cohort",
         .default = Cohort
       )
     )
@@ -3791,9 +3808,9 @@ plot_train_test_longitudinal_probability <- function(survival_data,
   cohort_levels_present <- sort(unique(plot_df$cohort_label))
   has_multiple_plot_cohorts <- length(cohort_levels_present) > 1
   cohort_title_note <- if (has_multiple_plot_cohorts) {
-    "Frontline + non-frontline assay-available rows"
+    "Training Cohort + Test Cohort assay-available rows"
   } else {
-    "Assay-available rows after train+test screening: frontline only"
+    "Assay-available rows after Training Cohort + Test Cohort screening: Training Cohort only"
   }
 
   max_mo <- ceiling(max(plot_df$months_before_event, na.rm = TRUE) / 12) * 12
@@ -4697,7 +4714,7 @@ p_sens_bm <- ggplot(sens_BM_df,
     labels = percent_format(scale = 1)
   ) +
   labs(
-    title = "Sensitivity of MRD assays over\nfollow‑up windows (Test Cohort)",
+    title = "Sensitivity of MRD assays over\nfollow-up windows (Test Cohort)",
     x     = "Assay",
     y     = "Sensitivity"
   ) +
@@ -4768,7 +4785,7 @@ p_sens_blood <- ggplot(sens_blood_df,
     labels = percent_format(scale = 1)
   ) +
   labs(
-    title = "Sensitivity of MRD assays over\nfollow‑up windows (Test Cohort)",
+    title = "Sensitivity of MRD assays over\nfollow-up windows (Test Cohort)",
     x     = "Assay",
     y     = "Sensitivity"
   ) +

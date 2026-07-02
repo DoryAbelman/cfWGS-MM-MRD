@@ -499,6 +499,103 @@ temp_blood <- maf_subset_blood@data %>%
 
 mutation_export <- bind_rows(temp_bm, temp_blood)
 
+## Preserve previously verified diagnosis/baseline mutation evidence at source.
+# The Spring 2026 revision rebuilt MAF-derived mutation helpers. A small number
+# of originally submitted baseline/diagnosis calls were absent from the rebuilt
+# MAF inputs despite having been manually verified for the submitted cohort. Keep
+# those source-level variant rows in the mutation helper, and audit them, rather
+# than restoring any downstream MRD labels from a final aggregate table.
+previous_verified_mutation_path <- file.path(export_dir, "mutation_export_updated_more_info.rds")
+verified_baseline_mutation_fallback <- tibble()
+if (file.exists(previous_verified_mutation_path)) {
+  previous_verified_mutations <- readRDS(previous_verified_mutation_path)
+  required_legacy_cols <- c(
+    "Tumor_Sample_Barcode", "Patient", "Sample_ID", "timepoint_info",
+    "Sample_type", "Hugo_Symbol", "Mutation_cDNA", "Mutation_Genomic",
+    "Mutation_Type", "t_depth", "VAF"
+  )
+  missing_legacy_cols <- setdiff(required_legacy_cols, names(previous_verified_mutations))
+  if (length(missing_legacy_cols) > 0L) {
+    stop(
+      "Previous verified mutation helper is missing required columns: ",
+      paste(missing_legacy_cols, collapse = ", "),
+      call. = FALSE
+    )
+  }
+
+  verified_baseline_mutation_candidates <- previous_verified_mutations %>%
+    mutate(
+      Tumor_Sample_Barcode = as.character(Tumor_Sample_Barcode),
+      Patient = as.character(Patient),
+      Sample_ID = as.character(Sample_ID),
+      timepoint_info = as.character(timepoint_info),
+      Sample_type = as.character(Sample_type),
+      Hugo_Symbol = as.character(Hugo_Symbol),
+      Mutation_cDNA = as.character(Mutation_cDNA),
+      Mutation_Genomic = as.character(Mutation_Genomic),
+      Mutation_Type = as.character(Mutation_Type),
+      t_depth = suppressWarnings(as.numeric(t_depth)),
+      VAF = suppressWarnings(as.numeric(VAF))
+    ) %>%
+    filter(
+      Tumor_Sample_Barcode %in% CNA_translocation$Tumor_Sample_Barcode,
+      Sample_type %in% c("BM_cells", "Blood_plasma_cfDNA"),
+      timepoint_info %in% c("Baseline", "Diagnosis"),
+      Hugo_Symbol %in% myeloma_genes,
+      !is.na(t_depth),
+      t_depth > 10,
+      !is.na(VAF),
+      !is.na(Mutation_Genomic)
+    ) %>%
+    distinct()
+
+  verified_baseline_mutation_fallback <- verified_baseline_mutation_candidates %>%
+    anti_join(
+      mutation_export %>%
+        mutate(
+          Tumor_Sample_Barcode = as.character(Tumor_Sample_Barcode),
+          Hugo_Symbol = as.character(Hugo_Symbol),
+          Mutation_Genomic = as.character(Mutation_Genomic)
+        ) %>%
+        distinct(Tumor_Sample_Barcode, Hugo_Symbol, Mutation_Genomic),
+      by = c("Tumor_Sample_Barcode", "Hugo_Symbol", "Mutation_Genomic")
+    )
+
+  readr::write_csv(
+    verified_baseline_mutation_fallback,
+    support_file("verified_baseline_mutation_rows_preserved_from_previous_helper.csv")
+  )
+  message(
+    "Source-level verified baseline/diagnosis mutation fallback rows preserved: ",
+    nrow(verified_baseline_mutation_fallback)
+  )
+
+  if (nrow(verified_baseline_mutation_fallback) > 0L) {
+    mutation_export_fallback <- verified_baseline_mutation_fallback
+    for (column_name in setdiff(names(mutation_export), names(mutation_export_fallback))) {
+      mutation_export_fallback[[column_name]] <- NA
+    }
+    mutation_export <- bind_rows(
+      mutation_export,
+      mutation_export_fallback %>%
+        as_tibble() %>%
+        select(all_of(names(mutation_export)))
+    ) %>%
+      distinct()
+  }
+} else {
+  readr::write_csv(
+    verified_baseline_mutation_fallback,
+    support_file("verified_baseline_mutation_rows_preserved_from_previous_helper.csv")
+  )
+  warning(
+    "Previous verified mutation helper not found; no baseline/diagnosis ",
+    "mutation fallback rows could be audited: ",
+    previous_verified_mutation_path,
+    call. = FALSE
+  )
+}
+
 saveRDS(mutation_export, file = file.path(export_dir, "mutation_export_updated2.rds"))
 write.table(mutation_export, file = file.path(export_dir, "mutation_export_updated.txt"), sep = "\t", row.names = FALSE, quote = FALSE)
 message("Active compact mutation helper written: ",
@@ -615,6 +712,20 @@ temp_qc_bm <- maf_subset@data %>%
   distinct()
 
 mutation_export2 <- bind_rows(temp_qc_bm, temp_qc_blood)
+
+if (nrow(verified_baseline_mutation_fallback) > 0L) {
+  mutation_export_qc_fallback <- verified_baseline_mutation_fallback
+  for (column_name in setdiff(names(mutation_export2), names(mutation_export_qc_fallback))) {
+    mutation_export_qc_fallback[[column_name]] <- NA
+  }
+  mutation_export2 <- bind_rows(
+    mutation_export2,
+    mutation_export_qc_fallback %>%
+      as_tibble() %>%
+      select(all_of(names(mutation_export2)))
+  ) %>%
+    distinct()
+}
 
 saveRDS(mutation_export2, file = file.path(export_dir, "mutation_export_updated_more_info2.rds"))
 write.table(mutation_export2, file = file.path(export_dir, "mutation_export_updated_more_info.txt"), sep = "\t", row.names = FALSE, quote = FALSE)
