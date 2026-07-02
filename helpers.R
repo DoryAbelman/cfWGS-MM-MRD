@@ -208,6 +208,26 @@ load_spring2026_revision_metadata <- function(required = FALSE) {
   metadata
 }
 
+augment_cohort_assignment_with_spring2026_revision <- function(cohort_df) {
+  revision <- load_spring2026_revision_metadata(required = FALSE)
+  if (is.null(revision)) return(cohort_df)
+
+  require_columns(cohort_df, c("Patient", "Cohort"), "Cohort assignment table")
+
+  revision_cohort <- revision %>%
+    dplyr::filter(!is.na(.data$Patient), nzchar(.data$Patient)) %>%
+    dplyr::distinct(Patient = as.character(.data$Patient)) %>%
+    dplyr::mutate(Cohort = "Non-frontline")
+
+  cohort_df %>%
+    dplyr::mutate(Patient = as.character(.data$Patient)) %>%
+    dplyr::bind_rows(
+      revision_cohort %>%
+        dplyr::filter(!.data$Patient %in% cohort_df$Patient)
+    ) %>%
+    dplyr::distinct(.data$Patient, .keep_all = TRUE)
+}
+
 coerce_revision_column_like_current <- function(current_col, revision_col, column_name) {
   if (grepl("date", column_name, ignore.case = TRUE)) {
     return(parse_date_safely(revision_col))

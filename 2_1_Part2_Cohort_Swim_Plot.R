@@ -70,10 +70,192 @@ if (!file.exists(.manuscript_helper)) {
 source(.manuscript_helper)
 rm(.manuscript_helper)
 
+.helpers_path <- file.path("Scripts_2025", "Final_Scripts", "helpers.R")
+if (!file.exists(.helpers_path)) {
+  .helpers_path <- "helpers.R"
+}
+source(.helpers_path)
+rm(.helpers_path)
+
+empty_swim_events <- function() {
+  tibble(
+    patient = character(),
+    event = character(),
+    start = as.Date(character()),
+    end = as.Date(character()),
+    details = character()
+  )
+}
+
+load_swim_mrdetect_calls <- function(path = "Output_tables_2025/all_patients_with_BM_and_blood_calls_updated6_full.rds") {
+  if (!file.exists(path)) {
+    warning("Missing MRDetect call table used to gate revision swim-plot patients: ", path, call. = FALSE)
+    return(NULL)
+  }
+  readRDS(path)
+}
+
+eligible_spring2026_swim_patients <- function() {
+  revision <- load_spring2026_revision_metadata(required = FALSE)
+  if (is.null(revision)) return(character())
+
+  calls <- load_swim_mrdetect_calls()
+  if (is.null(calls)) return(character())
+
+  require_columns(
+    revision,
+    c("Patient", "Sample_type", "timepoint_info", "has_bam"),
+    "Spring 2026 revision metadata for swim plot"
+  )
+  require_columns(
+    calls,
+    c("Patient", "timepoint_info"),
+    "MRDetect call table for swim plot"
+  )
+
+  baseline_bam_patients <- revision %>%
+    filter(
+      .data$timepoint_info %in% c("Diagnosis", "Baseline"),
+      .data$Sample_type %in% c("BM_cells", "Blood_plasma_cfDNA"),
+      .data$has_bam %in% TRUE
+    ) %>%
+    distinct(Patient) %>%
+    pull(Patient)
+
+  call_cols <- intersect(
+    c(
+      "BM_zscore_only_sites_call",
+      "BM_zscore_only_detection_rate_call",
+      "Blood_zscore_only_sites_call",
+      "Blood_zscore_only_detection_rate_call"
+    ),
+    names(calls)
+  )
+  if (!length(call_cols)) {
+    warning("MRDetect call table has no recognized BM/Blood call columns for revision swim-plot gating.", call. = FALSE)
+    return(character())
+  }
+
+  longitudinal_mrdetect_patients <- calls %>%
+    filter(
+      .data$Patient %in% revision$Patient,
+      !.data$timepoint_info %in% c("Diagnosis", "Baseline")
+    ) %>%
+    filter(if_any(all_of(call_cols), ~ !is.na(.x))) %>%
+    distinct(Patient) %>%
+    pull(Patient)
+
+  eligible <- sort(intersect(baseline_bam_patients, longitudinal_mrdetect_patients))
+  message(
+    "Spring 2026 swim-plot test cohort: ",
+    length(eligible), " patients with baseline BM/blood BAM and longitudinal MRDetect calls."
+  )
+  eligible
+}
+
+load_swim_cohort_assignment <- function(path = "cohort_assignment_table_updated.rds") {
+  cohort_df <- readRDS(path)
+  require_columns(cohort_df, c("Patient", "Cohort"), "Swim-plot cohort assignment")
+
+  revision_patients <- eligible_spring2026_swim_patients()
+  if (!length(revision_patients)) {
+    return(cohort_df %>% distinct(.data$Patient, .keep_all = TRUE))
+  }
+
+  revision_cohort <- tibble(
+    Patient = revision_patients,
+    Cohort = "Non-frontline"
+  )
+
+  cohort_df %>%
+    mutate(Patient = as.character(.data$Patient)) %>%
+    bind_rows(revision_cohort %>% filter(!.data$Patient %in% cohort_df$Patient)) %>%
+    distinct(.data$Patient, .keep_all = TRUE)
+}
+
+build_spring2026_revision_swim_events <- function(eligible_patients) {
+  revision <- load_spring2026_revision_metadata(required = FALSE)
+  if (is.null(revision)) return(empty_swim_events())
+
+  revision <- revision %>%
+    filter(.data$Patient %in% eligible_patients) %>%
+    mutate(
+      Date_of_sample_collection = parse_date_safely(.data$Date_of_sample_collection),
+      first_progression_date = parse_date_safely(.data$first_progression_date),
+      relapse_or_censor_date = parse_date_safely(.data$relapse_or_censor_date),
+      mrd_test_date = parse_date_safely(.data$mrd_test_date)
+    )
+
+  if (!nrow(revision)) return(empty_swim_events())
+
+  baseline_events <- revision %>%
+    filter(
+      .data$timepoint_info %in% c("Diagnosis", "Baseline"),
+      .data$Sample_type %in% c("BM_cells", "Blood_plasma_cfDNA"),
+      .data$has_bam %in% TRUE,
+      !is.na(.data$Date_of_sample_collection)
+    ) %>%
+    group_by(Patient) %>%
+    summarize(start = min(.data$Date_of_sample_collection), .groups = "drop") %>%
+    transmute(
+      patient = .data$Patient,
+      event = "Baseline",
+      start = .data$start,
+      end = .data$start,
+      details = "Spring 2026 baseline BM/blood BAM"
+    )
+
+  endpoint_events <- revision %>%
+    distinct(
+      Patient,
+      first_progression_date,
+      relapse_or_censor_date,
+      relapse_or_censor_status
+    ) %>%
+    mutate(
+      endpoint_date = case_when(
+        .data$relapse_or_censor_status == "relapse/progression" & !is.na(.data$first_progression_date) ~ .data$first_progression_date,
+        TRUE ~ .data$relapse_or_censor_date
+      ),
+      event = if_else(
+        .data$relapse_or_censor_status == "censored_last_followup",
+        "Last follow-up",
+        "Relapse"
+      ),
+      details = if_else(
+        .data$relapse_or_censor_status == "censored_last_followup",
+        "Relapsed: 0",
+        "Relapsed: 1"
+      )
+    ) %>%
+    filter(!is.na(.data$endpoint_date)) %>%
+    transmute(
+      patient = .data$Patient,
+      event = .data$event,
+      start = .data$endpoint_date,
+      end = .data$endpoint_date,
+      details = .data$details
+    )
+
+  clinical_mrd_events <- revision %>%
+    distinct(Patient, mrd_test_date, mrd_result_comprehensive) %>%
+    filter(!is.na(.data$mrd_test_date)) %>%
+    transmute(
+      patient = .data$Patient,
+      event = "MRD (clinical)",
+      start = .data$mrd_test_date,
+      end = .data$mrd_test_date,
+      details = paste0("Clinical MRD result: ", .data$mrd_result_comprehensive)
+    )
+
+  bind_rows(baseline_events, endpoint_events, clinical_mrd_events) %>%
+    distinct(.data$patient, .data$event, .data$start, .data$end, .data$details)
+}
+
 ### Load cohort assignments up front
 # The cohort table is needed both for early event-table filtering and for the
 # final Figure 1A annotation tracks.
-cohort_df <- readRDS("cohort_assignment_table_updated.rds")
+cohort_df <- load_swim_cohort_assignment()
 
 ## --------------------------
 ## 1. Load primary treatment-event sources
@@ -354,6 +536,7 @@ rm(.helpers_path)
 combined_clinical_data_updated <- read_combined_clinical_metadata_with_revision(
   "combined_clinical_data_updated_April2025.csv"
 )
+revision_swim_events <- build_spring2026_revision_swim_events(cohort_df$Patient)
 
 # 1. BM sample collection events
 bm_events <- combined_clinical_data_updated %>%
@@ -427,6 +610,7 @@ bm_events <- bm_events %>%
 # repeat for any other dfs with char dates...
 cfDNA_events   <- cfDNA_events   %>% mutate(start = as_date(start), end = as_date(end))
 followup_events<- followup_events%>% mutate(start = as_date(start), end = as_date(end))
+revision_swim_events <- revision_swim_events %>% mutate(start = as_date(start), end = as_date(end))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -461,6 +645,7 @@ all_events <- bind_rows(
   followup_events,
   bm_events,
   cfDNA_events,
+  revision_swim_events,
   clonoseq_events, 
   mfc_events
 ) %>%
@@ -509,7 +694,7 @@ all_events <- all_events %>%
   # Drop any stray Excel‐origin rows that parsed to 1899-12-31
   filter(start != as.Date("1899-12-31"))
 
-cohort_df <- readRDS("cohort_assignment_table_updated.rds")
+cohort_df <- load_swim_cohort_assignment()
 
 ## Filter to the manuscript cohort.
 all_events <- all_events %>% filter(patient %in% cohort_df$Patient)
@@ -701,7 +886,7 @@ events <- events %>%
     event = if_else(event == "Relapse", "Progression", event)
   )
 
-cohort_df <- readRDS("cohort_assignment_table_updated.rds")
+cohort_df <- load_swim_cohort_assignment()
 
 # ──────────────────────────────────────────────────────────────────────
 # 2. MERGE COHORT INFO  &  KEEP PATIENTS WITH A BASELINE
@@ -731,16 +916,38 @@ baseline_non <- combined_clinical_data_updated %>%
   ) %>%
   group_by(Patient) %>%
   summarize(
-    baseline_date = min(Date_of_sample_collection, na.rm = TRUE),
+    baseline_date = if (all(is.na(Date_of_sample_collection))) {
+      as.Date(NA)
+    } else {
+      min(Date_of_sample_collection, na.rm = TRUE)
+    },
     .groups = "drop"
   ) %>%
   rename(patient = Patient) %>%
   filter(patient %in% non_ids)
 
 # bind the two sets of baseline dates
-# parse baseline_date in baseline_non to Date
+# Preserve already-parsed Date columns. Using ymd() on a Date vector can coerce
+# valid dates to NA and silently drop non-front-line timelines from the plot.
 baseline_non <- baseline_non %>%
-  mutate(baseline_date = ymd(baseline_date))
+  mutate(baseline_date = as_date(baseline_date))
+
+baseline_event_fallback <- events %>%
+  filter(.data$patient %in% non_ids, .data$event == "Baseline") %>%
+  group_by(.data$patient) %>%
+  summarize(baseline_date_event = min(.data$start, na.rm = TRUE), .groups = "drop") %>%
+  mutate(baseline_date_event = as_date(.data$baseline_date_event))
+
+baseline_non <- baseline_non %>%
+  left_join(baseline_event_fallback, by = "patient") %>%
+  mutate(
+    baseline_date = if_else(
+      is.na(.data$baseline_date) | !is.finite(as.numeric(.data$baseline_date)),
+      .data$baseline_date_event,
+      .data$baseline_date
+    )
+  ) %>%
+  select(-baseline_date_event)
 
 # (Optional) if baseline_front ended up as character too, parse it likewise:
 baseline_front <- baseline_front %>%
@@ -956,6 +1163,7 @@ shape_map <- c(
   "cfDNA sample collection"= 4,   # x
   "MRD (MFC)"              = 1,   # circle
   "MRD (clonoSEQ)"         = 18,  # diamond
+  "MRD (clinical)"         = 17,  # triangle
   "Transplant"             = 7,  # square with x
   "Progression"            = 16   # filled circle
 )
@@ -1456,9 +1664,8 @@ patient_order_combined <- patient_order
 
 # B) Join the new y positions back into `events`
 events_combined <- events %>%
-  left_join(patient_order_combined, by = c("patient","cohort")) %>%
-  mutate(y = y.y) %>%      # pull in the new y
-  select(-y.x, -y.y)       # drop the old and the suffixed copy
+  select(-any_of("y")) %>%
+  left_join(patient_order_combined %>% select(patient, y), by = "patient")
 
 # C) Single swim‐plot
 p_combined <- ggplot() +
@@ -1557,6 +1764,72 @@ ord_df <- ord_df %>%
     )
   )
 
+baseline_order_availability <- combined_clinical_data_updated %>%
+  filter(
+    .data$Patient %in% cohort_df$Patient,
+    .data$Sample_type %in% c("BM_cells", "Blood_plasma_cfDNA"),
+    .data$timepoint_info %in% c("Diagnosis", "Baseline")
+  ) %>%
+  group_by(Patient) %>%
+  summarize(
+    has_baseline_bm = any(.data$Sample_type == "BM_cells", na.rm = TRUE),
+    has_baseline_blood = any(.data$Sample_type == "Blood_plasma_cfDNA", na.rm = TRUE),
+    .groups = "drop"
+  )
+
+tumour_fraction_order_lookup <- dat %>%
+  mutate(
+    Date = as_date(.data$Date),
+    TumourFraction = coalesce(
+      suppressWarnings(as.numeric(.data$WGS_Tumor_Fraction_Blood_plasma_cfDNA)),
+      suppressWarnings(as.numeric(.data$WGS_Tumor_Fraction_BM_cells))
+    )
+  ) %>%
+  filter(
+    .data$Patient %in% cohort_df$Patient,
+    .data$timepoint_info %in% c("Diagnosis", "Baseline"),
+    !is.na(.data$TumourFraction)
+  ) %>%
+  arrange(.data$Patient, .data$Date) %>%
+  group_by(Patient) %>%
+  slice_head(n = 1) %>%
+  ungroup() %>%
+  select(Patient, TumourFraction)
+
+missing_order_patients <- setdiff(cohort_df$Patient, ord_df$patient)
+if (length(missing_order_patients)) {
+  revision_order_rows <- cohort_df %>%
+    filter(.data$Patient %in% missing_order_patients) %>%
+    left_join(baseline_order_availability, by = "Patient") %>%
+    left_join(tumour_fraction_order_lookup, by = "Patient") %>%
+    mutate(
+      has_baseline_bm = replace_na(.data$has_baseline_bm, FALSE),
+      has_baseline_blood = replace_na(.data$has_baseline_blood, FALSE),
+      Sample = paste0(.data$Patient, "_Baseline"),
+      Cohort = if_else(.data$Cohort == "Frontline", "Train", "Test"),
+      Paired = .data$has_baseline_bm & .data$has_baseline_blood,
+      patient = .data$Patient,
+      cohort = recode(
+        .data$Cohort,
+        "Train" = "Front-line cohort",
+        "Test" = "Non-front-line cohort"
+      ),
+      sample_type = case_when(
+        .data$has_baseline_bm & .data$has_baseline_blood ~ "Paired",
+        .data$has_baseline_bm ~ "BM only",
+        .data$has_baseline_blood ~ "Blood only",
+        TRUE ~ "No baseline BAM"
+      )
+    ) %>%
+    select(Sample, Cohort, TumourFraction, Paired, patient, cohort, sample_type)
+
+  ord_df <- bind_rows(ord_df, revision_order_rows)
+}
+
+ord_df <- ord_df %>%
+  distinct(.data$patient, .keep_all = TRUE) %>%
+  arrange(factor(.data$Cohort, levels = c("Train", "Test")), desc(.data$TumourFraction), .data$patient)
+
 ### ──────────────────────────────────────────────────────────────
 ### 2.  Re-order patients by cohort → descending tumour-fraction
 ### ──────────────────────────────────────────────────────────────
@@ -1573,9 +1846,8 @@ patient_order_combined <- ord_df %>%
 
 # tack the new 'y' onto events
 events_combined <- events %>%
-  left_join(patient_order_combined, by = c("patient", "cohort")) %>%
-  mutate(y = y.y) %>%      # pull in the new y
-  select(-y.x, -y.y)       # drop the old and the suffixed copy
+  select(-any_of("y")) %>%
+  left_join(patient_order_combined %>% select(patient, y), by = "patient")
 
 patient_levels <- patient_order_combined$patient
 patient_order_combined <- patient_order_combined %>%
@@ -1653,7 +1925,8 @@ ann_cohort <- ggplot(patient_order_combined,
 paired_cols <- c(
   "Paired"     = "#9467bd",  # purple
   "BM only"    = "#1f77b4",  # blue (same as Front‑line cohort)
-  "Blood only" = "#CC6677"   # red (same as LEN‑based chemo)
+  "Blood only" = "#CC6677",  # red (same as LEN‑based chemo)
+  "No baseline BAM" = "#F7F7F7"
 )
 
 
@@ -1796,7 +2069,7 @@ ggsave("Final Tables and Figures/Figure1A_swimplot_with_3_annotations_wide_updat
 ### Edit to be simpler - less shapes, clearer
 # 1) Collapse to two point types
 
-lastfu_tbl <- followup_events %>%
+lastfu_tbl <- all_events %>%
   filter(
     event   == "Last follow-up",
     details == "Relapsed: 0"
@@ -1826,7 +2099,7 @@ events_combined2 <- events_combined2 %>%
   mutate(
     point_type = case_when(
       event %in% c("BM sample collection", "cfDNA sample collection") ~ "Sample collection",
-      event %in% c("MRD (MFC)", "MRD (clonoSEQ)")                       ~ "Clinical MRD assay",
+      event %in% c("MRD (MFC)", "MRD (clonoSEQ)", "MRD (clinical)")      ~ "Clinical MRD assay",
       TRUE                                                             ~ NA_character_
     ),
     is_progression = event == "Progression",
@@ -1946,6 +2219,25 @@ events_combined2 <- events_combined2 %>%
     end_month_plot = end_day_plot/30.44
   )
 
+write_csv(
+  events_combined2 %>%
+    filter(str_detect(as.character(.data$patient), "^SPORE")) %>%
+    select(
+      patient,
+      event,
+      start,
+      end,
+      baseline_date,
+      start_day,
+      end_day,
+      start_month_plot,
+      end_month_plot,
+      is_interval,
+      details
+    ),
+  file.path(swim_support_dir, "spore_plot_coordinate_audit.csv")
+)
+
 xmax <- max(events_combined2$end_week_plot, na.rm=TRUE) * 1.05
 max_months <- ceiling(xmax * 7 / 30.44)  # if xmax is in weeks, convert to months
 month_breaks <- seq(0, max_months, by = 3)
@@ -1959,7 +2251,7 @@ events_combined2 <- events_combined2 %>%
       is_progression     ~ "Progression",
       is_ongoing         ~ "Ongoing",
       point_type == "Sample collection" ~ "Sample collection",
-      point_type == "MRD assay"         ~ "Clinical MRD assay",
+      point_type == "Clinical MRD assay" ~ "Clinical MRD assay",
       TRUE               ~ NA_character_
     )
   )
@@ -2218,7 +2510,11 @@ patient_order <- patient_order_tbl_cVAF
 
 
 ## Or for MRD 
-patient_order <- patient_order_mrd
+patient_order <- c(
+  patient_order_mrd,
+  setdiff(as.character(patient_order_tbl$patient), patient_order_mrd)
+) %>%
+  unique()
 
 # 3) Re‑factor your patient column
 events_combined2 <- events_combined2 %>%
@@ -2518,7 +2814,8 @@ ann_cohort <- ggplot(patient_order_combined,
 paired_cols <- c(
   "Paired"     = "#9467bd",  # purple
   "BM only"    = "#1f77b4",  # blue (same as Front‑line cohort)
-  "Blood only" = "#CC6677"   # red (same as LEN‑based chemo)
+  "Blood only" = "#CC6677",  # red (same as LEN‑based chemo)
+  "No baseline BAM" = "#F7F7F7"
 )
 
 

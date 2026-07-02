@@ -95,8 +95,8 @@
 #   • all_nested_cv_metrics_v2_with_fragmentomics_restricted_cohorts.rds|csv
 #   • all_cfWGS_models_list_v2_with_fragmentomics_restricted_cohorts.rds
 #   • all_model_thresholds_v2_with_fragmentomics_restricted_cohorts.rds
-#   • all_patients_with_BM_and_blood_calls_updated5.rds|csv (masked scores)
-#   • all_patients_with_BM_and_blood_calls_updated5_full.rds|csv (unmasked scores)
+#   • all_patients_with_BM_and_blood_calls_updated6.rds|csv (masked scores)
+#   • all_patients_with_BM_and_blood_calls_updated6_full.rds|csv (unmasked scores)
 #   • Supplementary_Table_*.csv (formatted for manuscript)
 #   • Final Tables and Figures/*.png (manuscript-ready figures)
 #
@@ -158,6 +158,13 @@ if (!file.exists(.manuscript_helper)) {
 source(.manuscript_helper)
 rm(.manuscript_helper)
 
+.helpers_path <- file.path("Scripts_2025", "Final_Scripts", "helpers.R")
+if (!file.exists(.helpers_path)) {
+  .helpers_path <- "helpers.R"
+}
+source(.helpers_path)
+rm(.helpers_path)
+
 # -----------------------------------------------------------------------------
 # 2. Data Import & Cohort Definition
 # -----------------------------------------------------------------------------
@@ -168,7 +175,8 @@ if (!dir.exists(outdir)) dir.create(outdir, recursive = TRUE)
 
 ### Load data 
 file <- readRDS("Final_aggregate_table_cfWGS_features_with_clinical_and_demographics_updated9.rds")
-cohort_df <- readRDS("cohort_assignment_table_updated.rds")
+cohort_df <- readRDS("cohort_assignment_table_updated.rds") %>%
+  augment_cohort_assignment_with_spring2026_revision()
 
 dat <- file 
 
@@ -217,6 +225,149 @@ dat <- dat %>%
 ## Keep only MRD timepoints to optimize timepoint 
 dat_mrd <- dat %>%
   filter(!timepoint_info %in% c("Diagnosis", "Baseline"))
+
+USE_PRESERVED_MODELS_ONLY <- Sys.getenv("FNIH_RETRAIN_CFWGS_MODELS", unset = "0") != "1"
+
+if (USE_PRESERVED_MODELS_ONLY) {
+  message("Using preserved cfWGS models and thresholds; no model retraining will be run.")
+
+  selected_models <- readRDS(file.path(outdir, "selected_combo_models_2026-02-16.rds"))
+  selected_thr <- readRDS(file.path(outdir, "selected_combo_thresholds_2026-02-16.rds"))
+
+  if (!all(names(selected_models) %in% names(selected_thr))) {
+    stop(
+      "Preserved selected model names do not all have matching thresholds: ",
+      paste(setdiff(names(selected_models), names(selected_thr)), collapse = ", ")
+    )
+  }
+
+  required_predictors <- unique(unlist(lapply(
+    selected_models,
+    function(fit) setdiff(names(fit$trainingData), ".outcome")
+  )))
+  missing_predictors <- setdiff(required_predictors, names(dat))
+  if (length(missing_predictors) > 0L) {
+    stop(
+      "Cannot apply preserved cfWGS models because predictors are missing from the aggregate table: ",
+      paste(missing_predictors, collapse = ", ")
+    )
+  }
+
+  apply_preserved_selected <- function(dat, models, thresholds, positive_class = "pos") {
+    out <- dat
+    n <- nrow(dat)
+    common <- intersect(names(models), names(thresholds))
+
+    for (cmb in common) {
+      fit <- models[[cmb]]
+      thr <- thresholds[[cmb]]
+      preds <- setdiff(names(fit$trainingData), ".outcome")
+      can_score <- stats::complete.cases(dat[, preds, drop = FALSE])
+
+      probs <- rep(NA_real_, n)
+      calls <- rep(NA_integer_, n)
+
+      if (any(can_score)) {
+        probs[can_score] <- predict(
+          fit,
+          newdata = dat[can_score, preds, drop = FALSE],
+          type = "prob"
+        )[[positive_class]]
+        calls[can_score] <- as.integer(probs[can_score] >= thr)
+      }
+
+      out[[paste0(cmb, "_prob")]] <- probs
+      out[[paste0(cmb, "_call")]] <- calls
+    }
+
+    out
+  }
+
+  Good_pts <- read.csv("baseline_high_quality_patients_updated.csv",
+                       stringsAsFactors = FALSE)
+  bm_good_patients <- Good_pts %>%
+    filter(WGS_Evidence_of_Disease_BM_cells == 1) %>%
+    pull(Patient) %>%
+    unique()
+  cfDNA_good_patients <- Good_pts %>%
+    filter(WGS_Evidence_of_Disease_Blood_plasma_cfDNA_Relaxed == 1) %>%
+    pull(Patient) %>%
+    unique()
+
+  data_scored <- apply_preserved_selected(
+    dat = dat,
+    models = selected_models,
+    thresholds = selected_thr,
+    positive_class = "pos"
+  )
+
+  # The February 2026 preserved fragmentomics models carry explicit training-
+  # cohort suffixes. Older downstream survival scripts use the historical
+  # unsuffixed names for the full-cohort fragmentomics model, so keep aliases.
+  full_fragmentomics_aliases <- c(
+    "Fragmentomics_full",
+    "Fragmentomics_min",
+    "Fragmentomics_FS_only",
+    "Fragmentomics_mean_coverage_only",
+    "Fragmentomics_prop_short_only",
+    "Fragmentomics_tumor_fraction_only"
+  )
+  for (base_name in full_fragmentomics_aliases) {
+    for (suffix in c("prob", "call")) {
+      full_col <- paste0(base_name, "_Full_", suffix)
+      alias_col <- paste0(base_name, "_", suffix)
+      if (full_col %in% names(data_scored) && !alias_col %in% names(data_scored)) {
+        data_scored[[alias_col]] <- data_scored[[full_col]]
+      }
+    }
+  }
+
+  score_cols <- grep("_(prob|call)$", names(data_scored), value = TRUE, ignore.case = TRUE)
+  model_map <- tibble(
+    model_col = score_cols,
+    model_base = str_remove(score_cols, "_(?i:prob|call)$")
+  ) %>%
+    mutate(family = case_when(
+      str_detect(model_base, regex("^BM_", ignore_case = TRUE)) ~ "BM",
+      str_detect(model_base, regex("^Blood_", ignore_case = TRUE)) ~ "BLOOD",
+      str_detect(model_base, regex("^Fragmentomics_", ignore_case = TRUE)) ~ "FRAG",
+      TRUE ~ "OTHER"
+    ))
+
+  typed_na <- function(x) {
+    if (is.factor(x)) return(NA)
+    if (is.logical(x)) return(NA)
+    if (is.integer(x)) return(NA_integer_)
+    if (is.double(x)) return(NA_real_)
+    if (is.numeric(x)) return(NA_real_)
+    if (is.character(x)) return(NA_character_)
+    if (inherits(x, "Date")) return(as.Date(NA))
+    if (inherits(x, "POSIXt")) return(as.POSIXct(NA))
+    NA
+  }
+
+  data_scored_masked <- data_scored
+  walk2(model_map$model_col, model_map$family, function(col, fam) {
+    allowed <- switch(
+      fam,
+      "BM" = bm_good_patients,
+      "BLOOD" = cfDNA_good_patients,
+      "FRAG" = unique(data_scored$Patient),
+      "OTHER" = unique(data_scored$Patient)
+    )
+    x <- data_scored[[col]]
+    x[!data_scored$Patient %in% allowed] <- typed_na(x)
+    data_scored_masked[[col]] <<- x
+  })
+
+  saveRDS(data_scored, file = file.path(outdir, "all_patients_with_BM_and_blood_calls_updated6_full.rds"))
+  write_csv(data_scored, file = file.path(outdir, "all_patients_with_BM_and_blood_calls_updated6_full.csv"))
+  saveRDS(data_scored_masked, file = file.path(outdir, "all_patients_with_BM_and_blood_calls_updated6.rds"))
+  write_csv(data_scored_masked, file = file.path(outdir, "all_patients_with_BM_and_blood_calls_updated6.csv"))
+
+  message("Preserved-model cfWGS scoring complete. Wrote all_patients_with_BM_and_blood_calls_updated6*.rds/csv.")
+  quit(save = "no", status = 0)
+}
 
 
 # create train and test df - train on frontline, apply on hold out df
@@ -559,7 +710,14 @@ saveRDS(model_list,
 
 # parallel backend (optional, speeds up train())
 library(doParallel)
-registerDoParallel()
+detected_cores <- parallel::detectCores(logical = TRUE)
+parallel_workers <- if (is.na(detected_cores) || detected_cores < 2L) {
+  1L
+} else {
+  max(1L, detected_cores - 1L)
+}
+registerDoParallel(cores = parallel_workers)
+message(sprintf("Registered doParallel backend with %d worker(s)", parallel_workers))
 
 # Training/validation splits
 train_df <- dat_mrd %>% filter(Cohort == "Frontline") 
@@ -686,20 +844,39 @@ results <- imap(combos, function(preds, label) {
   
   # now do hold-out
   hold_cc    <- hold_df %>% drop_na(all_of(preds), MRD_truth)
-  probs_hold <- predict(fit, newdata=hold_cc, type="prob")[[positive_class]]
-  roc_hold   <- roc(hold_cc$MRD_truth, probs_hold, quiet=TRUE,
-                    levels=c("neg","pos"))
-  
-  hold_metrics <- map2_dfr(
-    thr_list,
-    c("youden","sens>=0.9","spec>=0.9"),
-    ~ eval_at(roc_hold, hold_cc$MRD_truth, probs_hold, .x) %>%
-      mutate(
-        combo = label,    # <- again, the feature-combo name
-        mode  = .y,
+  if (nrow(hold_cc) < 2L || n_distinct(hold_cc$MRD_truth) < 2L) {
+    message("Skipping hold-out metrics for ", label, " (n=", nrow(hold_cc),
+            ", classes=", n_distinct(hold_cc$MRD_truth), ")")
+    hold_metrics <- map2_dfr(
+      thr_list,
+      c("youden","sens>=0.9","spec>=0.9"),
+      ~ tibble(
+        sensitivity = NA_real_,
+        specificity = NA_real_,
+        accuracy = NA_real_,
+        auc = NA_real_,
+        thr = .x,
+        combo = label,
+        mode = .y,
         .before = 1
       )
-  )
+    )
+  } else {
+    probs_hold <- predict(fit, newdata=hold_cc, type="prob")[[positive_class]]
+    roc_hold   <- roc(hold_cc$MRD_truth, probs_hold, quiet=TRUE,
+                      levels=c("neg","pos"))
+
+    hold_metrics <- map2_dfr(
+      thr_list,
+      c("youden","sens>=0.9","spec>=0.9"),
+      ~ eval_at(roc_hold, hold_cc$MRD_truth, probs_hold, .x) %>%
+        mutate(
+          combo = label,    # <- again, the feature-combo name
+          mode  = .y,
+          .before = 1
+        )
+    )
+  }
   
   # return
   list(cv   = cv_metrics,

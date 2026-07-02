@@ -17,7 +17,7 @@
 ##    4. Optional: Time-window prediction analysis in non-frontline cohort
 ##  
 ##  Input Data Sources:
-##    - all_patients_with_BM_and_blood_calls_updated5.rds 
+##    - all_patients_with_BM_and_blood_calls_updated6.rds
 ##      (from 3_1_Optimize_cfWGS_thresholds.R)
 ##    - EasyM_all_samples_with_optimized_calls.csv 
 ##      (from 3_1_A_Process_and_optimize_EasyM.R)
@@ -115,7 +115,7 @@ latest_dates_csv     <- "Exported_data_tables_clinical/latest_dates_per_patient.
 # File 2: Main data table with all cfWGS model calls and clinical MRD results
 #         Each row = one sample (patient + timepoint)
 #         Contains: MFC calls, clonoSEQ calls, cfWGS calls (multiple models)
-dat_rds       <- "Output_tables_2025/all_patients_with_BM_and_blood_calls_updated5.rds"
+dat_rds       <- "Output_tables_2025/all_patients_with_BM_and_blood_calls_updated6.rds"
 
 ## ─────────────────────────────────────────────────────────────────────────────
 ## OUTPUT DIRECTORY: All results saved here
@@ -255,21 +255,22 @@ cat(sprintf("  ✓ Patient follow-up dates: %d patients loaded for prospective Q
 # MAIN cfWGS + CLINICAL ASSAYS DATA TABLE
 # Each row represents one sample (patient + timepoint)
 # Contains predictions from all MRD models and timepoint classifications
-dat <- readRDS(dat_rds) %>%
+dat_all <- readRDS(dat_rds) %>%
   mutate(
     Patient        = as.character(Patient),
     sample_date    = as.Date(Date),
+    Cohort         = as.character(Cohort),
     timepoint_info = tolower(timepoint_info)  # standardize timepoint names for consistent grouping
   )
 
 cat(sprintf("  ✓ Sample data: %d samples from %d patients loaded\n", 
-            nrow(dat), n_distinct(dat$Patient)))
+            nrow(dat_all), n_distinct(dat_all$Patient)))
 
 # FILTER TO FRONTLINE COHORT
 # Primary landmark survival analyses use only patients in the frontline/
 # induction-to-transplant cohort. The full all-cohort table is reloaded later
 # for the separate non-frontline/test-cohort time-window analysis.
-dat <- dat %>% filter(Cohort == "Frontline")
+dat <- dat_all %>% filter(Cohort == "Frontline")
 
 cat(sprintf("  ✓ Filtered to Frontline cohort: %d samples from %d patients\n", 
             nrow(dat), n_distinct(dat$Patient)))
@@ -278,6 +279,10 @@ cat(sprintf("  ✓ Filtered to Frontline cohort: %d samples from %d patients\n",
 # Screen call: different threshold optimized for sensitivity (detect 95% of relapsers)
 #   Uses probability >= 0.350 instead of default optimized threshold
 dat <- dat %>%
+  mutate(
+    BM_zscore_only_detection_rate_screen_call = as.integer(BM_zscore_only_detection_rate_prob >= 0.350),
+  )
+dat_all <- dat_all %>%
   mutate(
     BM_zscore_only_detection_rate_screen_call = as.integer(BM_zscore_only_detection_rate_prob >= 0.350),
   )
@@ -312,18 +317,30 @@ if (file.exists(EasyM_file)) {
   # Merge EasyM data into main dataset
   # Join key: Patient (character) + Timepoint (character)
   # relationship = "many-to-one": multiple samples per patient, but one EasyM value per timepoint
+  easym_join_tbl <- EasyM_data %>%
+    select(Patient, Timepoint, EasyM_value, EasyM_optimized_binary, EasyM_optimized_call) %>%
+    mutate(Patient = as.character(Patient), Timepoint = as.character(Timepoint))
+
   dat <- dat %>%
     mutate(Patient = as.character(Patient), Timepoint = as.character(Timepoint)) %>%
     left_join(
-      EasyM_data %>%
-        select(Patient, Timepoint, EasyM_value, EasyM_optimized_binary, EasyM_optimized_call) %>%
-        mutate(Patient = as.character(Patient), Timepoint = as.character(Timepoint)),
+      easym_join_tbl,
+      by = c("Patient", "Timepoint"),
+      relationship = "many-to-one"
+    )
+
+  dat_all <- dat_all %>%
+    mutate(Patient = as.character(Patient), Timepoint = as.character(Timepoint)) %>%
+    left_join(
+      easym_join_tbl,
       by = c("Patient", "Timepoint"),
       relationship = "many-to-one"
     )
   
   n_easym_matched <- sum(!is.na(dat$EasyM_optimized_binary))
-  cat(sprintf("  ✓ Merged EasyM data: %d samples with EasyM calls\n", n_easym_matched))
+  n_easym_matched_all <- sum(!is.na(dat_all$EasyM_optimized_binary))
+  cat(sprintf("  ✓ Merged EasyM data: %d frontline samples and %d all-cohort samples with EasyM calls\n",
+              n_easym_matched, n_easym_matched_all))
   
 } else {
   # If EasyM file not found, create placeholder columns (survival analysis will skip EasyM with NA filter)
@@ -331,6 +348,12 @@ if (file.exists(EasyM_file)) {
   cat("    Creating placeholder columns (EasyM will be skipped in downstream analyses)\n")
   
   dat <- dat %>%
+    mutate(
+      EasyM_value = NA_real_,
+      EasyM_optimized_binary = NA_integer_,
+      EasyM_optimized_call = NA_character_
+    )
+  dat_all <- dat_all %>%
     mutate(
       EasyM_value = NA_real_,
       EasyM_optimized_binary = NA_integer_,
@@ -380,7 +403,7 @@ survival_df <- dat %>%
   # Select only columns needed for survival analyses
   # (This reduces memory footprint and makes code more readable)
   select(
-    Patient, Timepoint, sample_date, censor_date, timepoint_info,
+    Patient, Cohort, Timepoint, sample_date, censor_date, timepoint_info,
     Time_to_event, Relapsed_Binary,
     # Clinical MRD assays
     Flow_Binary, Adaptive_Binary, Rapid_Novor_Binary,
@@ -421,6 +444,114 @@ cat(sprintf("    - Timepoints represented: %s\n",
             paste(unique(survival_df$timepoint_info), collapse=", ")))
 
 cat("  ✓ Survival table validation complete\n\n")
+
+# Additive train+test cohort table for count-expansion sensitivity figures.
+# The primary manuscript KM and longitudinal panels above/below retain the
+# original frontline-only scope. This companion table keeps frontline/training
+# plus non-frontline/test samples with interpretable outcome data, and excludes
+# rows whose sample was collected well after the PFS event/censor anchor.
+train_test_cohorts <- c("Frontline", "Non-frontline")
+
+survival_df_train_test <- dat_all %>%
+  dplyr::filter(Cohort %in% train_test_cohorts) %>%
+  dplyr::mutate(
+    Patient     = as.character(Patient),
+    sample_date = as.Date(Date)
+  ) %>%
+  dplyr::left_join(
+    final_tbl %>%
+      dplyr::select(Patient, censor_date, relapsed),
+    by = "Patient"
+  ) %>%
+  dplyr::mutate(
+    Time_to_event   = as.numeric(censor_date - sample_date),
+    Relapsed_Binary = as.integer(relapsed)
+  ) %>%
+  dplyr::select(
+    Patient, Cohort, Timepoint, sample_date, censor_date, timepoint_info,
+    Time_to_event, Relapsed_Binary,
+    Flow_Binary, Adaptive_Binary, Rapid_Novor_Binary,
+    Flow_pct_cells, Adaptive_Frequency, PET_Binary,
+    BM_zscore_only_detection_rate_call, BM_zscore_only_detection_rate_prob,
+    BM_zscore_only_detection_rate_screen_call,
+    Blood_zscore_only_sites_call, Blood_zscore_only_sites_prob,
+    Blood_base_prob, Blood_base_call,
+    Blood_plus_fragment_prob, Blood_plus_fragment_call,
+    Blood_plus_fragment_min_prob, Blood_plus_fragment_min_call,
+    Fragmentomics_mean_coverage_only_prob, Fragmentomics_mean_coverage_only_call,
+    EasyM_optimized_binary, EasyM_value
+  ) %>%
+  dplyr::filter(
+    !is.na(sample_date),
+    !is.na(censor_date),
+    !is.na(Relapsed_Binary),
+    !is.na(Time_to_event),
+    Time_to_event >= -30
+  )
+
+train_test_evaluable_summary <- survival_df_train_test %>%
+  dplyr::summarise(
+    n_samples = dplyr::n(),
+    n_patients = dplyr::n_distinct(Patient),
+    n_frontline_samples = sum(Cohort == "Frontline", na.rm = TRUE),
+    n_non_frontline_samples = sum(Cohort == "Non-frontline", na.rm = TRUE),
+    n_relapsed_patients = dplyr::n_distinct(Patient[Relapsed_Binary == 1]),
+    n_nonrelapsed_patients = dplyr::n_distinct(Patient[Relapsed_Binary == 0])
+  )
+
+readr::write_csv(
+  train_test_evaluable_summary,
+  file.path(outdir_source_data, paste0("All_train_test_outcome_available_summary_", date_tag, ".csv"))
+)
+
+train_test_assay_availability <- survival_df_train_test %>%
+  dplyr::group_by(Cohort) %>%
+  dplyr::summarise(
+    n_samples = dplyr::n(),
+    n_patients = dplyr::n_distinct(Patient),
+    n_bm_prob = sum(!is.na(BM_zscore_only_detection_rate_prob)),
+    n_bm_call = sum(!is.na(BM_zscore_only_detection_rate_call)),
+    n_blood_sites_prob = sum(!is.na(Blood_zscore_only_sites_prob)),
+    n_blood_sites_call = sum(!is.na(Blood_zscore_only_sites_call)),
+    n_blood_combined_call = sum(!is.na(Blood_plus_fragment_call)),
+    n_flow_call = sum(!is.na(Flow_Binary)),
+    n_clonoseq_call = sum(!is.na(Adaptive_Binary)),
+    n_easym_call = sum(!is.na(EasyM_optimized_binary)),
+    .groups = "drop"
+  )
+
+readr::write_csv(
+  train_test_assay_availability,
+  file.path(outdir_source_data, paste0("All_train_test_assay_availability_", date_tag, ".csv"))
+)
+
+if (any(train_test_assay_availability$Cohort == "Non-frontline")) {
+  nonfront_assay_total <- train_test_assay_availability %>%
+    dplyr::filter(Cohort == "Non-frontline") %>%
+    dplyr::select(
+      dplyr::starts_with("n_bm_"),
+      dplyr::starts_with("n_blood_"),
+      n_flow_call,
+      n_clonoseq_call,
+      n_easym_call
+    ) %>%
+    as.matrix() %>%
+    sum(na.rm = TRUE)
+  if (identical(nonfront_assay_total, 0L) || identical(nonfront_assay_total, 0)) {
+    message(
+      "  ! Non-frontline/test rows have outcome data but no non-missing assay calls ",
+      "for the KM/probability panels; additive outputs will not increase plotted counts."
+    )
+  }
+}
+
+cat(sprintf(
+  "  ✓ Additive train+test outcome table: %d samples from %d patients (%d frontline, %d non-frontline samples)\n\n",
+  train_test_evaluable_summary$n_samples,
+  train_test_evaluable_summary$n_patients,
+  train_test_evaluable_summary$n_frontline_samples,
+  train_test_evaluable_summary$n_non_frontline_samples
+))
 
 ## ── 3. KAPLAN-MEIER SURVIVAL ANALYSIS CONFIGURATION ──────────────────────────
 ##
@@ -720,6 +851,188 @@ for(tp in tps) {
     }
   }
 }
+
+## ── 4A. ADDITIVE KM CURVES: Frontline/Training + Non-Frontline/Test ─────────
+##
+##  Goal:
+##    Create separate exploratory/supporting KM versions that use all samples in
+##    the training/frontline and test/non-frontline cohorts when patient outcome
+##    information and assay calls are available.
+##
+##  Scope and safeguards:
+##    - Original manuscript KM panels above are unchanged.
+##    - Cohort scope is explicitly limited to Frontline + Non-frontline rows.
+##    - Rows without outcome dates/status, assay calls, or interpretable
+##      non-negative follow-up from sample to event/censor are excluded.
+##    - The first sample per patient per landmark is retained, matching the
+##      original KM landmark logic and avoiding repeated patient contributions.
+##
+##  Outputs:
+##    - PNGs in Output_tables_2025/detection_progression_updated6/
+##      all_train_test_outcome_available/<timepoint>/
+##    - Source-data CSVs beside manuscript source data.
+##
+cat("4A. Generating additive train+test outcome-available KM curves...\n\n")
+
+outdir_train_test_km <- file.path(outdir, "all_train_test_outcome_available")
+dir.create(outdir_train_test_km, recursive = TRUE, showWarnings = FALSE)
+
+km_train_test_summary <- list()
+tps_train_test <- unique(survival_df_train_test$timepoint_info)
+techs_train_test <- techs[names(techs) %in% names(survival_df_train_test)]
+
+for (tp in tps_train_test) {
+  nice_tp <- as.character(tp_labels[tp])
+  if (is.na(nice_tp) || nice_tp == "") nice_tp <- as.character(tp)
+
+  tp_dir <- file.path(outdir_train_test_km, gsub("\\s+", "_", tp))
+  dir.create(tp_dir, recursive = TRUE, showWarnings = FALSE)
+
+  for (var in names(techs_train_test)) {
+    assay_lab <- techs_train_test[[var]]
+    file_stub <- paste0(
+      "KM_", assay_lab, "_", nice_tp,
+      "_all_train_test_outcome_available"
+    )
+    fname <- file.path(tp_dir, paste0(file_stub, "_", date_tag, ".png"))
+    fname_stable <- file.path(tp_dir, paste0(file_stub, ".png"))
+
+    df_sub <- survival_df_train_test %>%
+      dplyr::filter(
+        timepoint_info == tp,
+        !is.na(Time_to_event),
+        Time_to_event >= -30,
+        !is.na(Relapsed_Binary),
+        !is.na(.data[[var]])
+      ) %>%
+      dplyr::arrange(Patient, sample_date) %>%
+      dplyr::group_by(Patient) %>%
+      dplyr::slice(1) %>%
+      dplyr::ungroup() %>%
+      dplyr::mutate(
+        Time_to_event_months = pmax(Time_to_event, 0) / 30.44,
+        Group = factor(
+          ifelse(.data[[var]] == 1, "Positive", "Negative"),
+          levels = c("Negative", "Positive")
+        )
+      )
+
+    km_train_test_summary[[length(km_train_test_summary) + 1]] <- df_sub %>%
+      dplyr::count(Cohort, Group, name = "n_samples") %>%
+      dplyr::mutate(
+        timepoint_info = tp,
+        assay_variable = var,
+        assay_label = assay_lab,
+        n_patients_total = dplyr::n_distinct(df_sub$Patient),
+        n_events_total = sum(df_sub$Relapsed_Binary == 1, na.rm = TRUE)
+      )
+
+    if (nrow(df_sub) < min_n || dplyr::n_distinct(df_sub$Group) < 2) {
+      next
+    }
+
+    readr::write_csv(
+      df_sub,
+      file.path(
+        outdir_source_data,
+        paste0(
+          "All_train_test_KM_source_data_",
+          gsub("[^A-Za-z0-9]+", "_", tp), "_",
+          gsub("[^A-Za-z0-9]+", "_", var), "_",
+          date_tag, ".csv"
+        )
+      )
+    )
+
+    surv_obj <- survival::Surv(df_sub$Time_to_event_months, df_sub$Relapsed_Binary)
+    fit <- survival::survfit(surv_obj ~ Group, data = df_sub)
+    pval_display <- tryCatch(
+      {
+        lr <- survival::survdiff(surv_obj ~ Group, data = df_sub)
+        if (!is.finite(lr$chisq) || length(lr$n) < 2) {
+          FALSE
+        } else {
+          p_val <- stats::pchisq(lr$chisq, df = length(lr$n) - 1, lower.tail = FALSE)
+          p_text <- if (is.finite(p_val) && p_val < 0.001) {
+            "<0.001"
+          } else if (is.finite(p_val)) {
+            sprintf("%.3f", p_val)
+          } else {
+            NA_character_
+          }
+          if (!is.na(p_text)) paste0("Log-rank p = ", p_text) else FALSE
+        }
+      },
+      error = function(e) FALSE
+    )
+
+    km <- survminer::ggsurvplot(
+      fit,
+      data = df_sub,
+      pval = pval_display,
+      break.time.by = 12,
+      conf.int = FALSE,
+      risk.table = TRUE,
+      risk.table.title = "Number at risk",
+      risk.table.title.theme = element_text(hjust = 0),
+      palette = pal_2,
+      legend.title = "MRD status",
+      legend.labs = c("MRD-", "MRD+"),
+      xlab = "Time since MRD assessment (months)",
+      ylab = "Progression-free survival",
+      title = stringr::str_wrap(
+        paste0(
+          "PFS Stratified by ", assay_lab, " at ", nice_tp,
+          "\nFrontline + non-frontline outcome-available cohorts"
+        ),
+        width = 54
+      ),
+      risk.table.height = 0.25,
+      ggtheme = theme_classic(base_size = 12) +
+        theme(
+          plot.title = element_text(face = "bold", hjust = 0.5, size = 15),
+          legend.position = "top",
+          axis.line = element_line(colour = "black"),
+          panel.grid.major = element_blank(),
+          panel.grid.minor = element_blank(),
+          axis.text.x = element_text(size = 12),
+          axis.text.y = element_text(size = 12),
+          axis.title.y = element_text(size = 15),
+          axis.title.x = element_text(size = 14)
+        )
+    )
+
+    km$table <- km$table +
+      theme(
+        axis.title.y = element_blank(),
+        plot.title = element_text(hjust = 0, face = "plain")
+      )
+
+    km$plot <- km$plot +
+      theme(axis.title.x = element_blank())
+
+    combined <- ggarrange(
+      km$plot,
+      km$table,
+      ncol = 1,
+      heights = c(3, 1)
+    )
+
+    ggsave(fname, combined, width = 7, height = 7, dpi = dpi_target)
+    ggsave(fname_stable, combined, width = 7, height = 7, dpi = dpi_target)
+  }
+}
+
+km_train_test_summary <- dplyr::bind_rows(km_train_test_summary)
+readr::write_csv(
+  km_train_test_summary,
+  file.path(outdir_source_data, paste0("All_train_test_KM_evaluable_counts_", date_tag, ".csv"))
+)
+
+cat(sprintf(
+  "  ✓ Additive train+test KM summary written for %d timepoint-assay combinations\n\n",
+  dplyr::n_distinct(paste(km_train_test_summary$timepoint_info, km_train_test_summary$assay_variable))
+))
 
 
 ## Optional KM confidence-interval sensitivity exports
@@ -3388,6 +3701,363 @@ ms_copy_artifact(
   role = "figure_panel_png",
   description = "Extended Data Figure 8 bottom-right panel: cfDNA-derived cfWGS probability versus days before relapse with summary footer.",
   script_name = "4_1_Survival_Analysis.R"
+)
+
+## ── Additive train+test longitudinal probability figures ───────────────────
+##
+## These figures use the preserved model probabilities and thresholds, but
+## expand the plotted rows to all Frontline + Non-frontline samples with usable
+## patient outcome data. They are intentionally saved as separate outputs so the
+## submitted frontline-only manuscript panels remain unchanged.
+
+format_p_for_label <- function(p_value) {
+  if (is.na(p_value)) {
+    return("NA")
+  }
+  if (p_value < 0.001) {
+    return("<0.001")
+  }
+  sprintf("%.3f", p_value)
+}
+
+safe_spearman_label <- function(df, x_col, y_col) {
+  if (!all(c(x_col, y_col) %in% names(df))) {
+    return("rho=NA, p=NA")
+  }
+  x <- suppressWarnings(as.numeric(df[[x_col]]))
+  y <- suppressWarnings(as.numeric(df[[y_col]]))
+  keep <- is.finite(x) & is.finite(y)
+  if (sum(keep) < 3 || dplyr::n_distinct(x[keep]) < 2 || dplyr::n_distinct(y[keep]) < 2) {
+    return("rho=NA, p=NA")
+  }
+  test <- suppressWarnings(cor.test(x[keep], y[keep], method = "spearman"))
+  sprintf("rho=%.2f, p=%s", unname(test$estimate), format_p_for_label(test$p.value))
+}
+
+plot_train_test_longitudinal_probability <- function(survival_data,
+                                                     prob_col,
+                                                     call_col,
+                                                     threshold,
+                                                     y_label,
+                                                     title_suffix,
+                                                     output_stem,
+                                                     y_limits = c(0, 1)) {
+  required_cols <- c(
+    "Patient", "Cohort", "timepoint_info", "sample_date", "Time_to_event",
+    "Relapsed_Binary", prob_col, call_col
+  )
+  missing_cols <- setdiff(required_cols, names(survival_data))
+  if (length(missing_cols) > 0) {
+    stop("Train+test longitudinal plot is missing columns: ",
+         paste(missing_cols, collapse = ", "), call. = FALSE)
+  }
+
+  plot_df <- survival_data %>%
+    dplyr::filter(
+      Cohort %in% train_test_cohorts,
+      !stringr::str_detect(timepoint_info, stringr::regex("Diagnosis|Baseline", TRUE)),
+      !is.na(.data[[prob_col]]),
+      !is.na(.data[[call_col]]),
+      !is.na(Time_to_event),
+      !is.na(Relapsed_Binary),
+      Time_to_event >= -30
+    ) %>%
+    dplyr::mutate(
+      days_before_event = pmax(Time_to_event, 0),
+      months_before_event = days_before_event / 30.44,
+      mrd_status = factor(
+        .data[[call_col]],
+        levels = c(0, 1),
+        labels = c("MRD-", "MRD+")
+      ),
+      progress_status = factor(
+        Relapsed_Binary,
+        levels = c(0, 1),
+        labels = c("No relapse", "Relapse")
+      ),
+      cohort_label = dplyr::recode(
+        Cohort,
+        "Frontline" = "Frontline/training",
+        "Non-frontline" = "Non-frontline/test",
+        .default = Cohort
+      )
+    )
+
+  if (nrow(plot_df) == 0) {
+    warning("No rows available for ", output_stem, call. = FALSE)
+    return(invisible(NULL))
+  }
+
+  cohort_levels_present <- sort(unique(plot_df$cohort_label))
+  has_multiple_plot_cohorts <- length(cohort_levels_present) > 1
+  cohort_title_note <- if (has_multiple_plot_cohorts) {
+    "Frontline + non-frontline assay-available rows"
+  } else {
+    "Assay-available rows after train+test screening: frontline only"
+  }
+
+  max_mo <- ceiling(max(plot_df$months_before_event, na.rm = TRUE) / 12) * 12
+  if (!is.finite(max_mo) || max_mo <= 0) max_mo <- 12
+
+  n_patients_by <- plot_df %>%
+    dplyr::distinct(Patient, progress_status) %>%
+    dplyr::count(progress_status, name = "n_patients")
+  n_timepoints_by <- plot_df %>%
+    dplyr::count(progress_status, name = "n_timepoints")
+
+  get_count <- function(tbl, lvl, col) {
+    val <- tbl %>% dplyr::filter(progress_status == lvl) %>% dplyr::pull({{ col }})
+    if (length(val) == 0) 0L else val
+  }
+
+  n_pat_nr <- get_count(n_patients_by, "No relapse", n_patients)
+  n_time_nr <- get_count(n_timepoints_by, "No relapse", n_timepoints)
+  n_pat_rl <- get_count(n_patients_by, "Relapse", n_patients)
+  n_time_rl <- get_count(n_timepoints_by, "Relapse", n_timepoints)
+
+  base_plot <- ggplot(
+    plot_df,
+    aes(x = months_before_event, y = .data[[prob_col]], group = Patient)
+  ) +
+    geom_hline(yintercept = threshold, linetype = "dotted", colour = "gray40") +
+    geom_line(aes(colour = progress_status), size = 0.4, alpha = 0.4) +
+    geom_point(
+      aes(fill = progress_status),
+      shape = 21,
+      colour = "black",
+      size = 2
+    ) +
+    scale_x_reverse(
+      name = "Months before event or censor",
+      breaks = seq(0, max_mo, by = 12),
+      minor_breaks = seq(0, max_mo, by = 6)
+    ) +
+    scale_y_continuous(
+      y_label,
+      limits = y_limits,
+      labels = scales::percent_format(accuracy = 1)
+    ) +
+    scale_colour_manual(
+      name = "Patient outcome",
+      values = c("No relapse" = "black", "Relapse" = "red"),
+      labels = c(
+        paste0("No relapse\n(n=", n_pat_nr, " patients; ", n_time_nr, " samples)"),
+        paste0("Relapse\n(n=", n_pat_rl, " patients; ", n_time_rl, " samples)")
+      )
+    ) +
+    scale_fill_manual(
+      name = "Patient outcome",
+      values = c("No relapse" = "black", "Relapse" = "red"),
+      labels = c(
+        paste0("No relapse\n(n=", n_pat_nr, " patients; ", n_time_nr, " samples)"),
+        paste0("Relapse\n(n=", n_pat_rl, " patients; ", n_time_rl, " samples)")
+      )
+    ) +
+    labs(
+      title = paste0(
+        "Longitudinal cfWGS MRD Probability by Patient Outcome\n",
+        title_suffix, "\n",
+        cohort_title_note
+      )
+    ) +
+    theme_classic(base_size = 11) +
+    theme(
+      panel.grid = element_blank(),
+      plot.title = element_text(face = "bold", hjust = 0.5, size = 13),
+      legend.position = "bottom",
+      legend.title = element_text(size = 10),
+      legend.text = element_text(size = 9)
+    )
+
+  source_path <- file.path(
+    outdir_source_data,
+    paste0(output_stem, "_source_data_", date_tag, ".csv")
+  )
+  readr::write_csv(plot_df, source_path)
+
+  ggsave(
+    file.path("Final Tables and Figures", paste0(output_stem, ".png")),
+    base_plot,
+    width = 6.4,
+    height = 4.8,
+    dpi = 600
+  )
+
+  by_cohort_summary <- plot_df %>%
+    dplyr::distinct(Patient, Cohort, progress_status) %>%
+    dplyr::count(Cohort, progress_status, name = "n_patients") %>%
+    dplyr::full_join(
+      plot_df %>% dplyr::count(Cohort, progress_status, name = "n_samples"),
+      by = c("Cohort", "progress_status")
+    )
+
+  readr::write_csv(
+    by_cohort_summary,
+    file.path(outdir_source_data, paste0(output_stem, "_counts_", date_tag, ".csv"))
+  )
+
+  invisible(plot_df)
+}
+
+plot_train_test_time_to_relapse <- function(plot_df,
+                                            prob_col,
+                                            threshold,
+                                            x_label,
+                                            title_suffix,
+                                            output_stem,
+                                            x_limits = c(0, 1)) {
+  if (is.null(plot_df) || nrow(plot_df) == 0) {
+    return(invisible(NULL))
+  }
+
+  relapse_plot_df <- plot_df %>%
+    dplyr::arrange(Patient, sample_date) %>%
+    dplyr::group_by(Patient) %>%
+    dplyr::filter(
+      progress_status == "Relapse" |
+        dplyr::row_number() == which.min(days_before_event)
+    ) %>%
+    dplyr::ungroup()
+
+  if (nrow(relapse_plot_df) == 0) {
+    warning("No rows available for ", output_stem, call. = FALSE)
+    return(invisible(NULL))
+  }
+
+  max_days <- ceiling(max(relapse_plot_df$days_before_event, na.rm = TRUE) / 180) * 180
+  if (!is.finite(max_days) || max_days <= 0) max_days <- 180
+  overflow <- max_days + 180
+
+  relapse_plot_df <- relapse_plot_df %>%
+    dplyr::mutate(
+      days_plot = dplyr::if_else(progress_status == "No relapse", overflow, days_before_event)
+    )
+
+  cohort_levels_present <- sort(unique(relapse_plot_df$cohort_label))
+  has_multiple_plot_cohorts <- length(cohort_levels_present) > 1
+  cohort_title_note <- if (has_multiple_plot_cohorts) {
+    "frontline + non-frontline assay-available rows"
+  } else {
+    "frontline assay-available rows only"
+  }
+
+  rel_all <- relapse_plot_df %>% dplyr::filter(progress_status == "Relapse")
+  rel_pre <- rel_all %>% dplyr::filter(days_before_event > 0)
+  annot_text <- paste0(
+    "All relapse samples:\n",
+    safe_spearman_label(rel_all, prob_col, "days_before_event"),
+    "\nPre-relapse only:\n",
+    safe_spearman_label(rel_pre, prob_col, "days_before_event")
+  )
+
+  readr::write_csv(
+    relapse_plot_df,
+    file.path(outdir_source_data, paste0(output_stem, "_source_data_", date_tag, ".csv"))
+  )
+
+  p_time <- ggplot(
+    relapse_plot_df,
+    aes(x = .data[[prob_col]], y = days_plot)
+  ) +
+    geom_vline(xintercept = threshold, linetype = "dotted", colour = "grey40") +
+    geom_point(
+      aes(fill = progress_status),
+      shape = 21,
+      size = 3,
+      colour = "black"
+    ) +
+    scale_y_continuous(
+      "Days until relapse (or infinity for censor)",
+      limits = c(0, overflow),
+      breaks = c(seq(0, max_days, by = 180), overflow),
+      labels = c(seq(0, max_days, by = 180), "infinity")
+    ) +
+    scale_x_continuous(
+      x_label,
+      limits = x_limits,
+      breaks = seq(0, 1, by = 0.1),
+      labels = scales::percent_format(accuracy = 1)
+    ) +
+    scale_fill_manual(
+      "Patient outcome",
+      values = c("No relapse" = "black", "Relapse" = "red")
+    ) +
+    annotate(
+      "label",
+      x = x_limits[1] + 0.58 * diff(x_limits),
+      y = max_days,
+      label = annot_text,
+      hjust = 0,
+      size = 3.2,
+      fill = scales::alpha("white", 0.75)
+    ) +
+    labs(
+      title = paste0(
+        "cfWGS MRD Probability vs Time to Relapse\n",
+        title_suffix, "\n",
+        cohort_title_note
+      )
+    ) +
+    theme_classic(base_size = 11) +
+    theme(
+      panel.grid = element_blank(),
+      plot.title = element_text(face = "bold", hjust = 0.5, size = 12),
+      legend.position = "bottom",
+      legend.title = element_text(size = 10),
+      legend.text = element_text(size = 9)
+    )
+
+  ggsave(
+    file.path("Final Tables and Figures", paste0(output_stem, ".png")),
+    p_time,
+    width = 5.8,
+    height = 4.9,
+    dpi = 600
+  )
+
+  invisible(relapse_plot_df)
+}
+
+bm_train_test_longitudinal_df <- plot_train_test_longitudinal_probability(
+  survival_data = survival_df_train_test,
+  prob_col = "BM_zscore_only_detection_rate_prob",
+  call_col = "BM_zscore_only_detection_rate_call",
+  threshold = 0.4215524,
+  y_label = "cVAF Model Probability",
+  title_suffix = "Using BM-Derived Mutation Lists",
+  output_stem = "F4C_cfWGS_prob_vs_time_all_train_test_BM_outcome_available",
+  y_limits = c(0, 1)
+)
+
+plot_train_test_time_to_relapse(
+  plot_df = bm_train_test_longitudinal_df,
+  prob_col = "BM_zscore_only_detection_rate_prob",
+  threshold = 0.4215524,
+  x_label = "cfWGS MRD probability (%)",
+  title_suffix = "Using BM-Derived Mutations",
+  output_stem = "Fig_4D_time_to_relapse_footer3cols_BM_muts_all_train_test_outcome_available",
+  x_limits = c(0, 1)
+)
+
+blood_train_test_longitudinal_df <- plot_train_test_longitudinal_probability(
+  survival_data = survival_df_train_test,
+  prob_col = "Blood_zscore_only_sites_prob",
+  call_col = "Blood_zscore_only_sites_call",
+  threshold = 0.5166693,
+  y_label = "Sites Model Probability",
+  title_suffix = "Using cfDNA-Derived Mutation Lists",
+  output_stem = "F4C_cfWGS_prob_vs_time_all_train_test_blood_outcome_available",
+  y_limits = c(0.3, 1)
+)
+
+plot_train_test_time_to_relapse(
+  plot_df = blood_train_test_longitudinal_df,
+  prob_col = "Blood_zscore_only_sites_prob",
+  threshold = 0.5166693,
+  x_label = "cfWGS MRD probability (%)",
+  title_suffix = "Using cfDNA-Derived Mutations",
+  output_stem = "Fig_4D_time_to_relapse_footer3cols_blood_muts_all_train_test_outcome_available",
+  x_limits = c(0.3, 1)
 )
 
 

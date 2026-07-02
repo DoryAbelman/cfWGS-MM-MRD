@@ -21,6 +21,7 @@
 #   - combined_clinical_data_updated_April2025.csv
 #   - Clinical data/SPORE/SPORE_pct_flow_extracted.xlsx
 #   - Clinical data/IMMAGINE/Extracted_clinical_MRD_data.xlsx  (sheet 3)
+#   - New OICR Submissions/derived_metadata/oicr_submission_clinical_comprehensive_rows.csv
 #
 # Outputs:
 #   - cfWGS clinical MRD values with timepoint and dates updated August 2025.csv
@@ -128,10 +129,109 @@ MRD_SPORE_IMMAGINE <- MRD_SPORE_IMMAGINE %>%
 ## Multiple by 100 to be consistent with other table for FLOW 
 MRD_SPORE_IMMAGINE$Flow_pct_cells <- MRD_SPORE_IMMAGINE$Flow_pct_cells*100
 
+oicr_revision_clinical_mrd_path <- file.path(
+  "New OICR Submissions",
+  "derived_metadata",
+  "oicr_submission_clinical_comprehensive_rows.csv"
+)
+
+oicr_revision_clinical_mrd <- tibble()
+if (file.exists(oicr_revision_clinical_mrd_path)) {
+  revision_metadata_for_mrd <- load_spring2026_revision_metadata(required = FALSE)
+
+  if (!is.null(revision_metadata_for_mrd)) {
+    revision_blood_sample_lookup <- revision_metadata_for_mrd %>%
+      filter(
+        Sample_type == "Blood_plasma_cfDNA",
+        !is.na(patient_numeric_id),
+        !is.na(Date_of_sample_collection)
+      ) %>%
+      transmute(
+        patient_numeric_id,
+        Patient,
+        revision_blood_date = as.Date(Date_of_sample_collection),
+        Visit_Number = as.character(Timepoint),
+        Sample_Code = str_remove(
+          as.character(Sample_ID),
+          "(-P|-B|-O|-OZ-DNA|-OZ|_BM_cells|_Blood_plasma_cfDNA|_Blood_Buffy_coat)$"
+        ),
+        timepoint_info,
+        revision_mrd_sample_id = Sample_ID
+      ) %>%
+      distinct()
+
+    oicr_revision_clinical_mrd_audit <- read_csv(
+      oicr_revision_clinical_mrd_path,
+      show_col_types = FALSE
+    ) %>%
+      mutate(
+        MRD_Blood_Date = as.Date(MRD_Blood_Date),
+        MRD_Test_Date = as.Date(MRD_Test_Date)
+      ) %>%
+      left_join(
+        revision_blood_sample_lookup,
+        by = c("Patient_ID" = "patient_numeric_id", "MRD_Blood_Date" = "revision_blood_date")
+      ) %>%
+      mutate(
+        revision_mrd_pairing_status = case_when(
+          is.na(MRD_Result) | MRD_Result == "Unknown" ~ "not_used_unknown_mrd_result",
+          is.na(MRD_Blood_Date) ~ "not_used_missing_mrd_blood_date",
+          is.na(Patient) ~ "not_used_no_matching_revision_plasma_sample",
+          TRUE ~ "used_selected_revision_mrd_pair"
+        )
+      )
+
+    dir.create("Output_tables_2025", showWarnings = FALSE, recursive = TRUE)
+    write_csv(
+      oicr_revision_clinical_mrd_audit,
+      file.path("Output_tables_2025", "spring2026_oicr_clinical_mrd_pairing_audit.csv")
+    )
+
+    unmatched_oicr_revision_mrd <- oicr_revision_clinical_mrd_audit %>%
+      filter(revision_mrd_pairing_status != "used_selected_revision_mrd_pair")
+    if (nrow(unmatched_oicr_revision_mrd) > 0L) {
+      warning(
+        "Some Spring 2026 OICR clinical MRD rows were not integrated: ",
+        paste(
+          unique(unmatched_oicr_revision_mrd$revision_mrd_pairing_status),
+          collapse = ", "
+        )
+      )
+    }
+
+    oicr_revision_clinical_mrd <- oicr_revision_clinical_mrd_audit %>%
+      filter(revision_mrd_pairing_status == "used_selected_revision_mrd_pair") %>%
+      transmute(
+        Patient,
+        Date = MRD_Blood_Date,
+        Visit_Number,
+        Sample_Code,
+        timepoint_info,
+        Flow_pct_cells = case_when(
+          MRD_Result == "Absent" ~ 0,
+          MRD_Result == "Present" ~ as.numeric(MRD_Residual_Pct),
+          TRUE ~ NA_real_
+        ),
+        MRD_Results_FLOW = case_when(
+          MRD_Result == "Absent" ~ "Negative",
+          MRD_Result == "Present" ~ "Positive",
+          TRUE ~ NA_character_
+        ),
+        revision_mrd_test_date = MRD_Test_Date,
+        revision_mrd_blood_date = MRD_Blood_Date,
+        revision_mrd_days_from_blood = MRD_Blood_Days_from_MRD,
+        revision_mrd_source = "Spring 2026 OICR selected clinical MRD pairing",
+        revision_mrd_decision_rationale = Decision_Rationale,
+        revision_mrd_sample_id
+      ) %>%
+      distinct()
+  }
+}
+
 M4_MRD_clinical <- M4_MRD_clinical %>% 
   rename(Patient = M4_id)
 
-cfWGS_Clinical_MRD <- bind_rows(M4_MRD_clinical, MRD_SPORE_IMMAGINE)
+cfWGS_Clinical_MRD <- bind_rows(M4_MRD_clinical, MRD_SPORE_IMMAGINE, oicr_revision_clinical_mrd)
 
 ## Calculate MRD rates 
 # Create MRD_by_clinical_testing column based on the specified conditions
@@ -2061,11 +2161,26 @@ saveRDS(filled_df, file = "Final_aggregate_table_cfWGS_features_with_clinical_an
 ## Export baseline high-quality cohort helper table.
 # This table is used to audit which baseline patients have usable BM and/or
 # blood WGS evidence variables after applying the cohort assignment file.
-cohort_df <- readRDS("cohort_assignment_table_updated.rds")
+cohort_df <- readRDS("cohort_assignment_table_updated.rds") %>%
+  augment_cohort_assignment_with_spring2026_revision()
+
+revision_patients_for_baseline_quality <- load_spring2026_revision_metadata(required = FALSE)
+revision_patients_for_baseline_quality <- if (is.null(revision_patients_for_baseline_quality)) {
+  character()
+} else {
+  unique(as.character(revision_patients_for_baseline_quality$Patient))
+}
 
 tmp <- left_join(filled_df, cohort_df) %>% 
   filter(!is.na(Cohort)) %>% 
-  filter(timepoint_info %in% c("Diagnosis", "Baseline")) %>% 
+  mutate(
+    is_baseline_diagnosis_source_for_quality = timepoint_info %in% c("Diagnosis", "Baseline") |
+      (
+        Patient %in% revision_patients_for_baseline_quality &
+          Timepoint %in% c("01", "1", "T0", "T1")
+      )
+  ) %>%
+  filter(is_baseline_diagnosis_source_for_quality) %>% 
   filter(
     !is.na(WGS_Evidence_of_Disease_Blood_plasma_cfDNA) |
       !is.na(WGS_Evidence_of_Disease_BM_cells)
@@ -2087,6 +2202,14 @@ tmp <- tmp %>%
     "WGS_Evidence_of_Disease_Blood_plasma_cfDNA_Relaxed",
     "Cohort"
   )))
+
+dir.create(file.path("Output_tables_2025", "clinical_support"), recursive = TRUE, showWarnings = FALSE)
+readr::write_csv(
+  tmp %>%
+    filter(Patient %in% revision_patients_for_baseline_quality) %>%
+    arrange(Patient, Timepoint, Sample_Code),
+  file.path("Output_tables_2025", "clinical_support", "spring2026_revision_baseline_quality_candidates.csv")
+)
 
 tmp <- tmp %>%
   filter(!(Patient == "SPORE_0009" & Date == as.Date("2020-03-11")))

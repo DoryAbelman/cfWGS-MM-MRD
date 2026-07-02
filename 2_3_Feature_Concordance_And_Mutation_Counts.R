@@ -1074,27 +1074,70 @@ cat(overall_sentence)
 
 #––– 3) Statistical testing––––––––––––––––––––––––––––––––––––––––––––
 
+run_two_group_test <- function(data, value_col, group_col, method = c("t.test", "wilcox.test")) {
+  method <- match.arg(method)
+  test_df <- data %>%
+    select(value = all_of(value_col), group = all_of(group_col)) %>%
+    filter(!is.na(.data$value), !is.na(.data$group))
+  group_counts <- test_df %>%
+    count(.data$group, name = "n") %>%
+    arrange(.data$group)
+
+  has_two_groups <- nrow(group_counts) == 2
+  enough_data <- has_two_groups && if (method == "t.test") {
+    all(group_counts$n >= 2)
+  } else {
+    all(group_counts$n >= 1)
+  }
+
+  if (!enough_data) {
+    return(list(
+      result = NULL,
+      p_value = NA_real_,
+      note = paste0(
+        "Skipped ", method, " for ", value_col,
+        ": expected two cohorts with ",
+        ifelse(method == "t.test", "at least two", "at least one"),
+        " non-missing observations each; observed ",
+        paste(paste0(group_counts$group, " n=", group_counts$n), collapse = "; ")
+      )
+    ))
+  }
+
+  formula <- stats::as.formula("value ~ group")
+  result <- if (method == "t.test") {
+    stats::t.test(formula, data = test_df)
+  } else {
+    stats::wilcox.test(formula, data = test_df)
+  }
+  list(result = result, p_value = result$p.value, note = NA_character_)
+}
+
 # BM mutation counts: Frontline vs Non-frontline
-bm_ttest <- t.test(BM_Mutation_Count ~ cohort, data = dat_base)
-bm_wilcox <- wilcox.test(BM_Mutation_Count ~ cohort, data = dat_base)
+bm_ttest <- run_two_group_test(dat_base, "BM_Mutation_Count", "cohort", "t.test")
+bm_wilcox <- run_two_group_test(dat_base, "BM_Mutation_Count", "cohort", "wilcox.test")
 
 # Blood mutation counts: Frontline vs Non-frontline
-blood_ttest <- t.test(Blood_Mutation_Count ~ cohort, data = dat_base)
-blood_wilcox <- wilcox.test(Blood_Mutation_Count ~ cohort, data = dat_base)
+blood_ttest <- run_two_group_test(dat_base, "Blood_Mutation_Count", "cohort", "t.test")
+blood_wilcox <- run_two_group_test(dat_base, "Blood_Mutation_Count", "cohort", "wilcox.test")
 
-# Show results
-bm_ttest
-bm_wilcox
-blood_ttest
-blood_wilcox
+# Show results when the cohort sizes support the requested test
+bm_ttest$result
+bm_wilcox$result
+blood_ttest$result
+blood_wilcox$result
 
 #––– 4) Optional: extract p-values–––––––––––––––––––––––––––––––––––
 pvals <- tibble(
   assay = c("BM", "BM (Wilcox)", "Blood", "Blood (Wilcox)"),
-  p_value = c(bm_ttest$p.value,
-              bm_wilcox$p.value,
-              blood_ttest$p.value,
-              blood_wilcox$p.value)
+  p_value = c(bm_ttest$p_value,
+              bm_wilcox$p_value,
+              blood_ttest$p_value,
+              blood_wilcox$p_value),
+  note = c(bm_ttest$note,
+           bm_wilcox$note,
+           blood_ttest$note,
+           blood_wilcox$note)
 )
 pvals
 

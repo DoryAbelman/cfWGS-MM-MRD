@@ -39,7 +39,7 @@
 #   Figure_4D, Extended_Data_Figure_7F, and Supplementary_Table_10.
 #
 # Inputs:
-#   • Output_tables_2025/all_patients_with_BM_and_blood_calls_updated5.rds
+#   • Output_tables_2025/all_patients_with_BM_and_blood_calls_updated6.rds
 #     from 3_1_Optimize_cfWGS_thresholds.R.
 #   • Output_EasyM_MRD_analysis_2025/EasyM_all_samples_with_optimized_calls.csv
 #     from 3_1_A_Process_and_optimize_EasyM.R, when EasyM comparison panels are
@@ -125,12 +125,12 @@ version_date <- as.character(Sys.Date())
 
 cat("\nLoading cfWGS data from prior analysis...\n")
 
-dat <- readRDS(file.path(outdir, "all_patients_with_BM_and_blood_calls_updated5.rds"))
+dat <- readRDS(file.path(outdir, "all_patients_with_BM_and_blood_calls_updated6.rds"))
 cat(sprintf("✓ Loaded %d rows from cfWGS dataset\n", nrow(dat)))
 
 # Optional model and threshold definitions used only for labels/benchmarking.
 # Keep these paths project-relative for Code Ocean portability. The scored calls
-# and probabilities are read from all_patients_with_BM_and_blood_calls_updated5.rds;
+# and probabilities are read from all_patients_with_BM_and_blood_calls_updated6.rds;
 # this script does not retrain the models.
 PATH_MODEL_LIST <- file.path(outdir, "selected_combo_models_2025-09-17.rds")
 PATH_THRESHOLD_LIST <- file.path(outdir, "selected_combo_thresholds_2025-09-17.rds")
@@ -1270,16 +1270,11 @@ non_conc <- pair_concord(non, "BM_zscore_only_detection_rate_call", "Flow_Binary
 ppv_npv <- function(df, pred_col = "BM_zscore_only_detection_rate_call") {
   # Build a 2×2 table of prediction vs truth
   tbl <- table(
-    Pred  = df[[pred_col]],
-    Truth = df$MRD_truth,
+    Pred  = factor(df[[pred_col]], levels = 0:1),
+    Truth = factor(df$MRD_truth, levels = 0:1),
     useNA = "no"
   )
-  
-  # Ensure the table has both rows 0/1 and columns 0/1
-  all_lv <- c("0", "1")
-  tbl     <- tbl[all_lv, all_lv, drop = FALSE]  # missing rows/cols become NA
-  tbl[is.na(tbl)] <- 0                           # convert those NA counts back to 0
-  
+
   # Extract TP, FP, TN, FN as scalars
   TP <- tbl["1", "1"]
   FP <- tbl["1", "0"]
@@ -1421,15 +1416,11 @@ if (write_para) {
 # 1.  General PPV/NPV helper that takes any truth column  -------------------
 ppv_npv_any <- function(df, pred_col = "BM_zscore_only_detection_rate_call", truth_col) {
   tbl <- table(
-    Pred  = df[[pred_col]],
-    Truth = df[[truth_col]],
+    Pred  = factor(df[[pred_col]], levels = 0:1),
+    Truth = factor(df[[truth_col]], levels = 0:1),
     useNA = "no"
   )
-  # ensure both levels exist
-  all_lv <- c("0", "1")
-  tbl     <- tbl[all_lv, all_lv, drop = FALSE]
-  tbl[is.na(tbl)] <- 0
-  
+
   TP <- tbl["1","1"]
   FP <- tbl["1","0"]
   TN <- tbl["0","0"]

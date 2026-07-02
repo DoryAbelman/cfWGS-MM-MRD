@@ -94,7 +94,7 @@ if (!dir.exists(outdir)) {
 csv_files <- list.files(input_root, pattern = "\\.csv$", full.names = TRUE)
 spring2026_dilution_mrdetect_files <- spring2026_revision_files(
   "MRDetect_outputs",
-  "^MRDetect_all_RESULTS_combined_with_source_dilution_series[.]csv$"
+  "^(MRDetect_all_RESULTS_combined_with_source_dilution_series|MRDetect_dilution_series_updated)[.]csv$"
 )
 spring2026_combined_mrdetect_files <- spring2026_revision_files(
   "MRDetect_outputs",
@@ -109,8 +109,58 @@ if (!length(csv_files)) {
   stop("No dilution-series MRDetect CSV files found in historical or Spring 2026 revision inputs.", call. = FALSE)
 }
 
+read_mrdetect_csv <- function(file) {
+  header_line <- readLines(file, n = 1, warn = FALSE)
+  header_cols <- trimws(strsplit(header_line, ",", fixed = TRUE)[[1]])
+  probe_lines <- readLines(file, n = 25, warn = FALSE)
+  data_probe <- probe_lines[-1]
+  nonempty_data_probe <- data_probe[nzchar(data_probe)]
+  field_counts <- count.fields(file, sep = ",", quote = "", blank.lines.skip = TRUE)
+  header_field_count <- field_counts[1]
+  max_data_field_count <- max(field_counts[-1], na.rm = TRUE)
+  has_one_extra_data_field <- is.finite(max_data_field_count) &&
+    max_data_field_count == header_field_count + 1
+  has_terminal_empty_data_field <- length(nonempty_data_probe) > 0 &&
+    !endsWith(header_line, ",") &&
+    any(endsWith(nonempty_data_probe, ","))
+  has_legacy_empty_field_before_filename <- has_one_extra_data_field &&
+    tail(header_cols, 1) == "filename" &&
+    !has_terminal_empty_data_field
+
+  if (!has_terminal_empty_data_field && !has_legacy_empty_field_before_filename) {
+    return(read_csv(file, show_col_types = FALSE))
+  }
+
+  col_names <- if (has_legacy_empty_field_before_filename) {
+    c(head(header_cols, -1), "legacy_empty_field", tail(header_cols, 1))
+  } else {
+    c(header_cols, "terminal_empty_field")
+  }
+  df <- read_csv(
+    file,
+    col_names = col_names,
+    skip = 1,
+    show_col_types = FALSE
+  )
+  empty_field <- if (has_legacy_empty_field_before_filename) {
+    "legacy_empty_field"
+  } else {
+    "terminal_empty_field"
+  }
+  empty_values <- as.character(df[[empty_field]])
+  empty_values[is.na(empty_values)] <- ""
+  if (any(nzchar(empty_values))) {
+    stop(
+      "MRDetect CSV has an unexpected non-empty extra field: ",
+      file,
+      call. = FALSE
+    )
+  }
+  df %>% select(-all_of(empty_field))
+}
+
 read_and_label <- function(file) {
-  df <- read_csv(file, show_col_types = FALSE)
+  df <- read_mrdetect_csv(file)
   if (!"filename" %in% names(df)) {
     if ("source_file" %in% names(df)) {
       df$filename <- df$source_file
@@ -172,14 +222,27 @@ all_files <- all_files %>%
       str_remove("\\.somatic.*")
   )
 
-extract_mrdetect_panel_patient <- function(x) {
+extract_mrdetect_mutation_list_patient <- function(x) {
   dplyr::case_when(
-    stringr::str_detect(x, "VA-09") ~ "VA-09",
-    stringr::str_detect(x, "VA-12") ~ "VA-12",
-    stringr::str_detect(x, "VA-13") ~ "VA-13",
+    stringr::str_detect(x, "VA-[0-9]+") ~ stringr::str_extract(x, "VA-[0-9]+"),
     stringr::str_detect(x, "IMG-[0-9]+") ~ stringr::str_extract(x, "IMG-[0-9]+"),
     TRUE ~ NA_character_
   )
+}
+
+extract_mrdetect_mutation_list_timepoint <- function(x) {
+  dplyr::case_when(
+    stringr::str_detect(x, "VA-[0-9]+-[0-9]+-[A-Z]-DNA") ~
+      stringr::str_match(x, "VA-[0-9]+-([0-9]+)-[A-Z]-DNA")[, 2],
+    stringr::str_detect(x, "VA-[0-9]+-R-[A-Z]-DNA") ~ "R",
+    stringr::str_detect(x, "IMG-[0-9]+-T[0-9]+-[A-Z]") ~
+      stringr::str_match(x, "IMG-[0-9]+-(T[0-9]+)-[A-Z]")[, 2],
+    TRUE ~ NA_character_
+  )
+}
+
+is_baseline_or_diagnosis_mutation_list <- function(timepoint) {
+  timepoint %in% c("01", "T0", "T1")
 }
 
 if (length(pwgval_dilution_bams) > 0) {
@@ -195,32 +258,45 @@ if (length(pwgval_dilution_bams) > 0) {
   all_files <- all_files %>%
     mutate(
       is_pwgval_m4chip_query_bam = .data$BAM %in% pwgval_dilution_bams | str_detect(.data$BAM, "^M4CHIP_"),
-      VCF_panel_patient_for_dilution = extract_mrdetect_panel_patient(.data$VCF),
-      VCF_panel_matches_PWGVAL_patient = NA
+      VCF_mutation_list_patient_for_dilution = extract_mrdetect_mutation_list_patient(.data$VCF),
+      VCF_mutation_list_timepoint_for_dilution = extract_mrdetect_mutation_list_timepoint(.data$VCF),
+      VCF_mutation_list_is_baseline_or_diagnosis =
+        is_baseline_or_diagnosis_mutation_list(.data$VCF_mutation_list_timepoint_for_dilution),
+      VCF_mutation_list_matches_PWGVAL_patient = NA,
+      VCF_mutation_list_usable_for_PWGVAL = NA
     ) %>%
     left_join(pwgval_bam_patient_lookup, by = "BAM") %>%
     mutate(
-      VCF_panel_matches_PWGVAL_patient = if_else(
+      VCF_mutation_list_matches_PWGVAL_patient = if_else(
         .data$is_pwgval_m4chip_query_bam,
         !is.na(.data$PWGVAL_dilution_patient) &
-          !is.na(.data$VCF_panel_patient_for_dilution) &
-          .data$VCF_panel_patient_for_dilution == .data$PWGVAL_dilution_patient,
+          !is.na(.data$VCF_mutation_list_patient_for_dilution) &
+          .data$VCF_mutation_list_patient_for_dilution == .data$PWGVAL_dilution_patient,
         NA
       ),
-      PWGVAL_panel_match_audit_note = case_when(
+      VCF_mutation_list_usable_for_PWGVAL = if_else(
+        .data$is_pwgval_m4chip_query_bam,
+        .data$VCF_mutation_list_matches_PWGVAL_patient %in% TRUE &
+          .data$VCF_mutation_list_is_baseline_or_diagnosis %in% TRUE,
+        NA
+      ),
+      PWGVAL_mutation_list_match_audit_note = case_when(
         !.data$is_pwgval_m4chip_query_bam ~ NA_character_,
-        .data$VCF_panel_matches_PWGVAL_patient ~
-          "PWGVAL queried BAM matched to same-patient VA/TFRIM4 mutation panel",
         is.na(.data$PWGVAL_dilution_patient) ~
           "M4CHIP/PWGVAL-like queried BAM is absent from PWGVAL dilution metadata",
-        is.na(.data$VCF_panel_patient_for_dilution) ~
-          "Could not infer mutation-panel patient from MRDetect source filename",
-        TRUE ~
-          "Excluded from PWGVAL dilution scoring because queried BAM patient and mutation-panel patient differ"
+        is.na(.data$VCF_mutation_list_patient_for_dilution) ~
+          "Could not infer personalized mutation-list patient from MRDetect source filename",
+        !.data$VCF_mutation_list_matches_PWGVAL_patient ~
+          "Excluded from PWGVAL dilution scoring because queried BAM patient and personalized mutation-list patient differ",
+        !.data$VCF_mutation_list_is_baseline_or_diagnosis ~
+          "Excluded from PWGVAL dilution scoring because the personalized mutation list is not baseline/diagnosis",
+        .data$VCF_mutation_list_usable_for_PWGVAL ~
+          "Kept: PWGVAL queried BAM matched to same-patient baseline/diagnosis personalized mutation list",
+        TRUE ~ "Excluded from PWGVAL dilution scoring"
       )
     )
 
-  pwgval_panel_match_audit <- all_files %>%
+  pwgval_mutation_list_match_audit <- all_files %>%
     filter(.data$is_pwgval_m4chip_query_bam) %>%
     select(
       input_source_file,
@@ -231,23 +307,31 @@ if (length(pwgval_dilution_bams) > 0) {
       PWGVAL_dilution_patient,
       PWGVAL_dilution_sample_id,
       PWGVAL_dilution_LOD,
-      VCF_panel_patient_for_dilution,
-      VCF_panel_matches_PWGVAL_patient,
-      PWGVAL_panel_match_audit_note
+      VCF_mutation_list_patient_for_dilution,
+      VCF_mutation_list_timepoint_for_dilution,
+      VCF_mutation_list_is_baseline_or_diagnosis,
+      VCF_mutation_list_matches_PWGVAL_patient,
+      VCF_mutation_list_usable_for_PWGVAL,
+      PWGVAL_mutation_list_match_audit_note
     ) %>%
     arrange(BAM, VCF)
 
-  if (nrow(pwgval_panel_match_audit) > 0) {
+  if (nrow(pwgval_mutation_list_match_audit) > 0) {
     readr::write_csv(
-      pwgval_panel_match_audit,
-      file.path(outdir, "spring2026_pwgval_mrdetect_panel_match_audit.csv")
+      pwgval_mutation_list_match_audit,
+      file.path(outdir, "spring2026_pwgval_mrdetect_mutation_list_match_audit.csv")
+    )
+    readr::write_csv(
+      pwgval_mutation_list_match_audit %>%
+        filter(.data$VCF_mutation_list_usable_for_PWGVAL %in% TRUE),
+      file.path(outdir, "spring2026_pwgval_mrdetect_kept_baseline_diagnosis_mutation_lists.csv")
     )
   }
 
   all_files <- all_files %>%
     filter(
       !.data$is_pwgval_m4chip_query_bam |
-        .data$VCF_panel_matches_PWGVAL_patient %in% TRUE
+        .data$VCF_mutation_list_usable_for_PWGVAL %in% TRUE
     )
 }
 
@@ -441,7 +525,7 @@ if ("VCF_panel_sample_type" %in% names(Merged_MRDetect_dilution)) {
   if (nrow(excluded_disallowed_dilution_panel) > 0) {
     readr::write_csv(
       excluded_disallowed_dilution_panel,
-      file.path(outdir, "spring2026_pwgval_mrdetect_excluded_disallowed_vcf_panels.csv")
+      file.path(outdir, "spring2026_pwgval_mrdetect_excluded_disallowed_vcf_mutation_lists.csv")
     )
   }
 
@@ -503,7 +587,35 @@ Merged_MRDetect_dilution <- Merged_MRDetect_dilution %>%
 # 11) Laod in the matched healthy control data and join
 # ──────────────────────────────────────────────────────────────────────────────
 Healthy_reference <- readRDS("MRDetect_output_winter_2025/Processed_R_outputs/cfWGS_Winter2025All_MRDetect_May2025.rds")
-Healthy_reference <- Healthy_reference %>% filter(Study == "CHARM_healthy") %>% filter(Patient == "VA-02")
+needed_healthy_reference_vcfs <- Merged_MRDetect_dilution %>%
+  filter(!is.na(.data$VCF_clean), nzchar(.data$VCF_clean)) %>%
+  distinct(VCF_clean)
+
+Healthy_reference <- Healthy_reference %>%
+  filter(
+    .data$Study == "CHARM_healthy",
+    .data$VCF_clean %in% needed_healthy_reference_vcfs$VCF_clean
+  )
+
+healthy_reference_audit <- needed_healthy_reference_vcfs %>%
+  left_join(
+    Healthy_reference %>%
+      count(VCF_clean, Mut_source, Filter_source, name = "healthy_reference_rows"),
+    by = "VCF_clean"
+  ) %>%
+  mutate(
+    healthy_reference_rows = coalesce(.data$healthy_reference_rows, 0L),
+    healthy_reference_status = if_else(
+      .data$healthy_reference_rows > 0,
+      "available",
+      "missing"
+    )
+  ) %>%
+  arrange(.data$VCF_clean, .data$Mut_source, .data$Filter_source)
+readr::write_csv(
+  healthy_reference_audit,
+  file.path(outdir, "spring2026_dilution_mrdetect_healthy_reference_audit.csv")
+)
 
 ## Ensure matching column types
 Merged_MRDetect_dilution <- Merged_MRDetect_dilution %>%

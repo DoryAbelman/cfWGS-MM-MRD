@@ -213,7 +213,7 @@ dilution_df <- dilution_base %>%
     mrdetect_missing_reason = case_when(
       .data$mrdetect_status == "available" ~ NA_character_,
       .data$dilution_series == "PWGVAL_M4CHIP" ~
-        "No PWGVAL query BAM rows against matching VA/TFRIM4 mutation panels in loaded MRDetect outputs",
+        "No PWGVAL query BAM rows against matching same-patient baseline/diagnosis personalized mutation lists in loaded MRDetect outputs",
       TRUE ~ "No matching MRDetect row after dilution metadata join"
     )
   ) %>%
@@ -304,6 +304,37 @@ dilution_df <- dilution_df %>%
 
 ## For consistency
 dilution_df$LOD <- dilution_df$LOD_updated
+
+pwgval_feature_availability <- dilution_df %>%
+  filter(.data$is_pwgval_dilution %in% TRUE) %>%
+  transmute(
+    Patient,
+    Sample_ID,
+    Bam,
+    Sample,
+    LOD,
+    WGS_Tumor_Fraction_Blood_plasma_cfDNA,
+    mrdetect_status,
+    mrdetect_missing_reason,
+    has_detect_rate_BM = !is.na(.data$detect_rate_BM),
+    has_detect_rate_blood = !is.na(.data$detect_rate_blood),
+    has_zscore_BM = !is.na(.data$zscore_BM),
+    has_zscore_blood = !is.na(.data$zscore_blood),
+    has_z_score_detection_rate_BM = !is.na(.data$z_score_detection_rate_BM),
+    has_z_score_detection_rate_blood = !is.na(.data$z_score_detection_rate_blood),
+    has_BM_rate_only_prob = !is.na(.data$BM_rate_only_prob),
+    has_Blood_rate_only_prob = !is.na(.data$Blood_rate_only_prob),
+    has_BM_base_zscore_prob = !is.na(.data$BM_base_zscore_prob),
+    has_Blood_base_zscore_prob = !is.na(.data$Blood_base_zscore_prob),
+    has_BM_plus_fragment_prob = !is.na(.data$BM_plus_fragment_prob),
+    has_Blood_plus_fragment_prob = !is.na(.data$Blood_plus_fragment_prob)
+  )
+if (nrow(pwgval_feature_availability) > 0) {
+  write_csv(
+    pwgval_feature_availability,
+    file.path(OUTPUT_DIR_TABLES, "spring2026_pwgval_dilution_feature_model_availability.csv")
+  )
+}
 
 # ── 7. SAVE SCORED DILUTION SERIES ──────────────────────────────────────────
 write_rds(dilution_df, file.path(OUTPUT_DIR, "dilution_series_scored_updated4.rds"))
@@ -2461,5 +2492,619 @@ ms_copy_artifact(
   description = "Blood/cfDNA-informed dilution-series LOD panel used as Extended Data Figure 7D.",
   script_name = "3_1_part2_Apply_cfWGS_thresholds_to_dilution_series.R"
 )
+
+# -------------------------------------------------------------------------
+# Reviewer-facing diagnostics: Fig5G blood dilution-series patient lines
+#
+# What this is:
+#   Two exploratory-but-reproducible versions of the blood/cfDNA dilution panel:
+#   one combined plot with patient/series/replicate lines, and one patient-
+#   stratified set of Fig5G-style plots. These figures do not retrain or rescore
+#   models; they reuse the scored dilution_df and thresholds used above.
+# -------------------------------------------------------------------------
+
+PRESENTATION_FIG5G_PATIENT_DIR <- file.path(
+  OUTPUT_DIR_FIGURES,
+  "Fig5G_LOD_by_patient"
+)
+if (!dir.exists(PRESENTATION_FIG5G_PATIENT_DIR)) {
+  dir.create(PRESENTATION_FIG5G_PATIENT_DIR, recursive = TRUE)
+}
+
+extract_dilution_replicate <- function(sample_id) {
+  replicate_id <- str_extract(sample_id, "rep[0-9]+$")
+  if_else(is.na(replicate_id), "single", replicate_id)
+}
+
+make_safe_filename_token <- function(x) {
+  str_replace_all(x, "[^A-Za-z0-9]+", "_") %>%
+    str_replace_all("^_|_$", "")
+}
+
+format_lod_percent <- function(x) {
+  out <- vapply(
+    x,
+    function(value) {
+      label <- format(value, scientific = FALSE, trim = TRUE, digits = 7)
+      if (grepl("\\.", label)) {
+        label <- sub("0+$", "", label)
+        label <- sub("\\.$", "", label)
+      }
+      label
+    },
+    character(1)
+  )
+  paste0(out, "%")
+}
+
+summarise_spearman_for_panels <- function(dat, x_col = "LOD") {
+  dat %>%
+    filter(.data$panel_type == "Feature") %>%
+    group_by(.data$feature) %>%
+    summarise(
+      n_complete = sum(complete.cases(.data[[x_col]], .data$value)),
+      n_lod = n_distinct(.data[[x_col]][!is.na(.data[[x_col]])]),
+      n_value = n_distinct(.data$value[!is.na(.data$value)]),
+      rho = if_else(
+        .data$n_complete >= 3 & .data$n_lod >= 2 & .data$n_value >= 2,
+        suppressWarnings(cor(.data$value, .data[[x_col]], method = "spearman", use = "complete.obs")),
+        NA_real_
+      ),
+      p = if_else(
+        .data$n_complete >= 3 & .data$n_lod >= 2 & .data$n_value >= 2,
+        suppressWarnings(cor.test(.data$value, .data[[x_col]], method = "spearman")$p.value),
+        NA_real_
+      ),
+      .groups = "drop"
+    ) %>%
+    mutate(
+      p_text = case_when(
+        is.na(.data$p) ~ "p = NA",
+        .data$p < 0.01 ~ "p < 0.01",
+        TRUE ~ sprintf("p = %.2f", .data$p)
+      ),
+      label = if_else(
+        is.na(.data$rho),
+        "rho = NA\np = NA",
+        paste0(sprintf("rho = %.2f", .data$rho), "\n", .data$p_text)
+      )
+    )
+}
+
+blood_patient_source <- dilution_df %>%
+  mutate(
+    series_label = if_else(
+      .data$is_pwgval_dilution,
+      "PWGVAL M4CHIP",
+      "VA-02 historical"
+    ),
+    replicate_id = extract_dilution_replicate(.data$Sample_ID),
+    patient_series = paste(.data$Patient, .data$series_label, sep = " | "),
+    line_group = paste(.data$Patient, .data$series_label, .data$replicate_id, sep = "__")
+  ) %>%
+  dplyr::select(
+    Patient,
+    Sample_ID,
+    Sample,
+    Bam,
+    LOD,
+    series_label,
+    replicate_id,
+    patient_series,
+    line_group,
+    all_of(c(blood_feat_names, blood_prob_feats))
+  ) %>%
+  pivot_longer(
+    cols = all_of(c(blood_feat_names, blood_prob_feats)),
+    names_to = "feature",
+    values_to = "value"
+  ) %>%
+  mutate(
+    panel_type = if_else(.data$feature %in% blood_feat_names, "Feature", "Probability")
+  ) %>%
+  left_join(blood_thresholds, by = "feature") %>%
+  mutate(
+    call = case_when(
+      .data$feature == "Blood_zscore_only_sites_prob" & .data$value >= .data$thr ~ "Positive",
+      .data$feature == "Blood_zscore_only_sites_prob" & .data$value >= 0.380 &
+        .data$value < .data$thr ~ "Confirmatory",
+      .data$feature == "Blood_zscore_only_sites_prob" ~ "Negative",
+      .data$panel_type == "Probability" & .data$value >= .data$thr ~ "Positive",
+      .data$panel_type == "Probability" ~ "Negative",
+      TRUE ~ NA_character_
+    ),
+    call = factor(.data$call, levels = c("Negative", "Confirmatory", "Positive"))
+  )
+
+write_csv(
+  blood_patient_source,
+  file.path(SOURCE_DATA_DIR, "SourceData_Fig5G_Blood_patient_series_points.csv")
+)
+
+make_blood_patient_line_plot <- function(plot_dat,
+                                         plot_title,
+                                         patient_specific = FALSE,
+                                         show_legend = TRUE,
+                                         x_col = "LOD",
+                                         x_breaks = major_breaks,
+                                         x_minor_breaks = minor_breaks,
+                                         x_labels = format_lod_percent) {
+  if (nrow(plot_dat) == 0) {
+    stop("No rows available for patient-line dilution plot.")
+  }
+  annotation_df <- summarise_spearman_for_panels(plot_dat, x_col = x_col)
+  color_var <- if (patient_specific) "replicate_id" else "patient_series"
+  color_label <- if (patient_specific) "Replicate" else "Patient | series"
+
+  feature_df <- plot_dat %>% filter(.data$panel_type == "Feature")
+  probability_df <- plot_dat %>% filter(.data$panel_type == "Probability")
+
+  p_feature_lines <- ggplot(
+    feature_df,
+    aes(x = .data[[x_col]], y = .data$value, group = .data$line_group)
+    ) +
+    geom_line(aes(color = .data[[color_var]], linetype = .data$replicate_id),
+              linewidth = 0.45, alpha = 0.75) +
+    geom_point(aes(color = .data[[color_var]]),
+               shape = 16, size = 1.8, alpha = 0.9) +
+    facet_wrap(
+      ~ feature,
+      scales = "free_y",
+      labeller = as_labeller(facet_labels_blood_hc)
+    ) +
+    geom_text(
+      data = annotation_df,
+      aes(x = 0.025, y = Inf, label = .data$label),
+      hjust = 0, vjust = 1.2, size = 3, inherit.aes = FALSE
+    ) +
+    scale_x_continuous(
+      trans = compose_trans("log10", "reverse"),
+      breaks = x_breaks,
+      minor_breaks = x_minor_breaks,
+      labels = x_labels
+    ) +
+    annotation_logticks(sides = "b", base = 10) +
+    scale_linetype_manual(
+      name = "Replicate",
+      values = c(rep01 = "solid", rep02 = "dashed", single = "dotdash")
+    ) +
+    labs(
+      x = "Log tumour fraction (%)",
+      y = "Feature value",
+      color = color_label
+    ) +
+    guides(
+      color = guide_legend(order = 1),
+      linetype = guide_legend(order = 2)
+    ) +
+    theme_classic(base_size = 10) +
+    theme(
+      strip.text = element_text(face = "bold"),
+      panel.border = element_rect(color = "black", fill = NA),
+      axis.ticks = element_line(color = "black"),
+      legend.position = if (show_legend) "right" else "none"
+    )
+
+  p_probability_lines <- ggplot(
+    probability_df,
+    aes(x = .data[[x_col]], y = .data$value, group = .data$line_group)
+  ) +
+    geom_hline(
+      data = blood_thresholds,
+      aes(yintercept = .data$thr),
+      linetype = "dashed",
+      color = "gray40"
+    ) +
+    geom_hline(
+      data = data.frame(feature = "Blood_zscore_only_sites_prob", thr = 0.380),
+      aes(yintercept = .data$thr),
+      linetype = "dashed",
+      color = "steelblue"
+    ) +
+    geom_line(aes(color = .data[[color_var]], linetype = .data$replicate_id),
+              linewidth = 0.45, alpha = 0.75) +
+    geom_point(aes(fill = .data$call), shape = 21, color = "black",
+               size = 1.9, alpha = 0.95, stroke = 0.25) +
+    facet_wrap(
+      ~ feature,
+      scales = "free_y",
+      labeller = as_labeller(facet_labels_blood_hc)
+    ) +
+    scale_x_continuous(
+      trans = compose_trans("log10", "reverse"),
+      breaks = x_breaks,
+      minor_breaks = x_minor_breaks,
+      labels = x_labels
+    ) +
+    annotation_logticks(sides = "b", base = 10) +
+    scale_linetype_manual(
+      name = "Replicate",
+      values = c(rep01 = "solid", rep02 = "dashed", single = "dotdash")
+    ) +
+    scale_fill_manual(
+      name = "Call",
+      values = c(
+        Negative = "gray60",
+        Confirmatory = "steelblue",
+        Positive = "forestgreen"
+      ),
+      na.value = "white"
+    ) +
+    labs(
+      x = "Log tumour fraction (%)",
+      y = "Model probability",
+      color = color_label
+    ) +
+    guides(
+      color = "none",
+      linetype = "none",
+      fill = guide_legend(order = 3)
+    ) +
+    theme_classic(base_size = 10) +
+    theme(
+      strip.text = element_text(face = "bold"),
+      panel.border = element_rect(color = "black", fill = NA),
+      axis.ticks = element_line(color = "black"),
+      legend.position = if (show_legend) "right" else "none"
+    )
+
+  p_feature_lines + p_probability_lines +
+    plot_layout(nrow = 1, widths = c(3, 2), guides = "collect") +
+    plot_annotation(
+      title = plot_title,
+      theme = theme(
+        plot.title = element_text(hjust = 0.5, face = "bold", size = 13),
+        plot.margin = margin(5, 5, 5, 5),
+        plot.background = element_rect(fill = "white", colour = NA)
+      )
+    ) &
+    theme(
+      panel.border = element_rect(colour = "black", fill = NA),
+      strip.text = element_text(face = "bold")
+    )
+}
+
+combined_blood_patient_lines <- make_blood_patient_line_plot(
+  blood_patient_source,
+  "cfDNA Dilution-Series Feature Values by Patient, Series, and Replicate",
+  patient_specific = FALSE
+)
+
+ggsave(
+  filename = file.path(OUTPUT_DIR_FIGURES, "Fig5G_LOD_combined_patient_series_lines.png"),
+  plot = combined_blood_patient_lines,
+  width = 12.8,
+  height = 4.8,
+  dpi = 600
+)
+message("Saved: Fig5G_LOD_combined_patient_series_lines.png")
+
+patient_line_plots <- lapply(
+  sort(unique(blood_patient_source$Patient)),
+  function(patient_id) {
+    patient_plot <- make_blood_patient_line_plot(
+      plot_dat = blood_patient_source %>% filter(.data$Patient == patient_id),
+      plot_title = paste0("cfDNA Dilution-Series Feature Values: ", patient_id),
+      patient_specific = TRUE
+    )
+    out_file <- file.path(
+      PRESENTATION_FIG5G_PATIENT_DIR,
+      paste0("Fig5G_LOD_patient_", make_safe_filename_token(patient_id), ".png")
+    )
+    ggsave(
+      filename = out_file,
+      plot = patient_plot,
+      width = 12.2,
+      height = 4.5,
+      dpi = 600
+    )
+    message("Saved: ", out_file)
+    patient_plot
+  }
+)
+
+combined_patient_rows <- wrap_plots(patient_line_plots, ncol = 1) +
+  plot_annotation(
+    title = "cfDNA Dilution-Series Feature Values: Patient-Stratified Views",
+    theme = theme(
+      plot.title = element_text(hjust = 0.5, face = "bold", size = 14),
+      plot.background = element_rect(fill = "white", colour = NA)
+    )
+  )
+
+ggsave(
+  filename = file.path(OUTPUT_DIR_FIGURES, "Fig5G_LOD_individual_patient_plots.png"),
+  plot = combined_patient_rows,
+  width = 12.8,
+  height = 16,
+  dpi = 500
+)
+message("Saved: Fig5G_LOD_individual_patient_plots.png")
+
+# -------------------------------------------------------------------------
+# Sensitivity version: historical VA-02 final timepoint treated as 0% TF
+#
+# The current main dilution_df keeps the original VA-02 recalibration:
+#   adjusted TF = baseline_vaf * dilution + neg_vaf * (1 - dilution)
+# where neg_vaf is the MRDetect-estimated tumor fraction at the longitudinal
+# low/negative endpoint. For comparison with the newer PWGVAL/M4CHIP dilution
+# cases, this sensitivity view keeps the baseline scaling but forces the VA-02
+# final endpoint contribution to 0. PWGVAL/M4CHIP rows are not recalculated.
+# -------------------------------------------------------------------------
+
+zero_final_plot_x <- min(
+  dilution_df %>%
+    mutate(
+      LOD_zero_final = if_else(
+        .data$is_pwgval_dilution,
+        .data$LOD,
+        (.data$LOD_original / orig_full) * baseline_vaf
+      )
+    ) %>%
+    filter(.data$LOD_zero_final > 0) %>%
+    pull(LOD_zero_final),
+  na.rm = TRUE
+) * 0.35
+
+format_lod_percent_with_zero <- function(x) {
+  out <- format_lod_percent(x)
+  out[x < min(major_breaks, na.rm = TRUE)] <- "0%"
+  out
+}
+
+zero_final_breaks <- sort(c(major_breaks, zero_final_plot_x))
+zero_final_break_labels <- format_lod_percent(zero_final_breaks)
+zero_final_break_labels[zero_final_breaks == zero_final_plot_x] <- "0%"
+zero_final_minor_breaks <- minor_ext[
+  minor_ext >= min(c(xr, zero_final_plot_x), na.rm = TRUE) &
+    minor_ext <= max(c(xr, zero_final_plot_x), na.rm = TRUE)
+]
+
+blood_patient_zero_final_source <- dilution_df %>%
+  mutate(
+    LOD_current_recalibrated = .data$LOD,
+    LOD_zero_final = if_else(
+      .data$is_pwgval_dilution,
+      .data$LOD,
+      (.data$LOD_original / orig_full) * baseline_vaf
+    ),
+    LOD_plot_zero_final = if_else(
+      .data$LOD_zero_final > 0,
+      .data$LOD_zero_final,
+      zero_final_plot_x
+    ),
+    LOD_zero_final_update_method = if_else(
+      .data$is_pwgval_dilution,
+      "PWGVAL workbook TF_Dilution retained; not recalculated",
+      "historical VA-02 dilution recalibration with final endpoint TF set to 0"
+    ),
+    series_label = if_else(
+      .data$is_pwgval_dilution,
+      "PWGVAL M4CHIP",
+      "VA-02 historical"
+    ),
+    replicate_id = extract_dilution_replicate(.data$Sample_ID),
+    patient_series = paste(.data$Patient, .data$series_label, sep = " | "),
+    line_group = paste(.data$Patient, .data$series_label, .data$replicate_id, sep = "__")
+  ) %>%
+  dplyr::select(
+    Patient,
+    Sample_ID,
+    Sample,
+    Bam,
+    LOD_current_recalibrated,
+    LOD_zero_final,
+    LOD_plot_zero_final,
+    LOD_zero_final_update_method,
+    series_label,
+    replicate_id,
+    patient_series,
+    line_group,
+    all_of(c(blood_feat_names, blood_prob_feats))
+  ) %>%
+  pivot_longer(
+    cols = all_of(c(blood_feat_names, blood_prob_feats)),
+    names_to = "feature",
+    values_to = "value"
+  ) %>%
+  mutate(
+    panel_type = if_else(.data$feature %in% blood_feat_names, "Feature", "Probability")
+  ) %>%
+  left_join(blood_thresholds, by = "feature") %>%
+  mutate(
+    call = case_when(
+      .data$feature == "Blood_zscore_only_sites_prob" & .data$value >= .data$thr ~ "Positive",
+      .data$feature == "Blood_zscore_only_sites_prob" & .data$value >= 0.380 &
+        .data$value < .data$thr ~ "Confirmatory",
+      .data$feature == "Blood_zscore_only_sites_prob" ~ "Negative",
+      .data$panel_type == "Probability" & .data$value >= .data$thr ~ "Positive",
+      .data$panel_type == "Probability" ~ "Negative",
+      TRUE ~ NA_character_
+    ),
+    call = factor(.data$call, levels = c("Negative", "Confirmatory", "Positive"))
+  )
+
+write_csv(
+  blood_patient_zero_final_source,
+  file.path(SOURCE_DATA_DIR, "SourceData_Fig5G_Blood_patient_series_points_zero_final_tf.csv")
+)
+
+make_blood_zero_final_point_plot <- function(plot_dat) {
+  feature_df <- plot_dat %>% filter(.data$panel_type == "Feature")
+  probability_df <- plot_dat %>% filter(.data$panel_type == "Probability")
+  annotation_df <- summarise_spearman_for_panels(
+    plot_dat,
+    x_col = "LOD_zero_final"
+  )
+
+  p_features <- ggplot(
+    feature_df,
+    aes(x = .data$LOD_plot_zero_final, y = .data$value)
+  ) +
+    geom_point(color = "black", size = 2, alpha = 0.8) +
+    facet_wrap(
+      ~ feature,
+      scales = "free_y",
+      labeller = as_labeller(facet_labels_blood_hc)
+    ) +
+    geom_text(
+      data = annotation_df,
+      aes(x = 0.025, y = Inf, label = .data$label),
+      hjust = 0, vjust = 1.2, size = 3, inherit.aes = FALSE
+    ) +
+    scale_x_continuous(
+      trans = compose_trans("log10", "reverse"),
+      breaks = zero_final_breaks,
+      minor_breaks = zero_final_minor_breaks,
+      labels = zero_final_break_labels
+    ) +
+    annotation_logticks(sides = "b", base = 10) +
+    labs(x = "Log tumour fraction (%)", y = "Feature value") +
+    theme_classic(base_size = 10) +
+    theme(
+      strip.text = element_text(face = "bold"),
+      panel.border = element_rect(color = "black", fill = NA),
+      axis.ticks = element_line(color = "black")
+    )
+
+  p_probabilities <- ggplot(
+    probability_df,
+    aes(x = .data$LOD_plot_zero_final, y = .data$value, color = .data$call)
+  ) +
+    geom_hline(
+      data = blood_thresholds,
+      aes(yintercept = .data$thr),
+      linetype = "dashed",
+      color = "gray40"
+    ) +
+    geom_hline(
+      data = data.frame(feature = "Blood_zscore_only_sites_prob", thr = 0.380),
+      aes(yintercept = .data$thr),
+      linetype = "dashed",
+      color = "steelblue"
+    ) +
+    geom_point(size = 2, alpha = 0.8) +
+    facet_wrap(
+      ~ feature,
+      scales = "free_y",
+      labeller = as_labeller(facet_labels_blood_hc)
+    ) +
+    scale_x_continuous(
+      trans = compose_trans("log10", "reverse"),
+      breaks = zero_final_breaks,
+      minor_breaks = zero_final_minor_breaks,
+      labels = zero_final_break_labels
+    ) +
+    annotation_logticks(sides = "b", base = 10) +
+    scale_color_manual(
+      name = "Call",
+      values = c(
+        Negative = "gray60",
+        Confirmatory = "steelblue",
+        Positive = "forestgreen"
+      )
+    ) +
+    labs(x = "Log tumour fraction (%)", y = "Model probability") +
+    theme_classic(base_size = 10) +
+    theme(
+      strip.text = element_text(face = "bold"),
+      panel.border = element_rect(color = "black", fill = NA),
+      axis.ticks = element_line(color = "black"),
+      legend.position = "right"
+    )
+
+  p_features + p_probabilities +
+    plot_layout(nrow = 1, widths = c(3, 2)) +
+    plot_annotation(
+      title = "cfDNA Dilution-Series Feature Values with VA-02 Final Timepoint Set to 0% TF",
+      theme = theme(
+        plot.title = element_text(hjust = 0.5, face = "bold", size = 13),
+        plot.margin = margin(5, 5, 5, 5),
+        plot.background = element_rect(fill = "white", colour = NA)
+      )
+    ) &
+    theme(
+      panel.border = element_rect(colour = "black", fill = NA),
+      strip.text = element_text(face = "bold")
+    )
+}
+
+zero_final_points_plot <- make_blood_zero_final_point_plot(
+  blood_patient_zero_final_source
+)
+
+ggsave(
+  filename = file.path(OUTPUT_DIR_FIGURES, "Fig5G_LOD_combined_zero_final_tf_points.png"),
+  plot = zero_final_points_plot,
+  width = 12.8,
+  height = 4.8,
+  dpi = 600
+)
+message("Saved: Fig5G_LOD_combined_zero_final_tf_points.png")
+
+zero_final_line_plot <- make_blood_patient_line_plot(
+  plot_dat = blood_patient_zero_final_source,
+  plot_title = "cfDNA Dilution-Series Patient Lines with VA-02 Final Timepoint Set to 0% TF",
+  patient_specific = FALSE,
+  x_col = "LOD_plot_zero_final",
+  x_breaks = zero_final_breaks,
+  x_minor_breaks = zero_final_minor_breaks,
+  x_labels = zero_final_break_labels
+)
+
+ggsave(
+  filename = file.path(OUTPUT_DIR_FIGURES, "Fig5G_LOD_combined_patient_series_lines_zero_final_tf.png"),
+  plot = zero_final_line_plot,
+  width = 12.8,
+  height = 4.8,
+  dpi = 600
+)
+message("Saved: Fig5G_LOD_combined_patient_series_lines_zero_final_tf.png")
+
+zero_final_patient_line_plots <- lapply(
+  sort(unique(blood_patient_zero_final_source$Patient)),
+  function(patient_id) {
+    patient_plot <- make_blood_patient_line_plot(
+      plot_dat = blood_patient_zero_final_source %>% filter(.data$Patient == patient_id),
+      plot_title = paste0("cfDNA Dilution-Series Feature Values: ", patient_id, " (VA-02 zero-final TF sensitivity)"),
+      patient_specific = TRUE,
+      x_col = "LOD_plot_zero_final",
+      x_breaks = zero_final_breaks,
+      x_minor_breaks = zero_final_minor_breaks,
+      x_labels = zero_final_break_labels
+    )
+    out_file <- file.path(
+      PRESENTATION_FIG5G_PATIENT_DIR,
+      paste0("Fig5G_LOD_patient_", make_safe_filename_token(patient_id), "_zero_final_tf.png")
+    )
+    ggsave(
+      filename = out_file,
+      plot = patient_plot,
+      width = 12.2,
+      height = 4.5,
+      dpi = 600
+    )
+    message("Saved: ", out_file)
+    patient_plot
+  }
+)
+
+zero_final_patient_rows <- wrap_plots(zero_final_patient_line_plots, ncol = 1) +
+  plot_annotation(
+    title = "cfDNA Dilution-Series Feature Values: Patient-Stratified Zero-Final TF Sensitivity",
+    theme = theme(
+      plot.title = element_text(hjust = 0.5, face = "bold", size = 14),
+      plot.background = element_rect(fill = "white", colour = NA)
+    )
+  )
+
+ggsave(
+  filename = file.path(OUTPUT_DIR_FIGURES, "Fig5G_LOD_individual_patient_plots_zero_final_tf.png"),
+  plot = zero_final_patient_rows,
+  width = 12.8,
+  height = 16,
+  dpi = 500
+)
+message("Saved: Fig5G_LOD_individual_patient_plots_zero_final_tf.png")
 
 message("\n═══ Done: healthy-control overlays saved ═══\n")

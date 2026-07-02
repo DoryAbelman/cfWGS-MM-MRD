@@ -70,6 +70,92 @@ if (!file.exists(.helpers_path)) {
 source(.helpers_path)
 rm(.helpers_path)
 
+restrict_to_single_baseline_mutation_source <- function(dat, audit_dir, audit_prefix) {
+  baseline_labels <- c("Baseline", "Diagnosis")
+
+  baseline_sources <- dat %>%
+    filter(timepoint_info %in% baseline_labels) %>%
+    mutate(
+      source_key = coalesce(
+        na_if(as.character(VCF_factor), ""),
+        na_if(as.character(VCF_clean), ""),
+        na_if(as.character(VCF), ""),
+        na_if(as.character(Sample_ID), ""),
+        paste(as.character(Patient), as.character(Mut_source), as.character(Timepoint), as.character(timepoint_info), sep = "|")
+      ),
+      source_date = suppressWarnings(as.Date(Date_of_sample_collection_Sample_ID)),
+      timepoint_rank = case_when(
+        str_to_upper(Timepoint) %in% c("T0", "TP0", "D0", "0", "01", "1") ~ 1,
+        str_to_upper(Timepoint) %in% c("T1", "TP1") ~ 2,
+        str_detect(Timepoint, "^[Tt]?[0-9]+$") ~ as.numeric(str_remove(str_to_upper(Timepoint), "^T")) + 10,
+        TRUE ~ 999
+      ),
+      label_rank = case_when(
+        timepoint_info == "Diagnosis" ~ 1,
+        timepoint_info == "Baseline" ~ 2,
+        TRUE ~ 9
+      )
+    ) %>%
+    distinct(
+      Patient, Mut_source, source_key, Sample_ID, Timepoint, timepoint_info,
+      source_date, timepoint_rank, label_rank
+    )
+
+  duplicate_groups <- baseline_sources %>%
+    count(Patient, Mut_source, name = "n_baseline_diagnosis_mutation_sources") %>%
+    filter(n_baseline_diagnosis_mutation_sources > 1)
+
+  if (nrow(duplicate_groups) == 0L) {
+    return(dat)
+  }
+
+  selected_sources <- baseline_sources %>%
+    semi_join(duplicate_groups, by = c("Patient", "Mut_source")) %>%
+    arrange(
+      Patient, Mut_source,
+      coalesce(source_date, as.Date("9999-12-31")),
+      timepoint_rank,
+      label_rank,
+      source_key
+    ) %>%
+    group_by(Patient, Mut_source) %>%
+    slice(1) %>%
+    ungroup() %>%
+    transmute(
+      Patient, Mut_source, selected_source_key = source_key,
+      selected_source = paste(Sample_ID, Timepoint, timepoint_info, source_date, sep = "|")
+    )
+
+  baseline_decisions <- baseline_sources %>%
+    semi_join(duplicate_groups, by = c("Patient", "Mut_source")) %>%
+    left_join(selected_sources, by = c("Patient", "Mut_source")) %>%
+    mutate(
+      retained = source_key == selected_source_key,
+      mutation_source = paste(Sample_ID, Timepoint, timepoint_info, source_date, sep = "|")
+    ) %>%
+    arrange(Patient, Mut_source, desc(retained), timepoint_rank, source_key)
+
+  dir.create(audit_dir, recursive = TRUE, showWarnings = FALSE)
+  write_csv(
+    baseline_decisions,
+    file.path(audit_dir, paste0(audit_prefix, "_baseline_mutation_source_deduplication_audit.csv"))
+  )
+
+  dat %>%
+    mutate(
+      source_key = coalesce(
+        na_if(as.character(VCF_factor), ""),
+        na_if(as.character(VCF_clean), ""),
+        na_if(as.character(VCF), ""),
+        na_if(as.character(Sample_ID), ""),
+        paste(as.character(Patient), as.character(Mut_source), as.character(Timepoint), as.character(timepoint_info), sep = "|")
+      )
+    ) %>%
+    left_join(selected_sources, by = c("Patient", "Mut_source")) %>%
+    filter(is.na(selected_source_key) | source_key == selected_source_key) %>%
+    select(-source_key, -selected_source_key, -selected_source)
+}
+
 # resolve common conflicts
 #conflicted::conflicts_prefer("dplyr::mutate")
 #conflicted::conflicts_prefer("dplyr::filter")
@@ -135,7 +221,8 @@ all_files <- all_files %>%
     ),
     Filter_source = case_when(
       str_detect(source_file, "encode_only") ~ "Encode_only",
-      str_detect(source_file, "STR_encode")  ~ "STR_encode",
+      str_detect(source_file, "STR_encode") |
+        str_detect(source_file, "encode_STR_removed") ~ "STR_encode",
       TRUE                                   ~ NA_character_
     )
   ) %>%
@@ -433,8 +520,37 @@ Merged_MRDetect$VCF_factor <- factor(Merged_MRDetect$VCF, levels = unique(Merged
 #   z = (patient_rate - mean_HC_rate) / sd_HC_rate
 # High z-score (>>2) → detection rate significantly above healthy-control noise,
 # suggesting true circulating tumor DNA.
-zscore_lookup <- Merged_MRDetect %>%
-  filter(Study == "CHARM_healthy") %>%
+healthy_reference_candidates <- Merged_MRDetect %>%
+  filter(Study %in% c("CHARM_healthy", "XPLUS_CHARM_healthy", "HCC_healthy")) %>%
+  mutate(
+    healthy_reference_tier = case_when(
+      Study == "CHARM_healthy" ~ "CHARM_healthy",
+      TRUE ~ "non_mm_healthy_fallback"
+    )
+  )
+
+healthy_reference_choice <- healthy_reference_candidates %>%
+  count(VCF_factor, Mut_source, Filter_source, healthy_reference_tier, name = "n_healthy_reference_rows") %>%
+  mutate(healthy_reference_priority = case_when(
+    healthy_reference_tier == "CHARM_healthy" ~ 1L,
+    healthy_reference_tier == "non_mm_healthy_fallback" ~ 2L,
+    TRUE ~ 99L
+  )) %>%
+  group_by(VCF_factor, Mut_source, Filter_source) %>%
+  slice_min(order_by = healthy_reference_priority, n = 1, with_ties = FALSE) %>%
+  ungroup()
+
+write_csv(
+  healthy_reference_choice,
+  file.path(outdir, "spring2026_mrdetect_healthy_reference_choice_audit.csv")
+)
+
+zscore_lookup <- healthy_reference_candidates %>%
+  inner_join(
+    healthy_reference_choice %>%
+      select(VCF_factor, Mut_source, Filter_source, healthy_reference_tier),
+    by = c("VCF_factor", "Mut_source", "Filter_source", "healthy_reference_tier")
+  ) %>%
   select(VCF_factor, Mut_source, Filter_source,
          detection_rate,
          detection_rate_as_reads_detected_over_reads_checked,
@@ -745,6 +861,45 @@ combined_data_plot$percent_change_detection_rate_second_timepoint <- combined_da
 export_dir <- "MRDetect_output_winter_2025/Processed_R_outputs/BM_muts_plots_baseline/"
 dir.create(export_dir, recursive = TRUE, showWarnings = FALSE)
 
+combined_data_plot <- restrict_to_single_baseline_mutation_source(
+  combined_data_plot,
+  audit_dir = export_dir,
+  audit_prefix = "bm"
+)
+
+bm_source_duplicate_audit <- combined_data_plot %>%
+  filter(timepoint_info %in% c("Baseline", "Diagnosis")) %>%
+  distinct(Patient, Mut_source, Sample_ID, Timepoint, timepoint_info) %>%
+  count(Patient, Mut_source, name = "n_baseline_diagnosis_mutation_sources") %>%
+  filter(n_baseline_diagnosis_mutation_sources > 1) %>%
+  left_join(
+    combined_data_plot %>%
+      filter(timepoint_info %in% c("Baseline", "Diagnosis")) %>%
+      distinct(Patient, Mut_source, Sample_ID, Timepoint, timepoint_info) %>%
+      group_by(Patient, Mut_source) %>%
+      summarise(
+        mutation_sources = paste(
+          sort(unique(paste(Sample_ID, Timepoint, timepoint_info, sep = "|"))),
+          collapse = "; "
+        ),
+        .groups = "drop"
+      ),
+    by = c("Patient", "Mut_source")
+  )
+
+write_csv(
+  bm_source_duplicate_audit,
+  file.path(export_dir, "spring2026_bm_mrdetect_duplicate_baseline_source_audit.csv")
+)
+
+if (nrow(bm_source_duplicate_audit) > 0L) {
+  warning(
+    "Patients with more than one baseline/diagnosis BM-mutation source were found. ",
+    "Audit written to: ",
+    file.path(export_dir, "spring2026_bm_mrdetect_duplicate_baseline_source_audit.csv")
+  )
+}
+
 readr::write_csv(
   combined_data_plot,
   file = file.path(export_dir, "cfWGS_MRDetect_BM_data_updated_Sep.csv")
@@ -911,13 +1066,21 @@ combined_data_plot$percent_change_detection_rate_second_timepoint <- combined_da
 
 ## Get rid of marrows that are not at baseline 
 combined_data_plot <- combined_data_plot %>%
-  filter(Timepoint %in% c("01", "T0", "1"))
+  filter(Timepoint %in% c("01", "T0", "T1", "1"))
 combined_data_plot <- combined_data_plot %>% 
   filter(Sample_type == "Blood_plasma_cfDNA")
 
 
 # 8) Write out 
 export_dir <- "MRDetect_output_winter_2025/Processed_R_outputs/Blood_muts_plots_baseline/"
+dir.create(export_dir, recursive = TRUE, showWarnings = FALSE)
+
+combined_data_plot <- restrict_to_single_baseline_mutation_source(
+  combined_data_plot,
+  audit_dir = export_dir,
+  audit_prefix = "blood_good_baseline"
+)
+
 readr::write_csv(
   combined_data_plot,
   file = file.path(export_dir, "cfWGS MRDetect Blood data updated Sep.csv")
@@ -994,13 +1157,54 @@ combined_data_plot$percent_change_detection_rate_second_timepoint <- combined_da
 
 ## Get rid of marrows that are not at baseline 
 combined_data_plot <- combined_data_plot %>%
-  filter(Timepoint %in% c("01", "T0", "1"))
+  filter(Timepoint %in% c("01", "T0", "T1", "1"))
 combined_data_plot <- combined_data_plot %>% 
   filter(Sample_type == "Blood_plasma_cfDNA")
 
 
 # 8) Write out 
 export_dir <- "MRDetect_output_winter_2025/Processed_R_outputs/Blood_muts_plots_baseline/"
+dir.create(export_dir, recursive = TRUE, showWarnings = FALSE)
+
+combined_data_plot <- restrict_to_single_baseline_mutation_source(
+  combined_data_plot,
+  audit_dir = export_dir,
+  audit_prefix = "blood_all_patients"
+)
+
+blood_source_duplicate_audit <- combined_data_plot %>%
+  filter(timepoint_info %in% c("Baseline", "Diagnosis")) %>%
+  distinct(Patient, Mut_source, Sample_ID, Timepoint, timepoint_info) %>%
+  count(Patient, Mut_source, name = "n_baseline_diagnosis_mutation_sources") %>%
+  filter(n_baseline_diagnosis_mutation_sources > 1) %>%
+  left_join(
+    combined_data_plot %>%
+      filter(timepoint_info %in% c("Baseline", "Diagnosis")) %>%
+      distinct(Patient, Mut_source, Sample_ID, Timepoint, timepoint_info) %>%
+      group_by(Patient, Mut_source) %>%
+      summarise(
+        mutation_sources = paste(
+          sort(unique(paste(Sample_ID, Timepoint, timepoint_info, sep = "|"))),
+          collapse = "; "
+        ),
+        .groups = "drop"
+      ),
+    by = c("Patient", "Mut_source")
+  )
+
+write_csv(
+  blood_source_duplicate_audit,
+  file.path(export_dir, "spring2026_blood_mrdetect_duplicate_baseline_source_audit.csv")
+)
+
+if (nrow(blood_source_duplicate_audit) > 0L) {
+  warning(
+    "Patients with more than one baseline/diagnosis blood-mutation source were found. ",
+    "Audit written to: ",
+    file.path(export_dir, "spring2026_blood_mrdetect_duplicate_baseline_source_audit.csv")
+  )
+}
+
 readr::write_csv(
   combined_data_plot,
   file = file.path(export_dir, "cfWGS MRDetect Blood data updated Sep with all patients.csv")

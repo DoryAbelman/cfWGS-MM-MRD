@@ -285,7 +285,7 @@ ggsave(
 # and merge with EasyM to enable head-to-head comparisons
 
 ### Now load in the cfWGS data 
-dat_rds       <- "Output_tables_2025/all_patients_with_BM_and_blood_calls_updated5.rds"
+dat_rds       <- "Output_tables_2025/all_patients_with_BM_and_blood_calls_updated6.rds"
 
 ## Add the other info that we have to this to get the actual total patient counts including baseline 
 dat <- readRDS(dat_rds) %>%
