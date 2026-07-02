@@ -27,7 +27,9 @@
 #   - cfWGS clinical MRD values with timepoint and dates updated August 2025.csv
 #   - Final_aggregate_table_cfWGS_features_with_clinical_and_demographics_updated.csv/.rds
 #   - Final_aggregate_table_cfWGS_features_with_clinical_and_demographics_updated2.csv/.rds
+#       intermediate checkpoint after timepoint/date cleanup
 #   - Final_aggregate_table_cfWGS_features_with_clinical_and_demographics_updated9.csv/.rds
+#       final current revision-inclusive aggregate used downstream
 #   - baseline_high_quality_patients_updated.csv/.rds
 #
 # Dependencies:
@@ -130,10 +132,14 @@ MRD_SPORE_IMMAGINE <- MRD_SPORE_IMMAGINE %>%
 MRD_SPORE_IMMAGINE$Flow_pct_cells <- MRD_SPORE_IMMAGINE$Flow_pct_cells*100
 
 oicr_revision_clinical_mrd_path <- file.path(
+  # Structured OICR clinical rows can include clinical MRD results for revision
+  # patients. These are paired to revision plasma/cfDNA sample dates below before
+  # joining into the common clinical MRD table.
   "New OICR Submissions",
   "derived_metadata",
   "oicr_submission_clinical_comprehensive_rows.csv"
 )
+oicr_revision_request_mrd_path <- "FINAL_sample_request_by_sample_send.csv"
 
 oicr_revision_clinical_mrd <- tibble()
 if (file.exists(oicr_revision_clinical_mrd_path)) {
@@ -141,6 +147,9 @@ if (file.exists(oicr_revision_clinical_mrd_path)) {
 
   if (!is.null(revision_metadata_for_mrd)) {
     revision_blood_sample_lookup <- revision_metadata_for_mrd %>%
+      # Pair clinical MRD results to revision plasma samples by patient numeric ID
+      # and MRD_Blood_Date. Blood/plasma rows only are eligible because this table
+      # represents clinical MRD blood draws, not BM/buffy metadata rows.
       filter(
         Sample_type == "Blood_plasma_cfDNA",
         !is.na(patient_numeric_id),
@@ -173,6 +182,8 @@ if (file.exists(oicr_revision_clinical_mrd_path)) {
         by = c("Patient_ID" = "patient_numeric_id", "MRD_Blood_Date" = "revision_blood_date")
       ) %>%
       mutate(
+        # Keep every clinical MRD row in the audit, but integrate only rows with
+        # a known MRD result and an exact revision plasma sample-date match.
         revision_mrd_pairing_status = case_when(
           is.na(MRD_Result) | MRD_Result == "Unknown" ~ "not_used_unknown_mrd_result",
           is.na(MRD_Blood_Date) ~ "not_used_missing_mrd_blood_date",
@@ -202,6 +213,8 @@ if (file.exists(oicr_revision_clinical_mrd_path)) {
     oicr_revision_clinical_mrd <- oicr_revision_clinical_mrd_audit %>%
       filter(revision_mrd_pairing_status == "used_selected_revision_mrd_pair") %>%
       transmute(
+        # Convert OICR clinical MRD labels into the same columns used by legacy
+        # M4/SPORE/IMMAGINE clinical MRD tables.
         Patient,
         Date = MRD_Blood_Date,
         Visit_Number,
@@ -225,6 +238,71 @@ if (file.exists(oicr_revision_clinical_mrd_path)) {
         revision_mrd_sample_id
       ) %>%
       distinct()
+
+    if (file.exists(oicr_revision_request_mrd_path)) {
+      oicr_revision_request_mrd_audit <- read_csv(
+        oicr_revision_request_mrd_path,
+        show_col_types = FALSE
+      ) %>%
+        mutate(
+          Sample_Date = as.Date(Sample_Date),
+          request_row_id = row_number()
+        ) %>%
+        filter(Request_Type %in% c("MRD Blood", "MRD-timed Blood")) %>%
+        left_join(
+          revision_blood_sample_lookup,
+          by = c("Patient_ID" = "patient_numeric_id", "Sample_Date" = "revision_blood_date")
+        ) %>%
+        mutate(
+          revision_request_mrd_pairing_status = case_when(
+            is.na(MRD_Result) | MRD_Result == "Unknown" ~ "not_used_unknown_mrd_result",
+            is.na(Sample_Date) ~ "not_used_missing_request_sample_date",
+            is.na(Patient) ~ "not_used_no_exact_revision_plasma_sample_date_match",
+            TRUE ~ "used_exact_request_mrd_pair"
+          )
+        )
+
+      write_csv(
+        oicr_revision_request_mrd_audit,
+        file.path("Output_tables_2025", "spring2026_oicr_request_mrd_pairing_audit.csv")
+      )
+
+      oicr_revision_request_mrd <- oicr_revision_request_mrd_audit %>%
+        filter(revision_request_mrd_pairing_status == "used_exact_request_mrd_pair") %>%
+        transmute(
+          Patient,
+          Date = Sample_Date,
+          Visit_Number,
+          Sample_Code,
+          timepoint_info,
+          Flow_pct_cells = case_when(
+            MRD_Result == "Absent" ~ 0,
+            MRD_Result == "Present" ~ suppressWarnings(as.numeric(str_extract(Clinical_Context, "[0-9.]+(?=%\\))"))),
+            TRUE ~ NA_real_
+          ),
+          MRD_Results_FLOW = case_when(
+            MRD_Result == "Absent" ~ "Negative",
+            MRD_Result == "Present" ~ "Positive",
+            TRUE ~ NA_character_
+          ),
+          revision_mrd_test_date = as.Date(Sample_Date - Days_from_MRD),
+          revision_mrd_blood_date = Sample_Date,
+          revision_mrd_days_from_blood = Days_from_MRD,
+          revision_mrd_source = "Spring 2026 OICR per-sample MRD request table",
+          revision_mrd_decision_rationale = Clinical_Context,
+          revision_mrd_sample_id
+        ) %>%
+        anti_join(
+          oicr_revision_clinical_mrd %>% distinct(Patient, Sample_Code),
+          by = c("Patient", "Sample_Code")
+        ) %>%
+        distinct()
+
+      oicr_revision_clinical_mrd <- bind_rows(
+        oicr_revision_clinical_mrd,
+        oicr_revision_request_mrd
+      )
+    }
   }
 }
 
@@ -1707,6 +1785,72 @@ write.csv(joined_consolidated, file = "Final_aggregate_table_cfWGS_features_with
 # Write to RDS (for loading back into R with full structure)
 saveRDS(joined_consolidated, file = "Final_aggregate_table_cfWGS_features_with_clinical_and_demographics_updated.rds")
 
+pre_cleanup_sample_identity_map <- joined_consolidated %>%
+  filter(!is.na(Patient), !is.na(Sample_Code)) %>%
+  transmute(
+    Patient = as.character(Patient),
+    Sample_Code = as.character(Sample_Code),
+    canonical_Timepoint = as.character(Timepoint),
+    canonical_timepoint_info = as.character(timepoint_info),
+    canonical_Date = as.Date(Date),
+    identity_source = "current_pre_cleanup",
+    identity_priority = 2L
+  ) %>%
+  filter(!is.na(canonical_Timepoint) | !is.na(canonical_timepoint_info) | !is.na(canonical_Date)) %>%
+  distinct()
+
+legacy_submitted_identity_path <- "Final_aggregate_table_cfWGS_features_with_clinical_and_demographics_updated6.csv"
+if (file.exists(legacy_submitted_identity_path)) {
+  legacy_submitted_identity_map <- readr::read_csv(
+    legacy_submitted_identity_path,
+    show_col_types = FALSE
+  ) %>%
+    filter(!is.na(Patient), !is.na(Sample_Code)) %>%
+    transmute(
+      Patient = as.character(Patient),
+      Sample_Code = as.character(Sample_Code),
+      canonical_Timepoint = as.character(Timepoint),
+      canonical_timepoint_info = as.character(timepoint_info),
+      canonical_Date = as.Date(Date),
+      identity_source = "legacy_submitted_updated6",
+      identity_priority = 1L
+    ) %>%
+    filter(!is.na(canonical_Timepoint) | !is.na(canonical_timepoint_info) | !is.na(canonical_Date)) %>%
+    distinct()
+
+  pre_cleanup_sample_identity_map <- bind_rows(
+    legacy_submitted_identity_map,
+    pre_cleanup_sample_identity_map
+  ) %>%
+    arrange(Patient, Sample_Code, identity_priority) %>%
+    group_by(Patient, Sample_Code) %>%
+    summarise(
+      canonical_Timepoint = first(canonical_Timepoint[!is.na(canonical_Timepoint)]),
+      canonical_timepoint_info = first(canonical_timepoint_info[!is.na(canonical_timepoint_info)]),
+      canonical_Date = first(canonical_Date[!is.na(canonical_Date)]),
+      identity_source = first(identity_source),
+      .groups = "drop"
+    )
+}
+
+pre_cleanup_identity_conflicts <- pre_cleanup_sample_identity_map %>%
+  distinct(Patient, Sample_Code, canonical_Timepoint, canonical_timepoint_info, canonical_Date) %>%
+  count(Patient, Sample_Code, name = "n_identity_rows") %>%
+  filter(n_identity_rows > 1) %>%
+  left_join(pre_cleanup_sample_identity_map, by = c("Patient", "Sample_Code"))
+
+dir.create(file.path("Output_tables_2025", "clinical_support"), recursive = TRUE, showWarnings = FALSE)
+readr::write_csv(
+  pre_cleanup_identity_conflicts,
+  file.path("Output_tables_2025", "clinical_support", "pre_cleanup_sample_identity_conflicts_audit.csv")
+)
+
+pre_cleanup_sample_identity_map <- pre_cleanup_sample_identity_map %>%
+  anti_join(
+    pre_cleanup_identity_conflicts %>% distinct(Patient, Sample_Code),
+    by = c("Patient", "Sample_Code")
+  )
+
 ### Do a bit more cleaning for duplicate or missing timepoints
 
 # 1) two lookup tables from your clinical master (de-duplicated if needed)
@@ -1934,10 +2078,30 @@ filled_df %>%
   # keep only those with more than one distinct date
   filter(n_dates > 1)
 
-## One last pass to coalesce
-filled_df <- filled_df %>%
-  #group on Patient, Date and collapse
+## One last pass to coalesce exact sample records only.
+# Do not collapse by Patient + Date alone: older longitudinal rows can have
+# missing or repeated dates, and grouping only on those two fields can merge
+# distinct timepoints from the same patient.
+patient_date_collision_audit <- filled_df %>%
   group_by(Patient, Date) %>%
+  summarise(
+    n_rows = dplyr::n(),
+    n_timepoints = n_distinct(Timepoint, na.rm = TRUE),
+    n_sample_codes = n_distinct(Sample_Code, na.rm = TRUE),
+    timepoints = paste(sort(unique(as.character(Timepoint))), collapse = ";"),
+    sample_codes = paste(sort(unique(as.character(Sample_Code))), collapse = ";"),
+    .groups = "drop"
+  ) %>%
+  filter(n_rows > 1, n_timepoints > 1 | n_sample_codes > 1)
+
+dir.create(file.path("Output_tables_2025", "clinical_support"), recursive = TRUE, showWarnings = FALSE)
+readr::write_csv(
+  patient_date_collision_audit,
+  file.path("Output_tables_2025", "clinical_support", "patient_date_groups_not_collapsed_in_updated9_audit.csv")
+)
+
+filled_df <- filled_df %>%
+  group_by(Patient, Timepoint, Sample_Code, Date) %>%
   reframe(
     across(everything(), first_non_na)
   )
@@ -1987,6 +2151,110 @@ filled_df <- filled_df %>%
   bind_rows(img98_coalesced) %>%
   # optional: re‐sort so IMG-098 sits in its original place
   arrange(Patient, Timepoint)
+
+sample_identity_restoration_audit <- filled_df %>%
+  mutate(
+    Patient = as.character(Patient),
+    Sample_Code = as.character(Sample_Code),
+    Timepoint_before_identity_restore = as.character(Timepoint),
+    timepoint_info_before_identity_restore = as.character(timepoint_info),
+    Date_before_identity_restore = as.Date(Date)
+  ) %>%
+  left_join(pre_cleanup_sample_identity_map, by = c("Patient", "Sample_Code")) %>%
+  filter(
+    (!is.na(canonical_Timepoint) &
+       coalesce(Timepoint_before_identity_restore, "") != canonical_Timepoint) |
+      (!is.na(canonical_timepoint_info) &
+         coalesce(timepoint_info_before_identity_restore, "") != canonical_timepoint_info) |
+      (!is.na(canonical_Date) &
+         (is.na(Date_before_identity_restore) | Date_before_identity_restore != canonical_Date))
+  ) %>%
+  transmute(
+    Patient,
+    Sample_Code,
+    Timepoint_before_identity_restore,
+    Timepoint_after_identity_restore = canonical_Timepoint,
+    timepoint_info_before_identity_restore,
+    timepoint_info_after_identity_restore = canonical_timepoint_info,
+    Date_before_identity_restore,
+    Date_after_identity_restore = canonical_Date,
+    identity_source
+  )
+
+readr::write_csv(
+  sample_identity_restoration_audit,
+  file.path("Output_tables_2025", "clinical_support", "sample_identity_restoration_from_pre_cleanup_audit.csv")
+)
+
+filled_df <- filled_df %>%
+  mutate(
+    Patient = as.character(Patient),
+    Sample_Code = as.character(Sample_Code)
+  ) %>%
+  left_join(pre_cleanup_sample_identity_map, by = c("Patient", "Sample_Code")) %>%
+  mutate(
+    Timepoint = coalesce(canonical_Timepoint, as.character(Timepoint)),
+    timepoint_info = coalesce(canonical_timepoint_info, as.character(timepoint_info)),
+    Date = coalesce(canonical_Date, as.Date(Date))
+  ) %>%
+  select(-canonical_Timepoint, -canonical_timepoint_info, -canonical_Date, -any_of(c("identity_source", "identity_priority")))
+
+if (file.exists(legacy_submitted_identity_path)) {
+  legacy_submitted_rows <- readr::read_csv(
+    legacy_submitted_identity_path,
+    show_col_types = FALSE
+  ) %>%
+    mutate(
+      Patient = as.character(Patient),
+      Sample_Code = as.character(Sample_Code),
+      Date = as.Date(Date)
+    )
+
+  legacy_rows_missing_after_current_assembly <- legacy_submitted_rows %>%
+    anti_join(
+      filled_df %>% distinct(Patient, Sample_Code),
+      by = c("Patient", "Sample_Code")
+    )
+
+  readr::write_csv(
+    legacy_rows_missing_after_current_assembly %>%
+      select(any_of(c("Patient", "Sample_Code", "Timepoint", "timepoint_info", "Date"))),
+    file.path("Output_tables_2025", "clinical_support", "legacy_submitted_rows_appended_to_updated9_audit.csv")
+  )
+
+  if (nrow(legacy_rows_missing_after_current_assembly) > 0L) {
+    for (col in intersect(names(filled_df), names(legacy_rows_missing_after_current_assembly))) {
+      template <- filled_df[[col]]
+      if (inherits(template, "Date")) {
+        legacy_rows_missing_after_current_assembly[[col]] <- as.Date(legacy_rows_missing_after_current_assembly[[col]])
+      } else if (is.character(template)) {
+        legacy_rows_missing_after_current_assembly[[col]] <- as.character(legacy_rows_missing_after_current_assembly[[col]])
+      } else if (is.integer(template)) {
+        legacy_rows_missing_after_current_assembly[[col]] <- as.integer(legacy_rows_missing_after_current_assembly[[col]])
+      } else if (is.double(template) || is.numeric(template)) {
+        legacy_rows_missing_after_current_assembly[[col]] <- as.numeric(legacy_rows_missing_after_current_assembly[[col]])
+      } else if (is.logical(template)) {
+        legacy_rows_missing_after_current_assembly[[col]] <- as.logical(legacy_rows_missing_after_current_assembly[[col]])
+      }
+    }
+    filled_df <- bind_rows(filled_df, legacy_rows_missing_after_current_assembly)
+  }
+
+}
+
+baseline_timepoint_tokens <- c("0", "1", "01", "T0", "T1", "TP0", "TP1", "D0")
+nonbaseline_with_baseline_label_audit <- filled_df %>%
+  mutate(Timepoint_upper = str_to_upper(as.character(Timepoint))) %>%
+  filter(
+    timepoint_info %in% c("Baseline", "Diagnosis"),
+    !Timepoint_upper %in% baseline_timepoint_tokens
+  ) %>%
+  select(any_of(c("Patient", "Sample_Code", "Timepoint", "timepoint_info", "Date")))
+
+readr::write_csv(
+  nonbaseline_with_baseline_label_audit,
+  file.path("Output_tables_2025", "clinical_support", "nonbaseline_timepoints_with_baseline_or_diagnosis_label_audit.csv")
+)
 
 
 ## Add relaxed blood evidence helper flag
@@ -2098,7 +2366,42 @@ recompute_sample_relapse_fields <- function(df, relapse_dates) {
 
 revision_metadata_for_endpoint_dates <- load_spring2026_revision_metadata(required = FALSE)
 if (!is.null(revision_metadata_for_endpoint_dates)) {
+  revision_sample_code_date_map <- revision_metadata_for_endpoint_dates %>%
+    # Prefer exact revision sample-code dates over older aggregate clinical
+    # dates. The Spring 2026 metadata is the current authority for these rows;
+    # using it here prevents stale non-missing dates from shifting MRD pairing
+    # and relapse/endpoints downstream.
+    transmute(
+      Patient = as.character(Patient),
+      Sample_Code = str_remove(
+        as.character(Sample_ID),
+        "(-P|-B|-O|-OZ-DNA|-OZ|_BM_cells|_Blood_plasma_cfDNA|_Blood_Buffy_coat)$"
+      ),
+      revision_sample_date = as.Date(Date_of_sample_collection),
+      revision_sample_id = as.character(Sample_ID)
+    ) %>%
+    filter(!is.na(Patient), !is.na(Sample_Code), !is.na(revision_sample_date)) %>%
+    distinct() %>%
+    group_by(Patient, Sample_Code) %>%
+    summarise(
+      n_revision_dates_for_sample_code = n_distinct(revision_sample_date),
+      revision_sample_code_date = if_else(
+        n_revision_dates_for_sample_code == 1L,
+        min(revision_sample_date),
+        as.Date(NA)
+      ),
+      revision_sample_code_dates_all = paste(
+        sort(unique(as.character(revision_sample_date))),
+        collapse = ";"
+      ),
+      revision_sample_ids_all = paste(sort(unique(revision_sample_id)), collapse = ";"),
+      .groups = "drop"
+    )
+
   revision_timepoint_date_map <- revision_metadata_for_endpoint_dates %>%
+    # Build a patient/timepoint -> sample date map from the current revision
+    # metadata. This fills aggregate rows that have patient/timepoint identity but
+    # lost Date during upstream feature joins.
     transmute(
       Patient = as.character(Patient),
       Timepoint = as.character(Timepoint),
@@ -2110,6 +2413,8 @@ if (!is.null(revision_metadata_for_endpoint_dates)) {
     summarise(
       n_revision_dates_for_timepoint = n_distinct(revision_sample_date),
       revision_timepoint_date = if_else(
+        # Only fill Date when a patient/timepoint has exactly one revision date.
+        # Ambiguous mappings are audited and left as NA rather than guessed.
         n_revision_dates_for_timepoint == 1L,
         min(revision_sample_date),
         as.Date(NA)
@@ -2124,6 +2429,15 @@ if (!is.null(revision_metadata_for_endpoint_dates)) {
   dir.create(file.path("Output_tables_2025", "endpoint_correctness_audit"),
              recursive = TRUE, showWarnings = FALSE)
   readr::write_csv(
+    revision_sample_code_date_map %>%
+      filter(n_revision_dates_for_sample_code > 1),
+    file.path(
+      "Output_tables_2025",
+      "endpoint_correctness_audit",
+      "spring2026_revision_aggregate_sample_code_date_ambiguity.csv"
+    )
+  )
+  readr::write_csv(
     revision_timepoint_date_map %>%
       filter(n_revision_dates_for_timepoint > 1),
     file.path(
@@ -2134,13 +2448,30 @@ if (!is.null(revision_metadata_for_endpoint_dates)) {
   )
 
   filled_df <- filled_df %>%
+    mutate(
+      Patient = as.character(Patient),
+      Sample_Code = as.character(Sample_Code),
+      Timepoint = as.character(Timepoint),
+      Date = as.Date(Date)
+    ) %>%
+    left_join(
+      revision_sample_code_date_map %>%
+        select(Patient, Sample_Code, revision_sample_code_date),
+      by = c("Patient", "Sample_Code")
+    ) %>%
     left_join(
       revision_timepoint_date_map %>%
         select(Patient, Timepoint, revision_timepoint_date),
       by = c("Patient", "Timepoint")
     ) %>%
-    mutate(Date = coalesce(as.Date(Date), revision_timepoint_date)) %>%
-    select(-revision_timepoint_date)
+    mutate(
+      Date = case_when(
+        !is.na(revision_sample_code_date) ~ revision_sample_code_date,
+        is.na(Date) & !is.na(revision_timepoint_date) ~ revision_timepoint_date,
+        TRUE ~ Date
+      )
+    ) %>%
+    select(-revision_sample_code_date, -revision_timepoint_date)
 }
 
 # Recompute endpoint fields after all clinical/MRD/WGS joins so every row with
@@ -2149,6 +2480,116 @@ if (!is.null(revision_metadata_for_endpoint_dates)) {
 # table; this final pass prevents downstream plots from treating those blanks as
 # "no relapse within window".
 filled_df <- recompute_sample_relapse_fields(filled_df, Relapse_dates_full)
+
+## Central sample-level scoring/status manifest.
+# This table separates descriptive labels from scoring eligibility. Some legacy
+# rows carry Diagnosis/Baseline labels even though they are not the selected
+# baseline mutation source or an early baseline/diagnosis timepoint; those rows
+# are retained in the aggregate table for provenance but are not treated as
+# baseline samples for scoring eligibility.
+cohort_df <- readRDS("cohort_assignment_table_updated.rds") %>%
+  augment_cohort_assignment_with_spring2026_revision()
+
+baseline_source_inventory_path <- file.path(
+  "Output_tables_2025",
+  "clinical_support",
+  "baseline_diagnosis_mutation_source_by_patient.csv"
+)
+baseline_source_inventory <- if (file.exists(baseline_source_inventory_path)) {
+  readr::read_csv(baseline_source_inventory_path, show_col_types = FALSE) %>%
+    transmute(
+      Patient = as.character(Patient),
+      Timepoint = as.character(Timepoint),
+      selected_baseline_mutation_source_type = as.character(mutation_source_type)
+    ) %>%
+    filter(!is.na(Patient), !is.na(Timepoint)) %>%
+    distinct()
+} else {
+  tibble(
+    Patient = character(),
+    Timepoint = character(),
+    selected_baseline_mutation_source_type = character()
+  )
+}
+
+selected_source_timepoints <- baseline_source_inventory %>%
+  group_by(Patient, Timepoint) %>%
+  summarise(
+    selected_baseline_mutation_source_types = paste(
+      sort(unique(selected_baseline_mutation_source_type)),
+      collapse = ";"
+    ),
+    .groups = "drop"
+  )
+
+baseline_timepoint_tokens <- c("0", "1", "01", "T0", "T1", "TP0", "TP1", "D0")
+
+sample_scoring_manifest <- filled_df %>%
+  left_join(cohort_df, by = "Patient") %>%
+  mutate(
+    sample_manifest_row_id = row_number(),
+    Patient = as.character(Patient),
+    Sample_Code = as.character(Sample_Code),
+    Timepoint = as.character(Timepoint),
+    Timepoint_upper = str_to_upper(Timepoint),
+    is_baseline_or_diagnosis_label = timepoint_info %in% c("Baseline", "Diagnosis"),
+    is_early_baseline_timepoint = Timepoint_upper %in% baseline_timepoint_tokens,
+    has_BM_WGS_evidence_field = !is.na(WGS_Evidence_of_Disease_BM_cells),
+    has_blood_WGS_evidence_field = !is.na(WGS_Evidence_of_Disease_Blood_plasma_cfDNA),
+    has_BM_cfWGS_score = !is.na(zscore_BM) | !is.na(Cumulative_VAF_BM) | !is.na(detect_rate_BM),
+    has_blood_cfWGS_score = !is.na(zscore_blood) | !is.na(Cumulative_VAF_blood) | !is.na(detect_rate_blood)
+  ) %>%
+  left_join(selected_source_timepoints, by = c("Patient", "Timepoint")) %>%
+  mutate(
+    is_selected_baseline_mutation_source_timepoint = !is.na(selected_baseline_mutation_source_types),
+    is_baseline_for_scoring = is_selected_baseline_mutation_source_timepoint |
+      (is_baseline_or_diagnosis_label & is_early_baseline_timepoint),
+    sample_scoring_role = case_when(
+      is_baseline_for_scoring ~ "baseline_or_diagnosis_scoring_baseline",
+      is_baseline_or_diagnosis_label & !is_baseline_for_scoring ~ "label_baseline_or_diagnosis_but_not_scoring_baseline",
+      !is_baseline_or_diagnosis_label ~ "nonbaseline_followup_or_context",
+      TRUE ~ "unclassified"
+    ),
+    included_in_baseline_high_quality_helper = is_baseline_for_scoring &
+      (has_BM_WGS_evidence_field | has_blood_WGS_evidence_field)
+  ) %>%
+  select(
+    sample_manifest_row_id,
+    Patient,
+    Sample_Code,
+    Timepoint,
+    timepoint_info,
+    Date,
+    Cohort,
+    sample_scoring_role,
+    is_baseline_or_diagnosis_label,
+    is_early_baseline_timepoint,
+    is_selected_baseline_mutation_source_timepoint,
+    selected_baseline_mutation_source_types,
+    is_baseline_for_scoring,
+    included_in_baseline_high_quality_helper,
+    has_BM_WGS_evidence_field,
+    has_blood_WGS_evidence_field,
+    has_BM_cfWGS_score,
+    has_blood_cfWGS_score,
+    WGS_Evidence_of_Disease_BM_cells,
+    WGS_Evidence_of_Disease_Blood_plasma_cfDNA,
+    WGS_Evidence_of_Disease_Blood_plasma_cfDNA_Relaxed,
+    zscore_BM,
+    zscore_blood,
+    Num_days_to_closest_relapse,
+    Relapsed
+  )
+
+dir.create(file.path("Output_tables_2025", "clinical_support"), recursive = TRUE, showWarnings = FALSE)
+readr::write_csv(
+  sample_scoring_manifest,
+  file.path("Output_tables_2025", "clinical_support", "sample_scoring_status_manifest.csv")
+)
+saveRDS(
+  sample_scoring_manifest,
+  file.path("Output_tables_2025", "clinical_support", "sample_scoring_status_manifest.rds")
+)
 
 ### Export final aggregate table for downstream manuscript scripts
 # This is the current final output of 2_0.
@@ -2161,9 +2602,6 @@ saveRDS(filled_df, file = "Final_aggregate_table_cfWGS_features_with_clinical_an
 ## Export baseline high-quality cohort helper table.
 # This table is used to audit which baseline patients have usable BM and/or
 # blood WGS evidence variables after applying the cohort assignment file.
-cohort_df <- readRDS("cohort_assignment_table_updated.rds") %>%
-  augment_cohort_assignment_with_spring2026_revision()
-
 revision_patients_for_baseline_quality <- load_spring2026_revision_metadata(required = FALSE)
 revision_patients_for_baseline_quality <- if (is.null(revision_patients_for_baseline_quality)) {
   character()
@@ -2172,15 +2610,17 @@ revision_patients_for_baseline_quality <- if (is.null(revision_patients_for_base
 }
 
 tmp <- left_join(filled_df, cohort_df) %>% 
-  filter(!is.na(Cohort)) %>% 
-  mutate(
-    is_baseline_diagnosis_source_for_quality = timepoint_info %in% c("Diagnosis", "Baseline") |
-      (
-        Patient %in% revision_patients_for_baseline_quality &
-          Timepoint %in% c("01", "1", "T0", "T1")
-      )
+  left_join(
+    sample_scoring_manifest %>%
+      group_by(Patient, Sample_Code) %>%
+      summarise(
+        is_baseline_for_scoring = any(is_baseline_for_scoring, na.rm = TRUE),
+        .groups = "drop"
+      ),
+    by = c("Patient", "Sample_Code")
   ) %>%
-  filter(is_baseline_diagnosis_source_for_quality) %>% 
+  filter(!is.na(Cohort)) %>% 
+  filter(is_baseline_for_scoring %in% TRUE) %>% 
   filter(
     !is.na(WGS_Evidence_of_Disease_Blood_plasma_cfDNA) |
       !is.na(WGS_Evidence_of_Disease_BM_cells)

@@ -136,6 +136,9 @@ metada_df_mutation_comparison <- read_combined_clinical_metadata_with_revision(
   "combined_clinical_data_updated_April2025.csv"
 ) %>%
   mutate(
+    # Tumor_Sample_Barcode is the caller-neutral sample key used to merge
+    # metadata with mutation, CNA, and translocation outputs. It removes assay
+    # tokens and processing suffixes while retaining the biological sample ID.
     Tumor_Sample_Barcode = Bam %>%
       str_remove_all("_PG|_WG") %>%
       str_replace_all("\\.filter.*|\\.ded.*|\\.recalibrate.*", ""),
@@ -156,6 +159,10 @@ cna_data_sequenza <- readRDS(file.path(export_dir, "cna_data_from_sequenza_400_u
 translocation_data <- readRDS(file.path(export_dir, "translocation_data_cytoband_updated.rds"))
 tumor_fraction <- read_tsv("Oct 2024 data/tumor_fraction_cfWGS.txt")
 spring2026_ichor_params <- spring2026_revision_files(
+  # Spring 2026 ichorCNA params are optional revision inputs. When present, they
+  # add tumor-fraction/ploidy estimates for newly integrated patient samples.
+  # M4CHIP dilution rows are excluded here because dilution tumor fractions are
+  # handled by the dilution-series workflow, not the main patient feature table.
   "",
   "^Ichor_CNA_combined_params_summary_tumor_fraction_sex[.]tsv$"
 )[1]
@@ -163,11 +170,16 @@ if (!is.na(spring2026_ichor_params) && file.exists(spring2026_ichor_params)) {
   spring2026_tumor_fraction <- read_tsv(spring2026_ichor_params, show_col_types = FALSE) %>%
     filter(!str_detect(file, "^M4CHIP_")) %>%
     transmute(
+      # file contains the ichorCNA params filename; removing .params.txt returns
+      # the BAM-like key used by the historical tumor_fraction table.
       Bam = str_remove(file, "[.]params[.]txt$"),
       Tumor_fraction = suppressWarnings(as.numeric(tumor_fraction)),
       Ploidy = suppressWarnings(as.numeric(ploidy))
     )
   tumor_fraction <- bind_rows(tumor_fraction, spring2026_tumor_fraction) %>%
+    # If a BAM already exists in the historical table, keep that first entry.
+    # The revision params extend missing rows rather than overriding historical
+    # manually reviewed tumor-fraction calls.
     distinct(Bam, .keep_all = TRUE)
 }
 

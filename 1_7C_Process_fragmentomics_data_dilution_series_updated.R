@@ -133,6 +133,9 @@ if (!dir.exists(out.dir)) dir.create(out.dir, recursive = TRUE)
 
 ### 2.  LOAD CLINICAL TABLE   ##################################
 combined_clinical <- read_dilution_metadata_with_spring2026(clinical.csv)
+# The dilution metadata helper appends Spring 2026 PWGVAL/M4CHIP dilution rows
+# to the historical dilution-series metadata while preserving the same columns
+# used by the legacy fragmentomics processing below.
 
 
 ### 3.  READ & PROCESS NUCLEOSOME-ACCESSIBILITY (cfWGS + PON)  ##################
@@ -143,6 +146,9 @@ results.files <- list.files(path = nuc_input.dir,
                             full.names = TRUE)
 results.files <- unique(c(
   results.files,
+  # Append Spring 2026 PWGVAL dilution nucleosome-accessibility output when
+  # present. These rows are dilution-series inputs, not main patient cohort
+  # fragmentomics rows.
   spring2026_revision_files(
     "Fragmentomics_Pipeeline_Suite_all_outputs",
     "^2026-06-25_cfWGS_MM_fragmentomics_Revisions_Spring2026_PWGVAL_Dilution_series_nucleosome_accessibility_distances[.]tsv$"
@@ -487,6 +493,8 @@ ins.files <- list.files(path = ins_fs.dir,
                         full.names = TRUE)
 ins.files <- unique(c(
   ins.files,
+  # Append Spring 2026 PWGVAL dilution insert-size summary. Proportion.Short is
+  # computed from this file and later joined by cleaned dilution Sample ID.
   spring2026_revision_files(
     "Fragmentomics_Pipeeline_Suite_all_outputs",
     "^2026-06-25_cfWGS_MM_fragmentomics_Revisions_Spring2026_PWGVAL_Dilution_series_insert_size_summary[.]tsv$"
@@ -505,6 +513,8 @@ fs.files <- list.files(path = ins_fs.dir,
                        full.names = TRUE)
 fs.files <- unique(c(
   fs.files,
+  # Append Spring 2026 PWGVAL dilution CHARM fragment scores. These are model
+  # inputs for limit-of-detection scoring, not training data.
   spring2026_revision_files(
     "Fragmentomics_Pipeeline_Suite_all_outputs",
     "^2026-06-25_cfWGS_MM_fragmentomics_Revisions_Spring2026_PWGVAL_Dilution_series_fragment_scores[.]tsv$"

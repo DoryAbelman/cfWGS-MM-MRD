@@ -30,7 +30,7 @@
 #   - cohort_assignment_table_updated.rds
 #   - baseline_high_quality_patients_updated.csv
 #   - Jan2025_exported_data/All_feature_data_Sep2025_updated2.rds
-#   - MRDetect_output_winter_2025/Processed_R_outputs/cfWGS_Winter2025All_MRDetect_with_Zscore_May2025.rds
+#   - MRDetect_output_winter_2025/Processed_R_outputs/cfWGS_Winter2025All_MRDetect_with_Zscore_Sep2025.rds
 #   - id_map.rds
 #
 # Key outputs:
@@ -516,6 +516,16 @@ if (length(numeric_vars) < 2) stop("Need ≥2 numeric variables to correlate.")
 # ── 4. All-against-all correlations ------------------------------------------
 var_pairs <- combn(numeric_vars, 2, simplify = FALSE)
 
+is_approximately_normal <- function(x) {
+  x <- x[is.finite(x)]
+  if (length(x) < 3 || length(unique(x)) < 2) return(FALSE)
+  result <- tryCatch(
+    shapiro.test(x)$p.value > 0.05,
+    error = function(e) FALSE
+  )
+  isTRUE(result)
+}
+
 # 4) Compute correlations + normality checks
 corr_table <- map_dfr(var_pairs, function(v) {
   x_all <- dat_clean[[v[1]]]
@@ -526,9 +536,9 @@ corr_table <- map_dfr(var_pairs, function(v) {
   
   x <- x_all[ok]; y <- y_all[ok]
   
-  # 4a) Normality tests if n <= 5000
-  normal_x <- if(n <= 5000) shapiro.test(x)$p.value > 0.05 else FALSE
-  normal_y <- if(n <= 5000) shapiro.test(y)$p.value > 0.05 else FALSE
+  # 4a) Normality tests if n <= 5000. Constant vectors are not testable.
+  normal_x <- if(n <= 5000) is_approximately_normal(x) else FALSE
+  normal_y <- if(n <= 5000) is_approximately_normal(y) else FALSE
   
   # 4b) Spearman and Pearson estimates + p-values
   rho_sp    <- suppressWarnings(cor(x,y,method="spearman"))
@@ -1753,7 +1763,7 @@ ggsave(
 
 #### Add specific example of progressor vs non-progressor 
 ### Need the full healthy control info for this 
-Merged_MRDetect_zscore <- readRDS("MRDetect_output_winter_2025/Processed_R_outputs/cfWGS_Winter2025All_MRDetect_with_Zscore_May2025.rds")
+Merged_MRDetect_zscore <- readRDS("MRDetect_output_winter_2025/Processed_R_outputs/cfWGS_Winter2025All_MRDetect_with_Zscore_Sep2025.rds")
 
 ## -----------------------------
 ## USER PARAMS
@@ -3094,28 +3104,45 @@ wrap_labels <- function(labels, width = 20) {
 
 pair_df <- pair_df %>% select(-Patient)
 wrapped_labels <- wrap_labels(names(pair_df), width = 15)
-p_pairs <- ggpairs(
-  pair_df,
-  columns    = 1:ncol(pair_df),
-  upper      = list(continuous = wrap("cor", size = 2.5, method = "spearman", use = "pairwise.complete.obs")),
-  lower      = list(continuous = wrap("points", alpha = 0.4, size = 0.8)),
-  diag       = list(continuous = wrap("densityDiag")),
-  columnLabels = wrapped_labels
-) +
-  theme_classic(base_size = 9) +
-  theme(
-    strip.text = element_text(face = "bold", size = 9),
-    axis.text  = element_text(size = 9)
-  )
+p_pairs <- tryCatch(
+  {
+    ggpairs(
+      pair_df,
+      columns    = 1:ncol(pair_df),
+      upper      = list(continuous = wrap("cor", size = 2.5, method = "spearman", use = "pairwise.complete.obs")),
+      lower      = list(continuous = wrap("points", alpha = 0.4, size = 0.8)),
+      diag       = list(continuous = wrap("densityDiag")),
+      columnLabels = wrapped_labels
+    ) +
+      theme_classic(base_size = 9) +
+      theme(
+        strip.text = element_text(face = "bold", size = 9),
+        axis.text  = element_text(size = 9)
+      )
+  },
+  error = function(e) {
+    warning("Skipping exploratory GGally pairs plot construction: ", conditionMessage(e))
+    NULL
+  }
+)
 
 # 4. Save as high-res PNG
-ggsave(
-  filename = file.path(outdir, "Supplementary_Figure_pairs_metrics_clinical_3B_2.png"),
-  plot     = p_pairs,
-  width    = 18,    # inches
-  height   = 18,    # inches
-  dpi      = 600
-)
+if (!is.null(p_pairs)) {
+  tryCatch(
+    {
+      ggsave(
+        filename = file.path(outdir, "Supplementary_Figure_pairs_metrics_clinical_3B_2.png"),
+        plot     = p_pairs,
+        width    = 18,    # inches
+        height   = 18,    # inches
+        dpi      = 600
+      )
+    },
+    error = function(e) {
+      warning("Skipping exploratory GGally pairs plot save: ", conditionMessage(e))
+    }
+  )
+}
 
 
 

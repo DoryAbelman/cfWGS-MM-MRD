@@ -4175,6 +4175,7 @@ calc_metrics <- function(df, assay_label, col_name, win_d) {
       test_pos        = (.data[[col_name]] == 1),
       event_in_window = relapsed == 1 &
         !is.na(relapse_date) &
+        relapse_date >= sample_date &
         relapse_date <= sample_date + lubridate::days(win_d)   # << here
     )
   
@@ -4226,32 +4227,23 @@ build_timewindow_metrics <- function(df, assays_available, windows) {
     arrange(Window_days, desc(Sensitivity), desc(Specificity))
 }
 
-# Matched cfWGS-tested subsets used for Extended Data Figures 6I/8D and
-# Supplementary Table 9.
-#
-# Reproducibility note:
-#   The final Feb 2026 manuscript table and panels were generated from `df_sf`,
-#   which joins each non-frontline sample to the patient-level PFS censor/event
-#   date in `final_tbl`. The stricter `df_sf2` object above uses the curated
-#   progression-date table and excludes samples whose updated progression date
-#   precedes the sample draw. That stricter view is useful for sensitivity/QC,
-#   but it changes the BM and blood cfWGS denominators from the manuscript
-#   values. Therefore the manuscript-facing exports below intentionally use
-#   `df_sf` to reproduce the submitted Supplementary Table 9 exactly.
+# Legacy matched cfWGS-tested subsets retained for provenance/QC. The final
+# manuscript block below is overwritten with the prospective current labels,
+# because revision samples can occur after an earlier patient-level PFS event.
 bm_col <- assays[["cfWGS_BM"]]
 blood_col <- assays[["cfWGS_Blood"]]
 manuscript_assays_available <- assays[unname(assays) %in% names(df_sf)]
 df_sf_BM <- df_sf %>% filter(!is.na(.data[[bm_col]]))
 df_sf_blood <- df_sf %>% filter(!is.na(.data[[blood_col]]))
 
-results_BM <- build_timewindow_metrics(df_sf_BM, manuscript_assays_available, windows)
-results_blood <- build_timewindow_metrics(df_sf_blood, manuscript_assays_available, windows)
+legacy_results_BM <- build_timewindow_metrics(df_sf_BM, manuscript_assays_available, windows)
+legacy_results_blood <- build_timewindow_metrics(df_sf_blood, manuscript_assays_available, windows)
 
 message("=== BM-cfWGS subset ===")
-print(results_BM)
+print(legacy_results_BM)
 
 message("=== Blood-cfWGS subset ===")
-print(results_blood)
+print(legacy_results_blood)
 
 ## Prospective robust time-window analysis for future test-cohort updates.
 ##
@@ -4492,54 +4484,26 @@ print(prospective_evaluability_summary)
 
 ## Final manuscript source for time-window panels and Supplementary Table 9.
 ##
-## The submitted Extended Data Figure 6I, Extended Data Figure 8D, and
-## Supplementary Table 9 were generated from the preserved
-## `detection_progression_updated5` time-window CSVs. Those CSVs encode the
-## original non-frontline event-window calls, including 730-day handling that is
-## not fully recoverable from the current active clinical-date inputs alone.
-## The recomputed `results_BM` and `results_blood` above are retained in the
-## command-line log as a QC/sensitivity check, but the manuscript-facing plots,
-## workbook, and prose below intentionally reload the preserved CSVs so that the
-## command-line pipeline reproduces the submitted manuscript artifacts exactly.
-manuscript_timewindow_dir <- file.path("Output_tables_2025", "detection_progression_updated5")
-manuscript_bm_timewindow_csv <- file.path(manuscript_timewindow_dir, "BM_cfWGS_timewindow_results2.csv")
-manuscript_blood_timewindow_csv <- file.path(manuscript_timewindow_dir, "blood_cfWGS_timewindow_results2.csv")
-manuscript_bm_event_counts_csv <- file.path(manuscript_timewindow_dir, "BM_cfWGS_event_counts2.csv")
-manuscript_blood_event_counts_csv <- file.path(manuscript_timewindow_dir, "blood_cfWGS_event_counts2.csv")
-
-required_manuscript_timewindow_files <- c(
-  manuscript_bm_timewindow_csv,
-  manuscript_blood_timewindow_csv,
-  manuscript_bm_event_counts_csv,
-  manuscript_blood_event_counts_csv
+legacy_results_dir <- file.path(outdir, "legacy_patient_level_pfs_timewindow_qc")
+dir.create(legacy_results_dir, showWarnings = FALSE, recursive = TRUE)
+readr::write_csv(
+  legacy_results_BM,
+  file.path(legacy_results_dir, "legacy_BM_cfWGS_timewindow_results.csv")
 )
-missing_manuscript_timewindow_files <- required_manuscript_timewindow_files[
-  !file.exists(required_manuscript_timewindow_files)
-]
-if (length(missing_manuscript_timewindow_files) > 0) {
-  stop(
-    "Missing preserved manuscript time-window source file(s): ",
-    paste(missing_manuscript_timewindow_files, collapse = "; "),
-    call. = FALSE
-  )
-}
+readr::write_csv(
+  legacy_results_blood,
+  file.path(legacy_results_dir, "legacy_blood_cfWGS_timewindow_results.csv")
+)
 
-results_BM_recomputed_qc <- results_BM
-results_blood_recomputed_qc <- results_blood
-results_BM <- readr::read_csv(manuscript_bm_timewindow_csv, show_col_types = FALSE)
-results_blood <- readr::read_csv(manuscript_blood_timewindow_csv, show_col_types = FALSE)
-event_counts_BM <- readr::read_csv(manuscript_bm_event_counts_csv, show_col_types = FALSE)
-event_counts_blood <- readr::read_csv(manuscript_blood_event_counts_csv, show_col_types = FALSE)
-
-message("Using preserved manuscript time-window CSVs for ED6I, ED8D, and Supplementary Table 9:")
-message("  BM: ", manuscript_bm_timewindow_csv)
-message("  blood: ", manuscript_blood_timewindow_csv)
+results_BM <- prospective_results_BM
+results_blood <- prospective_results_blood
 
 count_relapses_by_window <- function(df, wins = c(180, 365)) {
   purrr::map_dfr(wins, function(w) {
     df %>%
       dplyr::mutate(event_in_window = relapsed == 1 &
                       !is.na(relapse_date) &
+                      relapse_date >= sample_date &
                       relapse_date <= sample_date + lubridate::days(w)) %>%
       dplyr::summarise(
         Window_days       = w,
@@ -4548,6 +4512,36 @@ count_relapses_by_window <- function(df, wins = c(180, 365)) {
       )
   })
 }
+
+count_prospective_events_by_window <- function(labelled_df, assay_cols, wins) {
+  purrr::map_dfr(wins, function(w) {
+    labelled_df %>%
+      dplyr::filter(
+        Window_days == w,
+        evaluable_in_window,
+        dplyr::if_any(dplyr::all_of(assay_cols), ~ !is.na(.x))
+      ) %>%
+      dplyr::summarise(
+        Window_days = w,
+        N_patients = dplyr::n_distinct(Patient[event_in_window]),
+        N_samples = sum(event_in_window, na.rm = TRUE),
+        .groups = "drop"
+      )
+  })
+}
+
+event_counts_BM <- count_prospective_events_by_window(
+  prospective_timewindow_labels,
+  bm_col,
+  windows
+)
+event_counts_blood <- count_prospective_events_by_window(
+  prospective_timewindow_labels,
+  blood_col,
+  windows
+)
+
+message("Using prospective current time-window metrics for ED6I, ED8D, and Supplementary Table 9.")
 
 wins <- c(180, 365)
 
@@ -4576,16 +4570,19 @@ txt_blood <- glue::glue(
 )
 cat(txt_blood, "\n")
 
-# C) “Any cfWGS” wording = union of rows that have BM OR Blood assays
-cfwgs_any <- df_sf2 %>% dplyr::filter(!is.na(.data[[bm_col]]) | !is.na(.data[[blood_col]]))
-summ_any  <- count_relapses_by_window(cfwgs_any, wins)
+# C) “Any cfWGS” wording = union of evaluable rows that have BM OR Blood assays
+summ_any <- count_prospective_events_by_window(
+  prospective_timewindow_labels,
+  c(bm_col, blood_col),
+  wins
+)
 txt_any <- glue::glue(
   "In the test cohort, sampling times were heterogeneous, so we assessed each assay’s ",
   "ability to predict progression within fixed time windows (180 and 365 days). ",
-  "Among cfWGS samples, {summ_any$Samples_relapsed[summ_any$Window_days==180]} ",
-  "from {summ_any$Patients_relapsed[summ_any$Window_days==180]} patients relapsed within 180 days ",
-  "and {summ_any$Samples_relapsed[summ_any$Window_days==365]} ",
-  "from {summ_any$Patients_relapsed[summ_any$Window_days==365]} patients relapsed within 365 days."
+  "Among cfWGS samples, {summ_any$N_samples[summ_any$Window_days==180]} ",
+  "from {summ_any$N_patients[summ_any$Window_days==180]} patients relapsed within 180 days ",
+  "and {summ_any$N_samples[summ_any$Window_days==365]} ",
+  "from {summ_any$N_patients[summ_any$Window_days==365]} patients relapsed within 365 days."
 )
 cat(txt_any, "\n")
 
@@ -4630,24 +4627,7 @@ windows <- c(90, 180, 365, 730)
 # - how many distinct patients relapsed within that window
 # - how many samples fall into that window
 
-event_counts_BM_recomputed_qc <- map_dfr(windows, function(w) {
-  df_w <- df_sf_BM %>%
-    filter(
-      relapsed == 1,
-      !is.na(relapse_date),
-      relapse_date <= sample_date + days(w)
-    )
-  
-  tibble(
-    Window_days = w,
-    N_patients  = n_distinct(df_w$Patient),
-    N_samples   = nrow(df_w)
-  )
-})
-
-# view the recomputed QC result; manuscript outputs below use the preserved
-# event_counts_BM loaded from detection_progression_updated5.
-print(event_counts_BM_recomputed_qc)
+print(event_counts_BM)
 
 ## Make figure 
 # ────────────────────────────────────────────────────────────────────────────
@@ -4734,23 +4714,6 @@ ggsave("Final Tables and Figures/Supp_Fig_6_Fig_sensitivity_windows_BM_test_coho
        plot = p_sens_bm,
        width = 4.75, height = 6.25, dpi = 500)
 
-# The bar plot above is a deterministic redraw from the preserved source CSV,
-# but PNG device metadata/antialiasing can still change byte-level hashes. When
-# the exact submitted source component is present locally, copy it over the
-# redraw before registering the final manuscript artifact.
-preserved_edfig6i_png <- file.path(
-  "Scripts_2025", "Final_Scripts", "outputs", "manuscript",
-  "02_extended_data_figures", "Extended_Data_Figure_6", "source_components",
-  "EDFIG6I__I__Supp_Fig_6_Fig_sensitivity_windows_BM_test_cohort_updated2.png"
-)
-if (file.exists(preserved_edfig6i_png)) {
-  file.copy(
-    from = preserved_edfig6i_png,
-    to = "Final Tables and Figures/Supp_Fig_6_Fig_sensitivity_windows_BM_test_cohort_updated2.png",
-    overwrite = TRUE
-  )
-}
-
 # MANUSCRIPT OUTPUT: Extended Data Figure 6I
 # Test-cohort BM sensitivity across relapse follow-up windows.
 ms_copy_artifact(
@@ -4820,20 +4783,6 @@ p_sens_blood <- ggplot(sens_blood_df,
 ggsave("Final Tables and Figures/Supp_Fig_8_Fig_sensitivity_windows_blood_test_cohort3.png",
        plot = p_sens_blood,
        width = 5, height = 5, dpi = 500)
-
-# Same exact-output guard for the submitted Extended Data Figure 8D panel.
-preserved_edfig8d_png <- file.path(
-  "Scripts_2025", "Final_Scripts", "outputs", "manuscript",
-  "02_extended_data_figures", "Extended_Data_Figure_8", "source_components",
-  "EDFIG8D__D__Supp_Fig_8_Fig_sensitivity_windows_blood_test_cohort3.png"
-)
-if (file.exists(preserved_edfig8d_png)) {
-  file.copy(
-    from = preserved_edfig8d_png,
-    to = "Final Tables and Figures/Supp_Fig_8_Fig_sensitivity_windows_blood_test_cohort3.png",
-    overwrite = TRUE
-  )
-}
 
 # MANUSCRIPT OUTPUT: Extended Data Figure 8D
 # Test-cohort blood sensitivity across relapse follow-up windows.
@@ -4922,22 +4871,6 @@ write_csv(
   event_counts_BM,
   file.path(outdir, "BM_cfWGS_event_counts2.csv")
 )
-
-# For blood, recompute a QC comparison without replacing the preserved
-# manuscript event_counts_blood table loaded above.
-event_counts_blood_recomputed_qc <- map_dfr(windows, function(w) {
-  df_w <- df_sf_blood %>%
-    filter(
-      relapsed == 1,
-      !is.na(relapse_date),
-      relapse_date <= sample_date + days(w)
-    )
-  tibble(
-    Window_days = w,
-    N_patients  = n_distinct(df_w$Patient),
-    N_samples   = nrow(df_w)
-  )
-})
 
 write_csv(
   event_counts_blood,

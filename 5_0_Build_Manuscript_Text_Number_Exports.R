@@ -131,6 +131,14 @@ first_existing <- function(paths) {
   if (length(hit)) hit[1] else paths[1]
 }
 
+latest_existing <- function(pattern) {
+  hits <- Sys.glob(pattern)
+  hits <- hits[file.exists(hits)]
+  if (!length(hits)) return(pattern)
+  info <- file.info(hits)
+  hits[order(info$mtime, hits, decreasing = TRUE)][1]
+}
+
 slugify <- function(x, max_len = 90) {
   x <- str_replace_all(x, "[^A-Za-z0-9]+", "_")
   x <- str_replace_all(x, "^_+|_+$", "")
@@ -636,14 +644,14 @@ for (i in seq_len(nrow(model_metric_files))) {
 
 timewindow_sources <- tibble::tribble(
   ~subsection, ~path, ~source_script, ~artifact, ~caveat,
-  "Submitted BM time-window analysis",
-  project_path("Output_tables_2025", "detection_progression_updated5", "BM_cfWGS_timewindow_results2.csv"),
+  "Current BM time-window analysis",
+  project_path("Output_tables_2025", "detection_progression_updated6", "BM_cfWGS_timewindow_results2.csv"),
   "Scripts_2025/Final_Scripts/4_1_Survival_Analysis.R", "Extended_Data_Figure_6I; Supplementary_Table_9",
-  "Submitted manuscript values; preserved cached source.",
-  "Submitted blood time-window analysis",
-  project_path("Output_tables_2025", "detection_progression_updated5", "blood_cfWGS_timewindow_results2.csv"),
+  "Current revision-inclusive manuscript source.",
+  "Current blood time-window analysis",
+  project_path("Output_tables_2025", "detection_progression_updated6", "blood_cfWGS_timewindow_results2.csv"),
   "Scripts_2025/Final_Scripts/4_1_Survival_Analysis.R", "Extended_Data_Figure_8D; Supplementary_Table_9",
-  "Submitted manuscript values; preserved cached source.",
+  "Current revision-inclusive manuscript source.",
   "Prospective BM time-window QC",
   project_path("Output_tables_2025", "detection_progression_updated6", "prospective_timewindow_qc", "prospective_BM_cfWGS_timewindow_results.csv"),
   "Scripts_2025/Final_Scripts/4_1_Survival_Analysis.R", "prospective_QC",
@@ -882,7 +890,7 @@ if (!is.null(bm_nested) && all(c("combo", "auc_mean") %in% names(bm_nested))) {
   }
 }
 
-bm_surv_path <- project_path("Output_tables_2025", "detection_progression_updated6", "cfWGS_vs_flow_progression_summary_2026-06-22.csv")
+bm_surv_path <- latest_existing(project_path("Output_tables_2025", "detection_progression_updated6", "cfWGS_vs_flow_progression_summary_*.csv"))
 bm_surv <- read_csv_if_exists(bm_surv_path)
 if (!is.null(bm_surv) && all(c("Landmark", "HR_cf", "MedRFS_cf_pos", "Patients", "Events") %in% names(bm_surv))) {
   bm_1yr <- bm_surv %>% filter(.data$Landmark == "1yr_maintenance") %>% slice_head(n = 1)
@@ -933,7 +941,7 @@ if (!is.null(bm_surv) && all(c("Landmark", "HR_cf", "MedRFS_cf_pos", "Patients",
   }
 }
 
-blood_surv_path <- project_path("Output_tables_2025", "detection_progression_updated6", "cfWGS_vs_flow_progression_summary_blood_muts_2026-06-22.csv")
+blood_surv_path <- latest_existing(project_path("Output_tables_2025", "detection_progression_updated6", "cfWGS_vs_flow_progression_summary_blood_muts_*.csv"))
 blood_surv <- read_csv_if_exists(blood_surv_path)
 if (!is.null(blood_surv) && all(c("Landmark", "HR_cf", "MedRFS_cf_pos", "Patients", "Events") %in% names(blood_surv))) {
   blood_1yr <- blood_surv %>% filter(.data$Landmark == "1yr_maintenance") %>% slice_head(n = 1)
@@ -1112,10 +1120,10 @@ source_file_hints_for_category <- function(candidate_source_hint) {
   if ("survival/time-window outputs" %in% categories) {
     hints <- c(
       hints,
-      "Output_tables_2025/detection_progression_updated6/cfWGS_vs_flow_progression_summary_2026-06-22.csv",
-      "Output_tables_2025/detection_progression_updated6/cfWGS_vs_flow_progression_summary_blood_muts_2026-06-22.csv",
-      "Output_tables_2025/detection_progression_updated5/BM_cfWGS_timewindow_results2.csv",
-      "Output_tables_2025/detection_progression_updated5/blood_cfWGS_timewindow_results2.csv"
+      "Output_tables_2025/detection_progression_updated6/cfWGS_vs_flow_progression_summary_*.csv",
+      "Output_tables_2025/detection_progression_updated6/cfWGS_vs_flow_progression_summary_blood_muts_*.csv",
+      "Output_tables_2025/detection_progression_updated6/BM_cfWGS_timewindow_results2.csv",
+      "Output_tables_2025/detection_progression_updated6/blood_cfWGS_timewindow_results2.csv"
     )
   }
   if ("clinical concordance outputs" %in% categories) {

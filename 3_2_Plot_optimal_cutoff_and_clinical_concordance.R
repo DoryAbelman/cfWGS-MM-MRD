@@ -2740,9 +2740,20 @@ tbl %>%
   print(n = Inf)
 
 # 4) Helper to fit a logistic model for a given binary outcome
-fit_disc_model <- function(outcome) {
+fit_disc_model <- function(outcome, data = tbl) {
+  model_data <- data %>%
+    select(all_of(c(num_vars, outcome))) %>%
+    drop_na()
+
+  if (
+    nrow(model_data) == 0L ||
+      dplyr::n_distinct(model_data[[outcome]]) < 2L
+  ) {
+    return(NULL)
+  }
+
   formula <- as.formula(paste(outcome, "~", paste(num_vars, collapse = " + ")))
-  glm(formula, data = tbl %>% drop_na(all_of(num_vars)), family = binomial)
+  glm(formula, data = model_data, family = binomial)
 }
 
 # Sparse discordance strata can produce complete/quasi-complete separation.
@@ -2751,6 +2762,19 @@ fit_disc_model <- function(outcome) {
 # summary command-line-runnable by reporting Wald intervals and recording the
 # interval method explicitly.
 safe_tidy_glm <- function(model, conf.level = 0.95, exponentiate = TRUE) {
+  if (is.null(model)) {
+    return(tibble(
+      term = NA_character_,
+      estimate = NA_real_,
+      std.error = NA_real_,
+      statistic = NA_real_,
+      p.value = NA_real_,
+      conf.low = NA_real_,
+      conf.high = NA_real_,
+      ci_method = "not_fit_insufficient_nonmissing_or_single_class"
+    ))
+  }
+
   profiled <- tryCatch(
     broom::tidy(model, conf.int = TRUE, conf.level = conf.level, exponentiate = exponentiate),
     error = function(e) NULL
@@ -2797,8 +2821,8 @@ by_comp <- tbl %>%
   group_by(Comparator) %>%
   nest() %>%
   mutate(
-    missed_mod   = map(data, ~ glm(is_missed   ~ ., data = select(.x, all_of(num_vars), is_missed),   family=binomial)),
-    captured_mod = map(data, ~ glm(is_captured ~ ., data = select(.x, all_of(num_vars), is_captured), family=binomial)),
+    missed_mod   = map(data, ~ fit_disc_model("is_missed", .x)),
+    captured_mod = map(data, ~ fit_disc_model("is_captured", .x)),
     missed_tidy   = map(missed_mod, safe_tidy_glm),
     captured_tidy = map(captured_mod, safe_tidy_glm)
   ) %>%

@@ -93,10 +93,15 @@ if (!dir.exists(outdir)) {
 # ──────────────────────────────────────────────────────────────────────────────
 csv_files <- list.files(input_root, pattern = "\\.csv$", full.names = TRUE)
 spring2026_dilution_mrdetect_files <- spring2026_revision_files(
+  # Preferred Spring 2026 dilution-specific MRDetect exports. These already
+  # represent the dilution-series analysis surface when present.
   "MRDetect_outputs",
   "^(MRDetect_all_RESULTS_combined_with_source_dilution_series|MRDetect_dilution_series_updated)[.]csv$"
 )
 spring2026_combined_mrdetect_files <- spring2026_revision_files(
+  # Fallback combined Spring 2026 export. It can contain both patient rows and
+  # M4CHIP/PWGVAL dilution rows; the filtering below keeps only the dilution
+  # query BAMs from this combined file.
   "MRDetect_outputs",
   "^MRDetect_all_RESULTS_combined_with_source[.]csv$"
 )
@@ -110,6 +115,12 @@ if (!length(csv_files)) {
 }
 
 read_mrdetect_csv <- function(file) {
+  # ## Robust MRDetect CSV reader for legacy extra-field artifacts
+  # Some MRDetect exports have one more comma-delimited data field than the
+  # header because of either a trailing empty field or a legacy empty field
+  # immediately before filename. read_csv() would shift columns silently in those
+  # cases, so this function detects the pattern, names the empty field, verifies
+  # it is actually empty, and drops it before downstream parsing.
   header_line <- readLines(file, n = 1, warn = FALSE)
   header_cols <- trimws(strsplit(header_line, ",", fixed = TRUE)[[1]])
   probe_lines <- readLines(file, n = 25, warn = FALSE)
@@ -120,6 +131,8 @@ read_mrdetect_csv <- function(file) {
   max_data_field_count <- max(field_counts[-1], na.rm = TRUE)
   has_one_extra_data_field <- is.finite(max_data_field_count) &&
     max_data_field_count == header_field_count + 1
+  # Terminal-empty means rows end with a comma; legacy-empty-before-filename
+  # means the row has an empty field inserted before the final filename column.
   has_terminal_empty_data_field <- length(nonempty_data_probe) > 0 &&
     !endsWith(header_line, ",") &&
     any(endsWith(nonempty_data_probe, ","))
@@ -160,6 +173,9 @@ read_mrdetect_csv <- function(file) {
 }
 
 read_and_label <- function(file) {
+  # Standardize provenance columns across historical and Spring 2026 MRDetect
+  # exports. input_source_file is retained so audit tables can identify whether a
+  # row came from the combined Spring export or a dilution-specific file.
   df <- read_mrdetect_csv(file)
   if (!"filename" %in% names(df)) {
     if ("source_file" %in% names(df)) {
@@ -180,6 +196,9 @@ pwgval_dilution_metadata_for_mrdetect <- load_spring2026_pwgval_dilution_metadat
 pwgval_dilution_bams <- if (is.null(pwgval_dilution_metadata_for_mrdetect)) {
   character()
 } else {
+  # These BAM names define the Spring 2026 dilution query samples. They are used
+  # to keep M4CHIP/PWGVAL rows in 1_8A while 1_8 excludes them from patient
+  # scoring.
   unique(pwgval_dilution_metadata_for_mrdetect$BAM)
 }
 
@@ -187,6 +206,9 @@ if (length(spring2026_combined_mrdetect_files) > 0 && length(pwgval_dilution_bam
   spring2026_combined_basenames <- basename(spring2026_combined_mrdetect_files)
   all_files <- all_files %>%
     filter(
+      # For the combined Spring export, retain only rows that are demonstrably
+      # PWGVAL/M4CHIP dilution queries. Rows from historical or dilution-specific
+      # files pass through this filter.
       !.data$input_source_file %in% spring2026_combined_basenames |
         .data$BAM %in% pwgval_dilution_bams |
         str_detect(.data$BAM, "^M4CHIP_") |
@@ -223,6 +245,8 @@ all_files <- all_files %>%
   )
 
 extract_mrdetect_mutation_list_patient <- function(x) {
+  # Parse the patient ID encoded in the personalized mutation-list filename.
+  # This is used only for PWGVAL matching; it does not replace metadata Patient.
   dplyr::case_when(
     stringr::str_detect(x, "VA-[0-9]+") ~ stringr::str_extract(x, "VA-[0-9]+"),
     stringr::str_detect(x, "IMG-[0-9]+") ~ stringr::str_extract(x, "IMG-[0-9]+"),
@@ -231,6 +255,9 @@ extract_mrdetect_mutation_list_patient <- function(x) {
 }
 
 extract_mrdetect_mutation_list_timepoint <- function(x) {
+  # Parse the mutation-list timepoint from the VCF filename. VA-style IDs encode
+  # numeric timepoints such as 01; IMG-style IDs encode T0/T1. Relapse R lists
+  # are explicitly represented as R and excluded below.
   dplyr::case_when(
     stringr::str_detect(x, "VA-[0-9]+-[0-9]+-[A-Z]-DNA") ~
       stringr::str_match(x, "VA-[0-9]+-([0-9]+)-[A-Z]-DNA")[, 2],
@@ -242,10 +269,17 @@ extract_mrdetect_mutation_list_timepoint <- function(x) {
 }
 
 is_baseline_or_diagnosis_mutation_list <- function(timepoint) {
+  # For dilution scoring, only baseline/diagnosis personalized mutation lists are
+  # allowed. This avoids using future/progression mutation lists to score a
+  # dilution sample from that same patient.
   timepoint %in% c("01", "T0", "T1")
 }
 
 if (length(pwgval_dilution_bams) > 0) {
+  # ## PWGVAL/M4CHIP mutation-list gating
+  # A dilution queried BAM is interpretable only when it is run against a
+  # same-patient baseline/diagnosis mutation list. Cross-patient or progression
+  # mutation lists are written to audit tables and excluded before scoring.
   pwgval_bam_patient_lookup <- pwgval_dilution_metadata_for_mrdetect %>%
     transmute(
       BAM,
@@ -258,6 +292,8 @@ if (length(pwgval_dilution_bams) > 0) {
   all_files <- all_files %>%
     mutate(
       is_pwgval_m4chip_query_bam = .data$BAM %in% pwgval_dilution_bams | str_detect(.data$BAM, "^M4CHIP_"),
+      # These columns expose exactly what was inferred from the source filename
+      # before the boolean keep/exclude decision is made.
       VCF_mutation_list_patient_for_dilution = extract_mrdetect_mutation_list_patient(.data$VCF),
       VCF_mutation_list_timepoint_for_dilution = extract_mrdetect_mutation_list_timepoint(.data$VCF),
       VCF_mutation_list_is_baseline_or_diagnosis =
@@ -297,6 +333,9 @@ if (length(pwgval_dilution_bams) > 0) {
     )
 
   pwgval_mutation_list_match_audit <- all_files %>%
+    # Full audit of every M4CHIP/PWGVAL-like row, including excluded rows. This
+    # is intentionally generated before filtering so missing/incorrect mutation
+    # list matches remain visible.
     filter(.data$is_pwgval_m4chip_query_bam) %>%
     select(
       input_source_file,
@@ -330,6 +369,8 @@ if (length(pwgval_dilution_bams) > 0) {
 
   all_files <- all_files %>%
     filter(
+      # Non-PWGVAL rows remain available for historical dilution analysis.
+      # PWGVAL rows must pass the same-patient baseline/diagnosis gate.
       !.data$is_pwgval_m4chip_query_bam |
         .data$VCF_mutation_list_usable_for_PWGVAL %in% TRUE
     )
@@ -370,6 +411,9 @@ cfWGS_metadata <- read_combined_clinical_metadata_with_revision(
   )
 
 spring2026_panel_metadata <- cfWGS_metadata %>%
+  # Map mutect2_pair_id back to sample metadata for Spring 2026 VCF lists. The
+  # historical join key is still VCF_clean_merge; this lookup is for revision
+  # pair IDs that cannot be recovered from a BAM basename.
   filter(!is.na(mutect2_pair_id), nzchar(mutect2_pair_id)) %>%
   transmute(
     VCF_clean = mutect2_pair_id,
@@ -485,6 +529,8 @@ Merged_MRDetect_dilution <- all_files %>%
   left_join(tmp_meta, by = c("VCF_clean" = "VCF_clean_merge"))
 
 if ("mutect2_pair_id" %in% names(tmp_meta)) {
+  # Fill missing metadata by mutect2_pair_id after the historical BAM-key join.
+  # Coalesce preserves any metadata already found through VCF_clean_merge.
   tmp_meta_pair <- tmp_meta %>%
     filter(!is.na(mutect2_pair_id), nzchar(mutect2_pair_id)) %>%
     distinct(mutect2_pair_id, .keep_all = TRUE)
@@ -505,12 +551,17 @@ if ("mutect2_pair_id" %in% names(tmp_meta)) {
 if ("VCF_panel_sample_type" %in% names(Merged_MRDetect_dilution)) {
   Merged_MRDetect_dilution <- Merged_MRDetect_dilution %>%
     mutate(
+      # Trust metadata-derived sample type for determining whether the mutation
+      # list is BM-derived or blood-derived.
       Mut_source = case_when(
         VCF_panel_sample_type == "BM_cells" ~ "BM_cells",
         VCF_panel_sample_type == "Blood_plasma_cfDNA" ~ "Blood",
         TRUE ~ Mut_source
       ),
       VCF_panel_is_allowed_panel_timepoint = case_when(
+        # Even in dilution processing, the personalized mutation list should be
+        # baseline/diagnosis unless explicitly absent from metadata. Later
+        # mutation lists are exported to an exclusion audit.
         is.na(VCF_panel_timepoint_info) ~ TRUE,
         VCF_panel_timepoint_info %in% c("Baseline", "Diagnosis") ~ TRUE,
         TRUE ~ FALSE
@@ -541,6 +592,8 @@ bam_info <- read_dilution_metadata_with_spring2026("Metadata_dilution_series.csv
 
 # 3. Join back into the main Merged_MRDetect_dilution table
 Merged_MRDetect_dilution <- Merged_MRDetect_dilution %>%
+  # BAM is the queried dilution sample. Joining on BAM attaches the intended LOD,
+  # patient, replicate, and dilution-series source to each MRDetect row.
   left_join(bam_info, by = "BAM")
 
 if ("Patient.x" %in% names(Merged_MRDetect_dilution)) {
@@ -556,6 +609,9 @@ if ("Patient.y" %in% names(Merged_MRDetect_dilution)) {
 }
 
 pwgval_mrdetect_availability <- bam_info %>%
+  # Audit expected PWGVAL dilution BAMs against loaded MRDetect rows. A missing
+  # row here means the sample exists in metadata but was not present in the
+  # MRDetect result files selected above.
   filter(.data$dilution_series == "PWGVAL_M4CHIP") %>%
   distinct(BAM, Patient_Bam, LOD, Sample_ID, Merge) %>%
   mutate(
@@ -588,6 +644,9 @@ Merged_MRDetect_dilution <- Merged_MRDetect_dilution %>%
 # ──────────────────────────────────────────────────────────────────────────────
 Healthy_reference <- readRDS("MRDetect_output_winter_2025/Processed_R_outputs/cfWGS_Winter2025All_MRDetect_May2025.rds")
 needed_healthy_reference_vcfs <- Merged_MRDetect_dilution %>%
+  # Restrict healthy controls to the exact VCF/mutation lists represented in the
+  # dilution rows. This avoids carrying unrelated CHARM rows into the z-score
+  # reference table.
   filter(!is.na(.data$VCF_clean), nzchar(.data$VCF_clean)) %>%
   distinct(VCF_clean)
 
@@ -598,6 +657,8 @@ Healthy_reference <- Healthy_reference %>%
   )
 
 healthy_reference_audit <- needed_healthy_reference_vcfs %>%
+  # If healthy-reference rows are missing for a VCF, z-scores for that VCF will
+  # be NA. The audit makes that limitation explicit before model application.
   left_join(
     Healthy_reference %>%
       count(VCF_clean, Mut_source, Filter_source, name = "healthy_reference_rows"),

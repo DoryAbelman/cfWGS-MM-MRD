@@ -168,9 +168,13 @@ seg_files <- if (dir.exists(seg_dir)) {
   character()
 }
 spring2026_seg_files <- spring2026_revision_files(
+  # Optional Spring 2026 ichorCNA segment files. These extend the main patient
+  # CNA table when revision CNA outputs are present.
   "iChorCNA_All_CNA_Seg",
   "[.]seg$"
 )
+# M4CHIP files are dilution-series controls/samples and should not enter the
+# main patient CNA feature matrix.
 spring2026_seg_files <- spring2026_seg_files[!grepl("^M4CHIP_", basename(spring2026_seg_files))]
 seg_files <- unique(c(seg_files, spring2026_seg_files))
 

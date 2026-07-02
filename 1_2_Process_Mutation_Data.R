@@ -179,6 +179,9 @@ bm_maf_source <- resolve_maf_files(
 maf_directory <- bm_maf_source$directory
 maf_files <- unique(c(
   bm_maf_source$files,
+  # Append Spring 2026 BM MAFs selected through the revision metadata. The helper
+  # uses mutect2_pair_id and Sample_type == "BM_cells", so blood/cfDNA MAFs are
+  # not accidentally included in the baseline BM mutation set.
   spring2026_revision_maf_files("BM_cells")
 ))
 message("BM MAF files after adding Spring 2026 revision inputs: ", length(maf_files))
@@ -416,6 +419,8 @@ blood_maf_source <- resolve_maf_files(
 maf_directory <- blood_maf_source$directory
 maf_files <- unique(c(
   blood_maf_source$files,
+  # Append only Spring 2026 plasma/cfDNA MAFs. The metadata-driven helper keeps
+  # this separate from BM MAFs even when filenames are similar.
   spring2026_revision_maf_files("Blood_plasma_cfDNA")
 ))
 message("Blood/plasma MAF files after adding Spring 2026 revision inputs: ", length(maf_files))

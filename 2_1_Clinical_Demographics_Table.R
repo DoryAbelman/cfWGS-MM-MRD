@@ -19,7 +19,7 @@
 #   8. Export tables to Word and save cohort assignment as TXT/RDS
 #
 # Inputs:
-#   • RDS: Final_aggregate_table_cfWGS_features_with_clinical_and_demographics_updated5.rds
+#   • RDS: Final_aggregate_table_cfWGS_features_with_clinical_and_demographics_updated9.rds
 #   • CSV: Output_tables_2025/patient_cohort_assignment.csv
 #   • RDS: cohort_assignment_table_updated.rds
 #
@@ -83,10 +83,8 @@ rm(.manuscript_helper)
 # -----------------------------------------------------------
 # 1. Load baseline table inputs
 # -----------------------------------------------------------
-# The Table 1 source table is intentionally generated from the same historical
-# aggregate RDS used by the original script. See the input-version note above
-# before replacing this with a newer aggregate table.
-dat <- readRDS("Final_aggregate_table_cfWGS_features_with_clinical_and_demographics_updated5.rds")
+# Table 1 should reflect the current revision-inclusive aggregate table.
+dat <- readRDS("Final_aggregate_table_cfWGS_features_with_clinical_and_demographics_updated9.rds")
 
 
 ### Load the curated patient cohort list
@@ -165,9 +163,56 @@ dat_base <- dat_tb_final %>%
 dat_base <- dat_base %>%
   filter(!(Patient == "CA-03" & Timepoint == "02"))
 
+baseline_duplicate_audit <- dat_base %>%
+  group_by(Patient) %>%
+  mutate(n_patient_baseline_candidates = n()) %>%
+  ungroup() %>%
+  filter(n_patient_baseline_candidates > 1) %>%
+  mutate(
+    patient_baseline_timepoint_rank = case_when(
+      str_detect(as.character(Timepoint), regex("^T?0$", ignore_case = TRUE)) ~ 0L,
+      str_detect(as.character(Timepoint), regex("^T?1$|^0?1$", ignore_case = TRUE)) ~ 1L,
+      TRUE ~ 2L
+    ),
+    patient_baseline_has_feature_evidence = !is.na(BM_Mutation_Count) | !is.na(Blood_Mutation_Count)
+  ) %>%
+  group_by(Patient) %>%
+  arrange(
+    is.na(Date),
+    Date,
+    patient_baseline_timepoint_rank,
+    desc(patient_baseline_has_feature_evidence),
+    Timepoint,
+    .by_group = TRUE
+  ) %>%
+  mutate(
+    selected_for_patient_baseline_table = row_number() == 1L,
+    patient_baseline_selection_reason = case_when(
+      selected_for_patient_baseline_table ~ "selected earliest dated baseline/diagnosis candidate, preferring T0/T1 and rows with WGS mutation evidence",
+      TRUE ~ "not selected for patient-level Table 1 to enforce one baseline/diagnosis row per patient"
+    )
+  ) %>%
+  ungroup()
+
+if (nrow(baseline_duplicate_audit) > 0L) {
+  dir.create(file.path("Output_tables_2025", "clinical_support"), showWarnings = FALSE, recursive = TRUE)
+  readr::write_csv(
+    baseline_duplicate_audit,
+    file.path("Output_tables_2025", "clinical_support", "table1_patient_baseline_duplicate_selection_audit.csv")
+  )
+  dat_base <- dat_base %>%
+    left_join(
+      baseline_duplicate_audit %>%
+        select(Patient, Sample_Code, Timepoint, selected_for_patient_baseline_table),
+      by = c("Patient", "Sample_Code", "Timepoint")
+    ) %>%
+    filter(is.na(selected_for_patient_baseline_table) | selected_for_patient_baseline_table) %>%
+    select(-selected_for_patient_baseline_table)
+}
+
 # 6) Quick duplicate check
 dups <- dat_base %>%
-  count(Patient, timepoint_info) %>%
+  count(Patient) %>%
   filter(n > 1)
 
 if (nrow(dups)) {
@@ -326,7 +371,7 @@ table1_source_counts_path <- file.path(
 write.csv(table1_source_counts, table1_source_counts_path, row.names = FALSE, quote = TRUE)
 
 table1_source_qc <- data.frame(
-  input_rds = "Final_aggregate_table_cfWGS_features_with_clinical_and_demographics_updated5.rds",
+  input_rds = "Final_aggregate_table_cfWGS_features_with_clinical_and_demographics_updated9.rds",
   cohort_csv = "Output_tables_2025/patient_cohort_assignment.csv",
   n_baseline_table_patients = nrow(dat_base),
   n_frontline = sum(dat_base$cohort == "Frontline induction-transplant", na.rm = TRUE),

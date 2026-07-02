@@ -9,7 +9,7 @@
 #   plain-language sentences for the manuscript Results section.
 #
 # Inputs:
-#   - Jan2025_exported_data/All_feature_data_August2025.rds
+#   - Jan2025_exported_data/All_feature_data_Sep2025_updated2.rds
 #       (integrated feature table; output of 2_0)
 #   - cohort_assignment_table_updated.rds
 #       (M4/SPORE/IMMAGINE cohort labels for patient filtering)
@@ -45,7 +45,7 @@
 #
 
 ## ---- 0. USER SETTINGS -------------------------------------------------------
-in_rds        <- "Jan2025_exported_data/All_feature_data_August2025.rds"      # or "All_feature_data.csv"
+in_rds        <- "Jan2025_exported_data/All_feature_data_Sep2025_updated2.rds"
 out_plot_pdf  <- "Subclonal_evolution_plots.pdf"
 out_events_csv<- "Emergent_CNA_events.csv"
 cohort_df <- readRDS("cohort_assignment_table_updated.rds")
@@ -236,7 +236,16 @@ if (!is.na(edfig10_final_pdf)) {
 }
 
 ## ---- 7. Per-patient plots (Tumour fraction + FGA proxy) ---------------------
-plot_list <- cfDNA_df %>%
+plot_input <- cfDNA_df %>%
+  filter(!is.na(Sample_Date), is.finite(as.numeric(Sample_Date)))
+
+skipped_plot_rows <- cfDNA_df %>%
+  filter(is.na(Sample_Date) | !is.finite(as.numeric(Sample_Date)))
+if (nrow(skipped_plot_rows) > 0) {
+  write_csv(skipped_plot_rows, file.path(outdir, "Subclonal_evolution_skipped_plot_rows_missing_dates.csv"))
+}
+
+plot_list <- plot_input %>%
   mutate(
     is_relapse = factor(is_relapse,
                         levels = c(FALSE, TRUE),
@@ -275,10 +284,11 @@ plot_list <- cfDNA_df %>%
           plot.title      = element_text(face = "bold")
         )
     )
-  )
+  ) %>%
+  filter(map_int(data, nrow) > 0)
 
 pdf(out_plot_pdf, width = 7.5, height = 5.5)
-walk(plot_list$plot, print)
+if (nrow(plot_list) > 0) walk(plot_list$plot, print)
 dev.off()
 
 
@@ -295,8 +305,8 @@ n_patients     <- length(patients)
 spp            <- df_keep %>%
   group_by(Patient) %>%
   summarise(n = dplyr::n(), .groups = "drop")
-avg_spp        <- median(spp$n)
-range_spp      <- range(spp$n)
+avg_spp        <- median(spp$n, na.rm = TRUE)
+range_spp      <- range(spp$n, na.rm = TRUE)
 
 # 3) Emergent‐CNA patients
 emergent_pts   <- emergent_tbl %>% distinct(Patient) %>% pull(Patient)
@@ -309,9 +319,9 @@ days_vec       <- cfDNA_df %>%
   filter(Sample %in% emergent_tbl$Sample) %>%
   pull(Num_days_to_closest_relapse)
 
-mean_days      <- mean(days_vec)
-range_days     <- range(days_vec)
-iqr_days       <- IQR(days_vec)
+mean_days      <- mean(days_vec, na.rm = TRUE)
+range_days     <- range(days_vec, na.rm = TRUE)
+iqr_days       <- IQR(days_vec, na.rm = TRUE)
 
 # 5) Print formatted sentence
 summary_text <- sprintf(
@@ -338,10 +348,10 @@ emergent_tbl_days <- emergent_tbl %>%
 overall_days <- emergent_tbl_days$Num_days_to_closest_relapse
 overall_summary <- tibble(
   n_events   = nrow(emergent_tbl_days),
-  mean_days  = mean(overall_days),
-  median_days= median(overall_days),
-  range_days = paste(range(overall_days), collapse = "–"),
-  iqr_days   = IQR(overall_days)
+  mean_days  = mean(overall_days, na.rm = TRUE),
+  median_days= median(overall_days, na.rm = TRUE),
+  range_days = paste(range(overall_days, na.rm = TRUE), collapse = "–"),
+  iqr_days   = IQR(overall_days, na.rm = TRUE)
 )
 
 print(overall_summary)
@@ -351,10 +361,10 @@ per_event_summary <- emergent_tbl_days %>%
   group_by(Event) %>%
   summarise(
     n_events    = dplyr::n(),
-    mean_days   = mean(Num_days_to_closest_relapse),
-    median_days = median(Num_days_to_closest_relapse),
-    range_days  = paste(range(Num_days_to_closest_relapse), collapse = "–"),
-    iqr_days    = IQR(Num_days_to_closest_relapse),
+    mean_days   = mean(Num_days_to_closest_relapse, na.rm = TRUE),
+    median_days = median(Num_days_to_closest_relapse, na.rm = TRUE),
+    range_days  = paste(range(Num_days_to_closest_relapse, na.rm = TRUE), collapse = "–"),
+    iqr_days    = IQR(Num_days_to_closest_relapse, na.rm = TRUE),
     .groups     = "drop"
   )
 
@@ -389,17 +399,17 @@ second_closest <- cfDNA_df %>%
 # Compute median, range, and IQR:
 second_closest %>%
   summarise(
-    median_days = median(Days_before_relapse),
-    range_days  = paste(range(Days_before_relapse), collapse = "–"),
-    iqr_days    = IQR(Days_before_relapse)
+    median_days = median(Days_before_relapse, na.rm = TRUE),
+    range_days  = paste(range(Days_before_relapse, na.rm = TRUE), collapse = "–"),
+    iqr_days    = IQR(Days_before_relapse, na.rm = TRUE)
   ) %>%
   print()
 
 # If you prefer separate base‐R values:
 days <- second_closest$Days_before_relapse
-cat("Median:", median(days), "\n")
-cat("Range:", paste(range(days), collapse = "–"), "\n")
-cat("IQR:", IQR(days), "\n")
+cat("Median:", median(days, na.rm = TRUE), "\n")
+cat("Range:", paste(range(days, na.rm = TRUE), collapse = "–"), "\n")
+cat("IQR:", IQR(days, na.rm = TRUE), "\n")
 
 print(second_closest)
 
@@ -435,13 +445,13 @@ rise_q     <- quantile(tf_summary$tf_rise,     probs = c(0.25, 0.75), na.rm = TR
 days_q     <- quantile(tf_summary$days_nadir,  probs = c(0.25, 0.75), na.rm = TRUE)
 
 summary_sentence <- sprintf(
-  "In the %d patients who showed novel CNAs at progression, median tumour fraction rose from %.1f%% (IQR %.1f–%.1f%%) at diagnosis to %.1f%% (IQR %.1f–%.1f%%) at relapse.  From each patient’s nadir (median %.1f%% [IQR %.1f–%.1f%%]), tumour fraction increased by a median of %.1f%% (IQR %.1f–%.1f%%), with the nadir detected a median of %d days before progression (range %d–%d days; IQR %d days).",
+  "In the %d patients who showed novel CNAs at progression, median tumour fraction rose from %.1f%% (IQR %.1f–%.1f%%) at diagnosis to %.1f%% (IQR %.1f–%.1f%%) at relapse.  From each patient’s nadir (median %.1f%% [IQR %.1f–%.1f%%]), tumour fraction increased by a median of %.1f%% (IQR %.1f–%.1f%%), with the nadir detected a median of %.0f days before progression (range %.0f–%.0f days; IQR %.0f days).",
   nrow(tf_summary),
-  median(tf_summary$tf_baseline) * 100, baseline_q[1], baseline_q[2],
-  median(tf_summary$tf_relapse)  * 100, relapse_q[1], relapse_q[2],
-  median(tf_summary$tf_nadir)    * 100, quantile(tf_summary$tf_nadir, .25) * 100, quantile(tf_summary$tf_nadir, .75) * 100,
-  median(tf_summary$tf_rise)     * 100, rise_q[1], rise_q[2],
-  median(tf_summary$days_nadir), min(tf_summary$days_nadir), max(tf_summary$days_nadir), IQR(tf_summary$days_nadir)
+  median(tf_summary$tf_baseline, na.rm = TRUE) * 100, baseline_q[1], baseline_q[2],
+  median(tf_summary$tf_relapse, na.rm = TRUE)  * 100, relapse_q[1], relapse_q[2],
+  median(tf_summary$tf_nadir, na.rm = TRUE)    * 100, quantile(tf_summary$tf_nadir, .25, na.rm = TRUE) * 100, quantile(tf_summary$tf_nadir, .75, na.rm = TRUE) * 100,
+  median(tf_summary$tf_rise, na.rm = TRUE)     * 100, rise_q[1], rise_q[2],
+  median(tf_summary$days_nadir, na.rm = TRUE), min(tf_summary$days_nadir, na.rm = TRUE), max(tf_summary$days_nadir, na.rm = TRUE), IQR(tf_summary$days_nadir, na.rm = TRUE)
 )
 
 cat(summary_sentence, "\n")
@@ -454,7 +464,7 @@ rise_range     <- range(tf_summary$tf_rise,     na.rm = TRUE) * 100
 days_range     <- range(tf_summary$days_nadir,  na.rm = TRUE)
 
 summary_sentence <- sprintf(
-  "In the %d patients who showed novel CNAs at progression, median tumour fraction rose from %.1f%% (range %.1f–%.1f%%) at diagnosis to %.1f%% (range %.1f–%.1f%%) at relapse. From each patient’s nadir (median %.1f%% [range %.1f–%.1f%%]), tumour fraction increased by a median of %.1f%% (range %.1f–%.1f%%), with the nadir detected a median of %d days before progression (range %d–%d days).",
+  "In the %d patients who showed novel CNAs at progression, median tumour fraction rose from %.1f%% (range %.1f–%.1f%%) at diagnosis to %.1f%% (range %.1f–%.1f%%) at relapse. From each patient’s nadir (median %.1f%% [range %.1f–%.1f%%]), tumour fraction increased by a median of %.1f%% (range %.1f–%.1f%%), with the nadir detected a median of %.0f days before progression (range %.0f–%.0f days).",
   nrow(tf_summary),
   median(tf_summary$tf_baseline, na.rm = TRUE) * 100, baseline_range[1], baseline_range[2],
   median(tf_summary$tf_relapse,  na.rm = TRUE) * 100, relapse_range[1],  relapse_range[2],
@@ -494,13 +504,13 @@ rise_q     <- quantile(tf_summary$tf_rise,     probs = c(0.25, 0.75), na.rm = TR
 days_q     <- quantile(tf_summary$days_nadir,  probs = c(0.25, 0.75), na.rm = TRUE)
 
 summary_sentence <- sprintf(
-  "In the %d patients who did not show novel CNAs at progression, median tumour fraction rose from %.1f%% (IQR %.1f–%.1f%%) at diagnosis to %.1f%% (IQR %.1f–%.1f%%) at relapse.  From each patient’s nadir (median %.1f%% [IQR %.1f–%.1f%%]), tumour fraction increased by a median of %.1f%% (IQR %.1f–%.1f%%), with the nadir detected a median of %d days before progression (range %d–%d days; IQR %d days).",
+  "In the %d patients who did not show novel CNAs at progression, median tumour fraction rose from %.1f%% (IQR %.1f–%.1f%%) at diagnosis to %.1f%% (IQR %.1f–%.1f%%) at relapse.  From each patient’s nadir (median %.1f%% [IQR %.1f–%.1f%%]), tumour fraction increased by a median of %.1f%% (IQR %.1f–%.1f%%), with the nadir detected a median of %.0f days before progression (range %.0f–%.0f days; IQR %.0f days).",
   nrow(tf_summary),
-  median(tf_summary$tf_baseline) * 100, baseline_q[1], baseline_q[2],
-  median(tf_summary$tf_relapse)  * 100, relapse_q[1], relapse_q[2],
-  median(tf_summary$tf_nadir)    * 100, quantile(tf_summary$tf_nadir, .25) * 100, quantile(tf_summary$tf_nadir, .75) * 100,
-  median(tf_summary$tf_rise)     * 100, rise_q[1], rise_q[2],
-  median(tf_summary$days_nadir), min(tf_summary$days_nadir), max(tf_summary$days_nadir), IQR(tf_summary$days_nadir)
+  median(tf_summary$tf_baseline, na.rm = TRUE) * 100, baseline_q[1], baseline_q[2],
+  median(tf_summary$tf_relapse, na.rm = TRUE)  * 100, relapse_q[1], relapse_q[2],
+  median(tf_summary$tf_nadir, na.rm = TRUE)    * 100, quantile(tf_summary$tf_nadir, .25, na.rm = TRUE) * 100, quantile(tf_summary$tf_nadir, .75, na.rm = TRUE) * 100,
+  median(tf_summary$tf_rise, na.rm = TRUE)     * 100, rise_q[1], rise_q[2],
+  median(tf_summary$days_nadir, na.rm = TRUE), min(tf_summary$days_nadir, na.rm = TRUE), max(tf_summary$days_nadir, na.rm = TRUE), IQR(tf_summary$days_nadir, na.rm = TRUE)
 )
 
 cat(summary_sentence, "\n")
@@ -513,7 +523,7 @@ rise_range     <- range(tf_summary$tf_rise,     na.rm = TRUE) * 100
 days_range     <- range(tf_summary$days_nadir,  na.rm = TRUE)
 
 summary_sentence <- sprintf(
-  "In the %d patients who did not show novel CNAs at progression, median tumour fraction rose from %.1f%% (range %.1f–%.1f%%) at diagnosis to %.1f%% (range %.1f–%.1f%%) at relapse. From each patient’s nadir (median %.1f%% [range %.1f–%.1f%%]), tumour fraction increased by a median of %.1f%% (range %.1f–%.1f%%), with the nadir detected a median of %d days before progression (range %d–%d days).",
+  "In the %d patients who did not show novel CNAs at progression, median tumour fraction rose from %.1f%% (range %.1f–%.1f%%) at diagnosis to %.1f%% (range %.1f–%.1f%%) at relapse. From each patient’s nadir (median %.1f%% [range %.1f–%.1f%%]), tumour fraction increased by a median of %.1f%% (range %.1f–%.1f%%), with the nadir detected a median of %.0f days before progression (range %.0f–%.0f days).",
   nrow(tf_summary),
   median(tf_summary$tf_baseline, na.rm = TRUE) * 100, baseline_range[1], baseline_range[2],
   median(tf_summary$tf_relapse,  na.rm = TRUE) * 100, relapse_range[1],  relapse_range[2],
@@ -562,14 +572,14 @@ days_q     <- quantile(tf_summary$days_nadir,  probs = c(0.25, 0.75), na.rm = TR
 summary_sentence <- sprintf(
   "In the %d patients with baseline and cfDNA samples, median tumour fraction rose from %.1f%% (IQR %.1f–%.1f%%) at diagnosis to %.1f%% (IQR %.1f–%.1f%%) at relapse. From each patient’s nadir (median %.1f%% [IQR %.1f–%.1f%%]), tumour fraction increased by a median of %.1f%% (IQR %.1f–%.1f%%), with the nadir detected a median of %.0f days before progression (range %.0f–%.0f days; IQR %.0f days).",
   nrow(tf_summary),
-  median(tf_summary$tf_baseline) * 100, baseline_q[1], baseline_q[2],
-  median(tf_summary$tf_relapse)  * 100, relapse_q[1], relapse_q[2],
-  median(tf_summary$tf_nadir)    * 100,
-  quantile(tf_summary$tf_nadir, .25) * 100,
-  quantile(tf_summary$tf_nadir, .75) * 100,
-  median(tf_summary$tf_rise)     * 100, rise_q[1], rise_q[2],
-  median(tf_summary$days_nadir), min(tf_summary$days_nadir),
-  max(tf_summary$days_nadir), IQR(tf_summary$days_nadir)
+  median(tf_summary$tf_baseline, na.rm = TRUE) * 100, baseline_q[1], baseline_q[2],
+  median(tf_summary$tf_relapse, na.rm = TRUE)  * 100, relapse_q[1], relapse_q[2],
+  median(tf_summary$tf_nadir, na.rm = TRUE)    * 100,
+  quantile(tf_summary$tf_nadir, .25, na.rm = TRUE) * 100,
+  quantile(tf_summary$tf_nadir, .75, na.rm = TRUE) * 100,
+  median(tf_summary$tf_rise, na.rm = TRUE)     * 100, rise_q[1], rise_q[2],
+  median(tf_summary$days_nadir, na.rm = TRUE), min(tf_summary$days_nadir, na.rm = TRUE),
+  max(tf_summary$days_nadir, na.rm = TRUE), IQR(tf_summary$days_nadir, na.rm = TRUE)
 )
 
 cat(summary_sentence, "\n")

@@ -226,7 +226,7 @@ dat <- dat %>%
 dat_mrd <- dat %>%
   filter(!timepoint_info %in% c("Diagnosis", "Baseline"))
 
-USE_PRESERVED_MODELS_ONLY <- Sys.getenv("FNIH_RETRAIN_CFWGS_MODELS", unset = "0") != "1"
+USE_PRESERVED_MODELS_ONLY <- Sys.getenv("CFWGS_RETRAIN_MODELS", unset = "0") != "1"
 
 if (USE_PRESERVED_MODELS_ONLY) {
   message("Using preserved cfWGS models and thresholds; no model retraining will be run.")
@@ -365,7 +365,175 @@ if (USE_PRESERVED_MODELS_ONLY) {
   saveRDS(data_scored_masked, file = file.path(outdir, "all_patients_with_BM_and_blood_calls_updated6.rds"))
   write_csv(data_scored_masked, file = file.path(outdir, "all_patients_with_BM_and_blood_calls_updated6.csv"))
 
+  preserved_model_sample_group <- function(model_name) {
+    dplyr::case_when(
+      stringr::str_detect(model_name, "^BM_") ~ "BM_restricted",
+      stringr::str_detect(model_name, "^Blood_") ~ "Blood_restricted",
+      stringr::str_detect(model_name, "_BM_restricted$") ~ "BM_restricted",
+      stringr::str_detect(model_name, "_Blood_restricted$") ~ "Blood_restricted",
+      stringr::str_detect(model_name, "_Full$") ~ "Full",
+      TRUE ~ "Full"
+    )
+  }
+
+  safe_div <- function(num, den) {
+    ifelse(is.na(den) | den == 0, NA_real_, num / den)
+  }
+
+  metric_at_threshold <- function(truth, prob, threshold) {
+    pred <- as.integer(prob >= threshold)
+    tp <- sum(pred == 1 & truth == 1, na.rm = TRUE)
+    tn <- sum(pred == 0 & truth == 0, na.rm = TRUE)
+    fp <- sum(pred == 1 & truth == 0, na.rm = TRUE)
+    fn <- sum(pred == 0 & truth == 1, na.rm = TRUE)
+    sensitivity <- safe_div(tp, tp + fn)
+    specificity <- safe_div(tn, tn + fp)
+    ppv <- safe_div(tp, tp + fp)
+    npv <- safe_div(tn, tn + fn)
+    accuracy <- safe_div(tp + tn, tp + tn + fp + fn)
+    f1 <- ifelse(is.na(ppv) | is.na(sensitivity) | (ppv + sensitivity) == 0,
+                 NA_real_,
+                 2 * ppv * sensitivity / (ppv + sensitivity))
+    list(
+      sensitivity = sensitivity,
+      specificity = specificity,
+      ppv = ppv,
+      npv = npv,
+      accuracy = accuracy,
+      bal_accuracy = mean(c(sensitivity, specificity), na.rm = TRUE),
+      f1 = f1
+    )
+  }
+
+  preserved_test_eval <- data_scored_masked %>%
+    filter(!timepoint_info %in% c("Baseline", "Diagnosis"),
+           Cohort == "Non-frontline",
+           !is.na(MRD_truth))
+
+  preserved_test_metrics <- purrr::map_dfr(names(selected_models), function(model_name) {
+    prob_col <- paste0(model_name, "_prob")
+    threshold <- selected_thr[[model_name]]
+    if (!prob_col %in% names(preserved_test_eval)) {
+      return(tibble(
+        combo = model_name,
+        auc_mean = NA_real_, sens_mean = NA_real_, spec_mean = NA_real_,
+        sens95_mean = NA_real_, spec95_mean = NA_real_, balacc_mean = NA_real_,
+        ppv_mean = NA_real_, npv_mean = NA_real_, f1_mean = NA_real_,
+        brier_mean = NA_real_, pAUC90_mean = NA_real_, acc_mean = NA_real_,
+        sample_group = preserved_model_sample_group(model_name),
+        eval_cohort = "Testing"
+      ))
+    }
+
+    eval_df <- preserved_test_eval %>%
+      transmute(
+        MRD_truth = as.integer(MRD_truth),
+        prob = as.numeric(.data[[prob_col]])
+      ) %>%
+      filter(!is.na(MRD_truth), !is.na(prob))
+
+    if (nrow(eval_df) < 2L || dplyr::n_distinct(eval_df$MRD_truth) < 2L) {
+      return(tibble(
+        combo = model_name,
+        auc_mean = NA_real_, sens_mean = NA_real_, spec_mean = NA_real_,
+        sens95_mean = NA_real_, spec95_mean = NA_real_, balacc_mean = NA_real_,
+        ppv_mean = NA_real_, npv_mean = NA_real_, f1_mean = NA_real_,
+        brier_mean = if (nrow(eval_df)) mean((eval_df$prob - eval_df$MRD_truth)^2, na.rm = TRUE) else NA_real_,
+        pAUC90_mean = NA_real_, acc_mean = NA_real_,
+        sample_group = preserved_model_sample_group(model_name),
+        eval_cohort = "Testing"
+      ))
+    }
+
+    roc_obj <- pROC::roc(
+      response = eval_df$MRD_truth,
+      predictor = eval_df$prob,
+      levels = c(0, 1),
+      direction = "<",
+      quiet = TRUE
+    )
+
+    fixed_metrics <- metric_at_threshold(eval_df$MRD_truth, eval_df$prob, threshold)
+    roc_all <- pROC::coords(
+      roc_obj,
+      x = "all",
+      ret = c("threshold", "sensitivity", "specificity"),
+      transpose = FALSE
+    ) %>%
+      as_tibble()
+
+    spec95_row <- roc_all %>%
+      filter(specificity >= 0.95) %>%
+      arrange(desc(sensitivity), desc(specificity)) %>%
+      slice(1)
+    if (!nrow(spec95_row)) {
+      spec95_row <- roc_all %>%
+        arrange(desc(specificity), desc(sensitivity)) %>%
+        slice(1)
+    }
+
+    tibble(
+      combo = model_name,
+      auc_mean = as.numeric(pROC::auc(roc_obj)),
+      sens_mean = fixed_metrics$sensitivity,
+      spec_mean = fixed_metrics$specificity,
+      sens95_mean = spec95_row$sensitivity[[1]],
+      spec95_mean = spec95_row$specificity[[1]],
+      balacc_mean = fixed_metrics$bal_accuracy,
+      ppv_mean = fixed_metrics$ppv,
+      npv_mean = fixed_metrics$npv,
+      f1_mean = fixed_metrics$f1,
+      brier_mean = mean((eval_df$prob - eval_df$MRD_truth)^2, na.rm = TRUE),
+      pAUC90_mean = as.numeric(pROC::auc(
+        roc_obj,
+        partial.auc = c(0.9, 1),
+        partial.auc.correct = TRUE
+      )),
+      acc_mean = fixed_metrics$accuracy,
+      sample_group = preserved_model_sample_group(model_name),
+      eval_cohort = "Testing"
+    )
+  }) %>%
+    mutate(across(where(is.numeric), ~ round(.x, 3)))
+
+  preserved_test_metric_audit <- purrr::map_dfr(names(selected_models), function(model_name) {
+    prob_col <- paste0(model_name, "_prob")
+    if (!prob_col %in% names(preserved_test_eval)) {
+      return(tibble(combo = model_name, n_evaluable = 0L, n_mrd_positive = NA_integer_, n_mrd_negative = NA_integer_))
+    }
+    eval_df <- preserved_test_eval %>%
+      transmute(MRD_truth = as.integer(MRD_truth), prob = as.numeric(.data[[prob_col]])) %>%
+      filter(!is.na(MRD_truth), !is.na(prob))
+    tibble(
+      combo = model_name,
+      n_evaluable = nrow(eval_df),
+      n_mrd_positive = sum(eval_df$MRD_truth == 1, na.rm = TRUE),
+      n_mrd_negative = sum(eval_df$MRD_truth == 0, na.rm = TRUE)
+    )
+  })
+
+  write_csv(
+    preserved_test_metrics,
+    "Final Tables and Figures/Supplementary_Table_5_All_Model_performance_testing_cohort_v3_Feb2026_with_restricted_fragmentomics.csv"
+  )
+  write_csv(
+    preserved_test_metrics,
+    file.path(outdir, "preserved_model_current_test_cohort_metrics_for_supplementary_table_6.csv")
+  )
+  write_csv(
+    preserved_test_metric_audit,
+    file.path(outdir, "preserved_model_current_test_cohort_metrics_audit.csv")
+  )
+  ms_copy_artifact(
+    source_path = "Final Tables and Figures/Supplementary_Table_5_All_Model_performance_testing_cohort_v3_Feb2026_with_restricted_fragmentomics.csv",
+    artifact_id = "STABLE6",
+    role = "table_csv",
+    description = "Current testing-cohort model-performance table computed by applying preserved February 2026 models and thresholds to the expanded test cohort.",
+    script_name = "3_1_Optimize_cfWGS_thresholds.R"
+  )
+
   message("Preserved-model cfWGS scoring complete. Wrote all_patients_with_BM_and_blood_calls_updated6*.rds/csv.")
+  message("Current preserved-model testing metrics complete. Wrote Supplementary Table 6 source and audit outputs without model retraining.")
   quit(save = "no", status = 0)
 }
 

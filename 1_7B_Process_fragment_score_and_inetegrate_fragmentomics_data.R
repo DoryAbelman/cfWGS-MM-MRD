@@ -108,9 +108,18 @@ results.files <- list.files(path = input.dir,
                             full.names = TRUE)
 results.files <- unique(c(
   results.files,
+  # Append Spring 2026 insert-size summary rows for revision cfDNA samples. This
+  # extends the tumor-naive fragmentomics feature table without changing the
+  # historical PON/reference input selection.
   spring2026_revision_files(
     "Fragmentomics_Pipeeline_Suite_all_outputs",
     "^2026-06-25_cfWGS_MM_fragmentomics_Revisions_Spring2026_insert_size_summary[.]tsv$"
+  ),
+  # Append Spring 2026 PWGVAL/M4CHIP dilution-series insert-size rows for LOD
+  # analyses that use fragmentomics combined models.
+  spring2026_revision_files(
+    "Fragmentomics_Pipeeline_Suite_all_outputs",
+    "^2026-06-25_cfWGS_MM_fragmentomics_Revisions_Spring2026_PWGVAL_Dilution_series_insert_size_summary[.]tsv$"
   )
 ))
 pon.files <- rev(sort(
@@ -141,6 +150,23 @@ tmp.clin <- combined_clinical %>%
       str_replace(Sample_ID, "_Blood_plasma_cfDNA", "-P")
     )
   )
+spring2026_pwgval_metadata <- load_spring2026_pwgval_dilution_metadata(required = FALSE)
+if (!is.null(spring2026_pwgval_metadata)) {
+  tmp.clin <- bind_rows(
+    tmp.clin,
+    spring2026_pwgval_metadata %>%
+      transmute(
+        Merge_ID = paste0(.data$Group_ID, "-P"),
+        Patient = .data$Patient,
+        Sample_ID = .data$Sample_ID,
+        Bam = .data$Bam,
+        Date_of_sample_collection = as.Date(NA),
+        Timepoint = as.character(.data$Timepoint),
+        timepoint_info = .data$timepoint_info,
+        Study = "PWGVAL_M4CHIP"
+      )
+  )
+}
 tmp.clin <- bind_rows(
   tmp.clin,
   tmp.clin %>% mutate(Merge_ID = str_replace(Merge_ID, "^IMG", "MyP"))
@@ -288,9 +314,17 @@ fs.files <- list.files(path = input.dir,
                        full.names = TRUE)
 fs.files <- unique(c(
   fs.files,
+  # Append Spring 2026 CHARM fragment-score rows. The clinical metadata join
+  # below determines which of these rows are valid patient cfDNA samples.
   spring2026_revision_files(
     "Fragmentomics_Pipeeline_Suite_all_outputs",
     "^2026-06-25_cfWGS_MM_fragmentomics_Revisions_Spring2026_fragment_scores[.]tsv$"
+  ),
+  # Append Spring 2026 PWGVAL/M4CHIP dilution-series fragment-score rows for LOD
+  # analyses that use fragmentomics combined models.
+  spring2026_revision_files(
+    "Fragmentomics_Pipeeline_Suite_all_outputs",
+    "^2026-06-25_cfWGS_MM_fragmentomics_Revisions_Spring2026_PWGVAL_Dilution_series_fragment_scores[.]tsv$"
   )
 ))
 pon.fs.files <- rev(sort(
@@ -417,7 +451,20 @@ readr::write_csv(
 # Midpoint.normalized, Amplitude, z-scores vs. healthy, and binary
 # Threshold flags. These are joined with FS and Proportion.Short below
 # to form the unified fragmentomics feature table.
-mm_dars <- readRDS("Results_Fragmentomics/MM_DARs_chromatin_activation_data.rds")
+mm_dars_rds_path <- "Results_Fragmentomics/MM_DARs_chromatin_activation_data.rds"
+mm_dars_csv_path <- "Results_Fragmentomics/MM_DARs_chromatin_activation_data.csv"
+if (
+  file.exists(mm_dars_csv_path) &&
+    (!file.exists(mm_dars_rds_path) ||
+       file.info(mm_dars_csv_path)$mtime > file.info(mm_dars_rds_path)$mtime)
+) {
+  warning(
+    "MM_DARs RDS is missing or older than the CSV; reading the CSV to avoid stale fragmentomics features."
+  )
+  mm_dars <- read_csv(mm_dars_csv_path, show_col_types = FALSE)
+} else {
+  mm_dars <- readRDS(mm_dars_rds_path)
+}
 
 ## In case run in two batches (optional)
 mm_dars2 <- read.csv("Results_Fragmentomics/MM_Griffin_all_relevant_sites_data_updated_SPORE.csv")
@@ -441,7 +488,7 @@ mm_dars2_small <- mm_dars2 %>%
 mm_dars_small <- mm_dars %>%
   mutate(
     Date_of_sample_collection = as.Date(Date_of_sample_collection, format = "%Y-%m-%d"),
-    Date                     = as.Date(Date, format = "%Y-%m-%d")
+    Date = if ("Date" %in% names(.)) as.Date(.data$Date, format = "%Y-%m-%d") else Date_of_sample_collection
   ) %>%
   select(
     Sample, Site,

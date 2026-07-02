@@ -120,18 +120,27 @@ frag_df     <- read_rds(PATH_DILUTION_FRAGMENTOMICS)
 mrdetect_df <- read_rds(PATH_DILUTION_PROCESSED_MRDetect)
 clinical_df <- read_dilution_metadata_with_spring2026(PATH_DILUTION_CLINICAL)
 tumor_fraction_dilution <- read_dilution_tumor_fraction_with_spring2026(PATH_TUMOR_FRACTION)
+# clinical_df and tumor_fraction_dilution are revision-aware here. The helpers
+# append PWGVAL/M4CHIP rows to the historical dilution tables while preserving
+# the old schema expected by the model-application code below.
 
 # A) Combine features into one table 
 
 # Merge based on BAM (make sure both are character columns)
 mrdetect_df <- mrdetect_df %>%
   left_join(
+    # Some processed MRDetect dilution rows carry BAM but not the historical
+    # Merge label. Recover Merge from the dilution metadata so fragmentomics,
+    # MRDetect, and clinical dilution rows join through the same sample key.
     clinical_df %>% dplyr::select(BAM, Merge_lookup = Merge),
     by = "BAM"
   ) %>%
   mutate(
     Merge = coalesce(.data$Merge, .data$Merge_lookup),
     VCF_Timepoint_for_dilution_filter = coalesce(
+      # Different MRDetect joins can expose the mutation-list timepoint as
+      # Timepoint, Timepoint.x, or Timepoint.y. Coalesce across them before
+      # applying the baseline/diagnosis mutation-list gate.
       as.character(.data$Timepoint),
       as.character(.data$Timepoint.x),
       as.character(.data$Timepoint.y)
@@ -141,6 +150,9 @@ mrdetect_df <- mrdetect_df %>%
 
 # ── Filter MRDetect df to only timepoint 0 (diagnosis) and select/rename ─────────
 mrdetect_wide <- mrdetect_df %>%
+  # Keep only baseline/diagnosis personalized mutation lists. The PWGVAL rows
+  # have already been screened in 1_8A for same-patient baseline/diagnosis
+  # mutation lists, but this preserves the historical dilution-series rule too.
   filter(VCF_Timepoint_for_dilution_filter %in% c("01")) %>%
   filter(!is.na(Patient_Bam)) %>% # omit healthy controls since not plotted 
   dplyr::select(
@@ -177,6 +189,8 @@ mrdetect_wide <- mrdetect_df %>%
 
 # Ensure tumor_fraction_dilution$Bam has .bam to match clinical_df$Bam
 tumor_fraction_dilution <- tumor_fraction_dilution %>%
+  # Historical tumor-fraction files store Bam without ".bam"; clinical metadata
+  # stores the full BAM basename. Build BAM_full for this join only.
   mutate(BAM_full = paste0(Bam, ".bam")) %>%
   left_join(clinical_df, by = c("BAM_full" = "Bam"))
 
@@ -184,6 +198,8 @@ tumor_fraction_dilution <- tumor_fraction_dilution %>%
 dilution_base <- frag_df %>%
   rename(Merge = Sample) %>%
   left_join(
+    # Attach the intended dilution metadata to each fragmentomics row. For
+    # PWGVAL/M4CHIP rows, Metadata_LOD is the workbook TF_Dilution value.
     clinical_df %>%
       dplyr::select(
         BAM,
@@ -205,6 +221,9 @@ dilution_df <- dilution_base %>%
     by = c("Merge", "Patient")
   ) %>%
   mutate(
+    # Keep rows even when MRDetect is absent. Availability columns below make it
+    # clear which PWGVAL dilution samples could not be scored by one or more
+    # models because no same-patient baseline/diagnosis MRDetect row survived.
     mrdetect_status = if_else(
       is.na(.data$detect_rate_BM) & is.na(.data$detect_rate_blood),
       "missing_mrdetect",
@@ -229,6 +248,10 @@ dilution_df <- dilution_df %>%
 
 # ── 5. PREDICTION FUNCTION based on pre-trained model ────────────────────
 apply_selected <- function(dat, models, thresholds, positive_class = "pos") {
+  # ## Score dilution rows with frozen manuscript models
+  # Models and thresholds were trained/selected upstream. This function only
+  # applies them to rows with complete predictor values and leaves non-scorable
+  # rows as NA, which is important for PWGVAL rows missing MRDetect features.
   out <- dat            # start with your full data.frame
   n   <- nrow(dat)
   
@@ -291,6 +314,9 @@ dilution_df <- dilution_df %>%
     LOD_original = LOD,
     is_pwgval_dilution = coalesce(.data$dilution_series == "PWGVAL_M4CHIP", FALSE),
     LOD_updated = if_else(
+      # PWGVAL/M4CHIP rows keep the workbook TF_Dilution as their intended LOD.
+      # The older VA-02 dilution series used measured endpoint VAFs and is
+      # recalibrated with the historical baseline/negative formula.
       .data$is_pwgval_dilution,
       .data$LOD,
       (.data$LOD / orig_full) * baseline_vaf + (1 - .data$LOD / orig_full) * neg_vaf
@@ -306,6 +332,9 @@ dilution_df <- dilution_df %>%
 dilution_df$LOD <- dilution_df$LOD_updated
 
 pwgval_feature_availability <- dilution_df %>%
+  # Export one row per PWGVAL sample describing which MRDetect/model features
+  # were present after all joins. This is a key diagnostic for interpreting
+  # missing model probabilities in Supplementary Table 7.
   filter(.data$is_pwgval_dilution %in% TRUE) %>%
   transmute(
     Patient,
@@ -2852,7 +2881,10 @@ format_lod_percent_with_zero <- function(x) {
   out
 }
 
-zero_final_breaks <- sort(c(major_breaks, zero_final_plot_x))
+zero_final_breaks <- sort(c(
+  major_breaks[major_breaks > min(major_breaks, na.rm = TRUE)],
+  zero_final_plot_x
+))
 zero_final_break_labels <- format_lod_percent(zero_final_breaks)
 zero_final_break_labels[zero_final_breaks == zero_final_plot_x] <- "0%"
 zero_final_minor_breaks <- minor_ext[

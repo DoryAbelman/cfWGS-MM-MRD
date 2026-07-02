@@ -283,6 +283,10 @@ pp_table <- pp_table |>
   arrange(Sample)
 
 spring2026_ploidy_file <- spring2026_revision_files(
+  # Optional Sequenza purity/ploidy summary from the Spring 2026 DNA pipeline.
+  # These rows extend pp_table for new revision samples so segment calls can be
+  # interpreted relative to sample-specific ploidy instead of a generic diploid
+  # baseline.
   "DNA_pipeline_suite_Sequenza_outputs",
   "Sequenza_ploidy_purity[.]tsv$"
 )[1]
@@ -294,6 +298,8 @@ if (!is.na(spring2026_ploidy_file) && file.exists(spring2026_ploidy_file)) {
       Ploidy = round(suppressWarnings(as.numeric(ploidy)), 3)
     )
   pp_table <- bind_rows(pp_table, spring2026_pp) %>%
+    # Historical rows win if the same Sample already exists. The Spring file is
+    # an extension path, not an override of previously reviewed Sequenza outputs.
     distinct(Sample, .keep_all = TRUE) %>%
     arrange(Sample)
 }
@@ -390,6 +396,9 @@ for (i in seq_along(seg_files)) {
 }
 
 spring2026_segment_file <- spring2026_revision_files(
+  # Optional combined Spring 2026 Sequenza segment table. It is parsed in addition
+  # to per-sample historical segment files and only contributes samples not
+  # already present in seg_data_list.
   "DNA_pipeline_suite_Sequenza_outputs",
   "Sequenza_segments[.]tsv$"
 )[1]
@@ -408,6 +417,9 @@ if (!is.na(spring2026_segment_file) && file.exists(spring2026_segment_file)) {
   spring_samples <- sort(unique(spring2026_segments$Sample))
   existing_samples <- names(seg_data_list)
   for (sample_name in setdiff(spring_samples, existing_samples)) {
+    # Process each revision sample with the same CNt/A/B -> categorical-call
+    # logic used for historical Sequenza segments, so downstream CNA summaries do
+    # not depend on which input file format supplied the sample.
     df <- spring2026_segments %>% filter(Sample == sample_name)
     seg_core <- df %>%
       dplyr::transmute(
@@ -422,6 +434,9 @@ if (!is.na(spring2026_segment_file) && file.exists(spring2026_segment_file)) {
 
     ploidy_conf <- unname(ploidy_map[sample_name])
     if (!is.finite(ploidy_conf)) {
+      # If Spring purity/ploidy is missing for a sample, fall back to an
+      # autosome-weighted modal CNt estimate and record that source in the QC
+      # ploidy table.
       df_auto <- seg_core %>%
         dplyr::filter(chr %in% as.character(1:22)) %>%
         dplyr::mutate(CNt_round = round(CNt))

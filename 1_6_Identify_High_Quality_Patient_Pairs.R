@@ -40,7 +40,7 @@
 #   • Clinical data/M4/M4 V1 BM processed at baseline.xlsx
 #   • TFRIM4_Processing Log_Nov2024.xlsx   (sheet 6)
 #   • combined_clinical_data_updated_April2025.csv
-#   • Jan2025_exported_data/All_feature_data_August2025.rds
+#   • Jan2025_exported_data/All_feature_data_Sep2025_updated2.rds
 #   • summary_table_of_samples_and_patient_availability_cfWGS - for making the flow chart of samples.xlsx
 #
 # Output Files:
@@ -96,7 +96,7 @@ rm(.helpers_path)
 bm_list_path        <- "Clinical data/M4/M4 V1 BM processed at baseline.xlsx"
 processing_log_path <- "TFRIM4_Processing Log_Nov2024.xlsx"
 clinical_csv_path   <- "combined_clinical_data_updated_April2025.csv"
-features_rds_path   <- "Jan2025_exported_data/All_feature_data_August2025.rds"
+features_rds_path   <- "Jan2025_exported_data/All_feature_data_Sep2025_updated2.rds"
 failed_info_path    <- "summary_table_of_samples_and_patient_availability_cfWGS - for making the flow chart of samples.xlsx"
 export_dir          <- "Output_tables_2025"
 final_tables_dir    <- "Final Tables and Figures"

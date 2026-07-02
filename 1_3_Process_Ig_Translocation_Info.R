@@ -168,6 +168,9 @@ cfWGS_res_filtered_f <- list.files(cfWGS_res_dir,
                                    full.names = T)
 cfWGS_res_filtered_f <- unique(c(
   cfWGS_res_filtered_f,
+  # Append Spring 2026 IgCaller filtered outputs from the revision data root.
+  # These rows are parsed and exported for review, but final translocation
+  # feature calls are still gated by manual IGV review below.
   spring2026_revision_files("Ig_caller_all_filtered_outputs", "_filtered[.]tsv$")
 ))
 
@@ -1016,19 +1019,42 @@ screenshotter_df %>%
   group_walk(~ write_bed(.x, .y$Bam))
 
 
+add_col_if_missing <- function(df, colname, default = NA_integer_) {
+  if (!colname %in% colnames(df)) {
+    df[[colname]] <- default
+  }
+  df
+}
 
 
 
+gene_translocation_cols <- c("IGH-MAF", "IGH-CCND1", "IGH-MYC", "IGH-FGFR3")
+for (col in gene_translocation_cols) {
+  translocation_matrix <- add_col_if_missing(translocation_matrix, col, default = 0L)
+}
 
-
-# Replace missing values (if any) with 0
-translocation_matrix[is.na(translocation_matrix)] <- 0
+translocation_feature_cols <- setdiff(
+  names(translocation_matrix),
+  c("Bam_File", "Patient", "Timepoint", "Sample_type", "Sample_ID", "timepoint_info")
+)
+translocation_matrix <- translocation_matrix %>%
+  mutate(across(all_of(translocation_feature_cols), ~ replace_na(as.integer(.x), 0L)))
 
 #  Prepare translocation data
 translocation_data <- translocation_matrix %>%
   select(Bam_File, IGH_MAF = `IGH-MAF`, IGH_CCND1 = `IGH-CCND1`, IGH_MYC = `IGH-MYC`, IGH_FGFR3 = `IGH-FGFR3`) %>%
   mutate(Sample = gsub(".bam$", "", Bam_File))  # Remove '.bam' extension if present
 
+cyto_cols <- c(
+  "chr11q13.2_chr14q32.33",
+  "chr11q13.3_chr14q32.33",
+  "chr14q32.33_chr4p16.3",
+  "chr14q32.33_chr16q23.2",
+  "chr14q32.33_chr8q24.21"
+)
+for (col in cyto_cols) {
+  translocation_matrix_cytoband <- add_col_if_missing(translocation_matrix_cytoband, col, default = 0L)
+}
 
 translocation_data_cytoband <- translocation_matrix_cytoband %>%
   # first, create IGH_CCND1 by coalescing the two possible 11q13 bands
@@ -1081,6 +1107,9 @@ filtered_df <- Ig_caller_df_cfWGS_filtered_aggressive2 %>%
 
 spring2026_revision_metadata_for_igv <- load_spring2026_revision_metadata(required = FALSE)
 if (!is.null(spring2026_revision_metadata_for_igv)) {
+  # Write a revision-specific subset of common MM translocation candidates so
+  # manual reviewers can see exactly which new samples require IGV adjudication
+  # before they can enter the final binary feature matrix.
   spring2026_igv_candidates <- filtered_df %>%
     filter(.data$Sample_ID %in% spring2026_revision_metadata_for_igv$Sample_ID) %>%
     mutate(
@@ -1130,25 +1159,9 @@ translocation_matrix_cytoband <- iGV_verified %>%
   )
 
 
-# Helper: add column if missing
-add_col_if_missing <- function(df, colname, default = NA_integer_) {
-  if (!colname %in% colnames(df)) {
-    df[[colname]] <- default
-  }
-  df
-}
-
-cyto_cols <- c(
-  "chr11q13.2_chr14q32.33",
-  "chr11q13.3_chr14q32.33",
-  "chr14q32.33_chr4p16.3",
-  "chr14q32.33_chr16q23.2",
-  "chr14q32.33_chr8q24.21"
-)
-
 # Add all needed columns if missing
 for (col in cyto_cols) {
-  translocation_matrix_cytoband <- add_col_if_missing(translocation_matrix_cytoband, col)
+  translocation_matrix_cytoband <- add_col_if_missing(translocation_matrix_cytoband, col, default = 0L)
 }
 
 

@@ -88,6 +88,9 @@ empty_swim_events <- function() {
 }
 
 load_swim_mrdetect_calls <- function(path = "Output_tables_2025/all_patients_with_BM_and_blood_calls_updated6_full.rds") {
+  # The swim plot only adds Spring 2026 patients when processed MRDetect calls
+  # are available. Missing this table is a warning rather than a hard failure so
+  # older figure builds can still run without silently adding unscored patients.
   if (!file.exists(path)) {
     warning("Missing MRDetect call table used to gate revision swim-plot patients: ", path, call. = FALSE)
     return(NULL)
@@ -96,6 +99,11 @@ load_swim_mrdetect_calls <- function(path = "Output_tables_2025/all_patients_wit
 }
 
 eligible_spring2026_swim_patients <- function() {
+  # ## Decide which Spring 2026 patients belong in the swim plot
+  # Revision metadata can contain many submitted samples, but the manuscript swim
+  # plot should only add patients who have analyzable baseline BM/blood BAMs and
+  # at least one longitudinal MRDetect call. This keeps the revision set as a
+  # scored test-cohort addition rather than a broad submission inventory.
   revision <- load_spring2026_revision_metadata(required = FALSE)
   if (is.null(revision)) return(character())
 
@@ -115,6 +123,8 @@ eligible_spring2026_swim_patients <- function() {
 
   baseline_bam_patients <- revision %>%
     filter(
+      # Baseline/Diagnosis BAMs establish the patient's molecular context for the
+      # longitudinal row. Other revision timepoints alone are not sufficient.
       .data$timepoint_info %in% c("Diagnosis", "Baseline"),
       .data$Sample_type %in% c("BM_cells", "Blood_plasma_cfDNA"),
       .data$has_bam %in% TRUE
@@ -123,6 +133,9 @@ eligible_spring2026_swim_patients <- function() {
     pull(Patient)
 
   call_cols <- intersect(
+    # The gate accepts either BM-derived or blood-derived MRDetect call columns.
+    # Column names vary across exports, so only available recognized columns are
+    # tested.
     c(
       "BM_zscore_only_sites_call",
       "BM_zscore_only_detection_rate_call",
@@ -139,6 +152,8 @@ eligible_spring2026_swim_patients <- function() {
   longitudinal_mrdetect_patients <- calls %>%
     filter(
       .data$Patient %in% revision$Patient,
+      # Require a non-baseline timepoint with at least one call value. Baseline
+      # calls alone do not demonstrate longitudinal monitoring for the swim plot.
       !.data$timepoint_info %in% c("Diagnosis", "Baseline")
     ) %>%
     filter(if_any(all_of(call_cols), ~ !is.na(.x))) %>%
@@ -154,6 +169,8 @@ eligible_spring2026_swim_patients <- function() {
 }
 
 load_swim_cohort_assignment <- function(path = "cohort_assignment_table_updated.rds") {
+  # Start from the historical cohort assignment and append eligible revision
+  # patients as Non-frontline. Existing cohort labels are not overwritten.
   cohort_df <- readRDS(path)
   require_columns(cohort_df, c("Patient", "Cohort"), "Swim-plot cohort assignment")
 
@@ -174,6 +191,11 @@ load_swim_cohort_assignment <- function(path = "cohort_assignment_table_updated.
 }
 
 build_spring2026_revision_swim_events <- function(eligible_patients) {
+  # ## Convert Spring 2026 metadata into swim-plot event rows
+  # Events are intentionally conservative: baseline is anchored to the earliest
+  # baseline/diagnosis BAM date, endpoint events use progression date when the
+  # patient progressed otherwise censor date, and clinical MRD events come from
+  # explicit mrd_test_date rows.
   revision <- load_spring2026_revision_metadata(required = FALSE)
   if (is.null(revision)) return(empty_swim_events())
 
@@ -190,6 +212,8 @@ build_spring2026_revision_swim_events <- function(eligible_patients) {
 
   baseline_events <- revision %>%
     filter(
+      # Use BAM-backed baseline/diagnosis BM or blood rows only; submitted rows
+      # without BAMs are not plotted as molecular baseline events.
       .data$timepoint_info %in% c("Diagnosis", "Baseline"),
       .data$Sample_type %in% c("BM_cells", "Blood_plasma_cfDNA"),
       .data$has_bam %in% TRUE,
@@ -214,6 +238,8 @@ build_spring2026_revision_swim_events <- function(eligible_patients) {
     ) %>%
     mutate(
       endpoint_date = case_when(
+        # If progression occurred and a first progression date is present, that
+        # is the event date. Otherwise use the relapse/censor date from metadata.
         .data$relapse_or_censor_status == "relapse/progression" & !is.na(.data$first_progression_date) ~ .data$first_progression_date,
         TRUE ~ .data$relapse_or_censor_date
       ),
@@ -238,6 +264,8 @@ build_spring2026_revision_swim_events <- function(eligible_patients) {
     )
 
   clinical_mrd_events <- revision %>%
+    # Clinical MRD is a separate event type from cfWGS MRDetect calls. It is
+    # plotted only when the metadata provides an explicit test date.
     distinct(Patient, mrd_test_date, mrd_result_comprehensive) %>%
     filter(!is.na(.data$mrd_test_date)) %>%
     transmute(
@@ -250,6 +278,404 @@ build_spring2026_revision_swim_events <- function(eligible_patients) {
 
   bind_rows(baseline_events, endpoint_events, clinical_mrd_events) %>%
     distinct(.data$patient, .data$event, .data$start, .data$end, .data$details)
+}
+
+build_spring2026_revision_treatment_events <- function(
+    eligible_patients,
+    clinical_dir = file.path("New OICR Submissions", "derived_metadata"),
+    support_dir = swim_support_dir
+) {
+  # ## Build OICR revision treatment bars for swim plots
+  # This function is restricted to patients already eligible for the Spring 2026
+  # swim-plot test cohort. It prefers directly dated treatment rows. Relative
+  # treatment timelines are used only for patients without dated treatment rows
+  # and require a usable diagnosis date as the time origin.
+  eligible_patients <- sort(intersect(as.character(eligible_patients), eligible_spring2026_swim_patients()))
+  if (!length(eligible_patients)) return(empty_swim_events())
+
+  summary_path <- file.path(clinical_dir, "oicr_submission_patient_clinical_summary.csv")
+  treatment_path <- file.path(clinical_dir, "oicr_submission_clinical_treatment_rows.csv")
+  timeline_path <- file.path(clinical_dir, "oicr_submission_clinical_treatment_timeline_rows.csv")
+  esther_treatment_path <- file.path(
+    "Clinical data",
+    "Additional sample sheets from Esther",
+    "Chem_LiberateID_19Feb2026.xlsx"
+  )
+
+  required_paths <- c(summary_path, treatment_path, timeline_path)
+  missing_paths <- required_paths[!file.exists(required_paths)]
+  if (length(missing_paths)) {
+    warning(
+      "Missing OICR revision treatment source file(s): ",
+      paste(missing_paths, collapse = ", "),
+      call. = FALSE
+    )
+    return(empty_swim_events())
+  }
+
+  clean_date <- function(x) {
+    # Treat Excel-origin sentinel/invalid dates at or before 1900-01-01 as
+    # missing rather than plotting them as real clinical events.
+    x_chr <- as.character(x)
+    parsed <- parse_date_safely(x_chr)
+    excel_serial_idx <- is.na(parsed) &
+      !is.na(x_chr) &
+      str_detect(x_chr, "^\\d+(\\.0+)?$")
+    if (any(excel_serial_idx)) {
+      serial <- suppressWarnings(as.numeric(x_chr[excel_serial_idx]))
+      valid_serial <- !is.na(serial) & serial >= 20000 & serial <= 60000
+      excel_dates <- rep(as.Date(NA), length(serial))
+      excel_dates[valid_serial] <- as.Date(serial[valid_serial], origin = "1899-12-30")
+      parsed[which(excel_serial_idx)] <- excel_dates
+    }
+    parsed[!is.na(parsed) & parsed <= as.Date("1900-01-01")] <- NA
+    parsed
+  }
+
+  is_transplant_regimen <- function(x) {
+    # Transplants are plotted as point events separate from chemotherapy bars.
+    str_detect(
+      coalesce(as.character(x), ""),
+      regex("\\bASCT\\b|\\bBMT\\b|transplant", ignore_case = TRUE)
+    )
+  }
+
+  patient_summary <- read_csv(summary_path, col_types = cols(.default = "c"))
+  dated_treatments <- read_csv(treatment_path, col_types = cols(.default = "c"))
+  timeline_treatments <- read_csv(timeline_path, col_types = cols(.default = "c"))
+  revision_metadata <- load_spring2026_revision_metadata(required = FALSE)
+
+  require_columns(
+    patient_summary,
+    c("patient_img_id", "patient_numeric_id", "study_name", "date_diagnosis", "date_of_last_followup"),
+    "OICR revision patient clinical summary"
+  )
+  require_columns(
+    dated_treatments,
+    c("patient_numeric_id", "study_name", "line_regimen", "line_of_treatment",
+      "treatment_start_date", "treatment_end_date", "treatment_intent"),
+    "OICR revision dated treatment rows"
+  )
+  require_columns(
+    timeline_treatments,
+    c("patient_img_id", "treatment_start_days", "treatment_stop_days",
+      "treatment_name", "treatment_line", "treatment_category", "treatment_setting"),
+    "OICR revision relative treatment timeline rows"
+  )
+
+  patient_key <- patient_summary %>%
+    # Dated treatment rows use numeric patient IDs plus study name, while the
+    # rest of the workflow uses patient_img_id. Build a bridge between the two.
+    transmute(
+      patient_img_id = as.character(.data$patient_img_id),
+      patient_numeric_id = as.character(.data$patient_numeric_id),
+      study_name = as.character(.data$study_name)
+    ) %>%
+    filter(!is.na(.data$patient_img_id)) %>%
+    distinct(.data$patient_numeric_id, .data$study_name, .keep_all = TRUE)
+
+  if (!is.null(revision_metadata)) {
+    require_columns(
+      revision_metadata,
+      c("Patient", "patient_numeric_id", "Study"),
+      "Spring 2026 revision metadata patient ID bridge"
+    )
+    revision_patient_key <- revision_metadata %>%
+      transmute(
+        patient_img_id = as.character(.data$Patient),
+        patient_numeric_id = as.character(.data$patient_numeric_id),
+        study_name = as.character(.data$Study)
+      ) %>%
+      filter(!is.na(.data$patient_img_id), !is.na(.data$patient_numeric_id))
+
+    patient_key <- bind_rows(patient_key, revision_patient_key) %>%
+      distinct(.data$patient_numeric_id, .data$study_name, .keep_all = TRUE)
+  }
+
+  patient_key_by_id <- patient_key %>%
+    filter(!is.na(.data$patient_numeric_id), .data$patient_img_id %in% eligible_patients) %>%
+    group_by(.data$patient_numeric_id) %>%
+    filter(n_distinct(.data$patient_img_id) == 1L) %>%
+    summarize(patient_img_id_by_id = first(.data$patient_img_id), .groups = "drop")
+
+  primary_dated_patient_ids <- dated_treatments %>%
+    mutate(patient_numeric_id = as.character(.data$patient_numeric_id)) %>%
+    left_join(patient_key, by = c("patient_numeric_id", "study_name")) %>%
+    filter(.data$patient_img_id %in% eligible_patients) %>%
+    distinct(.data$patient_numeric_id) %>%
+    pull(.data$patient_numeric_id)
+
+  esther_treatments <- tibble(
+    patient_numeric_id = character(),
+    study_name = character(),
+    line_regimen = character(),
+    line_of_treatment = character(),
+    treatment_start_date = character(),
+    treatment_end_date = character(),
+    treatment_study_drug = character(),
+    treatment_intent = character(),
+    best_response_date = character(),
+    best_response = character(),
+    progression = character(),
+    progression_date = character(),
+    progression_details = character(),
+    treatment_source_file = character()
+  )
+  if (file.exists(esther_treatment_path)) {
+    esther_raw <- read_excel(esther_treatment_path, col_types = "text")
+    require_columns(
+      esther_raw,
+      c("PATIENT_ID", "REGIMEN_NAME", "LINE_OF_TREATMENT", "START_DATE",
+        "END_DATE", "STUDY_DRUG", "INTENT", "BEST_RESPONSE", "PROGRESSION",
+        "PROGRESSION_DATE"),
+      "Esther IMMAGINE chemotherapy workbook"
+    )
+    esther_treatments <- esther_raw %>%
+      transmute(
+        patient_numeric_id = as.character(.data$PATIENT_ID),
+        study_name = NA_character_,
+        line_regimen = as.character(.data$REGIMEN_NAME),
+        line_of_treatment = as.character(.data$LINE_OF_TREATMENT),
+        treatment_start_date = as.character(.data$START_DATE),
+        treatment_end_date = as.character(.data$END_DATE),
+        treatment_study_drug = as.character(.data$STUDY_DRUG),
+        treatment_intent = as.character(.data$INTENT),
+        best_response_date = as.character(.data$BEST_RESPONSE_DATE),
+        best_response = as.character(.data$BEST_RESPONSE),
+        progression = as.character(.data$PROGRESSION),
+        progression_date = as.character(.data$PROGRESSION_DATE),
+        progression_details = NA_character_,
+        treatment_source_file = "Chem_LiberateID_19Feb2026.xlsx"
+      ) %>%
+      filter(
+        .data$patient_numeric_id %in% patient_key$patient_numeric_id,
+        !.data$patient_numeric_id %in% primary_dated_patient_ids,
+        !is.na(.data$line_regimen),
+        nzchar(.data$line_regimen)
+      )
+  }
+
+  dated_treatments <- dated_treatments %>%
+    mutate(
+      treatment_source_file = "oicr_submission_clinical_treatment_rows.csv",
+      best_response_date = NA_character_
+    ) %>%
+    bind_rows(esther_treatments)
+
+  date_index <- patient_summary %>%
+    # Diagnosis anchors relative treatment timelines; last follow-up can be used
+    # as an end date when a relative stop date is unavailable.
+    transmute(
+      patient_img_id = as.character(.data$patient_img_id),
+      date_diagnosis = clean_date(.data$date_diagnosis),
+      date_of_last_followup = clean_date(.data$date_of_last_followup)
+    )
+
+  if (!is.null(revision_metadata)) {
+    # Add diagnosis/follow-up dates from the curated revision metadata as a
+    # fallback date index. This covers patients whose clinical summary rows are
+    # incomplete but whose repo-style metadata has endpoint dates.
+    require_columns(
+      revision_metadata,
+      c("Patient", "date_diagnosis", "relapse_or_censor_date"),
+      "Spring 2026 revision metadata treatment date index"
+    )
+    revision_dates <- revision_metadata %>%
+      transmute(
+        patient_img_id = as.character(.data$Patient),
+        date_diagnosis = clean_date(.data$date_diagnosis),
+        date_of_last_followup = clean_date(.data$relapse_or_censor_date)
+      )
+
+    date_index <- bind_rows(date_index, revision_dates)
+  }
+
+  date_index <- date_index %>%
+    filter(.data$patient_img_id %in% eligible_patients) %>%
+    group_by(.data$patient_img_id) %>%
+    summarize(
+      date_diagnosis = suppressWarnings(min(.data$date_diagnosis, na.rm = TRUE)),
+      date_of_last_followup = suppressWarnings(max(.data$date_of_last_followup, na.rm = TRUE)),
+      .groups = "drop"
+    ) %>%
+    mutate(
+      date_diagnosis = if_else(is.infinite(.data$date_diagnosis), as.Date(NA), .data$date_diagnosis),
+      date_of_last_followup = if_else(is.infinite(.data$date_of_last_followup), as.Date(NA), .data$date_of_last_followup)
+    )
+
+  dated_joined <- dated_treatments %>%
+    # Directly dated treatment rows are the highest-confidence source because
+    # start/end dates are already absolute calendar dates.
+    mutate(
+      patient_numeric_id = as.character(.data$patient_numeric_id),
+      study_name = as.character(.data$study_name),
+      treatment_start_date = clean_date(.data$treatment_start_date),
+      treatment_end_date = clean_date(.data$treatment_end_date),
+      best_response_date = clean_date(.data$best_response_date),
+      progression_date = clean_date(.data$progression_date)
+    ) %>%
+    left_join(patient_key, by = c("patient_numeric_id", "study_name")) %>%
+    left_join(patient_key_by_id, by = "patient_numeric_id") %>%
+    mutate(patient_img_id = coalesce(.data$patient_img_id, .data$patient_img_id_by_id)) %>%
+    filter(
+      .data$patient_img_id %in% eligible_patients,
+      !is.na(.data$treatment_start_date)
+    ) %>%
+    mutate(
+      regimen = coalesce(na_if(.data$line_regimen, ""), "Unspecified OICR treatment"),
+      line_label = if_else(
+        is.na(.data$line_of_treatment) | !nzchar(.data$line_of_treatment),
+        NA_character_,
+        paste0("L", .data$line_of_treatment)
+      ),
+      details = str_squish(paste(coalesce(.data$line_label, ""), .data$regimen))
+    )
+
+  dated_bars <- dated_joined %>%
+    filter(!is_transplant_regimen(.data$regimen)) %>%
+    transmute(
+      patient = .data$patient_img_id,
+      event = "Chemotherapy",
+      start = .data$treatment_start_date,
+      end = coalesce(
+        .data$treatment_end_date,
+        .data$progression_date,
+        .data$best_response_date,
+        .data$treatment_start_date
+      ),
+      details = .data$details,
+      provenance = .data$treatment_source_file
+    )
+
+  dated_transplants <- dated_joined %>%
+    filter(is_transplant_regimen(.data$regimen)) %>%
+    transmute(
+      patient = .data$patient_img_id,
+      event = "Transplant",
+      start = .data$treatment_start_date,
+      end = .data$treatment_start_date,
+      details = .data$details,
+      provenance = .data$treatment_source_file
+    )
+
+  dated_patients <- dated_joined %>%
+    distinct(.data$patient_img_id) %>%
+    pull(.data$patient_img_id)
+
+  timeline_joined <- timeline_treatments %>%
+    # Relative treatment rows are used only for patients lacking dated rows. The
+    # start/stop day offsets are converted to calendar dates using diagnosis date.
+    mutate(
+      patient_img_id = as.character(.data$patient_img_id),
+      treatment_start_days = suppressWarnings(as.numeric(.data$treatment_start_days)),
+      treatment_stop_days = suppressWarnings(as.numeric(.data$treatment_stop_days)),
+      treatment_name = coalesce(na_if(.data$treatment_name, ""), "Unspecified OICR treatment")
+    ) %>%
+    filter(
+      .data$patient_img_id %in% setdiff(eligible_patients, dated_patients),
+      !is.na(.data$treatment_start_days)
+    ) %>%
+    left_join(date_index, by = "patient_img_id") %>%
+    filter(!is.na(.data$date_diagnosis)) %>%
+    mutate(
+      start = .data$date_diagnosis + days(.data$treatment_start_days),
+      end = case_when(
+        # Prefer explicit relative stop day; otherwise extend to last follow-up
+        # when available, or use a point event at start as the least assumptive
+        # fallback.
+        !is.na(.data$treatment_stop_days) ~ .data$date_diagnosis + days(.data$treatment_stop_days),
+        !is.na(.data$date_of_last_followup) ~ .data$date_of_last_followup,
+        TRUE ~ .data$date_diagnosis + days(.data$treatment_start_days)
+      ),
+      details = str_squish(paste(
+        coalesce(na_if(.data$treatment_line, ""), NA_character_),
+        .data$treatment_name,
+        sep = " "
+      ))
+    )
+
+  timeline_bars <- timeline_joined %>%
+    transmute(
+      patient = .data$patient_img_id,
+      event = "Chemotherapy",
+      start = .data$start,
+      end = pmax(.data$end, .data$start, na.rm = TRUE),
+      details = .data$details,
+      provenance = "oicr_submission_clinical_treatment_timeline_rows.csv"
+    )
+
+  timeline_transplants <- timeline_joined %>%
+    filter(is_transplant_regimen(.data$treatment_name)) %>%
+    transmute(
+      patient = .data$patient_img_id,
+      event = "Transplant",
+      start = .data$start,
+      end = .data$start,
+      details = .data$details,
+      provenance = "oicr_submission_clinical_treatment_timeline_rows.csv"
+    )
+
+  treatment_events <- bind_rows(
+    dated_bars,
+    dated_transplants,
+    timeline_bars,
+    timeline_transplants
+  ) %>%
+    filter(!is.na(.data$start)) %>%
+    distinct(.data$patient, .data$event, .data$start, .data$end, .data$details, .keep_all = TRUE) %>%
+    arrange(.data$patient, .data$start, .data$event)
+
+  coverage_audit <- tibble(patient = sort(unique(eligible_patients))) %>%
+    # One-row-per-patient audit showing which treatment source contributed plot
+    # events and which patients still lack structured treatment bars.
+    left_join(
+      dated_joined %>% count(.data$patient_img_id, name = "dated_treatment_rows"),
+      by = c("patient" = "patient_img_id")
+    ) %>%
+    left_join(
+      timeline_treatments %>%
+        count(.data$patient_img_id, name = "relative_timeline_rows"),
+      by = c("patient" = "patient_img_id")
+    ) %>%
+    left_join(
+      treatment_events %>% count(.data$patient, name = "plot_events_added"),
+      by = "patient"
+    ) %>%
+    mutate(
+      across(
+        c("dated_treatment_rows", "relative_timeline_rows", "plot_events_added"),
+        ~ replace_na(.x, 0L)
+      ),
+      treatment_source_used = case_when(
+        .data$dated_treatment_rows > 0 ~ "dated_treatment_rows",
+        .data$plot_events_added > 0 & .data$relative_timeline_rows > 0 ~ "relative_timeline_rows_with_diagnosis_anchor",
+        .data$relative_timeline_rows > 0 ~ "relative_timeline_rows_without_usable_anchor",
+        TRUE ~ "no_structured_treatment_rows_found"
+      )
+    )
+
+  write_csv(
+    treatment_events,
+    file.path(support_dir, "oicr_revision_treatment_events_used.csv")
+  )
+  write_csv(
+    coverage_audit,
+    file.path(support_dir, "oicr_revision_treatment_coverage_audit.csv")
+  )
+
+  missing_plot_treatment <- coverage_audit %>%
+    filter(.data$plot_events_added == 0) %>%
+    pull(.data$patient)
+  if (length(missing_plot_treatment)) {
+    warning(
+      "No structured OICR treatment rows were available for revision swim-plot patients: ",
+      paste(missing_plot_treatment, collapse = ", "),
+      call. = FALSE
+    )
+  }
+
+  treatment_events %>%
+    select("patient", "event", "start", "end", "details")
 }
 
 ### Load cohort assignments up front
@@ -537,6 +963,7 @@ combined_clinical_data_updated <- read_combined_clinical_metadata_with_revision(
   "combined_clinical_data_updated_April2025.csv"
 )
 revision_swim_events <- build_spring2026_revision_swim_events(cohort_df$Patient)
+revision_treatment_events <- build_spring2026_revision_treatment_events(cohort_df$Patient)
 
 # 1. BM sample collection events
 bm_events <- combined_clinical_data_updated %>%
@@ -565,7 +992,7 @@ cfDNA_events <- combined_clinical_data_updated %>%
 # ─────────────────────────────────────────────────────────────────────────────
 # F. MRD test dates
 # ─────────────────────────────────────────────────────────────────────────────
-dat <- read.csv("Final_aggregate_table_cfWGS_features_with_clinical_and_demographics_updated8.csv")
+dat <- read.csv("Final_aggregate_table_cfWGS_features_with_clinical_and_demographics_updated9.csv")
 
 
 mfc_events <- dat %>%
@@ -611,6 +1038,7 @@ bm_events <- bm_events %>%
 cfDNA_events   <- cfDNA_events   %>% mutate(start = as_date(start), end = as_date(end))
 followup_events<- followup_events%>% mutate(start = as_date(start), end = as_date(end))
 revision_swim_events <- revision_swim_events %>% mutate(start = as_date(start), end = as_date(end))
+revision_treatment_events <- revision_treatment_events %>% mutate(start = as_date(start), end = as_date(end))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -645,6 +1073,7 @@ all_events <- bind_rows(
   followup_events,
   bm_events,
   cfDNA_events,
+  revision_treatment_events,
   revision_swim_events,
   clonoseq_events, 
   mfc_events
@@ -2237,6 +2666,27 @@ write_csv(
     ),
   file.path(swim_support_dir, "spore_plot_coordinate_audit.csv")
 )
+
+revision_swim_patients <- eligible_spring2026_swim_patients()
+write_csv(
+  events_combined2 %>%
+    filter(.data$patient %in% revision_swim_patients) %>%
+    select(
+      patient,
+      event,
+      start,
+      end,
+      baseline_date,
+      start_day,
+      end_day,
+      start_month_plot,
+      end_month_plot,
+      is_interval,
+      details
+    ),
+  file.path(swim_support_dir, "oicr_revision_plot_coordinate_audit.csv")
+)
+rm(revision_swim_patients)
 
 xmax <- max(events_combined2$end_week_plot, na.rm=TRUE) * 1.05
 max_months <- ceiling(xmax * 7 / 30.44)  # if xmax is in weeks, convert to months

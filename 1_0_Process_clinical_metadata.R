@@ -936,6 +936,10 @@ new_rows <- tibble(
 Relapse_dates_full <- bind_rows(Relapse_dates_full, new_rows)
 
 oicr_revision_endpoint_path <- file.path(
+  # The revision metadata contains endpoint/follow-up fields for Spring 2026
+  # patients that may not exist in the older clinical workbooks. This file is
+  # used here only to augment endpoint availability; sample-level integration is
+  # handled centrally by read_combined_clinical_metadata_with_revision().
   "New OICR Submissions",
   "derived_metadata",
   "oicr_revision_repo_style_metadata.csv"
@@ -944,6 +948,9 @@ oicr_revision_endpoint_path <- file.path(
 oicr_revision_endpoints <- if (file.exists(oicr_revision_endpoint_path)) {
   readr::read_csv(oicr_revision_endpoint_path, show_col_types = FALSE) %>%
     transmute(
+      # Normalize all candidate endpoint dates immediately so downstream relapse
+      # and follow-up logic works with Date objects rather than mixed Excel/text
+      # formats.
       Patient = as.character(Patient),
       date_diagnosis = normalize_clinical_date(date_diagnosis),
       first_progression_date = normalize_clinical_date(first_progression_date),
@@ -966,6 +973,8 @@ oicr_revision_endpoints <- if (file.exists(oicr_revision_endpoint_path)) {
 oicr_revision_progression_dates <- oicr_revision_endpoints %>%
   mutate(
     relapse_or_censor_progression_date = if_else(
+      # relapse_or_censor_date is only a progression date when the status says
+      # relapse/progression. Censored dates are follow-up endpoints, not events.
       str_detect(str_to_lower(coalesce(relapse_or_censor_status, "")), "relapse|progress"),
       relapse_or_censor_date,
       as.Date(NA)
@@ -978,6 +987,9 @@ oicr_revision_progression_dates <- oicr_revision_endpoints %>%
     relapse_or_censor_progression_date
   ) %>%
   pivot_longer(
+    # Long format preserves the source of each appended progression date in the
+    # audit output, which is important when first/latest/censor-derived dates
+    # disagree.
     cols = -Patient,
     names_to = "revision_progression_date_source",
     values_to = "Progression_date"
@@ -1411,6 +1423,9 @@ tmp_IMG <- tmp_IMG %>%
 tmp_oicr_revision_followup <- oicr_revision_endpoints %>%
   rowwise() %>%
   mutate(
+    # For prospective time-window analyses, use the latest known clinical
+    # endpoint among censor date and progression dates. This is a "known through"
+    # date, not necessarily a PFS event date.
     latest_date = max_clinical_date_or_na(c(
       relapse_or_censor_date,
       latest_progression_date,
@@ -1422,6 +1437,9 @@ tmp_oicr_revision_followup <- oicr_revision_endpoints %>%
     Patient,
     latest_date,
     followup_source = case_when(
+      # Record which revision field supported the follow-up date so downstream
+      # audits can distinguish censored follow-up from progression-derived
+      # follow-up.
       str_detect(str_to_lower(coalesce(relapse_or_censor_status, "")), "censor") ~
         "Spring 2026 OICR revision metadata:relapse_or_censor_date",
       !is.na(latest_progression_date) ~

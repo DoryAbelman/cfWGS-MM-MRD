@@ -15,7 +15,7 @@
 # Inputs:
 #   - Final_aggregate_table_cfWGS_features_with_clinical_and_demographics_updated9.rds
 #   - cohort_assignment_table_updated.rds
-#   - Jan2025_exported_data/mutation_export_updated.rds
+#   - Jan2025_exported_data/mutation_export_updated_more_info2.rds
 #   - Jan2025_exported_data/All_feature_data_Sep2025_updated2.rds
 #   - combined_clinical_data_updated_April2025.csv
 #
@@ -181,9 +181,56 @@ dat_base <- dat_tb_final
 dat_base <- dat_base %>%
   filter(!(Patient == "CA-03" & Timepoint == "02"))
 
+baseline_duplicate_audit <- dat_base %>%
+  group_by(Patient) %>%
+  mutate(n_patient_baseline_candidates = n()) %>%
+  ungroup() %>%
+  filter(n_patient_baseline_candidates > 1) %>%
+  mutate(
+    patient_baseline_timepoint_rank = case_when(
+      str_detect(as.character(Timepoint), regex("^T?0$", ignore_case = TRUE)) ~ 0L,
+      str_detect(as.character(Timepoint), regex("^T?1$|^0?1$", ignore_case = TRUE)) ~ 1L,
+      TRUE ~ 2L
+    ),
+    patient_baseline_has_feature_evidence = !is.na(BM_Mutation_Count) | !is.na(Blood_Mutation_Count)
+  ) %>%
+  group_by(Patient) %>%
+  arrange(
+    is.na(Date),
+    Date,
+    patient_baseline_timepoint_rank,
+    desc(patient_baseline_has_feature_evidence),
+    Timepoint,
+    .by_group = TRUE
+  ) %>%
+  mutate(
+    selected_for_patient_baseline_concordance = row_number() == 1L,
+    patient_baseline_selection_reason = case_when(
+      selected_for_patient_baseline_concordance ~ "selected earliest dated baseline/diagnosis candidate, preferring T0/T1 and rows with WGS mutation evidence",
+      TRUE ~ "not selected for patient-level baseline concordance to enforce one baseline/diagnosis row per patient"
+    )
+  ) %>%
+  ungroup()
+
+if (nrow(baseline_duplicate_audit) > 0L) {
+  dir.create(file.path("Output_tables_2025", "clinical_support"), showWarnings = FALSE, recursive = TRUE)
+  readr::write_csv(
+    baseline_duplicate_audit,
+    file.path("Output_tables_2025", "clinical_support", "feature_concordance_patient_baseline_duplicate_selection_audit.csv")
+  )
+  dat_base <- dat_base %>%
+    left_join(
+      baseline_duplicate_audit %>%
+        select(Patient, Sample_Code, Timepoint, selected_for_patient_baseline_concordance),
+      by = c("Patient", "Sample_Code", "Timepoint")
+    ) %>%
+    filter(is.na(selected_for_patient_baseline_concordance) | selected_for_patient_baseline_concordance) %>%
+    select(-selected_for_patient_baseline_concordance)
+}
+
 # 6) Quick duplicate check
 dups <- dat_base %>%
-  count(Patient, timepoint_info) %>%
+  count(Patient) %>%
   filter(n > 1)
 
 if (nrow(dups)) {

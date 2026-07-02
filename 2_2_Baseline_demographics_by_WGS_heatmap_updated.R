@@ -99,22 +99,34 @@ heatmap_study_colors <- c(
   "M4" = "#984ea3",
   "MyC" = "#ff7f00",
   "SPORE" = "#a65628",
+  # Spring 2026 revision rows are test-cohort additions from the OICR revision
+  # metadata. They share the IMMAGINE color family but retain a distinct Study
+  # label so plots/tables can audit where those rows came from.
   "IMMAGINE_revision_OICR" = "#ff7f00"
 )
 spring2026_revision_metadata_for_heatmap <- load_spring2026_revision_metadata(required = FALSE)
 spring2026_revision_sample_ids_for_heatmap <- if (is.null(spring2026_revision_metadata_for_heatmap)) {
   character()
 } else {
+  # Capture the revision Sample_ID universe once, so later audits only report
+  # samples introduced by the Spring 2026 metadata rather than historical rows.
   unique(spring2026_revision_metadata_for_heatmap$Sample_ID)
 }
 
 write_spring2026_heatmap_exclusion_audit <- function(data, compartment) {
+  # ## Audit revision samples excluded from baseline heatmaps
+  # The heatmap is explicitly a baseline/diagnosis figure. Revision samples with
+  # longitudinal, treatment, or progression timepoint_info are not discarded
+  # silently; they are written to a compartment-specific audit so the exclusion is
+  # reproducible and reviewable.
   if (!length(spring2026_revision_sample_ids_for_heatmap) || !"Sample_ID" %in% names(data)) {
     return(invisible(NULL))
   }
   audit <- data %>%
     filter(
       .data$Sample_ID %in% spring2026_revision_sample_ids_for_heatmap,
+      # Only non-baseline revision rows are audited here. Historical nonbaseline
+      # rows are outside the scope of the Spring 2026 revision audit.
       !.data$timepoint_info %in% baseline_heatmap_timepoints
     ) %>%
     distinct(
@@ -137,6 +149,8 @@ write_spring2026_heatmap_exclusion_audit <- function(data, compartment) {
   audit_path <- file.path(audit_dir, "spring2026_heatmap_excluded_nonbaseline_samples.csv")
   audit <- audit %>% mutate(across(everything(), as.character))
   existing <- if (file.exists(audit_path)) {
+    # BM and blood calls use this helper separately. Preserve previous
+    # compartment rows and de-duplicate by compartment/Sample_ID/BAM-derived key.
     readr::read_csv(audit_path, show_col_types = FALSE) %>%
       mutate(across(everything(), as.character))
   } else {
@@ -151,11 +165,18 @@ write_spring2026_heatmap_exclusion_audit <- function(data, compartment) {
 }
 
 deduplicate_spring2026_heatmap_baselines <- function(data, compartment) {
+  # ## Resolve duplicate baseline-like rows for the heatmap
+  # The same patient/sample-type/timepoint can appear in both the older metadata
+  # and the Spring 2026 revision metadata. For the baseline heatmap, prefer the
+  # revision row when available because it carries the current OICR-reviewed
+  # labels and provenance. Removed rows are written to an audit table.
   required <- c("Patient", "Sample_type", "timepoint_info", "Study")
   if (!all(required %in% names(data))) return(data)
   if (!any(data$Study == "IMMAGINE_revision_OICR", na.rm = TRUE)) return(data)
 
   date_available <- if ("Date_of_sample_collection" %in% names(data)) {
+    # Collection date and tumor fraction are tie-breakers only; they do not
+    # convert a nonbaseline sample into a baseline sample.
     !is.na(data$Date_of_sample_collection)
   } else {
     rep(FALSE, nrow(data))
@@ -169,6 +190,8 @@ deduplicate_spring2026_heatmap_baselines <- function(data, compartment) {
   ranked <- data %>%
     mutate(
       .row_id = row_number(),
+      # Prefer Spring 2026 rows only inside duplicate patient/sample-type/
+      # timepoint groups. Unique historical rows remain unchanged.
       .prefer_spring2026 = Study == "IMMAGINE_revision_OICR",
       .has_collection_date = date_available,
       .has_tumor_fraction = tf_available
@@ -192,6 +215,8 @@ deduplicate_spring2026_heatmap_baselines <- function(data, compartment) {
 
   keep <- ranked %>%
     group_by(Patient, Sample_type, timepoint_info) %>%
+    # If a duplicate group has a Spring 2026 baseline row, keep the top-ranked
+    # row; otherwise do not collapse the group here.
     mutate(.keep_row = if_else(.n_baseline_rows > 1 & .has_spring2026_baseline, row_number() == 1L, TRUE)) %>%
     ungroup()
 
@@ -227,6 +252,8 @@ metada_df_mutation_comparison <- read_combined_clinical_metadata_with_revision(
 ) %>%
   # recreate the “clean” BAM key that all your joins rely on
   mutate(
+    # Tumor_Sample_Barcode strips assay/library tokens and suffixes to match the
+    # sample keys used by mutation/CNA/translocation intermediate tables.
     Tumor_Sample_Barcode = Bam %>%
       str_remove_all("_PG|_WG") %>%
       str_replace_all("\\.filter.*|\\.ded.*|\\.recalibrate.*", ""),
@@ -244,12 +271,12 @@ metada_df_mutation_comparison <- metada_df_mutation_comparison %>%
 # 1. tumour‐fraction from ichor
 tumor_fraction <- read_tsv("Oct 2024 data/tumor_fraction_cfWGS.txt")
 
-# 2. arm‐level CNA matrix (was saved as cna_data.rds in your export_dir)
+# 2. arm-level CNA matrix from the current ichorCNA processing script.
 export_dir <- "Jan2025_exported_data"  
-cna_data <- readRDS(file.path(export_dir, "cna_data.rds"))
+cna_data <- readRDS(file.path(export_dir, "cna_data_ichorCNA.rds"))
 
 CNA_translocation <- readRDS("Jan2025_exported_data/CNA_translocation_Sep2025_updated2.rds") ## From 1_5 script
-mutation_data_total <- readRDS("Jan2025_exported_data/mutation_export_updated.rds")
+mutation_data_total <- readRDS("Jan2025_exported_data/mutation_export_updated2.rds")
 
 # 3. cfDNA translocation tab (the 4‐call binary table)
 translocation_data <- readRDS(
@@ -266,7 +293,7 @@ translocation_data <- readRDS(
 maf_bm_data <- readRDS(
   "combined_maf_bm_dx.rds"
 )
-maf_blood_data <- readRDS("combined_maf_blood_all_muts.rds")
+maf_blood_data <- readRDS("combined_maf_blood_all_muts_updated.rds")
 
 # Convert data frames to MAF objects if needed
 if (is.data.frame(maf_bm_data)) {
@@ -351,11 +378,26 @@ missing_bams    <- setdiff(screenshot_bams, current_bams)
 
 library(stringdist)
 
+closest_bam_match <- function(missing_bams, current_bams) {
+  missing_bams <- as.character(missing_bams)
+  current_bams <- as.character(current_bams)
+  if (!length(missing_bams)) {
+    return(character())
+  }
+  vapply(missing_bams, function(miss) {
+    if (is.na(miss) || !length(current_bams)) {
+      return(NA_character_)
+    }
+    distances <- stringdist(miss, current_bams, method = "lv")
+    if (!length(distances) || all(is.na(distances))) {
+      return(NA_character_)
+    }
+    current_bams[which.min(distances)]
+  }, character(1), USE.NAMES = FALSE)
+}
+
 # For each missing BAM, find the closest match in current_bams based on Levenshtein distance
-closest_matches <- sapply(missing_bams, function(miss) {
-  distances <- stringdist(miss, current_bams, method = "lv")
-  current_bams[which.min(distances)]
-})
+closest_matches <- closest_bam_match(missing_bams, current_bams)
 
 # Combine results into a data frame and print
 result <- data.frame(
@@ -418,10 +460,7 @@ screenshot_bams <- screenshotter_df$Bam %>% str_remove("\\.bam$")
 missing_bams    <- setdiff(screenshot_bams, current_bams)
 
 # For each missing BAM, find the closest match in current_bams based on Levenshtein distance
-closest_matches <- sapply(missing_bams, function(miss) {
-  distances <- stringdist(miss, current_bams, method = "lv")
-  current_bams[which.min(distances)]
-})
+closest_matches <- closest_bam_match(missing_bams, current_bams)
 
 # Combine results into a data frame and print
 result <- data.frame(

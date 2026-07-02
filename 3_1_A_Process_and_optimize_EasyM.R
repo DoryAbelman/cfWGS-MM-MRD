@@ -2104,7 +2104,7 @@ patients <- patients %>%
   unique()
 
 # 2. Subset joined_consolidated to diagnosis timepoints for those patients
-joined_consolidated <- readRDS("Final_aggregate_table_cfWGS_features_with_clinical_and_demographics_updated.rds")
+joined_consolidated <- readRDS("Final_aggregate_table_cfWGS_features_with_clinical_and_demographics_updated9.rds")
 clin_diag <- joined_consolidated %>%
   filter(timepoint_info == "Diagnosis", Timepoint == "01",
          Patient %in% patients)

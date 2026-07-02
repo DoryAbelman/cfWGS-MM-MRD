@@ -9,7 +9,7 @@
 #
 # Input:
 #   MRDetect_output_winter_2025/Processed_R_outputs/
-#     cfWGS_Winter2025All_MRDetect_with_Zscore_Sep2025_2.rds
+#     cfWGS_Winter2025All_MRDetect_with_Zscore_Sep2025.rds
 #
 # Output:
 #   MRDetect_output_winter_2025/Processed_R_outputs/Derived_exports/
@@ -43,7 +43,7 @@ suppressPackageStartupMessages({
 input_file <- file.path(
   "MRDetect_output_winter_2025",
   "Processed_R_outputs",
-  "cfWGS_Winter2025All_MRDetect_with_Zscore_Sep2025_2.rds"
+  "cfWGS_Winter2025All_MRDetect_with_Zscore_Sep2025.rds"
 )
 
 output_dir <- file.path(

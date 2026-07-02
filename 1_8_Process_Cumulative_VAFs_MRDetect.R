@@ -31,10 +31,10 @@
 # Output Directory (created if necessary):
 #   • MRDetect_output_winter_2025/Processed_R_outputs/
 #   • Writes:
-#       - cfWGS_Winter2025All_MRDetect_May2025.txt
-#       - cfWGS_Winter2025All_MRDetect_May2025.rds
-#       - cfWGS_Winter2025All_MRDetect_with_Zscore_May2025.txt
-#       - cfWGS_Winter2025All_MRDetect_with_Zscore_May2025.rds
+#       - cfWGS_Winter2025All_MRDetect_Sep2025.txt
+#       - cfWGS_Winter2025All_MRDetect_Sep2025.rds
+#       - cfWGS_Winter2025All_MRDetect_with_Zscore_Sep2025.txt
+#       - cfWGS_Winter2025All_MRDetect_with_Zscore_Sep2025.rds
 #       - cfWGS MRDetect BM data updated May.csv
 #       - cfWGS MRDetect Blood data updated May.csv
 #
@@ -71,26 +71,49 @@ source(.helpers_path)
 rm(.helpers_path)
 
 restrict_to_single_baseline_mutation_source <- function(dat, audit_dir, audit_prefix) {
+  # ## Keep one baseline/diagnosis personalized mutation source per patient
+  # Spring 2026 metadata can contain both Diagnosis and Baseline rows for the same
+  # patient and mutation-source compartment. MRDetect rows are patient-sample x
+  # mutation-list comparisons; if two baseline-like mutation lists are carried
+  # forward for the same patient, downstream longitudinal summaries double-count
+  # that patient. This helper deterministically chooses one source and writes the
+  # decision table before filtering.
   baseline_labels <- c("Baseline", "Diagnosis")
 
   baseline_sources <- dat %>%
     filter(timepoint_info %in% baseline_labels) %>%
     mutate(
+      # Prefer the canonical biological source identity when metadata exists.
+      # Historical and revision MRDetect files can name the same baseline sample
+      # with different VCF/BAM strings; those aliases should not be treated as
+      # separate baseline mutation sources. Fall back to VCF strings only when
+      # source metadata is unavailable.
+      source_date = suppressWarnings(as.Date(Date_of_sample_collection_Sample_ID)),
+      biological_source_key = if_else(
+        !is.na(Patient) & !is.na(Mut_source) & !is.na(Sample_ID) & !is.na(source_date),
+        paste(Patient, Mut_source, Sample_ID, source_date, sep = "|"),
+        NA_character_
+      ),
       source_key = coalesce(
+        biological_source_key,
         na_if(as.character(VCF_factor), ""),
         na_if(as.character(VCF_clean), ""),
         na_if(as.character(VCF), ""),
         na_if(as.character(Sample_ID), ""),
         paste(as.character(Patient), as.character(Mut_source), as.character(Timepoint), as.character(timepoint_info), sep = "|")
       ),
-      source_date = suppressWarnings(as.Date(Date_of_sample_collection_Sample_ID)),
       timepoint_rank = case_when(
+        # Earlier baseline-like timepoints are preferred when dates cannot break
+        # the tie. T0/TP0/D0/01 all represent the earliest baseline family.
         str_to_upper(Timepoint) %in% c("T0", "TP0", "D0", "0", "01", "1") ~ 1,
         str_to_upper(Timepoint) %in% c("T1", "TP1") ~ 2,
         str_detect(Timepoint, "^[Tt]?[0-9]+$") ~ as.numeric(str_remove(str_to_upper(Timepoint), "^T")) + 10,
         TRUE ~ 999
       ),
       label_rank = case_when(
+        # Diagnosis is preferred over Baseline only after date/timepoint ranking.
+        # This preserves explicit diagnosis mutation lists when both labels exist
+        # for the same dated/timepoint context.
         timepoint_info == "Diagnosis" ~ 1,
         timepoint_info == "Baseline" ~ 2,
         TRUE ~ 9
@@ -105,13 +128,29 @@ restrict_to_single_baseline_mutation_source <- function(dat, audit_dir, audit_pr
     count(Patient, Mut_source, name = "n_baseline_diagnosis_mutation_sources") %>%
     filter(n_baseline_diagnosis_mutation_sources > 1)
 
+  dir.create(audit_dir, recursive = TRUE, showWarnings = FALSE)
+
   if (nrow(duplicate_groups) == 0L) {
+    write_csv(
+      baseline_sources %>%
+        mutate(
+          selected_source_key = NA_character_,
+          selected_source = NA_character_,
+          retained = NA,
+          mutation_source = paste(Sample_ID, Timepoint, timepoint_info, source_date, sep = "|")
+        ) %>%
+        filter(FALSE),
+      file.path(audit_dir, paste0(audit_prefix, "_baseline_mutation_source_deduplication_audit.csv"))
+    )
     return(dat)
   }
 
   selected_sources <- baseline_sources %>%
     semi_join(duplicate_groups, by = c("Patient", "Mut_source")) %>%
     arrange(
+      # Deterministic tie break: earliest collection date, earliest timepoint,
+      # preferred label, then lexical source key. This avoids run-to-run changes
+      # if input row order changes.
       Patient, Mut_source,
       coalesce(source_date, as.Date("9999-12-31")),
       timepoint_rank,
@@ -135,7 +174,6 @@ restrict_to_single_baseline_mutation_source <- function(dat, audit_dir, audit_pr
     ) %>%
     arrange(Patient, Mut_source, desc(retained), timepoint_rank, source_key)
 
-  dir.create(audit_dir, recursive = TRUE, showWarnings = FALSE)
   write_csv(
     baseline_decisions,
     file.path(audit_dir, paste0(audit_prefix, "_baseline_mutation_source_deduplication_audit.csv"))
@@ -143,7 +181,14 @@ restrict_to_single_baseline_mutation_source <- function(dat, audit_dir, audit_pr
 
   dat %>%
     mutate(
+      source_date = suppressWarnings(as.Date(Date_of_sample_collection_Sample_ID)),
+      biological_source_key = if_else(
+        !is.na(Patient) & !is.na(Mut_source) & !is.na(Sample_ID) & !is.na(source_date),
+        paste(Patient, Mut_source, Sample_ID, source_date, sep = "|"),
+        NA_character_
+      ),
       source_key = coalesce(
+        biological_source_key,
         na_if(as.character(VCF_factor), ""),
         na_if(as.character(VCF_clean), ""),
         na_if(as.character(VCF), ""),
@@ -152,8 +197,102 @@ restrict_to_single_baseline_mutation_source <- function(dat, audit_dir, audit_pr
       )
     ) %>%
     left_join(selected_sources, by = c("Patient", "Mut_source")) %>%
+    # Patients without duplicate baseline-like mutation lists pass through.
+    # Patients with duplicates keep only the selected source_key.
     filter(is.na(selected_source_key) | source_key == selected_source_key) %>%
-    select(-source_key, -selected_source_key, -selected_source)
+    select(-source_date, -biological_source_key, -source_key, -selected_source_key, -selected_source)
+}
+
+deduplicate_baseline_source_alias_query_rows <- function(dat, audit_dir, audit_prefix) {
+  # ## Collapse VCF-name aliases only when they represent the same source/query
+  # Once historical and revision IDs are mapped to one biological source, the same
+  # queried BAM can occasionally have both a canonical VCF row and a historical
+  # alias VCF row. Keep the canonical VCF for that exact source/query pair, but do
+  # not remove alias-only longitudinal rows such as old MRDetect calls that were
+  # never rerun under the revision VCF name.
+  required_cols <- c(
+    "Patient", "Mut_source", "Sample_ID", "Date_of_sample_collection_Sample_ID",
+    "Sample_ID_Bam", "Filter_source", "VCF_clean"
+  )
+  if (!all(required_cols %in% names(dat))) return(dat)
+
+  dat_keyed <- dat %>%
+    mutate(
+      source_date = suppressWarnings(as.Date(Date_of_sample_collection_Sample_ID)),
+      biological_source_key = if_else(
+        !is.na(Patient) & !is.na(Mut_source) & !is.na(Sample_ID) & !is.na(source_date),
+        paste(Patient, Mut_source, Sample_ID, source_date, sep = "|"),
+        paste(Patient, Mut_source, Sample_ID, VCF_clean, sep = "|")
+      ),
+      source_query_alias_key = paste(
+        biological_source_key,
+        Sample_ID_Bam,
+        Filter_source,
+        sep = "|"
+      ),
+      source_alias_priority = case_when(
+        str_detect(VCF_clean, "__.+__vs__") ~ 1L,
+        TRUE ~ 2L
+      ),
+      source_alias_row_id = row_number()
+    )
+
+  duplicate_alias_groups <- dat_keyed %>%
+    count(source_query_alias_key, name = "n_source_query_alias_rows") %>%
+    filter(n_source_query_alias_rows > 1)
+
+  selected_alias_rows <- dat_keyed %>%
+    group_by(source_query_alias_key) %>%
+    arrange(source_alias_priority, desc(total_reads), VCF_clean, .by_group = TRUE) %>%
+    slice(1) %>%
+    ungroup() %>%
+    select(source_query_alias_key, selected_source_alias_row_id = source_alias_row_id)
+
+  alias_decisions <- dat_keyed %>%
+    semi_join(duplicate_alias_groups, by = "source_query_alias_key") %>%
+    left_join(selected_alias_rows, by = "source_query_alias_key") %>%
+    mutate(retained = source_alias_row_id == selected_source_alias_row_id) %>%
+    select(
+      Patient, Mut_source, Sample_ID, Sample_ID_Bam, Filter_source,
+      VCF_clean, source_date, biological_source_key,
+      source_alias_priority, total_reads, retained
+    ) %>%
+    arrange(Patient, Mut_source, Sample_ID, Sample_ID_Bam, desc(retained), source_alias_priority)
+
+  dir.create(audit_dir, recursive = TRUE, showWarnings = FALSE)
+  write_csv(
+    alias_decisions,
+    file.path(audit_dir, paste0(audit_prefix, "_baseline_source_alias_query_deduplication_audit.csv"))
+  )
+
+  dat_keyed %>%
+    left_join(selected_alias_rows, by = "source_query_alias_key") %>%
+    filter(is.na(selected_source_alias_row_id) | source_alias_row_id == selected_source_alias_row_id) %>%
+    select(
+      -source_date, -biological_source_key, -source_query_alias_key,
+      -source_alias_priority, -source_alias_row_id, -selected_source_alias_row_id
+    )
+}
+
+filter_to_baseline_mutation_sources <- function(dat, audit_dir, audit_prefix) {
+  baseline_labels <- c("Baseline", "Diagnosis")
+
+  excluded_sources <- dat %>%
+    filter(is.na(timepoint_info) | !timepoint_info %in% baseline_labels) %>%
+    distinct(
+      Patient, Mut_source, Sample_ID, VCF_clean, VCF_factor, Timepoint,
+      timepoint_info
+    ) %>%
+    arrange(Patient, Mut_source, Timepoint, VCF_clean)
+
+  dir.create(audit_dir, recursive = TRUE, showWarnings = FALSE)
+  write_csv(
+    excluded_sources,
+    file.path(audit_dir, paste0(audit_prefix, "_excluded_nonbaseline_mutation_sources.csv"))
+  )
+
+  dat %>%
+    filter(timepoint_info %in% baseline_labels)
 }
 
 # resolve common conflicts
@@ -180,6 +319,9 @@ if (!dir.exists(outdir)) {
 # ──────────────────────────────────────────────────────────────────────────────
 csv_files <- list.files(input_root, pattern = "\\.csv$", full.names = TRUE)
 spring2026_mrdetect_files <- spring2026_revision_files(
+  # Spring 2026 MRDetect outputs live under the revision data root. The main
+  # patient processor reads the combined source file but later removes M4CHIP
+  # query BAMs because those are dilution-series rows handled by 1_8A.
   "MRDetect_outputs",
   "^MRDetect_all_RESULTS_combined_with_source[.]csv$"
 )
@@ -189,6 +331,9 @@ if (!length(csv_files)) {
 }
 
 read_and_label <- function(file) {
+  # Historical MRDetect CSVs and Spring 2026 combined exports do not always carry
+  # the same file provenance columns. Standardize to filename/source_file and add
+  # input_source_file so later code can infer mutation source and audit origin.
   df <- read_csv(file, show_col_types = FALSE)
   if (!"filename" %in% names(df)) {
     if ("source_file" %in% names(df)) {
@@ -207,6 +352,9 @@ all_files <- bind_rows(lapply(csv_files, read_and_label))
 
 all_files <- all_files %>%
   filter(
+    # M4CHIP/PWGVAL rows are dilution-series query BAMs. They are excluded from
+    # the main patient-sample MRDetect output so they do not enter clinical
+    # patient scoring, survival analyses, or main-cohort model inputs.
     !str_detect(source_file, "^M4CHIP_"),
     !str_detect(filename, "^M4CHIP_"),
     !str_detect(input_source_file, "dilution_series")
@@ -274,7 +422,12 @@ cfWGS_metadata <- read_combined_clinical_metadata_with_revision(
     )
   )
 
+cfWGS_identity_map <- build_cfwgs_sample_identity_map(cfWGS_metadata)
+
 spring2026_panel_metadata <- cfWGS_metadata %>%
+  # Spring 2026 mutation-list names are stable mutect2_pair_id values rather than
+  # always being reconstructable from BAM basenames. Build a small lookup so
+  # MRDetect VCF_clean can be assigned to the correct patient/sample compartment.
   filter(!is.na(mutect2_pair_id), nzchar(mutect2_pair_id)) %>%
   transmute(
     VCF_clean = mutect2_pair_id,
@@ -289,12 +442,18 @@ if (nrow(spring2026_panel_metadata) > 0) {
   all_files <- all_files %>%
     left_join(spring2026_panel_metadata, by = "VCF_clean") %>%
     mutate(
+      # If the VCF panel metadata says the personalized mutation list came from
+      # BM or blood, trust that metadata over filename heuristics.
       Mut_source = case_when(
         VCF_panel_sample_type == "BM_cells" ~ "BM_cells",
         VCF_panel_sample_type == "Blood_plasma_cfDNA" ~ "Blood",
         TRUE ~ Mut_source
       ),
       VCF_panel_is_allowed_panel_timepoint = case_when(
+        # Main MRDetect scoring only uses baseline/diagnosis personalized
+        # mutation lists. Later/progression mutation lists are exported to an
+        # audit file and excluded to avoid circularly defining disease using a
+        # future relapse/progression tumor sample.
         is.na(VCF_panel_timepoint_info) ~ TRUE,
         VCF_panel_timepoint_info %in% c("Baseline", "Diagnosis") ~ TRUE,
         TRUE ~ FALSE
@@ -402,14 +561,23 @@ all_files <- all_files %>%
 # ──────────────────────────────────────────────────────────────────────────────
 # 8) Merge MRDetect outputs with clinical metadata
 # ──────────────────────────────────────────────────────────────────────────────
-tmp_meta <- cfWGS_metadata %>%
-  select(-Bam) %>%
+tmp_meta <- cfWGS_identity_map %>%
+  # Metadata is first joined by VCF_clean_merge, the historical BAM-derived key.
+  # Revision rows that use mutect2_pair_id are filled in the fallback join below.
+  filter(!is.na(metadata_join_vcf_clean), nzchar(metadata_join_vcf_clean)) %>%
+  arrange(metadata_join_priority) %>%
+  distinct(metadata_join_vcf_clean, .keep_all = TRUE) %>%
+  select(-Bam, -any_of("VCF_clean_merge")) %>%
+  rename(VCF_clean_merge = metadata_join_vcf_clean) %>%
   rename(Study_VCF = Study)
 
 Merged_MRDetect <- all_files %>%
   left_join(tmp_meta, by = c("VCF_clean" = "VCF_clean_merge"))
 
 if ("mutect2_pair_id" %in% names(tmp_meta)) {
+  # Spring 2026 MRDetect VCF_clean often equals mutect2_pair_id. The fallback
+  # join fills metadata columns that were missing after the historical BAM-key
+  # join without overwriting successfully joined historical rows.
   tmp_meta_pair <- tmp_meta %>%
     filter(!is.na(mutect2_pair_id), nzchar(mutect2_pair_id)) %>%
     distinct(mutect2_pair_id, .keep_all = TRUE)
@@ -431,6 +599,9 @@ if ("mutect2_pair_id" %in% names(tmp_meta)) {
 # ──────────────────────────────────────────────────────────────────────────────
 # Make a helper to normalise BAM strings
 normalize_bam <- function(x) {
+  # BAM labels differ across callers by optional PG/WG tokens and by whether the
+  # ".filter." token is present. Normalize only for joining; keep the original
+  # BAM fields in outputs so provenance remains inspectable.
   x %>%
     # remove internal _PG_ or _WG_ tokens
     str_replace_all("_[PW]G_", "_") %>%
@@ -441,9 +612,19 @@ normalize_bam <- function(x) {
 }
 
 # Build bam_info with normalised key
-bam_info <- cfWGS_metadata %>%
-  mutate(Bam_norm = normalize_bam(Bam)) %>%
-  select(Bam, Bam_norm, Sample_ID, Patient, Sample_type, timepoint_info) %>%
+bam_info <- cfWGS_identity_map %>%
+  filter(!is.na(metadata_join_bam), nzchar(metadata_join_bam)) %>%
+  mutate(Bam_norm = normalize_bam(metadata_join_bam)) %>%
+  arrange(metadata_join_priority) %>%
+  distinct(Bam_norm, .keep_all = TRUE) %>%
+  transmute(
+    Bam = metadata_join_bam,
+    Bam_norm,
+    Sample_ID,
+    Patient,
+    Sample_type,
+    timepoint_info
+  ) %>%
   rename_with(~ paste0(.x, "_Bam"),
               .cols = c(Sample_ID, Patient, Sample_type, timepoint_info))
 
@@ -473,7 +654,7 @@ Merged_MRDetect <- Merged_MRDetect %>% select(-BAM_norm)
 Merged_MRDetect %>%
   filter(is.na(Patient_Bam)) %>%
   pull(BAM) %>% 
-  unique() # seems good
+  unique() # diagnostic only: non-empty output means BAM metadata did not join.
   
 # ──────────────────────────────────────────────────────────────────────────────
 # 10) Classify matched vs. unmatched plasma; force CHARM_healthy→cfDNA
@@ -524,12 +705,18 @@ healthy_reference_candidates <- Merged_MRDetect %>%
   filter(Study %in% c("CHARM_healthy", "XPLUS_CHARM_healthy", "HCC_healthy")) %>%
   mutate(
     healthy_reference_tier = case_when(
+      # Preserve CHARM_healthy as the primary normalization population. XPlus
+      # CHARM and HCC healthy controls are used only as fallback non-MM healthy
+      # references when the exact VCF/source/filter combination has no CHARM rows.
       Study == "CHARM_healthy" ~ "CHARM_healthy",
       TRUE ~ "non_mm_healthy_fallback"
     )
   )
 
 healthy_reference_choice <- healthy_reference_candidates %>%
+  # Choose one reference tier per VCF_factor x mutation-source x filter-source
+  # group. The audit CSV documents whether the z-score came from primary CHARM
+  # controls or from the fallback tier.
   count(VCF_factor, Mut_source, Filter_source, healthy_reference_tier, name = "n_healthy_reference_rows") %>%
   mutate(healthy_reference_priority = case_when(
     healthy_reference_tier == "CHARM_healthy" ~ 1L,
@@ -546,6 +733,8 @@ write_csv(
 )
 
 zscore_lookup <- healthy_reference_candidates %>%
+  # Compute VCF-specific healthy-control means and SDs after the tier choice.
+  # This keeps each patient mutation-list background estimate separate.
   inner_join(
     healthy_reference_choice %>%
       select(VCF_factor, Mut_source, Filter_source, healthy_reference_tier),
@@ -572,6 +761,9 @@ zscore_lookup <- healthy_reference_candidates %>%
 Merged_MRDetect_zscore <- Merged_MRDetect %>%
   left_join(zscore_lookup, by = c("VCF_factor","Mut_source","Filter_source")) %>%
   mutate(
+    # These z-scores are descriptive MRDetect features. If the selected healthy
+    # reference has zero/NA SD, the resulting z-score remains NA rather than
+    # inventing a finite value.
     detection_rate_zscore_charm                   = (detection_rate - mean_det_charm) / sd_det_charm,
     detection_rate_zscore_reads_checked_charm     = (detection_rate_as_reads_detected_over_reads_checked - mean_det_checked_charm) / sd_det_checked_charm,
     detection_rate_zscore_total_reads_charm       = (detection_rate_as_reads_detected_over_total_reads - mean_det_total_charm) / sd_det_total_charm,
@@ -592,6 +784,9 @@ Merged_MRDetect_zscore <- Merged_MRDetect %>%
 dup_keys <- c("BAM","Mut_source","Filter_source","VCF","VCF_clean","Study",
               "Sample_ID_Bam","Patient_Bam","VCF_factor")
 Merged_MRDetect_zscore <- Merged_MRDetect_zscore %>%
+  # If multiple MRDetect rows represent the same BAM/VCF/source/filter run, keep
+  # the row with the most total reads because it has the largest denominator for
+  # estimating detection rate.
   group_by(across(all_of(dup_keys))) %>%
   slice_max(order_by = total_reads, n = 1, with_ties = FALSE) %>%
   ungroup()
@@ -795,14 +990,27 @@ if (nrow(start_date_dupes) > 0) {
 combined_data_plot <- df %>%
   left_join(start_dates, by = c("Sample_ID", "Sample_ID_Bam", "Patient"))
 
-# 6) Flag “Good_baseline_marrow” from your All_feature_data
-All_feature_data <- readRDS("Jan2025_exported_data/All_feature_data_August2025.rds")
+# 6) Flag “Good_baseline_marrow” from the active integrated WGS feature table
+All_feature_data <- readRDS("Jan2025_exported_data/All_feature_data_Sep2025_updated2.rds")
 cohort_df <- readRDS("cohort_assignment_table_updated.rds")
 good_pts <- All_feature_data %>%
   filter(Sample_type == "BM_cells",
          Evidence_of_Disease == 1,
          timepoint_info %in% c("Diagnosis","Baseline")) %>%
   pull(Patient) %>% unique()
+
+spring2026_good_bm_pts <- cfWGS_metadata %>%
+  filter(
+    Study == "IMMAGINE_revision_OICR",
+    Sample_type == "BM_cells",
+    timepoint_info %in% c("Diagnosis", "Baseline"),
+    !is.na(mutect2_pair_id),
+    nzchar(mutect2_pair_id)
+  ) %>%
+  pull(Patient) %>%
+  unique()
+
+good_pts <- union(good_pts, spring2026_good_bm_pts)
 
 combined_data_plot <- combined_data_plot %>%
   mutate(
@@ -861,7 +1069,19 @@ combined_data_plot$percent_change_detection_rate_second_timepoint <- combined_da
 export_dir <- "MRDetect_output_winter_2025/Processed_R_outputs/BM_muts_plots_baseline/"
 dir.create(export_dir, recursive = TRUE, showWarnings = FALSE)
 
+combined_data_plot <- filter_to_baseline_mutation_sources(
+  combined_data_plot,
+  audit_dir = export_dir,
+  audit_prefix = "bm"
+)
+
 combined_data_plot <- restrict_to_single_baseline_mutation_source(
+  combined_data_plot,
+  audit_dir = export_dir,
+  audit_prefix = "bm"
+)
+
+combined_data_plot <- deduplicate_baseline_source_alias_query_rows(
   combined_data_plot,
   audit_dir = export_dir,
   audit_prefix = "bm"
@@ -911,7 +1131,7 @@ readr::write_csv(
 # 15) Additional Processing - Blood muts
 # ──────────────────────────────────────────────────────────────────────────────
 ### Next for blood-derived muts
-#Merged_MRDetect_zscore <- readRDS(file = "MRDetect_output_winter_2025/Processed_R_outputs/cfWGS_Winter2025All_MRDetect_with_Zscore_May2025.rds")
+#Merged_MRDetect_zscore <- readRDS(file = "MRDetect_output_winter_2025/Processed_R_outputs/cfWGS_Winter2025All_MRDetect_with_Zscore_Sep2025.rds")
 # 1) Start from your z-scored MRDetect table
 df <- Merged_MRDetect_zscore %>%
   filter(plotting_type == "Matched_plasma",
@@ -1075,7 +1295,19 @@ combined_data_plot <- combined_data_plot %>%
 export_dir <- "MRDetect_output_winter_2025/Processed_R_outputs/Blood_muts_plots_baseline/"
 dir.create(export_dir, recursive = TRUE, showWarnings = FALSE)
 
+combined_data_plot <- filter_to_baseline_mutation_sources(
+  combined_data_plot,
+  audit_dir = export_dir,
+  audit_prefix = "blood_good_baseline"
+)
+
 combined_data_plot <- restrict_to_single_baseline_mutation_source(
+  combined_data_plot,
+  audit_dir = export_dir,
+  audit_prefix = "blood_good_baseline"
+)
+
+combined_data_plot <- deduplicate_baseline_source_alias_query_rows(
   combined_data_plot,
   audit_dir = export_dir,
   audit_prefix = "blood_good_baseline"
@@ -1166,7 +1398,19 @@ combined_data_plot <- combined_data_plot %>%
 export_dir <- "MRDetect_output_winter_2025/Processed_R_outputs/Blood_muts_plots_baseline/"
 dir.create(export_dir, recursive = TRUE, showWarnings = FALSE)
 
+combined_data_plot <- filter_to_baseline_mutation_sources(
+  combined_data_plot,
+  audit_dir = export_dir,
+  audit_prefix = "blood_all_patients"
+)
+
 combined_data_plot <- restrict_to_single_baseline_mutation_source(
+  combined_data_plot,
+  audit_dir = export_dir,
+  audit_prefix = "blood_all_patients"
+)
+
+combined_data_plot <- deduplicate_baseline_source_alias_query_rows(
   combined_data_plot,
   audit_dir = export_dir,
   audit_prefix = "blood_all_patients"
@@ -1208,6 +1452,103 @@ if (nrow(blood_source_duplicate_audit) > 0L) {
 readr::write_csv(
   combined_data_plot,
   file = file.path(export_dir, "cfWGS MRDetect Blood data updated Sep with all patients.csv")
+)
+
+baseline_source_inventory_from_export <- function(path, source_label) {
+  if (!file.exists(path)) {
+    return(tibble())
+  }
+
+  read_csv(path, show_col_types = FALSE) %>%
+    mutate(
+      mutation_source_type = source_label,
+      source_key = coalesce(
+        na_if(as.character(VCF_factor), ""),
+        na_if(as.character(VCF_clean), ""),
+        na_if(as.character(VCF), ""),
+        na_if(as.character(Sample_ID), "")
+      )
+    ) %>%
+    group_by(
+      Patient, mutation_source_type, source_key, Sample_ID, VCF_clean,
+      Timepoint, timepoint_info, Date_of_sample_collection_Sample_ID
+    ) %>%
+    summarise(
+      n_queried_blood_bams = n_distinct(Sample_ID_Bam, na.rm = TRUE),
+      queried_timepoints = paste(
+        sort(unique(na.omit(as.character(Timepoint_Sample_ID_Bam)))),
+        collapse = "; "
+      ),
+      queried_timepoint_labels = paste(
+        sort(unique(na.omit(as.character(timepoint_info_Bam)))),
+        collapse = "; "
+      ),
+      .groups = "drop"
+    ) %>%
+    arrange(Patient, mutation_source_type, Timepoint, source_key)
+}
+
+baseline_source_inventory <- bind_rows(
+  baseline_source_inventory_from_export(
+    "MRDetect_output_winter_2025/Processed_R_outputs/BM_muts_plots_baseline/cfWGS_MRDetect_BM_data_updated_Sep.csv",
+    "BM_cells"
+  ),
+  baseline_source_inventory_from_export(
+    "MRDetect_output_winter_2025/Processed_R_outputs/Blood_muts_plots_baseline/cfWGS MRDetect Blood data updated Sep with all patients.csv",
+    "Blood_plasma_cfDNA"
+  )
+)
+
+dir.create("Output_tables_2025/clinical_support", recursive = TRUE, showWarnings = FALSE)
+
+baseline_source_inventory_ranked <- baseline_source_inventory %>%
+  mutate(
+    inventory_source_date = suppressWarnings(as.Date(Date_of_sample_collection_Sample_ID)),
+    inventory_timepoint_rank = case_when(
+      str_to_upper(Timepoint) %in% c("T0", "TP0", "D0", "0", "01", "1") ~ 1,
+      str_to_upper(Timepoint) %in% c("T1", "TP1") ~ 2,
+      str_detect(Timepoint, "^[Tt]?[0-9]+$") ~ as.numeric(str_remove(str_to_upper(Timepoint), "^T")) + 10,
+      TRUE ~ 999
+    ),
+    inventory_label_rank = case_when(
+      timepoint_info == "Diagnosis" ~ 1,
+      timepoint_info == "Baseline" ~ 2,
+      TRUE ~ 9
+    )
+  ) %>%
+  arrange(
+    Patient, mutation_source_type,
+    coalesce(inventory_source_date, as.Date("9999-12-31")),
+    inventory_timepoint_rank,
+    inventory_label_rank,
+    source_key
+  ) %>%
+  group_by(Patient, mutation_source_type) %>%
+  mutate(retained_inventory_source = row_number() == 1L) %>%
+  ungroup()
+
+baseline_source_inventory_duplicate_audit <- baseline_source_inventory_ranked %>%
+  add_count(Patient, mutation_source_type, name = "n_patient_source_inventory_rows") %>%
+  filter(n_patient_source_inventory_rows > 1L) %>%
+  arrange(Patient, mutation_source_type, desc(retained_inventory_source), source_key)
+
+write_csv(
+  baseline_source_inventory_duplicate_audit,
+  "Output_tables_2025/clinical_support/baseline_diagnosis_mutation_source_inventory_deduplication_audit.csv"
+)
+
+baseline_source_inventory <- baseline_source_inventory_ranked %>%
+  filter(retained_inventory_source) %>%
+  select(
+    -inventory_source_date,
+    -inventory_timepoint_rank,
+    -inventory_label_rank,
+    -retained_inventory_source
+  )
+
+write_csv(
+  baseline_source_inventory,
+  "Output_tables_2025/clinical_support/baseline_diagnosis_mutation_source_by_patient.csv"
 )
 
 
