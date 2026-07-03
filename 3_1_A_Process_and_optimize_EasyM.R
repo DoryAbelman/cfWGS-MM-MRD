@@ -168,6 +168,127 @@ code_to_mrd_status <- function(code) {
   )
 }
 
+classify_easym_reference_isotype_text <- function(details, subtype) {
+  text <- str_to_lower(str_squish(paste(details, subtype, sep = " ")))
+
+  case_when(
+    is.na(text) | text == "" ~ NA_character_,
+    str_detect(text, "\\bigg\\b|ig\\s*g") ~ "IgG",
+    str_detect(text, "\\biga\\b|ig\\s*a") ~ "IgA",
+    str_detect(
+      text,
+      "light\\s*chain|light-chain|free\\s+kappa|free\\s+lambda|kappa\\s+light|lambda\\s+light|lc\\s*only"
+    ) ~ "Light Chain",
+    TRUE ~ NA_character_
+  )
+}
+
+infer_easym_reference_isotype <- function(details, subtype, iga, igg, igm) {
+  text_isotype <- classify_easym_reference_isotype_text(details, subtype)
+  ifelse(
+    !is.na(text_isotype),
+    text_isotype,
+    case_when(
+      !is.na(igg) & (is.na(iga) | igg >= iga) & (is.na(igm) | igg >= igm) ~ "IgG",
+      !is.na(iga) & (is.na(igg) | iga > igg) & (is.na(igm) | iga >= igm) ~ "IgA",
+      TRUE ~ NA_character_
+    )
+  )
+}
+
+easym_reference_threshold_percent <- function(isotype) {
+  case_when(
+    isotype == "IgG" ~ 1.00,
+    isotype %in% c("IgA", "Light Chain") ~ 0.05,
+    TRUE ~ NA_real_
+  )
+}
+
+build_patient_easym_reference_isotypes <- function(dat) {
+  required <- c("Patient", "Timepoint", "Date", "timepoint_info", "DETAILS", "Subtype", "IgA", "IgG", "IgM")
+  stop_if_missing(dat, required, "EasyM/cfWGS joined clinical table")
+
+  candidates <- dat %>%
+    mutate(
+      Patient = as.character(Patient),
+      Timepoint = as.character(Timepoint),
+      diagnosis_priority = case_when(
+        Timepoint == "01" ~ 1L,
+        str_to_lower(as.character(timepoint_info)) %in% c("diagnosis", "baseline") ~ 2L,
+        TRUE ~ 3L
+      ),
+      EasyM_reference_isotype = infer_easym_reference_isotype(
+        DETAILS, Subtype,
+        suppressWarnings(as.numeric(IgA)),
+        suppressWarnings(as.numeric(IgG)),
+        suppressWarnings(as.numeric(IgM))
+      ),
+      EasyM_reference_isotype_source = case_when(
+        !is.na(classify_easym_reference_isotype_text(DETAILS, Subtype)) ~ "clinical_text_DETAILS_or_Subtype",
+        !is.na(EasyM_reference_isotype) ~ "baseline_heavy_chain_dominance",
+        TRUE ~ "unclassified"
+      )
+    ) %>%
+    filter(!is.na(Patient), !is.na(EasyM_reference_isotype)) %>%
+    arrange(Patient, diagnosis_priority, Timepoint, Date)
+
+  patient_isotypes <- candidates %>%
+    group_by(Patient) %>%
+    slice(1) %>%
+    ungroup() %>%
+    transmute(
+      Patient,
+      EasyM_reference_isotype,
+      EasyM_reference_threshold_percent = easym_reference_threshold_percent(EasyM_reference_isotype),
+      EasyM_reference_isotype_source,
+      EasyM_reference_source_timepoint = Timepoint,
+      EasyM_reference_source_details = DETAILS,
+      EasyM_reference_source_subtype = Subtype
+    )
+
+  patient_isotypes
+}
+
+compute_easym_reference_contingency <- function(df, pred_col, pred_label, cohort_label, timepoint_label) {
+  required <- c(pred_col, "EasyM_reference_threshold_binary")
+  stop_if_missing(df, required, "EasyM reference contingency input")
+
+  eval_df <- df %>%
+    filter(!is.na(.data[[pred_col]]), !is.na(EasyM_reference_threshold_binary))
+
+  if (nrow(eval_df) == 0) {
+    return(tibble())
+  }
+
+  pred <- as.integer(eval_df[[pred_col]])
+  truth <- as.integer(eval_df$EasyM_reference_threshold_binary)
+  tp <- sum(pred == 1L & truth == 1L, na.rm = TRUE)
+  fp <- sum(pred == 1L & truth == 0L, na.rm = TRUE)
+  fn <- sum(pred == 0L & truth == 1L, na.rm = TRUE)
+  tn <- sum(pred == 0L & truth == 0L, na.rm = TRUE)
+  n <- tp + fp + fn + tn
+
+  tibble(
+    Cohort = cohort_label,
+    Timepoint = timepoint_label,
+    Pred_Column = pred_col,
+    Pred_Label = pred_label,
+    Comparator = "EasyM reference threshold",
+    N = n,
+    Agree = tp + tn,
+    TP = tp,
+    FP = fp,
+    FN = fn,
+    TN = tn,
+    Concordance = if_else(n > 0, (tp + tn) / n, NA_real_),
+    Sensitivity = if_else((tp + fn) > 0, tp / (tp + fn), NA_real_),
+    Specificity = if_else((tn + fp) > 0, tn / (tn + fp), NA_real_),
+    PPV = if_else((tp + fp) > 0, tp / (tp + fp), NA_real_),
+    NPV = if_else((tn + fn) > 0, tn / (tn + fn), NA_real_),
+    Matrix = sprintf("TN=%d; FP=%d; FN=%d; TP=%d", tn, fp, fn, tp)
+  )
+}
+
 theme_mrd <- theme_bw(base_size = 16) +
   theme(
     panel.grid.major = element_blank(),
@@ -2176,6 +2297,13 @@ cat(sentence, "\n")
 #   - 4_1 loads this file for EasyM comparisons in the survival and
 #     relapse-detection analyses.
 
+EasyM_reference_isotypes <- build_patient_easym_reference_isotypes(dat)
+
+readr::write_csv(
+  EasyM_reference_isotypes,
+  file.path(out_dir, "tables", "EasyM_reference_isotype_thresholds_by_patient.csv")
+)
+
 EasyM_comprehensive <- dat %>%
   mutate(
     Patient     = as.character(Patient),
@@ -2183,11 +2311,21 @@ EasyM_comprehensive <- dat %>%
     EasyM_value = as.numeric(EasyM_value),
     EasyM_log10 = log10(pmax(EasyM_value, 1e-6))
   ) %>%
+  left_join(EasyM_reference_isotypes, by = "Patient") %>%
   select(
-    Patient, Timepoint, timepoint_info, Sample_Code, Date,
+    Patient, Timepoint, timepoint_info, Cohort, Sample_Code, Date,
+    DETAILS, Subtype,
     EasyM_value, EasyM_mrd,
     BM_zscore_only_detection_rate_prob,
-    BM_zscore_only_detection_rate_call
+    BM_zscore_only_detection_rate_call,
+    Blood_zscore_only_sites_prob,
+    Blood_zscore_only_sites_call,
+    EasyM_reference_isotype,
+    EasyM_reference_threshold_percent,
+    EasyM_reference_isotype_source,
+    EasyM_reference_source_timepoint,
+    EasyM_reference_source_details,
+    EasyM_reference_source_subtype
   ) %>%
   mutate(
     # ============================================================
@@ -2214,6 +2352,38 @@ EasyM_comprehensive <- dat %>%
         EasyM_mrd == "MRD-" ~ 0L,
         TRUE ~ NA_integer_
       )
+    ),
+
+    # ============================================================
+    # RAPID NOVOR REFERENCE THRESHOLD CALLS (isotype-specific)
+    # ============================================================
+    # Rapid Novor/EasyM reference negativity is defined as:
+    #   IgG:          residual M-protein <= 1% of baseline
+    #   IgA/LC-only:  residual M-protein <= 0.05% of baseline
+    # Values above the relevant threshold are scored positive/residual.
+    EasyM_reference_threshold_binary = case_when(
+      !is.na(EasyM_value) & !is.na(EasyM_reference_threshold_percent) ~
+        as.integer(EasyM_value > EasyM_reference_threshold_percent),
+      TRUE ~ NA_integer_
+    ),
+    EasyM_reference_threshold_call = case_when(
+      EasyM_reference_threshold_binary == 1L ~ paste0(
+        "Positive/residual (>",
+        sprintf("%.3f", EasyM_reference_threshold_percent),
+        "%; ", EasyM_reference_isotype, ")"
+      ),
+      EasyM_reference_threshold_binary == 0L ~ paste0(
+        "Negative/cleared (≤",
+        sprintf("%.3f", EasyM_reference_threshold_percent),
+        "%; ", EasyM_reference_isotype, ")"
+      ),
+      is.na(EasyM_reference_threshold_percent) ~ "Not scored: unsupported or unresolved isotype",
+      TRUE ~ NA_character_
+    ),
+    EasyM_reference_threshold_method = case_when(
+      !is.na(EasyM_reference_threshold_percent) ~
+        "Rapid Novor reference: negative if IgG <=1%; IgA/Light Chain <=0.05% of baseline M-protein",
+      TRUE ~ NA_character_
     ),
     
     # ============================================================
@@ -2255,7 +2425,149 @@ readr::write_csv(
 
 cat("✓ Exported comprehensive EasyM table: EasyM_all_samples_with_optimized_calls.csv\n")
 cat("  Columns: Patient, Timepoint, timepoint_info, EasyM_value, \n")
-cat("           EasyM_clinician_binary, EasyM_optimized_binary, EasyM_optimized_call\n\n")
+cat("           EasyM_clinician_binary, EasyM_optimized_binary, EasyM_reference_threshold_binary\n\n")
+
+reference_status_summary <- EasyM_comprehensive %>%
+  group_by(
+    Timepoint,
+    timepoint_info,
+    EasyM_reference_isotype,
+    EasyM_reference_threshold_percent,
+    EasyM_reference_threshold_binary
+  ) %>%
+  summarise(
+    n_samples = n(),
+    n_patients = n_distinct(Patient),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    EasyM_reference_status = case_when(
+      EasyM_reference_threshold_binary == 1L ~ "Positive/residual",
+      EasyM_reference_threshold_binary == 0L ~ "Negative/cleared",
+      TRUE ~ "Not scored"
+    )
+  ) %>%
+  arrange(Timepoint, EasyM_reference_isotype, EasyM_reference_status)
+
+readr::write_csv(
+  reference_status_summary,
+  file.path(out_dir, "tables", "EasyM_reference_threshold_status_counts_by_timepoint.csv")
+)
+
+build_easym_reference_supplement_tables <- function(easym_df) {
+  analysis_sets <- list(
+    list(
+      cohort = "All",
+      timepoint = "All non-diagnosis",
+      data = easym_df %>%
+        filter(!Timepoint %in% c("01"), !str_to_lower(as.character(timepoint_info)) %in% c("diagnosis", "baseline"))
+    ),
+    list(
+      cohort = "Frontline",
+      timepoint = "Post-ASCT",
+      data = easym_df %>% filter(Cohort == "Frontline", str_to_lower(as.character(timepoint_info)) == "post_transplant")
+    ),
+    list(
+      cohort = "Frontline",
+      timepoint = "Maintenance-1yr",
+      data = easym_df %>% filter(Cohort == "Frontline", str_to_lower(as.character(timepoint_info)) == "1yr maintenance")
+    ),
+    list(
+      cohort = "Non-frontline",
+      timepoint = "All non-diagnosis",
+      data = easym_df %>%
+        filter(
+          Cohort == "Non-frontline",
+          !Timepoint %in% c("01"),
+          !str_to_lower(as.character(timepoint_info)) %in% c("diagnosis", "baseline")
+        )
+    )
+  )
+
+  pred_specs <- tibble(
+    pred_col = c("BM_zscore_only_detection_rate_call", "Blood_zscore_only_sites_call"),
+    pred_label = c("BM cVAF Z-score cfWGS", "Blood MM-sites cfWGS")
+  )
+
+  metrics <- purrr::map_dfr(analysis_sets, function(analysis_set) {
+    purrr::map2_dfr(
+      pred_specs$pred_col,
+      pred_specs$pred_label,
+      ~ compute_easym_reference_contingency(
+        df = analysis_set$data,
+        pred_col = .x,
+        pred_label = .y,
+        cohort_label = analysis_set$cohort,
+        timepoint_label = analysis_set$timepoint
+      )
+    )
+  }) %>%
+    mutate(
+      Agree_str = sprintf("%d/%d", Agree, N),
+      Concordance_pct = scales::percent(Concordance, accuracy = 1),
+      Sensitivity_pct = scales::percent(Sensitivity, accuracy = 1),
+      Specificity_pct = scales::percent(Specificity, accuracy = 1),
+      PPV_pct = scales::percent(PPV, accuracy = 1),
+      NPV_pct = scales::percent(NPV, accuracy = 1)
+    ) %>%
+    select(
+      Cohort, Timepoint, Pred_Column, Pred_Label, Comparator,
+      Agree_str, Concordance_pct, Sensitivity_pct, Specificity_pct, PPV_pct, NPV_pct,
+      N, Agree, TP, FP, FN, TN, Concordance, Sensitivity, Specificity, PPV, NPV, Matrix
+    )
+
+  cells <- metrics %>%
+    select(Cohort, Timepoint, Pred_Label, TN, FP, FN, TP) %>%
+    pivot_longer(
+      cols = c(TN, FP, FN, TP),
+      names_to = "Cell",
+      values_to = "Count"
+    ) %>%
+    mutate(
+      Observed_EasyM_status = case_when(Cell %in% c("TN", "FP") ~ "neg", TRUE ~ "pos"),
+      Predicted_cfWGS_status = case_when(Cell %in% c("TN", "FN") ~ "neg", TRUE ~ "pos")
+    ) %>%
+    select(Cohort, Timepoint, Pred_Label, Observed_EasyM_status, Predicted_cfWGS_status, Cell, Count)
+
+  sample_level <- easym_df %>%
+    select(
+      Patient, Timepoint, timepoint_info, Cohort, Sample_Code, Date,
+      EasyM_value, EasyM_reference_isotype, EasyM_reference_threshold_percent,
+      EasyM_reference_threshold_binary, EasyM_reference_threshold_call,
+      BM_zscore_only_detection_rate_call, Blood_zscore_only_sites_call
+    ) %>%
+    filter(!is.na(EasyM_reference_threshold_binary)) %>%
+    arrange(Patient, Timepoint)
+
+  list(Metrics = metrics, Contingency_Cells = cells, Sample_Level = sample_level)
+}
+
+easym_reference_supp_tables <- build_easym_reference_supplement_tables(EasyM_comprehensive)
+
+readr::write_csv(
+  easym_reference_supp_tables$Metrics,
+  file.path(out_dir, "tables", "EasyM_reference_threshold_contingency_vs_cfWGS.csv")
+)
+readr::write_csv(
+  easym_reference_supp_tables$Contingency_Cells,
+  file.path(out_dir, "tables", "EasyM_reference_threshold_2x2_cells_vs_cfWGS.csv")
+)
+readr::write_csv(
+  easym_reference_supp_tables$Sample_Level,
+  file.path(out_dir, "tables", "EasyM_reference_threshold_sample_level_calls.csv")
+)
+
+if (requireNamespace("writexl", quietly = TRUE)) {
+  writexl::write_xlsx(
+    easym_reference_supp_tables,
+    path = file.path(out_dir, "tables", "EasyM_reference_threshold_supplement_contingency_tables.xlsx")
+  )
+}
+
+cat("✓ Exported Rapid Novor reference-threshold EasyM contingency tables\n")
+cat("  - tables/EasyM_reference_threshold_contingency_vs_cfWGS.csv\n")
+cat("  - tables/EasyM_reference_threshold_2x2_cells_vs_cfWGS.csv\n")
+cat("  - tables/EasyM_reference_threshold_sample_level_calls.csv\n\n")
 
 # ============================================================
 # CUTOFF SUMMARY TABLE

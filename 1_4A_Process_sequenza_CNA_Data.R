@@ -1142,13 +1142,68 @@ cna_data_cleaned <- cna_data_cleaned %>%
   ))
 
 
-# Join to metadata by Sample ↔ Tumor_Sample_Barcode
+# Join to metadata by the best available Sequenza sample key.
+# Historical Sequenza inputs use BAM-derived sample names that match
+# Tumor_Sample_Barcode after removing _PG/_WG. The Spring 2026 pipeline-suite
+# export instead uses repo-style Sample_ID values such as "IMG-081-T0-OZ".
+# Resolve both formats to Bam_clean_tmp, because downstream integration uses
+# Bam_clean_tmp as the canonical CNA/translocation sample key.
+sequenza_metadata_lookup <- metada_df_mutation_comparison %>%
+  mutate(
+    Tumor_Sample_Barcode = as.character(Tumor_Sample_Barcode),
+    Sample_ID = as.character(Sample_ID),
+    Bam_clean_tmp = as.character(Bam_clean_tmp)
+  )
+
+sequenza_tsb_lookup <- sequenza_metadata_lookup %>%
+  filter(!is.na(Tumor_Sample_Barcode), Tumor_Sample_Barcode != "") %>%
+  distinct(Tumor_Sample_Barcode, Bam_clean_tmp)
+
+sequenza_sample_id_lookup <- sequenza_metadata_lookup %>%
+  filter(!is.na(Sample_ID), Sample_ID != "", !is.na(Bam_clean_tmp), Bam_clean_tmp != "") %>%
+  semi_join(
+    cna_data_cleaned %>% distinct(Sample),
+    by = c("Sample_ID" = "Sample")
+  ) %>%
+  distinct(Sample_ID, Bam_clean_tmp)
+
+duplicated_sample_id_lookup <- sequenza_sample_id_lookup %>%
+  group_by(Sample_ID) %>%
+  summarise(n_bam_keys = n_distinct(Bam_clean_tmp), .groups = "drop") %>%
+  filter(n_bam_keys > 1)
+
+if (nrow(duplicated_sample_id_lookup) > 0L) {
+  stop(
+    "Cannot map Sequenza Sample_ID to Bam_clean_tmp; non-unique Sample_ID values: ",
+    paste(duplicated_sample_id_lookup$Sample_ID, collapse = ", "),
+    call. = FALSE
+  )
+}
+
 cna_data_merged <- cna_data_cleaned %>%
   left_join(
-    metada_df_mutation_comparison %>%
-      select(Tumor_Sample_Barcode, Bam_clean_tmp),
+    sequenza_tsb_lookup %>% dplyr::rename(Bam_clean_tmp_from_tsb = Bam_clean_tmp),
     by = c("Sample" = "Tumor_Sample_Barcode")
+  ) %>%
+  left_join(
+    sequenza_sample_id_lookup %>% dplyr::rename(Bam_clean_tmp_from_sample_id = Bam_clean_tmp),
+    by = c("Sample" = "Sample_ID")
+  ) %>%
+  mutate(
+    Bam_clean_tmp = coalesce(Bam_clean_tmp_from_tsb, Bam_clean_tmp_from_sample_id)
+  ) %>%
+  select(-Bam_clean_tmp_from_tsb, -Bam_clean_tmp_from_sample_id)
+
+unmapped_spring2026_sequenza <- cna_data_merged %>%
+  filter(str_detect(Sample, "^IMG-"), is.na(Bam_clean_tmp))
+
+if (nrow(unmapped_spring2026_sequenza) > 0L) {
+  stop(
+    "Spring 2026 Sequenza rows could not be mapped to Bam_clean_tmp: ",
+    paste(unmapped_spring2026_sequenza$Sample, collapse = ", "),
+    call. = FALSE
   )
+}
 
 # Check results
 message("Merged Sequenza CNA data with metadata: added Bam_clean_tmp column.")

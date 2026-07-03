@@ -157,7 +157,8 @@ if (file.exists(PATH_THRESHOLD_LIST)) {
 # 3_1_A produces the following key files:
 #   1. EasyM_all_samples_with_optimized_calls.csv
 #      Contains: Patient, Timepoint, EasyM_value, EasyM_clinician_binary,
-#                EasyM_optimized_binary, EasyM_optimized_call, threshold_method
+#                EasyM_optimized_binary, EasyM_reference_threshold_binary,
+#                EasyM_optimized_call, threshold_method
 #   2. EasyM_threshold_values_by_timepoint.csv
 #      Contains: Timepoint and corresponding threshold cutoff (%) used
 
@@ -168,6 +169,13 @@ EasyM_thresholds <- NULL
 
 if (file.exists(EasyM_file)) {
   EasyM_data <- readr::read_csv(EasyM_file, show_col_types = FALSE)
+  if (!"EasyM_reference_threshold_binary" %in% colnames(EasyM_data)) {
+    EasyM_data <- EasyM_data %>% mutate(EasyM_reference_threshold_binary = NA_integer_)
+    warning(
+      "EasyM table lacks EasyM_reference_threshold_binary; rerun ",
+      "3_1_A_Process_and_optimize_EasyM.R to populate Rapid Novor reference-threshold calls."
+    )
+  }
   cat(sprintf("✓ Loaded EasyM data: %d samples across %d timepoints\n", 
               n_distinct(EasyM_data$Patient), n_distinct(EasyM_data$Timepoint)))
   
@@ -181,6 +189,7 @@ if (file.exists(EasyM_file)) {
           EasyM_value,
           EasyM_clinician_binary,
           EasyM_optimized_binary,
+          EasyM_reference_threshold_binary,
           EasyM_optimized_call,
           threshold_method
         ) %>%
@@ -193,6 +202,7 @@ if (file.exists(EasyM_file)) {
   cat(sprintf("✓ Merged EasyM data: %d samples matched with cfWGS\n", n_easy_m_matched))
   cat(sprintf("  - EasyM_clinician_binary: %d samples\n", sum(!is.na(dat$EasyM_clinician_binary))))
   cat(sprintf("  - EasyM_optimized_binary: %d samples\n", sum(!is.na(dat$EasyM_optimized_binary))))
+  cat(sprintf("  - EasyM_reference_threshold_binary: %d samples\n", sum(!is.na(dat$EasyM_reference_threshold_binary))))
   cat(sprintf("  - Using optimized thresholds: %d samples\n", 
               sum(dat$threshold_method == "optimized", na.rm = TRUE)))
   cat(sprintf("  - Using clinician calls: %d samples\n", 
@@ -215,6 +225,7 @@ if (file.exists(EasyM_file)) {
       EasyM_value = NA_real_,
       EasyM_clinician_binary = NA_integer_,
       EasyM_optimized_binary = NA_integer_,
+      EasyM_reference_threshold_binary = NA_integer_,
       EasyM_optimized_call = NA_character_,
       threshold_method = NA_character_
     )
@@ -265,7 +276,7 @@ front_tbl <- dat %>%
   ## Compare both EasyM methods (any-detect and optimized) with other modalities
   pivot_longer(
     cols      = c(Flow_Binary, Adaptive_Binary, BM_zscore_only_detection_rate_call, 
-                  EasyM_clinician_binary, EasyM_optimized_binary),
+                  EasyM_clinician_binary, EasyM_optimized_binary, EasyM_reference_threshold_binary),
     names_to  = "Technology",
     values_to = "Result"
   ) %>%
@@ -284,7 +295,8 @@ front_tbl <- dat %>%
       Adaptive_Binary     = "clonoSEQ",
       BM_zscore_only_detection_rate_call = "cfWGS",
       EasyM_clinician_binary = "EasyM (any)",
-      EasyM_optimized_binary = "EasyM (opt)"
+      EasyM_optimized_binary = "EasyM (opt)",
+      EasyM_reference_threshold_binary = "EasyM (ref)"
     )
   )
 
@@ -300,7 +312,7 @@ front_long <- dat %>%
   filter(!is.na(BM_zscore_only_detection_rate_call)) %>%
   pivot_longer(
     cols      = c(Flow_Binary, Adaptive_Binary, BM_zscore_only_detection_rate_call, 
-                  EasyM_clinician_binary, EasyM_optimized_binary),
+                  EasyM_clinician_binary, EasyM_optimized_binary, EasyM_reference_threshold_binary),
     names_to  = "Technology",
     values_to = "Result"
   ) %>%
@@ -312,7 +324,8 @@ front_long <- dat %>%
       Adaptive_Binary                 = "clonoSEQ",
       BM_zscore_only_detection_rate_call = "cfWGS",
       EasyM_clinician_binary          = "EasyM (any)",
-      EasyM_optimized_binary          = "EasyM (opt)"
+      EasyM_optimized_binary          = "EasyM (opt)",
+      EasyM_reference_threshold_binary = "EasyM (ref)"
     )
   )
 
@@ -493,7 +506,7 @@ front_tbl <- front_tbl %>%
   # Reorder Technology for consistent display order across all plots
   mutate(
     Technology = factor(Technology,
-                        levels = c("cfWGS", "clonoSEQ", "MFC", "EasyM (opt)", "EasyM (any)"))
+                        levels = c("cfWGS", "clonoSEQ", "MFC", "EasyM (opt)", "EasyM (ref)", "EasyM (any)"))
   )
 
 # Build grouped barplot comparing MRD+ rates across technologies and timepoints
@@ -620,7 +633,7 @@ non_tbl <- non_tbl %>%
   # Reorder Technology for consistent display order across all plots
   mutate(
     Technology = factor(Technology,
-                        levels = c("cfWGS", "clonoSEQ", "MFC", "EasyM (opt)", "EasyM (any)"))
+                        levels = c("cfWGS", "clonoSEQ", "MFC", "EasyM (opt)", "EasyM (ref)", "EasyM (any)"))
   )
 
 # Build a standalone non-frontline/test-cohort plot for provenance.
@@ -743,7 +756,7 @@ combo_tbl <- combo_tbl %>%
                                     "Maintenance-1yr",
                                     "All timepoints")),
     Technology = factor(Technology,
-                        levels = c("cfWGS", "clonoSEQ", "MFC", "EasyM (opt)", "EasyM (any)"))
+                        levels = c("cfWGS", "clonoSEQ", "MFC", "EasyM (opt)", "EasyM (ref)", "EasyM (any)"))
   )
 
 # Single faceted plot used as the final Figure 3D component.
@@ -884,7 +897,7 @@ front_tbl <- dat %>%
   ) %>%
   pivot_longer(
     cols      = c(Flow_Binary, Adaptive_Binary, Blood_zscore_only_sites_call, Blood_zscore_screen_call, 
-                  EasyM_clinician_binary, EasyM_optimized_binary),
+                  EasyM_clinician_binary, EasyM_optimized_binary, EasyM_reference_threshold_binary),
     names_to  = "Technology",
     values_to = "Result"
   ) %>%
@@ -904,7 +917,8 @@ front_tbl <- dat %>%
       Blood_zscore_only_sites_call = "cfWGS (confirm)",
       Blood_zscore_screen_call = "cfWGS (screen)",
       EasyM_clinician_binary = "EasyM (any)",
-      EasyM_optimized_binary = "EasyM (opt)"
+      EasyM_optimized_binary = "EasyM (opt)",
+      EasyM_reference_threshold_binary = "EasyM (ref)"
     )
   )
 #      Blood_zscore_only_sites_call = "cfWGS (confirm)",
@@ -924,7 +938,7 @@ front_long <- dat %>%
   filter(!is.na(Blood_zscore_only_sites_call)) %>%
   pivot_longer(
     cols      = c(Flow_Binary, Adaptive_Binary, Blood_zscore_only_sites_call, 
-                  EasyM_clinician_binary, EasyM_optimized_binary),
+                  EasyM_clinician_binary, EasyM_optimized_binary, EasyM_reference_threshold_binary),
     names_to  = "Technology",
     values_to = "Result"
   ) %>%
@@ -936,7 +950,8 @@ front_long <- dat %>%
       Adaptive_Binary                 = "clonoSEQ",
       Blood_zscore_only_sites_call = "cfWGS",
       EasyM_clinician_binary          = "EasyM (any)",
-      EasyM_optimized_binary          = "EasyM (opt)"
+      EasyM_optimized_binary          = "EasyM (opt)",
+      EasyM_reference_threshold_binary = "EasyM (ref)"
     )
   )
 
@@ -996,7 +1011,7 @@ non_tbl <- dat %>%
   ) %>%
   pivot_longer(
     cols      = c(Flow_Binary, Adaptive_Binary, Blood_zscore_only_sites_call, Blood_zscore_screen_call, 
-                  EasyM_clinician_binary, EasyM_optimized_binary),
+                  EasyM_clinician_binary, EasyM_optimized_binary, EasyM_reference_threshold_binary),
     names_to  = "Technology",
     values_to = "Result"
   ) %>%
@@ -1016,7 +1031,8 @@ non_tbl <- dat %>%
       Blood_zscore_only_sites_call = "cfWGS (confirm)",
       Blood_zscore_screen_call = "cfWGS (screen)",
       EasyM_clinician_binary = "EasyM (any)",
-      EasyM_optimized_binary = "EasyM (opt)"
+      EasyM_optimized_binary = "EasyM (opt)",
+      EasyM_reference_threshold_binary = "EasyM (ref)"
     )
   )
 
@@ -1062,6 +1078,7 @@ combo_tbl <- combo_tbl %>%
                            "clonoSEQ",
                            "MFC",
                            "EasyM (opt)",
+                           "EasyM (ref)",
                            "EasyM (any)"
                          ))
     

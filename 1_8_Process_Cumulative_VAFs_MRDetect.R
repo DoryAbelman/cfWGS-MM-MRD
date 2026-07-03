@@ -622,11 +622,14 @@ bam_info <- cfWGS_identity_map %>%
     Bam_norm,
     Sample_ID,
     Patient,
+    Study,
+    revision_new_xplus_bam = Study == "IMMAGINE_revision_OICR" &
+      existing_repo_patient_timepoint_type_overlap %in% FALSE,
     Sample_type,
     timepoint_info
   ) %>%
   rename_with(~ paste0(.x, "_Bam"),
-              .cols = c(Sample_ID, Patient, Sample_type, timepoint_info))
+              .cols = c(Sample_ID, Patient, Study, revision_new_xplus_bam, Sample_type, timepoint_info))
 
 # Add the same normalized key to Merged_MRDetect
 Merged_MRDetect <- Merged_MRDetect %>%
@@ -669,7 +672,11 @@ Merged_MRDetect %>%
 Merged_MRDetect <- Merged_MRDetect %>%
   mutate(
     plotting_type       = if_else(Patient_Bam == Patient, "Matched_plasma", "Unmatched_plasma"),
-    Sample_type_Bam     = if_else(Study == "CHARM_healthy", "Blood_plasma_cfDNA", Sample_type_Bam)
+    Sample_type_Bam     = if_else(
+      Study %in% c("CHARM_healthy", "XPLUS_CHARM_healthy"),
+      "Blood_plasma_cfDNA",
+      Sample_type_Bam
+    )
   )
 
 
@@ -686,46 +693,100 @@ Merged_MRDetect_cfDNA <- Merged_MRDetect %>%
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# 12) Compute CHARM_healthy means & SDs → join back for z-scores
+# 12) Compute selected healthy-control means & SDs → join back for z-scores
 # ──────────────────────────────────────────────────────────────────────────────
 Merged_MRDetect$VCF_factor <- factor(Merged_MRDetect$VCF, levels = unique(Merged_MRDetect$VCF))
 
 # Z-SCORE NORMALIZATION STRATEGY:
 # For each patient VCF (VCF_factor), we compute a healthy-control reference
-# distribution using CHARM_healthy donors run against that same VCF.
+# distribution using healthy donors run against that same VCF.
 # This is very important: each patient has a different mutation set (different VCF),
 # so the background noise level differs per patient. By grouping on VCF_factor,
 # we get a VCF-specific mean and SD for healthy controls, ensuring that the
 # z-score for a patient sample is relative to healthy donors tested against
 # that exact same set of patient mutations.
+# Historical queried samples use the original CHARM background. Spring 2026
+# revision queried samples request the XPlus CHARM background only when they are
+# new revision samples rather than original-repo BAMs carried in the revision
+# metadata for harmonized naming.
 #   z = (patient_rate - mean_HC_rate) / sd_HC_rate
 # High z-score (>>2) → detection rate significantly above healthy-control noise,
 # suggesting true circulating tumor DNA.
+Merged_MRDetect <- Merged_MRDetect %>%
+  mutate(
+    healthy_reference_requested = case_when(
+      # Spring 2026 revision queried BAMs were sequenced on the NovaSeq X Plus
+      # workflow, so their MRDetect z-scores should use XPlus CHARM controls.
+      # Existing-repo overlap rows stay on the original CHARM background.
+      revision_new_xplus_bam_Bam %in% TRUE ~ "XPLUS_CHARM_healthy",
+      Study == "XPLUS_CHARM_healthy" ~ "XPLUS_CHARM_healthy",
+      TRUE ~ "CHARM_healthy"
+    )
+  )
+
 healthy_reference_candidates <- Merged_MRDetect %>%
   filter(Study %in% c("CHARM_healthy", "XPLUS_CHARM_healthy", "HCC_healthy")) %>%
   mutate(
     healthy_reference_tier = case_when(
-      # Preserve CHARM_healthy as the primary normalization population. XPlus
-      # CHARM and HCC healthy controls are used only as fallback non-MM healthy
-      # references when the exact VCF/source/filter combination has no CHARM rows.
+      # Keep XPlus CHARM controls separate from legacy CHARM controls. Historical
+      # rows request CHARM_healthy below; Spring 2026 revision rows request
+      # XPLUS_CHARM_healthy and are not silently normalized to regular controls.
       Study == "CHARM_healthy" ~ "CHARM_healthy",
+      Study == "XPLUS_CHARM_healthy" ~ "XPLUS_CHARM_healthy",
       TRUE ~ "non_mm_healthy_fallback"
     )
   )
 
-healthy_reference_choice <- healthy_reference_candidates %>%
-  # Choose one reference tier per VCF_factor x mutation-source x filter-source
-  # group. The audit CSV documents whether the z-score came from primary CHARM
-  # controls or from the fallback tier.
-  count(VCF_factor, Mut_source, Filter_source, healthy_reference_tier, name = "n_healthy_reference_rows") %>%
-  mutate(healthy_reference_priority = case_when(
-    healthy_reference_tier == "CHARM_healthy" ~ 1L,
-    healthy_reference_tier == "non_mm_healthy_fallback" ~ 2L,
-    TRUE ~ 99L
-  )) %>%
-  group_by(VCF_factor, Mut_source, Filter_source) %>%
-  slice_min(order_by = healthy_reference_priority, n = 1, with_ties = FALSE) %>%
-  ungroup()
+healthy_reference_counts <- healthy_reference_candidates %>%
+  count(
+    VCF_factor, Mut_source, Filter_source, healthy_reference_tier,
+    name = "n_healthy_reference_rows"
+  )
+
+healthy_reference_requests <- Merged_MRDetect %>%
+  distinct(VCF_factor, Mut_source, Filter_source, healthy_reference_requested)
+
+healthy_reference_choice <- healthy_reference_requests %>%
+  tidyr::crossing(
+    healthy_reference_tier = c(
+      "CHARM_healthy",
+      "XPLUS_CHARM_healthy",
+      "non_mm_healthy_fallback"
+    )
+  ) %>%
+  left_join(
+    healthy_reference_counts,
+    by = c("VCF_factor", "Mut_source", "Filter_source", "healthy_reference_tier")
+  ) %>%
+  mutate(
+    n_healthy_reference_rows = coalesce(n_healthy_reference_rows, 0L),
+    healthy_reference_priority = case_when(
+      healthy_reference_requested == "XPLUS_CHARM_healthy" &
+        healthy_reference_tier == "XPLUS_CHARM_healthy" ~ 1L,
+      healthy_reference_requested == "CHARM_healthy" &
+        healthy_reference_tier == "CHARM_healthy" ~ 1L,
+      healthy_reference_requested == "CHARM_healthy" &
+        healthy_reference_tier == "non_mm_healthy_fallback" ~ 2L,
+      TRUE ~ 99L
+    )
+  ) %>%
+  filter(healthy_reference_priority < 99L) %>%
+  group_by(VCF_factor, Mut_source, Filter_source, healthy_reference_requested) %>%
+  arrange(healthy_reference_priority, desc(n_healthy_reference_rows), .by_group = TRUE) %>%
+  slice(1) %>%
+  ungroup() %>%
+  mutate(
+    healthy_reference_status = if_else(
+      n_healthy_reference_rows > 0,
+      "available",
+      "missing"
+    ),
+    healthy_reference_tier = if_else(
+      n_healthy_reference_rows > 0,
+      healthy_reference_tier,
+      NA_character_
+    )
+  )
 
 write_csv(
   healthy_reference_choice,
@@ -735,17 +796,22 @@ write_csv(
 zscore_lookup <- healthy_reference_candidates %>%
   # Compute VCF-specific healthy-control means and SDs after the tier choice.
   # This keeps each patient mutation-list background estimate separate.
+  select(-healthy_reference_requested) %>%
   inner_join(
     healthy_reference_choice %>%
-      select(VCF_factor, Mut_source, Filter_source, healthy_reference_tier),
+      filter(healthy_reference_status == "available") %>%
+      select(
+        VCF_factor, Mut_source, Filter_source,
+        healthy_reference_requested, healthy_reference_tier
+      ),
     by = c("VCF_factor", "Mut_source", "Filter_source", "healthy_reference_tier")
   ) %>%
-  select(VCF_factor, Mut_source, Filter_source,
+  select(VCF_factor, Mut_source, Filter_source, healthy_reference_requested,
          detection_rate,
          detection_rate_as_reads_detected_over_reads_checked,
          detection_rate_as_reads_detected_over_total_reads,
          sites_detection_rate) %>%
-  group_by(VCF_factor, Mut_source, Filter_source) %>%
+  group_by(VCF_factor, Mut_source, Filter_source, healthy_reference_requested) %>%
   summarize(
     mean_det_charm                     = mean(detection_rate, na.rm = TRUE),
     sd_det_charm                       = sd(detection_rate, na.rm = TRUE),
@@ -759,7 +825,19 @@ zscore_lookup <- healthy_reference_candidates %>%
   ungroup()
 
 Merged_MRDetect_zscore <- Merged_MRDetect %>%
-  left_join(zscore_lookup, by = c("VCF_factor","Mut_source","Filter_source")) %>%
+  left_join(
+    healthy_reference_choice %>%
+      select(
+        VCF_factor, Mut_source, Filter_source,
+        healthy_reference_requested, healthy_reference_tier,
+        n_healthy_reference_rows, healthy_reference_status
+      ),
+    by = c("VCF_factor", "Mut_source", "Filter_source", "healthy_reference_requested")
+  ) %>%
+  left_join(
+    zscore_lookup,
+    by = c("VCF_factor", "Mut_source", "Filter_source", "healthy_reference_requested")
+  ) %>%
   mutate(
     # These z-scores are descriptive MRDetect features. If the selected healthy
     # reference has zero/NA SD, the resulting z-score remains NA rather than

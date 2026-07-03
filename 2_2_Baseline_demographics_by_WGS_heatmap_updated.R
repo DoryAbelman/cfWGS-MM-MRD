@@ -2734,13 +2734,13 @@ BM_trans  <- combined_data_heatmap_BM_subset     %>%
   select(Patient_Timepoint, Patient, cohort,
          TF_BM = Tumor_Fraction, TP_BM = timepoint_info,
          dplyr::all_of(transloc_cols)) %>%
-  mutate(across(transloc_cols, ~ ifelse(.=="Yes","Yes","No")))
+  mutate(across(all_of(transloc_cols), ~ ifelse(.=="Yes","Yes","No")))
 
 CF_trans  <- combined_data_heatmap_blood_subset  %>%
   select(Patient_Timepoint, Patient, cohort,
          TF_CF = Tumor_Fraction, TP_CF = timepoint_info,
          dplyr::all_of(transloc_cols)) %>%
-  mutate(across(transloc_cols, ~ ifelse(.=="Yes","Yes","No")))
+  mutate(across(all_of(transloc_cols), ~ ifelse(.=="Yes","Yes","No")))
 
 merged_trans <- full_join(BM_trans, CF_trans,
                           by=c("Patient_Timepoint","Patient","cohort"),
@@ -2857,13 +2857,13 @@ BM_CNA  <- combined_data_heatmap_BM_subset %>%
   select(Patient_Timepoint, Patient, cohort,
          TF_BM = Tumor_Fraction, TP_BM = timepoint_info,
          dplyr::all_of(cna_cols)) %>%
-  mutate(across(cna_cols, ~ ifelse(.=="Yes","Yes","No")))
+  mutate(across(all_of(cna_cols), ~ ifelse(.=="Yes","Yes","No")))
 
 CF_CNA  <- combined_data_heatmap_blood_subset %>%
   select(Patient_Timepoint, Patient, cohort,
          TF_CF = Tumor_Fraction, TP_CF = timepoint_info,
          dplyr::all_of(cna_cols)) %>%
-  mutate(across(cna_cols, ~ ifelse(.=="Yes","Yes","No")))
+  mutate(across(all_of(cna_cols), ~ ifelse(.=="Yes","Yes","No")))
 
 merged_CNA <- full_join(BM_CNA, CF_CNA,
                         by=c("Patient_Timepoint","Patient","cohort"),
@@ -3118,8 +3118,8 @@ mutation_global_conc <- merged_mut %>%
   filter(!is.na(n_BM) & !is.na(n_CF)) %>%
   summarise(
     n_pairs = dplyr::n(),
-    n_concordant = sum(overlap == 1),
-    percent_concordant = 100 * n_concordant / n_pairs
+    n_concordant = sum(overlap == 1, na.rm = TRUE),
+    percent_concordant = if_else(n_pairs > 0, 100 * n_concordant / n_pairs, NA_real_)
   ) %>%
   mutate(feature = "Mutations")
 
@@ -3128,8 +3128,8 @@ trans_global_conc <- merged_trans %>%
   filter(!is.na(n_tr_BM) & !is.na(n_tr_CF)) %>%
   summarise(
     n_pairs = dplyr::n(),
-    n_concordant = sum(overlap == 1),
-    percent_concordant = 100 * n_concordant / n_pairs
+    n_concordant = sum(overlap == 1, na.rm = TRUE),
+    percent_concordant = if_else(n_pairs > 0, 100 * n_concordant / n_pairs, NA_real_)
   ) %>%
   mutate(feature = "Translocations")
 
@@ -3138,8 +3138,8 @@ cna_global_conc <- merged_CNA %>%
   filter(!is.na(n_cna_BM) & !is.na(n_cna_CF)) %>%
   summarise(
     n_pairs = dplyr::n(),
-    n_concordant = sum(overlap == 1),
-    percent_concordant = 100 * n_concordant / n_pairs
+    n_concordant = sum(overlap == 1, na.rm = TRUE),
+    percent_concordant = if_else(n_pairs > 0, 100 * n_concordant / n_pairs, NA_real_)
   ) %>%
   mutate(feature = "Copy Number Alterations")
 

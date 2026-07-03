@@ -183,6 +183,7 @@ message("Saved support QC table -> ", filtered_log_path)
 get_patient_list <- function(df, sample_type, timepoints, evidence_col = NULL, evidence_val = NULL) {
   df2 <- df %>%
     filter(
+      !is.na(Patient),
       Sample_type %in% sample_type,
       timepoint_info %in% timepoints
     )
@@ -309,8 +310,18 @@ summary_table <- summary_table %>%
         ),
       1, 0
     ),
+    # Baseline mutation-calling eligibility is a baseline disease-evidence
+    # question, not a longitudinal/MRDetect sampling-depth question. Do not
+    # require >=2 cfDNA draws here; that requirement belongs to
+    # `eligible_in_MRDetect_study` and the explicit longitudinal helper below.
     High_quality_baseline = if_else(
-      (Qualifying_BM == 1 | Qualifying_cfDNA == 1) & total_cfDNA_samples >= 2, 1, 0
+      coalesce(Qualifying_BM == 1, FALSE) | coalesce(Qualifying_cfDNA == 1, FALSE),
+      1, 0
+    ),
+    High_quality_baseline_longitudinal_cfDNA = if_else(
+      (coalesce(Qualifying_BM == 1, FALSE) | coalesce(Qualifying_cfDNA == 1, FALSE)) &
+        coalesce(total_cfDNA_samples >= 2, FALSE),
+      1, 0
     )
   )
 
@@ -318,11 +329,47 @@ high_quality_patients <- summary_table %>%
   filter(High_quality_baseline == 1) %>%
   pull(Patient)
 
+high_quality_longitudinal_patients <- summary_table %>%
+  filter(High_quality_baseline_longitudinal_cfDNA == 1) %>%
+  pull(Patient)
+
 high_quality_csv <- file.path(export_dir, "high_quality_patients_list_for_baseline_mut_calling2.csv")
 high_quality_rds <- file.path(export_dir, "high_quality_patients_list_for_baseline_mut_calling2.rds")
 write_csv(tibble(Patient = high_quality_patients), high_quality_csv)
 saveRDS(high_quality_patients, high_quality_rds)
 message("Saved high-quality mutation patient list -> ", high_quality_csv, " and ", high_quality_rds)
+
+high_quality_longitudinal_csv <- file.path(
+  export_dir,
+  "high_quality_patients_list_for_longitudinal_mrdetect_baseline_cfDNA2.csv"
+)
+high_quality_longitudinal_rds <- file.path(
+  export_dir,
+  "high_quality_patients_list_for_longitudinal_mrdetect_baseline_cfDNA2.rds"
+)
+write_csv(tibble(Patient = high_quality_longitudinal_patients), high_quality_longitudinal_csv)
+saveRDS(high_quality_longitudinal_patients, high_quality_longitudinal_rds)
+
+baseline_vs_longitudinal_audit <- summary_table %>%
+  transmute(
+    Patient,
+    BM_diagnosis_baseline,
+    cfDNA_diagnosis_baseline,
+    Qualifying_BM,
+    Qualifying_cfDNA,
+    total_cfDNA_samples,
+    High_quality_baseline,
+    High_quality_baseline_longitudinal_cfDNA,
+    excluded_only_by_longitudinal_cfDNA_requirement =
+      High_quality_baseline == 1 & High_quality_baseline_longitudinal_cfDNA == 0
+  ) %>%
+  filter(!is.na(Patient)) %>%
+  filter(High_quality_baseline == 1 | High_quality_baseline_longitudinal_cfDNA == 1)
+
+write_csv(
+  baseline_vs_longitudinal_audit,
+  file.path(export_dir, "baseline_vs_longitudinal_high_quality_patient_audit.csv")
+)
 
 
 # ──────────────────────────────────────────────────────────────────────────────

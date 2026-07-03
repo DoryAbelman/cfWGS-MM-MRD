@@ -467,57 +467,119 @@ labs <- labs %>%
     )
   )
 
-# Convert LAB_VALUE to numeric, coerce any non-numeric values to NA
-## Clean first
-labs <- labs %>%
-  # Remove "g/L" and any similar units from LAB_VALUE
-  mutate(LAB_VALUE = str_remove_all(LAB_VALUE, "\\s*g/L")) %>% 
-  
-  # Convert "Negative" to 0 before coercing to numeric
-  mutate(LAB_VALUE = ifelse(LAB_VALUE == "Negative", "0", LAB_VALUE))
-
-## Clean lab values 
-
+# Convert LAB_VALUE to numeric, preserving the raw value for auditability.
+# The parser is deliberately conservative: it removes explicit units and
+# handles whole-field scientific notation, but it must not rewrite internal
+# digit sequences. A previous broad "10...<digit>" regex converted values like
+# "8.7100000000000009" into 8.7e9 and "2.107 mmol/L" into 2.0e7.
 clean_lab_values <- function(lab_values) {
-  lab_values %>%
-    # Convert to character (handles cases where it's factor/mixed type)
-    as.character() %>%
-    
-    # Standardize inequality signs: "<0.01" → "0.01", ">6.37" → "6.37"
-    str_replace_all("^<\\s*(\\d+\\.?\\d*)", "\\1") %>%
-    str_replace_all("^>\\s*(\\d+\\.?\\d*)", "\\1") %>%
-    
-    # Convert qualitative values to numeric indicators
-    str_replace_all("(?i)Negative", "0") %>%
-    str_replace_all("(?i)Positive", "1") %>%
-    
-    # Fix decimal separators (comma → dot)
-    str_replace_all(",", ".") %>%
-    
-    # Add leading zero for decimal values without leading zero (.164 → 0.164)
-    str_replace_all("^\\.", "0.") %>%
-    
-    # Convert scientific notation variations: "2.7 E+9/L" → "2.7E9"
-    str_replace_all("\\s*E\\+?(\\d+)/L", "E\\1") %>%  # Removes unnecessary spaces
-    str_replace_all("\\s*x?\\s*10[\\^\\*eE]?\\s*(\\d+)", "E\\1") %>%  # "6.7 10*9/L" → "6.7E9"
-    
-    # Remove remaining units (g/L, mmol/L, umol/L, nmol/L, IU/L, %, etc.)
-    str_remove_all("\\s*(g/L|mmol/L|umol/L|nmol/L|U/L|mIU/L|E9|m|IU/L|s|pg/ml|units/mL|mm/h|%)") %>%
-    
-    str_replace_all("^999.*", NA_character_) %>%
-    
-    # Trim any remaining spaces before converting to numeric
-    str_trim()
+  x <- as.character(lab_values)
+  x <- stringr::str_squish(x)
+  x <- stringr::str_replace_all(x, "\u00d7", "x")
+  x <- stringr::str_replace_all(x, ",", ".")
+  x <- stringr::str_replace_all(x, "^\\.", "0.")
+  x <- stringr::str_replace_all(x, regex("(?i)^negative$"), "0")
+  x <- stringr::str_replace_all(x, regex("(?i)^positive$"), "1")
+  x <- stringr::str_replace_all(x, "^[<>]\\s*([+-]?\\d+\\.?\\d*)", "\\1")
+  x <- ifelse(
+    stringr::str_detect(x, regex("^999(\\b|\\s|$)")),
+    NA_character_,
+    x
+  )
+
+  # Whole-field scientific notation only. This supports forms like
+  # "2.7 E+9/L", "2.7 x 10^9/L", and "2.7 x10e9/L" without touching
+  # ordinary long decimals such as "8.7100000000000009".
+  x <- stringr::str_replace(
+    x,
+    regex("^([+-]?\\d+(?:\\.\\d+)?)\\s*E\\+?([+-]?\\d+)\\s*/?\\s*[A-Za-z]*\\s*$", ignore_case = TRUE),
+    "\\1E\\2"
+  )
+  x <- stringr::str_replace(
+    x,
+    regex("^([+-]?\\d+(?:\\.\\d+)?)\\s*x\\s*10\\s*(?:\\^|\\*|e)?\\s*([+-]?\\d+)\\s*/?\\s*[A-Za-z]*\\s*$", ignore_case = TRUE),
+    "\\1E\\2"
+  )
+
+  # Remove explicit measurement units. Do not remove bare letters such as "m"
+  # or "s"; doing so corrupts legitimate numeric strings with long decimals.
+  x %>%
+    stringr::str_remove_all(regex("\\s*(mg/L|g/L|mmol/L|umol/L|µmol/L|nmol/L|U/L|mIU/L|IU/L|pg/ml|units/mL|mm/h|g/CP|%)\\s*", ignore_case = TRUE)) %>%
+    stringr::str_trim()
 }
 
 # Use
 labs <- labs %>%
+  mutate(LAB_VALUE_raw = as.character(LAB_VALUE)) %>%
   mutate(LAB_VALUE_clean = clean_lab_values(LAB_VALUE)) ## doesn't do scientific notation but not needed
 
 ## Also now remove 999 as NA
 
 labs <- labs %>%
-  mutate(LAB_VALUE = as.numeric(LAB_VALUE_clean))  %>% 
+  mutate(LAB_VALUE = as.numeric(LAB_VALUE_clean))
+
+# Quarantine values that remain biologically/analytically implausible after
+# parsing. These rows are exported for manual review rather than silently
+# corrected, because values such as "242 mmol/L" or "68 mmol/L" likely reflect
+# source data entry issues but the correct decimal placement cannot be inferred
+# reproducibly.
+lab_plausibility_ranges <- tibble::tribble(
+  ~LAB_NAME, ~min_value, ~max_value,
+  "Calcium Total, Plasma", 0.5, 5,
+  "Albumin, Plasma", 0, 80,
+  "Hemoglobin", 0, 250,
+  "B2 microglobulin", 0, 10000,
+  "Creatinine, Plasma", 0, 5000,
+  "LDH", 0, 10000,
+  "Plasma cells", 0, 100,
+  "Absolute number of plasma cells", 0, 1000000000000,
+  "Serum free light chain: Kappa / Lambda ratio", 0, 1000000,
+  "Serum free light chain: Kappa", 0, 1000000,
+  "Serum free light chain: Lambda", 0, 1000000,
+  "Protein Electrophoresis: M- protein", 0, 200,
+  "Immunoglobulin Quantitation: M-protein", 0, 200,
+  "Protein Electrophoresis: Total Ur Protein", 0, 1000000,
+  "dFLC (difference between involved FLC and uninvolved FLC)", 0, 1000000
+)
+
+lab_value_plausibility_audit <- labs %>%
+  inner_join(lab_plausibility_ranges, by = "LAB_NAME") %>%
+  filter(!is.na(LAB_VALUE), LAB_VALUE < min_value | LAB_VALUE > max_value) %>%
+  select(
+    M4_id,
+    study_patient_id,
+    LAB_TYPE,
+    LAB_DATE,
+    PURPOSE,
+    LAB_NAME,
+    LAB_VALUE_raw,
+    LAB_VALUE_clean,
+    parsed_value = LAB_VALUE,
+    min_value,
+    max_value,
+    RANGE,
+    RESULT,
+    DETAILS
+  ) %>%
+  arrange(LAB_NAME, desc(parsed_value), M4_id, LAB_DATE)
+
+write_active_csv(
+  lab_value_plausibility_audit,
+  "Output_tables_2025/clinical_support/lab_value_plausibility_audit.csv"
+)
+
+labs <- labs %>%
+  left_join(lab_plausibility_ranges, by = "LAB_NAME") %>%
+  mutate(
+    LAB_VALUE = if_else(
+      !is.na(min_value) &
+        !is.na(LAB_VALUE) &
+        (LAB_VALUE < min_value | LAB_VALUE > max_value),
+      NA_real_,
+      LAB_VALUE
+    )
+  ) %>%
+  select(-min_value, -max_value) %>%
   filter(!is.na(LAB_VALUE))
 
 # Transform selected labs to one row per patient/timepoint where possible.
@@ -543,6 +605,19 @@ labs_transformed <- labs %>%
     names_from = LAB_COLUMN,  # Use LAB_COLUMN for new column names
     values_from = LAB_VALUE   # Fill new columns with LAB_VALUE
   )
+
+# Keep the downstream schema stable even when an optional lab has no usable
+# values after parsing/plausibility filtering. Without this, pivot_wider() omits
+# all-absent columns and the explicit clinical_all_tp select below can fail.
+expected_lab_columns <- paste("Blood labs set", relevant_labs, sep = " - ")
+missing_lab_columns <- setdiff(expected_lab_columns, names(labs_transformed))
+if (length(missing_lab_columns) > 0) {
+  message(
+    "Adding absent lab columns as NA_real_: ",
+    paste(missing_lab_columns, collapse = ", ")
+  )
+  labs_transformed[missing_lab_columns] <- NA_real_
+}
 
 
 ### Add the timepoint if have from other table 

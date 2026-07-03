@@ -2727,6 +2727,7 @@ sample_scoring_manifest <- filled_df %>%
       TRUE ~ "unclassified"
     ),
     included_in_baseline_high_quality_helper = is_baseline_for_scoring &
+      !is.na(Cohort) &
       (has_BM_WGS_evidence_field | has_blood_WGS_evidence_field)
   ) %>%
   select(
@@ -2829,6 +2830,90 @@ readr::write_csv(
 
 tmp <- tmp %>%
   filter(!(Patient == "SPORE_0009" & Date == as.Date("2020-03-11")))
+
+## The baseline high-quality helper is consumed downstream as a patient-level
+## eligibility mask (Patient + BM evidence + relaxed cfDNA evidence). Keep it
+## patient-level here rather than allowing near-baseline BM/cfDNA rows with
+## different T0/T1 labels to appear as duplicate patients. The full sample-level
+## provenance remains in `sample_scoring_status_manifest.csv` and the audit
+## table below records every row collapsed by this step.
+baseline_quality_duplicate_rows <- tmp %>%
+  group_by(Patient) %>%
+  filter(dplyr::n() > 1L) %>%
+  ungroup() %>%
+  arrange(Patient, Date, Timepoint, Sample_Code)
+
+readr::write_csv(
+  baseline_quality_duplicate_rows,
+  file.path(
+    "Output_tables_2025",
+    "clinical_support",
+    "baseline_high_quality_patient_level_collapse_audit.csv"
+  )
+)
+
+max_flag_or_na_integer <- function(x) {
+  x <- suppressWarnings(as.integer(x))
+  x <- x[!is.na(x)]
+  if (!length(x)) return(NA_integer_)
+  as.integer(max(x))
+}
+
+min_numeric_or_na <- function(x) {
+  x <- suppressWarnings(as.numeric(x))
+  x <- x[!is.na(x)]
+  if (!length(x)) return(NA_real_)
+  min(x)
+}
+
+collapse_unique_values <- function(x) {
+  x <- as.character(x)
+  x <- x[!is.na(x) & nzchar(x)]
+  if (!length(x)) return(NA_character_)
+  paste(unique(x), collapse = ";")
+}
+
+tmp <- tmp %>%
+  arrange(Patient, Date, Timepoint, Sample_Code) %>%
+  group_by(Patient) %>%
+  summarise(
+    Date = {
+      x <- as.Date(Date)
+      x <- x[!is.na(x)]
+      if (length(x)) min(x) else as.Date(NA)
+    },
+    Timepoint = collapse_unique_values(Timepoint),
+    Sample_Code = collapse_unique_values(Sample_Code),
+    timepoint_info = collapse_unique_values(timepoint_info),
+    WGS_Evidence_of_Disease_BM_cells =
+      max_flag_or_na_integer(WGS_Evidence_of_Disease_BM_cells),
+    WGS_Evidence_of_Disease_Blood_plasma_cfDNA =
+      max_flag_or_na_integer(WGS_Evidence_of_Disease_Blood_plasma_cfDNA),
+    Num_days_to_closest_relapse = min_numeric_or_na(Num_days_to_closest_relapse),
+    Relapsed = case_when(
+      any(Relapsed == "Yes", na.rm = TRUE) ~ "Yes",
+      any(Relapsed == "No", na.rm = TRUE) ~ "No",
+      TRUE ~ NA_character_
+    ),
+    BM_Mutation_Count = min_numeric_or_na(BM_Mutation_Count),
+    Blood_Mutation_Count = min_numeric_or_na(Blood_Mutation_Count),
+    WGS_Evidence_of_Disease_Blood_plasma_cfDNA_Relaxed =
+      max_flag_or_na_integer(WGS_Evidence_of_Disease_Blood_plasma_cfDNA_Relaxed),
+    Cohort = {
+      x <- unique(Cohort[!is.na(Cohort) & nzchar(Cohort)])
+      if (length(x) == 1L) x else paste(x, collapse = ";")
+    },
+    .groups = "drop"
+  )
+
+if (any(grepl(";", tmp$Cohort))) {
+  stop(
+    "Baseline high-quality patient-level collapse produced mixed cohort labels. ",
+    "Inspect Output_tables_2025/clinical_support/",
+    "baseline_high_quality_patient_level_collapse_audit.csv.",
+    call. = FALSE
+  )
+}
 
 ## What is missing? 
 setdiff(cohort_df$Patient, tmp$Patient)
