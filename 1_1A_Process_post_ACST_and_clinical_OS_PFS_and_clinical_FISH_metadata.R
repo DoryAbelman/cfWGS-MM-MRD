@@ -111,6 +111,44 @@ write_active_csv <- function(x, path) {
   invisible(path)
 }
 
+normalize_m4_demo_date <- function(x) {
+  if (inherits(x, "Date")) return(as.Date(x))
+  if (inherits(x, c("POSIXct", "POSIXlt"))) return(as.Date(x))
+  if (is.numeric(x)) {
+    return(as.Date(x, origin = "1899-12-30"))
+  }
+  x_chr <- trimws(as.character(x))
+  x_chr[x_chr %in% c("", "NA", "N/A", "Unknown", "NULL")] <- NA_character_
+  month_year_only <- !is.na(x_chr) &
+    stringr::str_detect(x_chr, "^[A-Za-z]{3,9}[[:space:]-]*[0-9]{4}$")
+  parsed <- suppressWarnings(lubridate::dmy(x_chr))
+  still_missing <- is.na(parsed) & !is.na(x_chr) & nzchar(x_chr)
+  parsed[still_missing] <- suppressWarnings(lubridate::ymd(x_chr[still_missing]))
+  still_missing <- is.na(parsed) & !is.na(x_chr) & nzchar(x_chr) & !month_year_only
+  parsed[still_missing] <- suppressWarnings(lubridate::mdy(x_chr[still_missing]))
+  parsed[month_year_only] <- as.Date(NA)
+  as.Date(parsed)
+}
+
+is_m4_demo_month_year_only_date <- function(x) {
+  x_chr <- trimws(as.character(x))
+  !is.na(x_chr) &
+    !x_chr %in% c("", "NA", "N/A", "Unknown", "NULL") &
+    stringr::str_detect(x_chr, "^[A-Za-z]{3,9}[[:space:]-]*[0-9]{4}$")
+}
+
+read_march2026_csv_if_present <- function(filename) {
+  path <- file.path("M4_CMRG_Data", "March 2026", filename)
+  if (!file.exists(path)) {
+    return(tibble())
+  }
+  readr::read_csv(
+    path,
+    col_types = readr::cols(.default = readr::col_character()),
+    show_col_types = FALSE
+  )
+}
+
 # Helper to verify that required input files exist
 ensure_exists <- function(path) {
   if (!file.exists(path)) {
@@ -819,8 +857,101 @@ combined_tbl <- combined_tbl %>%
   ) 
 
 
-### Pull fo M4 
-M4_OS_info <- read_excel("M4_CMRG_Data/M4_COHORT_DEMO.xlsx")
+### Pull for M4.
+#
+# The March 2026 DEMO export is the newest M4 source for vital status, death
+# date, and last follow-up. Keep the historical workbook, bind the March rows,
+# and choose the latest per-patient OS/follow-up record deterministically.
+M4_OS_info_current <- read_excel("M4_CMRG_Data/M4_COHORT_DEMO.xlsx") %>%
+  transmute(
+    M4_id = as.character(M4_id),
+    VITAL_STATUS = as.character(VITAL_STATUS),
+    CAUSE_OF_DEATH = as.character(CAUSE_OF_DEATH),
+    DATE_OF_DEATH_RAW = as.character(DATE_OF_DEATH),
+    DATE_OF_DEATH_MONTH_YEAR_ONLY = is_m4_demo_month_year_only_date(DATE_OF_DEATH),
+    DATE_OF_DEATH = normalize_m4_demo_date(DATE_OF_DEATH),
+    DATE_OF_LAST_FOLLOWUP = normalize_m4_demo_date(DATE_OF_LAST_FOLLOWUP),
+    endpoint_source = "M4_COHORT_DEMO.xlsx"
+  )
+
+M4_OS_info_march2026 <- read_march2026_csv_if_present("M4_COHORT_DEMO.csv") %>%
+  transmute(
+    M4_id = as.character(M4_id),
+    VITAL_STATUS = as.character(VITAL_STATUS),
+    CAUSE_OF_DEATH = as.character(CAUSE_OF_DEATH),
+    DATE_OF_DEATH_RAW = as.character(DATE_OF_DEATH),
+    DATE_OF_DEATH_MONTH_YEAR_ONLY = is_m4_demo_month_year_only_date(DATE_OF_DEATH),
+    DATE_OF_DEATH = normalize_m4_demo_date(DATE_OF_DEATH),
+    DATE_OF_LAST_FOLLOWUP = normalize_m4_demo_date(DATE_OF_LAST_FOLLOWUP),
+    endpoint_source = "March 2026/M4_COHORT_DEMO.csv"
+  )
+
+M4_OS_march2026_comparison <- full_join(
+  M4_OS_info_current %>%
+    select(
+      M4_id,
+      current_vital_status = VITAL_STATUS,
+      current_cause_of_death = CAUSE_OF_DEATH,
+      current_date_of_death_raw = DATE_OF_DEATH_RAW,
+      current_date_of_death_month_year_only = DATE_OF_DEATH_MONTH_YEAR_ONLY,
+      current_date_of_death = DATE_OF_DEATH,
+      current_date_of_last_followup = DATE_OF_LAST_FOLLOWUP
+    ),
+  M4_OS_info_march2026 %>%
+    select(
+      M4_id,
+      march2026_vital_status = VITAL_STATUS,
+      march2026_cause_of_death = CAUSE_OF_DEATH,
+      march2026_date_of_death_raw = DATE_OF_DEATH_RAW,
+      march2026_date_of_death_month_year_only = DATE_OF_DEATH_MONTH_YEAR_ONLY,
+      march2026_date_of_death = DATE_OF_DEATH,
+      march2026_date_of_last_followup = DATE_OF_LAST_FOLLOWUP
+    ),
+  by = "M4_id"
+) %>%
+  mutate(
+    followup_change = case_when(
+      is.na(current_date_of_last_followup) & !is.na(march2026_date_of_last_followup) ~ "new_march_followup",
+      !is.na(current_date_of_last_followup) & is.na(march2026_date_of_last_followup) ~ "missing_in_march_demo",
+      !is.na(current_date_of_last_followup) & !is.na(march2026_date_of_last_followup) &
+        march2026_date_of_last_followup > current_date_of_last_followup ~ "march_followup_later",
+      !is.na(current_date_of_last_followup) & !is.na(march2026_date_of_last_followup) &
+        march2026_date_of_last_followup < current_date_of_last_followup ~ "march_followup_earlier",
+      !is.na(current_date_of_last_followup) & !is.na(march2026_date_of_last_followup) &
+        march2026_date_of_last_followup == current_date_of_last_followup ~ "same_followup",
+      TRUE ~ "no_followup_in_either_demo"
+    ),
+    followup_days_added = as.numeric(march2026_date_of_last_followup - current_date_of_last_followup),
+    vital_status_change = coalesce(current_vital_status, "") != coalesce(march2026_vital_status, ""),
+    death_date_change = coalesce(as.character(current_date_of_death), "") !=
+      coalesce(as.character(march2026_date_of_death), "")
+  ) %>%
+  arrange(desc(followup_change == "march_followup_later"), M4_id)
+
+write_support_csv(
+  M4_OS_march2026_comparison,
+  "m4_demo_march2026_os_followup_comparison.csv"
+)
+
+M4_OS_info <- bind_rows(M4_OS_info_current, M4_OS_info_march2026) %>%
+  filter(!is.na(M4_id), stringr::str_detect(M4_id, "^[A-Z]{2}-[0-9]{2}$")) %>%
+  arrange(M4_id, desc(endpoint_source == "March 2026/M4_COHORT_DEMO.csv")) %>%
+  group_by(M4_id) %>%
+  summarise(
+    VITAL_STATUS = dplyr::first(na.omit(VITAL_STATUS)),
+    CAUSE_OF_DEATH = dplyr::first(na.omit(CAUSE_OF_DEATH)),
+    DATE_OF_DEATH = {
+      vals <- DATE_OF_DEATH[!is.na(DATE_OF_DEATH)]
+      if (length(vals) == 0) as.Date(NA) else max(vals)
+    },
+    DATE_OF_DEATH_MONTH_YEAR_ONLY = any(DATE_OF_DEATH_MONTH_YEAR_ONLY, na.rm = TRUE),
+    DATE_OF_LAST_FOLLOWUP = {
+      vals <- DATE_OF_LAST_FOLLOWUP[!is.na(DATE_OF_LAST_FOLLOWUP)]
+      if (length(vals) == 0) as.Date(NA) else max(vals)
+    },
+    os_source = paste(sort(unique(endpoint_source)), collapse = "; "),
+    .groups = "drop"
+  )
 
 ### See if any later than latest dates table from above
 
@@ -873,7 +1004,8 @@ M4_OS_updated <- M4_OS_info %>%
   # clean up
   select(-latest_date)
 
-M4_OS_updated <- M4_OS_updated %>% select(-DOB, -CONSENT_OBTAINED, -CONSENT_DATE, -study_patient_id) ## Remove unnecessary columns
+M4_OS_updated <- M4_OS_updated %>%
+  select(-any_of(c("DOB", "CONSENT_OBTAINED", "CONSENT_DATE", "study_patient_id"))) ## Remove unnecessary columns
 
 ### Now integrate this with the relapse info in final table 
 # 1) Prep the OS table: rename and ensure dates are Date class
@@ -888,6 +1020,7 @@ M4_OS2 <- M4_OS_updated %>%
     VITAL_STATUS,
     CAUSE_OF_DEATH,
     DATE_OF_DEATH,
+    DATE_OF_DEATH_MONTH_YEAR_ONLY,
     DATE_OF_LAST_FOLLOWUP
   )
 

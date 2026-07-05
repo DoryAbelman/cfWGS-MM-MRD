@@ -1689,6 +1689,8 @@ cm_non <- ct_to_long(ct_non_Flow, "Flow (MFC)")
 # Figure 7F-H. Earlier draft versions of this helper were removed from the
 # active script to keep the manuscript path unambiguous.
 plot_cm <- function(df, main_title,
+                    x_lab = "Clinical MRD",
+                    y_lab = "cfWGS MRD",
                     col_low = "#f2f2f2", col_high = "#4a4a4a") {
   
   df <- df %>%
@@ -1715,8 +1717,8 @@ plot_cm <- function(df, main_title,
     scale_color_identity() +
     scale_x_discrete(position = "top") +
     labs(
-      x = "Clinical MRD",
-      y = "cfWGS MRD",
+      x = x_lab,
+      y = y_lab,
       title = main_title
     ) +
     theme_minimal(base_size = 10) +
@@ -1780,6 +1782,73 @@ ms_copy_artifact(
   script_name = "3_2_Plot_optimal_cutoff_and_clinical_concordance.R"
 )
 
+# -------------------------------------------------------------------------
+# Manuscript output: Extended Data Figure 5H
+#
+# What this is:
+#   BM-derived cfWGS mutation-list call compared directly against the
+#   isotype-specific Rapid Novor EasyM reference-threshold call.
+#
+# Denominator:
+#   All paired non-diagnosis samples with both a BM cfWGS call and an EasyM
+#   reference-threshold call. This keeps the EasyM concordance panel tied to
+#   the EasyM comparator rather than to the clinical-MRD test-cohort subset.
+# -------------------------------------------------------------------------
+if (!"EasyM_reference_threshold_binary" %in% names(dat)) {
+  stop(
+    "Expected EasyM_reference_threshold_binary in dat. ",
+    "Run 3_1_A_Process_and_optimize_EasyM.R before building EasyM concordance figures."
+  )
+}
+
+easym_non_diagnosis <- dat %>%
+  mutate(
+    Timepoint_chr = as.character(Timepoint),
+    timepoint_info_chr = stringr::str_squish(stringr::str_to_lower(as.character(timepoint_info))),
+    is_baseline_or_diagnosis = Timepoint_chr %in% c("01") |
+      timepoint_info_chr %in% c("diagnosis", "baseline") |
+      stringr::str_detect(timepoint_info_chr, "baseline|diagnosis")
+  ) %>%
+  filter(
+    !is_baseline_or_diagnosis,
+    !is.na(EasyM_reference_threshold_binary)
+  )
+
+easym_bm_df <- easym_non_diagnosis %>%
+  filter(!is.na(BM_zscore_only_detection_rate_call))
+
+if (nrow(easym_bm_df) == 0) {
+  stop("No paired non-diagnosis BM cfWGS/EasyM reference-threshold rows available for Extended Data Figure 5H.")
+}
+if (any(easym_bm_df$is_baseline_or_diagnosis, na.rm = TRUE)) {
+  stop("Baseline/diagnosis rows remain in the BM EasyM confusion-matrix denominator.")
+}
+
+ct_easym_bm <- easym_bm_df %>%
+  make_ct(
+    pred = "BM_zscore_only_detection_rate_call",
+    truth = "EasyM_reference_threshold_binary"
+  )
+
+cm_easym_bm <- ct_to_long(ct_easym_bm, "EasyM")
+
+p_easym_bm <- plot_cm(
+  cm_easym_bm,
+  "Confusion Matrix vs EasyM",
+  x_lab = "EasyM MRD"
+)
+
+ggsave("Final Tables and Figures/Fig4_confmat_EasyM_reference_BM_updated1.png",
+       p_easym_bm, width = 3, height = 2.75, dpi = 600)
+
+ms_copy_artifact(
+  source_path = "Final Tables and Figures/Fig4_confmat_EasyM_reference_BM_updated1.png",
+  artifact_id = "EDFIG5H",
+  role = "figure_panel_png",
+  description = "BM-informed cfWGS confusion matrix against EasyM reference-threshold MRD used as Extended Data Figure 5H.",
+  script_name = "3_2_Plot_optimal_cutoff_and_clinical_concordance.R"
+)
+
 # ══════════════════════════════════════════════════════════════════════════
 # SOURCE DATA: Confusion matrices (BM) - individual panels
 # ══════════════════════════════════════════════════════════════════════════
@@ -1794,6 +1863,17 @@ readr::write_csv(
 readr::write_csv(
   cm_non %>% mutate(Figure = "Fig4_confmat_nonfront5"),
   file.path(outdir_source_data, "Fig4_confmat_nonfront5_source_data.csv")
+)
+readr::write_csv(
+  cm_easym_bm %>%
+    mutate(
+      Figure = "Fig4_confmat_EasyM_reference_BM_updated1",
+      Comparator = "EasyM reference threshold",
+      Pred_Column = "BM_zscore_only_detection_rate_call",
+      Truth_Column = "EasyM_reference_threshold_binary",
+      N = nrow(easym_bm_df)
+    ),
+  file.path(outdir_source_data, "Fig4_confmat_EasyM_reference_BM_updated1_source_data.csv")
 )
 
 # Auxiliary combined BM layout retained for provenance. This is not staged as a
@@ -2084,6 +2164,52 @@ ms_copy_artifact(
   script_name = "3_2_Plot_optimal_cutoff_and_clinical_concordance.R"
 )
 
+# -------------------------------------------------------------------------
+# Manuscript output: Extended Data Figure 7I
+#
+# What this is:
+#   Blood/cfDNA-derived cfWGS mutation-list call compared directly against the
+#   isotype-specific Rapid Novor EasyM reference-threshold call.
+#
+# Denominator:
+#   All paired non-diagnosis samples with both a blood/cfDNA cfWGS call and an
+#   EasyM reference-threshold call.
+# -------------------------------------------------------------------------
+easym_blood_df <- easym_non_diagnosis %>%
+  filter(!is.na(Blood_zscore_only_sites_call))
+
+if (nrow(easym_blood_df) == 0) {
+  stop("No paired non-diagnosis blood/cfDNA cfWGS/EasyM reference-threshold rows available for Extended Data Figure 7I.")
+}
+if (any(easym_blood_df$is_baseline_or_diagnosis, na.rm = TRUE)) {
+  stop("Baseline/diagnosis rows remain in the blood/cfDNA EasyM confusion-matrix denominator.")
+}
+
+ct_easym_blood <- easym_blood_df %>%
+  make_ct(
+    pred = "Blood_zscore_only_sites_call",
+    truth = "EasyM_reference_threshold_binary"
+  )
+
+cm_easym_blood <- ct_to_long(ct_easym_blood, "EasyM")
+
+p_easym_blood <- plot_cm(
+  cm_easym_blood,
+  "Confusion Matrix vs EasyM",
+  x_lab = "EasyM MRD"
+)
+
+ggsave("Final Tables and Figures/Fig5_confmat_EasyM_reference_blood_updated1.png",
+       p_easym_blood, width = 3, height = 2.75, dpi = 600)
+
+ms_copy_artifact(
+  source_path = "Final Tables and Figures/Fig5_confmat_EasyM_reference_blood_updated1.png",
+  artifact_id = "EDFIG7I",
+  role = "figure_panel_png",
+  description = "Blood/cfDNA-informed cfWGS confusion matrix against EasyM reference-threshold MRD used as Extended Data Figure 7I.",
+  script_name = "3_2_Plot_optimal_cutoff_and_clinical_concordance.R"
+)
+
 # ══════════════════════════════════════════════════════════════════════════
 # SOURCE DATA: Blood confusion matrices (cfWGS vs clinical - individual panels)
 # ══════════════════════════════════════════════════════════════════════════
@@ -2098,6 +2224,17 @@ readr::write_csv(
 readr::write_csv(
   cm_non %>% mutate(Figure = "Fig5_confmat_nonfront_blood_updated6"),
   file.path(outdir_source_data, "Fig5_confmat_nonfront_blood_updated6_source_data.csv")
+)
+readr::write_csv(
+  cm_easym_blood %>%
+    mutate(
+      Figure = "Fig5_confmat_EasyM_reference_blood_updated1",
+      Comparator = "EasyM reference threshold",
+      Pred_Column = "Blood_zscore_only_sites_call",
+      Truth_Column = "EasyM_reference_threshold_binary",
+      N = nrow(easym_blood_df)
+    ),
+  file.path(outdir_source_data, "Fig5_confmat_EasyM_reference_blood_updated1_source_data.csv")
 )
 
 # Auxiliary combined blood layout retained for provenance. This is not staged
@@ -4273,8 +4410,8 @@ cat("  Figure 3D: BM-informed positivity by technology and cohort\n")
 cat("  Figure 3E: BM-informed cfWGS probability vs MFC, clonoSEQ, and EasyM\n")
 cat("  Figure 4C: blood/cfDNA-informed positivity by technology and cohort\n")
 cat("  Figure 4D: blood/cfDNA-informed cfWGS probability vs MFC, clonoSEQ, and EasyM\n")
-cat("  Extended Data Figure 5E-G: BM-informed clinical-comparator confusion matrices\n")
-cat("  Extended Data Figure 7F-H: blood/cfDNA-informed clinical-comparator confusion matrices\n")
+cat("  Extended Data Figure 5E-H: BM-informed clinical and EasyM confusion matrices\n")
+cat("  Extended Data Figure 7F-I: blood/cfDNA-informed clinical and EasyM confusion matrices\n")
 cat("  Supplementary Table 8: row-level model comparisons to clinical metrics\n")
 cat("  Supplementary Table 10: all call metrics against clinical comparators\n\n")
 

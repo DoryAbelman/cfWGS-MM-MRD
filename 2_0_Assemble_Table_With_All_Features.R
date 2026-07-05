@@ -2023,6 +2023,24 @@ collapsed <- joined_clean2 %>%
     }
   }), .groups="drop")
 
+# Keep the collapsed duplicate rows type-stable with the source table. When all
+# values in a collapsed group are missing, the generic `else NA` branch above can
+# otherwise create logical columns (for example Timepoint), which makes
+# `bind_rows()` fail against the character/date/numeric columns in `unchanged`.
+for (nm in intersect(names(collapsed), names(joined_clean2))) {
+  if (is.character(joined_clean2[[nm]])) {
+    collapsed[[nm]] <- as.character(collapsed[[nm]])
+  } else if (inherits(joined_clean2[[nm]], "Date")) {
+    collapsed[[nm]] <- as.Date(collapsed[[nm]])
+  } else if (inherits(joined_clean2[[nm]], c("POSIXct", "POSIXlt"))) {
+    collapsed[[nm]] <- as.POSIXct(collapsed[[nm]])
+  } else if (is.numeric(joined_clean2[[nm]])) {
+    collapsed[[nm]] <- as.numeric(collapsed[[nm]])
+  } else if (is.logical(joined_clean2[[nm]])) {
+    collapsed[[nm]] <- as.logical(collapsed[[nm]])
+  }
+}
+
 # 3) Everything *not* in those duplicate groups just stays as-is
 unchanged <- joined_clean2 %>%
   anti_join(dup_keys, by = c("Patient","timepoint_info"))
@@ -2515,6 +2533,57 @@ if (!is.null(revision_metadata_for_endpoint_dates)) {
     select(-revision_sample_code_date, -revision_timepoint_date)
 }
 
+manual_clinical_metadata_override_path <- "Clinical data/manual_clinical_metadata_overrides.csv"
+if (!file.exists(manual_clinical_metadata_override_path)) {
+  stop(
+    "Missing required manual clinical metadata override file: ",
+    manual_clinical_metadata_override_path
+  )
+}
+
+manual_aggregate_date_overrides <- readr::read_csv(
+  manual_clinical_metadata_override_path,
+  col_types = readr::cols(
+    .default = readr::col_character(),
+    Date_of_sample_collection = readr::col_date()
+  ),
+  show_col_types = FALSE
+) %>%
+  mutate(
+    Patient = na_if(trimws(Patient), ""),
+    Sample_Code = na_if(trimws(Sample_Code), ""),
+    timepoint_info = na_if(trimws(timepoint_info), "")
+  ) %>%
+  filter(!is.na(Patient), !is.na(Sample_Code), !is.na(Date_of_sample_collection)) %>%
+  transmute(
+    Patient,
+    Sample_Code,
+    manual_aggregate_date = Date_of_sample_collection,
+    manual_aggregate_timepoint_info = timepoint_info
+  ) %>%
+  distinct()
+
+## Manual aggregate date corrections live in
+## Clinical data/manual_clinical_metadata_overrides.csv rather than executable
+## code. This preserves the recovered baseline rows without embedding
+## patient-specific dates here.
+filled_df <- filled_df %>%
+  mutate(Date = as.Date(Date)) %>%
+  left_join(
+    manual_aggregate_date_overrides,
+    by = c("Patient", "Sample_Code")
+  ) %>%
+  mutate(
+    Date = coalesce(manual_aggregate_date, Date),
+    timepoint_info = if_else(
+      !is.na(manual_aggregate_timepoint_info) &
+        (is.na(timepoint_info) | !nzchar(timepoint_info)),
+      manual_aggregate_timepoint_info,
+      timepoint_info
+    )
+  ) %>%
+  select(-manual_aggregate_date, -manual_aggregate_timepoint_info)
+
 # Recompute endpoint fields after all clinical/MRD/WGS joins so every row with
 # Patient + Date uses the same current progression-date source. Some earlier
 # joins carry relapse timing only for rows that originated in a clinical-MRD
@@ -2766,6 +2835,31 @@ readr::write_csv(
 saveRDS(
   sample_scoring_manifest,
   file.path("Output_tables_2025", "clinical_support", "sample_scoring_status_manifest.rds")
+)
+
+baseline_scoring_rows_with_evidence_excluded_no_cohort <- sample_scoring_manifest %>%
+  filter(
+    is_baseline_for_scoring,
+    is.na(Cohort) | !nzchar(Cohort),
+    has_BM_WGS_evidence_field | has_blood_WGS_evidence_field
+  ) %>%
+  select(
+    Patient,
+    Sample_Code,
+    Date,
+    timepoint_info,
+    Cohort,
+    has_BM_WGS_evidence_field,
+    has_blood_WGS_evidence_field,
+    WGS_Evidence_of_Disease_BM_cells,
+    WGS_Evidence_of_Disease_Blood_plasma_cfDNA_Relaxed
+  ) %>%
+  arrange(Patient, Date, Sample_Code)
+
+readr::write_csv(
+  baseline_scoring_rows_with_evidence_excluded_no_cohort,
+  file.path("Output_tables_2025", "baseline_scoring_rows_with_evidence_excluded_no_cohort.csv"),
+  na = ""
 )
 
 ### Export final aggregate table for downstream manuscript scripts

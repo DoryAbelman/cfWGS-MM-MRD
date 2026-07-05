@@ -512,6 +512,36 @@ cat(
   "\n"
 )
 
+manual_clinical_metadata_override_path <- "Clinical data/manual_clinical_metadata_overrides.csv"
+if (!file.exists(manual_clinical_metadata_override_path)) {
+  stop(
+    "Missing required manual clinical metadata override file: ",
+    manual_clinical_metadata_override_path
+  )
+}
+
+reviewed_recovered_test_cohort <- readr::read_csv(
+  manual_clinical_metadata_override_path,
+  col_types = readr::cols(
+    .default = readr::col_character(),
+    include_in_recovered_test_cohort = readr::col_logical()
+  ),
+  show_col_types = FALSE
+) %>%
+  mutate(
+    Patient = na_if(trimws(Patient), ""),
+    Cohort = na_if(trimws(Cohort), ""),
+    include_in_recovered_test_cohort = coalesce(
+      include_in_recovered_test_cohort,
+      FALSE
+    )
+  ) %>%
+  filter(include_in_recovered_test_cohort, !is.na(Patient), !is.na(Cohort)) %>%
+  transmute(Patient, Cohort) %>%
+  distinct()
+
+strict_cfdna_mrd_excluded_patients <- c("CA-13", "IMG-066", "IMG-210")
+
 patient_cohort <- failed_info %>%
   filter(BM_status == "Sequenced_pass" | cfDNA_status == "Sequenced_pass") %>%
   distinct(Patient, Study) %>%
@@ -522,7 +552,11 @@ patient_cohort <- failed_info %>%
       TRUE                                 ~ "Frontline"
     )
   ) %>%
-  select(Patient, Cohort)
+  select(Patient, Cohort) %>%
+  filter(!Patient %in% reviewed_recovered_test_cohort$Patient) %>%
+  bind_rows(reviewed_recovered_test_cohort) %>%
+  filter(!Patient %in% strict_cfdna_mrd_excluded_patients) %>%
+  arrange(Cohort, Patient)
 
 write_csv(patient_cohort, file.path(export_dir, "patient_cohort_assignment.csv"))
 saveRDS(patient_cohort,   file.path(export_dir, "patient_cohort_assignment.rds"))
@@ -535,7 +569,11 @@ message("Saved patient cohort assignment -> ", file.path(export_dir, "patient_co
 #   by the submitted analysis. The earlier `patient_cohort_assignment.rds` export
 #   above is retained as a reproducible pipeline intermediate, while this curated
 #   assignment is used to annotate the manuscript Figure 1B source table.
-cohort_df <- readRDS("cohort_assignment_table_updated.rds")
+cohort_df <- readRDS("cohort_assignment_table_updated.rds") %>%
+  filter(!Patient %in% reviewed_recovered_test_cohort$Patient) %>%
+  bind_rows(reviewed_recovered_test_cohort) %>%
+  filter(!Patient %in% strict_cfdna_mrd_excluded_patients) %>%
+  arrange(Cohort, Patient)
 
 failed_info <- failed_info %>% 
   left_join(cohort_df)

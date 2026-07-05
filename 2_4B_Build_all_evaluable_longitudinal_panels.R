@@ -556,31 +556,30 @@ write_csv(
   file.path(output_dir, "Figure_2D_all_evaluable_fragmentomics_longitudinal_source_data.csv")
 )
 
-figure_panel_targets <- tribble(
-  ~source_file, ~panel_subdir, ~target_file,
+all_evaluable_support_manifest <- tribble(
+  ~file_name, ~description,
   "Figure_2B_all_evaluable_BM_zscore_longitudinal.png",
-  "Figure_2B",
-  "Figure_2B_ALL_EVALUABLE__figure_panel_png__BM_zscore_longitudinal.png",
+  "All-evaluable support version of the BM longitudinal z-score panel.",
   "Figure_2C_all_evaluable_blood_zscore_longitudinal.png",
-  "Figure_2C",
-  "Figure_2C_ALL_EVALUABLE__figure_panel_png__blood_zscore_longitudinal.png",
+  "All-evaluable support version of the cfDNA longitudinal z-score panel.",
   "Figure_2C_all_evaluable_blood_zscore_longitudinal_capped300.png",
-  "Figure_2C",
-  "Figure_2C_ALL_EVALUABLE__figure_panel_png__blood_zscore_longitudinal_capped300.png",
+  "All-evaluable support version of the cfDNA longitudinal z-score panel with the plotting y-axis capped at 300.",
   "Figure_2D_all_evaluable_fragmentomics_longitudinal.png",
-  "Figure_2D",
-  "Figure_2D_ALL_EVALUABLE__figure_panel_png__fragmentomics_longitudinal.png"
-)
+  "All-evaluable support version of the fragmentomics longitudinal z-score panel."
+) %>%
+  mutate(
+    path = file.path(output_dir, file_name),
+    exists = file.exists(path),
+    md5 = if_else(exists, map_chr(path, ~ unname(tools::md5sum(.x))), NA_character_),
+    note = paste(
+      "Support-only all-evaluable panel. Do not copy into 01_main_figures/Figure_2,",
+      "because the manuscript Figure 2 panels intentionally remain frontline-only."
+    )
+  )
 
-walk2(
-  file.path(output_dir, figure_panel_targets$source_file),
-  file.path(figure2_dir, figure_panel_targets$panel_subdir, figure_panel_targets$target_file),
-  function(source_path, target_path) {
-    dir.create(dirname(target_path), recursive = TRUE, showWarnings = FALSE)
-    if (!file.copy(source_path, target_path, overwrite = TRUE)) {
-      stop("Failed to copy all-evaluable panel to: ", target_path, call. = FALSE)
-    }
-  }
+write_csv(
+  all_evaluable_support_manifest,
+  file.path(output_dir, "all_evaluable_support_manifest.csv")
 )
 
 qc_tbl <- bind_rows(

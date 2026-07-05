@@ -143,6 +143,16 @@ metada_df_mutation_comparison <- read_combined_clinical_metadata_with_revision(
       str_remove_all("_PG|_WG") %>%
       str_replace_all("\\.filter.*|\\.ded.*|\\.recalibrate.*", ""),
     Bam_clean_tmp = str_remove(Bam, "\\.bam$")
+  ) %>%
+  mutate(
+    Sample_ID = if_else(
+      (is.na(Sample_ID) | !nzchar(as.character(Sample_ID))) &
+        !is.na(Patient) & nzchar(as.character(Patient)) &
+        !is.na(Timepoint) & nzchar(as.character(Timepoint)) &
+        !is.na(Sample_type) & nzchar(as.character(Sample_type)),
+      paste(Patient, paste0("T", Timepoint), Sample_type, sep = "_"),
+      as.character(Sample_ID)
+    )
   )
 
 # Load CNA, translocation, tumor-fraction, and mutation inputs.
@@ -224,21 +234,54 @@ maf_object_bm    <- read.maf(bm_maf_path)
 # downstream checks use the CNA/translocation-only intermediate directly.
 #saveRDS(CNA_translocation, "CNA_translocation_original_Feb2025.rds")
 
+# Define caller-source rules by sample matrix before merging CNA calls.
+# Publication-facing analyses use Sequenza for BM-cell CNA calls and ichorCNA
+# for cfDNA/non-BM CNA calls. BM rows found only in ichorCNA are therefore
+# excluded from the active CNA feature table rather than mixed with Sequenza BM
+# calls. They are written to a support table for traceability.
+metadata_sample_types <- metada_df_mutation_comparison %>%
+  transmute(
+    Sample = as.character(Bam_clean_tmp),
+    Sample_type = as.character(Sample_type),
+    Patient = as.character(Patient),
+    Sample_ID = as.character(Sample_ID),
+    Timepoint = as.character(Timepoint),
+    timepoint_info = as.character(timepoint_info)
+  ) %>%
+  filter(!is.na(Sample), nzchar(Sample)) %>%
+  distinct(Sample, .keep_all = TRUE)
+
+bm_sample_keys <- metadata_sample_types %>%
+  filter(Sample_type == "BM_cells") %>%
+  distinct(Sample)
+
 # 1) Rename Sequenza ID to Sample so downstream stays consistent
 # Sequenza (1_4A) stores the sample identifier in Bam_clean_tmp rather
 # than Sample because it derives from a different pipeline input file.
 # Renaming here ensures it joins correctly on the 'Sample' key used
 # throughout all downstream scripts (1_5 onward).
-cna_seq_renamed <- cna_data_sequenza %>% select(-Sample) %>%
+cna_seq_renamed <- cna_data_sequenza %>% select(-any_of("Sample")) %>%
   rename(Sample = Bam_clean_tmp) %>%
   # Align columns to the ichorCNA-derived table before row-binding.
   select(any_of(names(cna_data)))
 
-# 2) Drop ichorCNA rows that are superseded by Sequenza
-# Where both callers processed the same BAM, Sequenza calls take
-# precedence; the ichorCNA row is dropped to prevent duplicate Sample
-# keys in the merged CNA table. Samples unique to ichorCNA (cfDNA cases) are retained via bind_rows.
+# 2) Drop ichorCNA rows only when they are superseded by Sequenza.
+# Where both callers processed the same BAM, Sequenza calls take precedence and
+# the ichorCNA row is dropped to prevent duplicate Sample keys. BM-cell rows
+# without a Sequenza replacement are retained so samples with valid CNA evidence
+# are not misrepresented as CNA-missing downstream.
 overlap_samples <- intersect(cna_data$Sample, cna_seq_renamed$Sample)
+
+cna_ichor_bm_rows_excluded <- cna_data %>%
+  semi_join(bm_sample_keys, by = "Sample") %>%
+  filter(Sample %in% overlap_samples) %>%
+  left_join(metadata_sample_types, by = "Sample") %>%
+  arrange(Patient, Sample_ID, Sample)
+
+readr::write_csv(
+  cna_ichor_bm_rows_excluded,
+  support_file("excluded_bm_ichor_cna_rows.csv")
+)
 
 cna_ichor_filtered <- cna_data %>%
   filter(!Sample %in% overlap_samples)
@@ -296,11 +339,22 @@ CNA_translocation <- left_join(CNA_translocation,
 FISH_sequenza <- readRDS(file.path(export_dir, "FISH_data_from_sequenza_400_updated.rds"))
 FISH_ichor <- readRDS(file.path(export_dir, "FISH_probe_calls_bin_cytoband_ichorCNA.rds"))
 
-FISH_sequenza <- FISH_sequenza %>% select(-Sample) %>%
-  rename(Sample = Bam_clean_tmp) 
+FISH_sequenza <- FISH_sequenza %>% select(-any_of("Sample")) %>%
+  rename(Sample = Bam_clean_tmp)
 
 # 2) Drop ichorCNA probe rows that are superseded by Sequenza
 overlap_samples <- intersect(FISH_ichor$Sample, FISH_sequenza$Sample)
+
+FISH_ichor_bm_rows_excluded <- FISH_ichor %>%
+  semi_join(bm_sample_keys, by = "Sample") %>%
+  filter(Sample %in% overlap_samples) %>%
+  left_join(metadata_sample_types, by = "Sample") %>%
+  arrange(Patient, Sample_ID, Sample)
+
+readr::write_csv(
+  FISH_ichor_bm_rows_excluded,
+  support_file("excluded_bm_ichor_fish_cna_rows.csv")
+)
 
 FISH_ichor_filtered <- FISH_ichor %>%
   filter(!Sample %in% overlap_samples)
@@ -379,6 +433,49 @@ readr::write_csv(
 message("Support QC table written: ",
         support_file("samples_missing_metadata_after_cna_translocation_join.csv"))
 
+## Keep unmatched genomic rows out of the active feature table.
+#
+# The full-join above intentionally captures CNA/translocation calls even when
+# metadata are missing, but rows without Patient/Sample_ID/timepoint identity
+# cannot be joined correctly to clinical MRD, longitudinal samples, or
+# manuscript cohorts. Leaving them in `All_feature_data` creates silent junk
+# rows that downstream scripts may ignore inconsistently. The unmatched rows
+# remain fully exported in the support QC table above for investigation.
+CNA_translocation <- CNA_translocation %>%
+  filter(
+    !is.na(Patient),
+    !is.na(Sample_ID),
+    !is.na(Timepoint),
+    !is.na(timepoint_info)
+  )
+
+pre_dedup_exact_cna_translocation_rows <- CNA_translocation %>%
+  add_count(across(everything()), name = "exact_duplicate_rows") %>%
+  filter(exact_duplicate_rows > 1L) %>%
+  distinct() %>%
+  arrange(Sample, Patient, Sample_ID)
+
+readr::write_csv(
+  pre_dedup_exact_cna_translocation_rows,
+  support_file("pre_dedup_exact_cna_translocation_rows.csv")
+)
+
+## Remove exact duplicated BAM-level rows before auditing true active duplicate
+# sample keys. Non-identical duplicate Sample rows remain visible below and in
+# the downstream dataflow audit.
+CNA_translocation <- CNA_translocation %>%
+  distinct()
+
+active_duplicate_sample_rows <- CNA_translocation %>%
+  group_by(Sample) %>%
+  filter(!is.na(Sample), dplyr::n() > 1L) %>%
+  ungroup() %>%
+  arrange(Sample, Patient, Sample_ID)
+
+readr::write_csv(
+  active_duplicate_sample_rows,
+  support_file("active_cna_translocation_duplicate_sample_rows.csv")
+)
 
 ##### Extract mutation data for specified genes
 # These 30 recurrently mutated genes constitute the MM-specific panel
@@ -757,7 +854,52 @@ mutation_summary <- filtered_mutations %>%
     Mut_type = paste(unique(Mutation_Type), collapse = ", ")  # List of mutation types
   )
 
-# Step 2: Merge the mutation summary back with CNA_translocation
+# Audit mutation samples before feature integration.
+#
+# All mutation-positive samples entering the integrated WGS feature table should
+# already have a CNA/translocation identity row. Do not create synthetic
+# mutation-only feature rows: that would hide missing CNA/Ig processing or broken
+# sample-key normalization by later converting unknown CNA/translocation values
+# to FALSE.
+mutation_samples_missing_cna_translocation <- mutation_summary %>%
+  anti_join(
+    CNA_translocation %>%
+      distinct(Tumor_Sample_Barcode),
+    by = "Tumor_Sample_Barcode"
+  ) %>%
+  left_join(
+    mutation_export2 %>%
+      mutate(
+        Tumor_Sample_Barcode = as.character(Tumor_Sample_Barcode),
+        Sample = coalesce(
+          as.character(Sample),
+          str_remove(as.character(Bam), "[.]bam$")
+        )
+      ) %>%
+      select(any_of(c(
+        "Tumor_Sample_Barcode", "Sample", "Bam", "Patient", "Sample_ID",
+        "Timepoint", "timepoint_info", "Sample_type"
+      ))) %>%
+      distinct(),
+    by = "Tumor_Sample_Barcode"
+  ) %>%
+  arrange(Patient, Sample_ID, Tumor_Sample_Barcode)
+
+readr::write_csv(
+  mutation_samples_missing_cna_translocation,
+  support_file("mutation_samples_missing_cna_translocation_rows.csv")
+)
+
+if (nrow(mutation_samples_missing_cna_translocation) > 0L) {
+  stop(
+    "Mutation-positive samples are missing CNA/translocation rows. ",
+    "This indicates missing upstream CNA/Ig processing or sample-key mismatch; ",
+    "see ", support_file("mutation_samples_missing_cna_translocation_rows.csv"),
+    call. = FALSE
+  )
+}
+
+# Step 2: Merge the mutation summary back with CNA_translocation-derived rows
 All_feature_data <- CNA_translocation %>%
   left_join(mutation_summary, by = "Tumor_Sample_Barcode")
 
@@ -1009,6 +1151,83 @@ message("Support QC table written: ",
 #   Tumor_Fraction                               (ichorCNA continuous estimate)
 #   Mut_identified, Mut_genes, Mut_highest_VAF   (mutation summary)
 #   Evidence_of_Disease                          (composite 0/1 classifier)
+
+## Collapse non-identical technical replicates of the same biological sample.
+# Some submitted cfDNA aliquots have multiple BAM-level rows for the same
+# Patient/Sample_ID/Sample_type/Timepoint/timepoint_info biological sample. The
+# active feature table is consumed by patient/sample-level analyses, so keeping
+# multiple rows can inflate denominators or make downstream joins depend on
+# incidental row order. Retain one row deterministically, preferring the row with
+# strongest disease evidence, then higher tumour fraction / mutation VAF, then a
+# stable sample-name tie-breaker. Removed rows remain exported for audit.
+biological_sample_key_cols <- c(
+  "Patient", "Sample_ID", "Sample_type", "Timepoint", "timepoint_info"
+)
+
+binary_feature_cols_for_rank <- intersect(
+  c(
+    "del1p", "amp1q", "del13q", "del17p", "hyperdiploid",
+    "IGH_CCND1", "IGH_FGFR3", "IGH_MAF", "IGH_MYC"
+  ),
+  names(All_feature_data_logical)
+)
+
+ranked_biological_replicates <- All_feature_data_logical %>%
+  mutate(
+    .original_row = dplyr::row_number(),
+    .evidence_rank = dplyr::coalesce(as.integer(Evidence_of_Disease), 0L),
+    .tumor_fraction_rank = dplyr::coalesce(as.numeric(Tumor_Fraction), -Inf),
+    .mutation_vaf_rank = dplyr::coalesce(as.numeric(Mut_highest_VAF), -Inf)
+  )
+
+if (length(binary_feature_cols_for_rank) > 0) {
+  ranked_biological_replicates <- ranked_biological_replicates %>%
+    mutate(
+      .feature_positive_count = rowSums(
+        dplyr::across(
+          dplyr::all_of(binary_feature_cols_for_rank),
+          ~ dplyr::coalesce(as.logical(.x), FALSE)
+        )
+      )
+    )
+} else {
+  ranked_biological_replicates <- ranked_biological_replicates %>%
+    mutate(.feature_positive_count = 0L)
+}
+
+ranked_biological_replicates <- ranked_biological_replicates %>%
+  dplyr::group_by(dplyr::across(dplyr::all_of(biological_sample_key_cols))) %>%
+  dplyr::mutate(.biological_replicate_n = dplyr::n()) %>%
+  dplyr::ungroup() %>%
+  dplyr::arrange(
+    dplyr::across(dplyr::all_of(biological_sample_key_cols)),
+    dplyr::desc(.evidence_rank),
+    dplyr::desc(.tumor_fraction_rank),
+    dplyr::desc(.mutation_vaf_rank),
+    dplyr::desc(.feature_positive_count),
+    Sample,
+    .original_row
+  ) %>%
+  dplyr::group_by(dplyr::across(dplyr::all_of(biological_sample_key_cols))) %>%
+  dplyr::mutate(.keep_biological_replicate = dplyr::row_number() == 1L) %>%
+  dplyr::ungroup()
+
+removed_biological_replicates <- ranked_biological_replicates %>%
+  dplyr::filter(.biological_replicate_n > 1L, !.keep_biological_replicate)
+
+readr::write_csv(
+  removed_biological_replicates,
+  support_file("all_feature_data_biological_replicates_removed.csv")
+)
+
+All_feature_data_logical <- ranked_biological_replicates %>%
+  dplyr::filter(.keep_biological_replicate) %>%
+  dplyr::select(-dplyr::starts_with("."))
+
+retained_active_samples <- unique(All_feature_data_logical$Sample)
+CNA_translocation <- CNA_translocation %>%
+  dplyr::filter(Sample %in% retained_active_samples)
+
 # Save All_feature_data as an RDS file
 saveRDS(All_feature_data_logical, file = file.path(export_dir, "All_feature_data_Sep2025_updated2.rds"))
 

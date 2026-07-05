@@ -122,6 +122,36 @@ max_clinical_date_or_na <- function(x) {
   max(x)
 }
 
+normalize_m4_endpoint_date <- function(x) {
+  if (inherits(x, "Date")) return(as.Date(x))
+  if (inherits(x, c("POSIXct", "POSIXlt"))) return(as.Date(x))
+  if (is.numeric(x)) return(normalize_clinical_date(x))
+
+  x_chr <- trimws(as.character(x))
+  x_chr[x_chr %in% c("", "NA", "N/A", "Unknown", "NULL")] <- NA_character_
+
+  parsed <- rep(as.Date(NA), length(x_chr))
+  compact_day_month_year <- !is.na(x_chr) &
+    stringr::str_detect(x_chr, "^[0-9]{1,2}[A-Za-z]{3}[0-9]{4}$")
+  parsed[compact_day_month_year] <- suppressWarnings(
+    lubridate::dmy(x_chr[compact_day_month_year])
+  )
+
+  still_missing <- is.na(parsed) & !is.na(x_chr) & nzchar(x_chr)
+  parsed[still_missing] <- normalize_clinical_date(x_chr[still_missing])
+  still_missing <- is.na(parsed) & !is.na(x_chr) & nzchar(x_chr)
+  parsed[still_missing] <- suppressWarnings(lubridate::my(x_chr[still_missing]))
+  as.Date(parsed)
+}
+
+read_march2026_csv_if_present <- function(filename) {
+  path <- file.path("M4_CMRG_Data", "March 2026", filename)
+  if (!file.exists(path)) {
+    return(tibble())
+  }
+  readr::read_csv(path, col_types = readr::cols(.default = readr::col_character()), show_col_types = FALSE)
+}
+
 # ─── 2.  Configuration & helper functions (optional) ───────────────────────────
 # [ Single place to change paths ]
 #
@@ -341,21 +371,128 @@ combined_clinical_data_updated <- combined_clinical_data_updated %>%
     )
   )
 
-## Fix IMG cases
-combined_clinical_data_updated <- combined_clinical_data_updated %>%
+manual_clinical_metadata_override_path <- "Clinical data/manual_clinical_metadata_overrides.csv"
+if (!file.exists(manual_clinical_metadata_override_path)) {
+  stop(
+    "Missing required manual clinical metadata override file: ",
+    manual_clinical_metadata_override_path
+  )
+}
+
+manual_clinical_metadata_overrides <- readr::read_csv(
+  manual_clinical_metadata_override_path,
+  col_types = readr::cols(
+    .default = readr::col_character(),
+    Date_of_sample_collection = readr::col_date(),
+    include_in_recovered_test_cohort = readr::col_logical()
+  ),
+  show_col_types = FALSE
+) %>%
   mutate(
-    Date_of_sample_collection = if_else(
-      Patient == "IMG-181" & Timepoint == "T0",
-      as.Date("2021-04-27"),
-      as.Date(Date_of_sample_collection)
+    across(
+      c(Patient, Sample_ID, Sample_Code, Timepoint, timepoint_info, Cohort),
+      ~ na_if(trimws(.x), "")
     ),
+    include_in_recovered_test_cohort = coalesce(
+      include_in_recovered_test_cohort,
+      FALSE
+    )
+  )
+
+required_manual_override_cols <- c(
+  "Patient",
+  "Sample_ID",
+  "Sample_Code",
+  "Timepoint",
+  "Date_of_sample_collection",
+  "timepoint_info",
+  "Cohort",
+  "include_in_recovered_test_cohort"
+)
+missing_manual_override_cols <- setdiff(
+  required_manual_override_cols,
+  names(manual_clinical_metadata_overrides)
+)
+if (length(missing_manual_override_cols) > 0) {
+  stop(
+    "Manual clinical metadata override file is missing required columns: ",
+    paste(missing_manual_override_cols, collapse = ", ")
+  )
+}
+if (any(is.na(manual_clinical_metadata_overrides$Patient))) {
+  stop("Manual clinical metadata override file contains rows without Patient.")
+}
+
+manual_sample_id_date_overrides <- manual_clinical_metadata_overrides %>%
+  filter(!is.na(Date_of_sample_collection), !is.na(Sample_ID)) %>%
+  transmute(
+    Patient,
+    Sample_ID,
+    manual_sample_id_date = Date_of_sample_collection,
+    manual_sample_id_timepoint_info = timepoint_info
+  ) %>%
+  distinct()
+
+manual_patient_timepoint_date_overrides <- manual_clinical_metadata_overrides %>%
+  filter(
+    !is.na(Date_of_sample_collection),
+    is.na(Sample_ID),
+    !is.na(Timepoint)
+  ) %>%
+  transmute(
+    Patient,
+    Timepoint,
+    manual_timepoint_date = Date_of_sample_collection,
+    manual_timepoint_info = timepoint_info
+  ) %>%
+  distinct()
+
+## Patient-specific sample-date corrections live in
+## Clinical data/manual_clinical_metadata_overrides.csv rather than executable
+## code, so reruns remain reproducible without embedding PHI-like dates here.
+combined_clinical_data_updated <- combined_clinical_data_updated %>%
+  left_join(
+    manual_sample_id_date_overrides,
+    by = c("Patient", "Sample_ID")
+  ) %>%
+  left_join(
+    manual_patient_timepoint_date_overrides,
+    by = c("Patient", "Timepoint")
+  ) %>%
+  mutate(
+    Date_of_sample_collection = coalesce(
+      manual_sample_id_date,
+      manual_timepoint_date,
+      normalize_clinical_date(Date_of_sample_collection)
+    ),
+    timepoint_info = coalesce(
+      manual_sample_id_timepoint_info,
+      manual_timepoint_info,
+      timepoint_info
+    )
+  ) %>%
+  select(
+    -manual_sample_id_date,
+    -manual_sample_id_timepoint_info,
+    -manual_timepoint_date,
+    -manual_timepoint_info
+  ) %>%
+  mutate(
     timepoint_info = case_when(
-      Patient == "IMG-181" & Timepoint == "T0" ~ "Diagnosis",
       Patient == "IMG-181" & Timepoint %in% c("T6", "T12", "T15") ~ "Maintenance",
       TRUE ~ timepoint_info
     ),
     Timepoint = ifelse(Patient == "IMG-181" & Timepoint == "T6", "07", Timepoint)
   )
+
+recoverable_img_wgs_sample_dates <- manual_clinical_metadata_overrides %>%
+  filter(
+    include_in_recovered_test_cohort,
+    !is.na(Date_of_sample_collection),
+    !is.na(Sample_ID)
+  ) %>%
+  transmute(Patient, Sample_ID, Date_of_sample_collection) %>%
+  distinct()
 
 # ─── 11.  Write out the first combined clinical-data intermediate ──────────────
 # This temporary checkpoint is useful for auditing timepoint harmonization before
@@ -801,12 +938,43 @@ Relapse_dates_M4_clean <- Relapse_dates_M4_clean %>%
   mutate(Sample_ID = paste0(Site, "-", sprintf("%02d", Patient)))
 
 ### Add in missing dates of progressive disease from CMRG
-CMRG_progressive_disease <- read_excel("M4_CMRG_Data/M4_COHORT_CHEMOTHERAPY.xlsx")
+CMRG_progressive_disease <- read_excel("M4_CMRG_Data/M4_COHORT_CHEMOTHERAPY.xlsx") %>%
+  transmute(
+    M4_id = as.character(M4_id),
+    PROGRESSION_DATE = normalize_m4_endpoint_date(PROGRESSION_DATE),
+    endpoint_source = "M4_COHORT_CHEMOTHERAPY.xlsx"
+  )
+
+march2026_chemo_progression <- read_march2026_csv_if_present("M4_COHORT_CHEMOTHERAPY.csv") %>%
+  transmute(
+    M4_id = as.character(M4_id),
+    PROGRESSION_DATE = normalize_m4_endpoint_date(PROGRESSION_DATE),
+    endpoint_source = "March 2026/M4_COHORT_CHEMOTHERAPY.csv"
+  )
+
+CMRG_progressive_disease <- bind_rows(
+  CMRG_progressive_disease,
+  march2026_chemo_progression
+) %>%
+  filter(
+    !is.na(M4_id),
+    stringr::str_detect(M4_id, "^[A-Z]{2}-[0-9]{2}$"),
+    !is.na(PROGRESSION_DATE)
+  ) %>%
+  distinct(M4_id, PROGRESSION_DATE, .keep_all = TRUE)
+
+readr::write_csv(
+  CMRG_progressive_disease %>%
+    arrange(M4_id, PROGRESSION_DATE),
+  file.path(clinical_support_dir, "m4_progression_dates_with_march2026_augmentation.csv"),
+  na = ""
+)
 
 # Perform a left join to bring PROGRESSION_DATE into Relapse_dates_M4_clean based on Sample_ID and M4_id
 Relapse_dates_M4_clean <- Relapse_dates_M4_clean %>%
   left_join(
-    CMRG_progressive_disease %>% filter(!is.na(PROGRESSION_DATE)) %>% unique() %>% dplyr::select(M4_id, PROGRESSION_DATE),
+    CMRG_progressive_disease %>%
+      dplyr::select(M4_id, PROGRESSION_DATE),
     by = c("Sample_ID" = "M4_id")
   )
 
@@ -952,6 +1120,7 @@ oicr_revision_endpoints <- if (file.exists(oicr_revision_endpoint_path)) {
       # and follow-up logic works with Date objects rather than mixed Excel/text
       # formats.
       Patient = as.character(Patient),
+      sample_collection_date = normalize_clinical_date(Date_of_sample_collection),
       date_diagnosis = normalize_clinical_date(date_diagnosis),
       first_progression_date = normalize_clinical_date(first_progression_date),
       latest_progression_date = normalize_clinical_date(latest_progression_date),
@@ -962,6 +1131,7 @@ oicr_revision_endpoints <- if (file.exists(oicr_revision_endpoint_path)) {
 } else {
   tibble(
     Patient = character(),
+    sample_collection_date = as.Date(character()),
     date_diagnosis = as.Date(character()),
     first_progression_date = as.Date(character()),
     latest_progression_date = as.Date(character()),
@@ -1216,7 +1386,11 @@ processing_log_cleaned <- processing_log_cleaned %>%
   mutate(
     Sample_Code = str_remove(Sample_Code, "M4-"),  # Remove "M4-" prefix
     Sample_Code = str_remove_all(Sample_Code, "(_[0-9]|-[0-9])$"),  # Remove endings like -1, -2, _1, _2
-    Patient = str_sub(Sample_Code, 1, 5),  # Extract the first 5 characters as Patient
+    # Extract the true M4 patient code from the sample identifier. A historical
+    # processing-log typo (`MA-VA-25-01-2`) previously became the invalid patient
+    # `MA-VA` when the first five characters were used. Regex extraction keeps
+    # valid IDs such as VA-06 and recovers VA-25 from that malformed sample code.
+    Patient = str_extract(Sample_Code, "[A-Z]{2}-[0-9]{2}"),
     Timepoint = str_extract(Sample_Code, "[^-]+$")  # Extract everything after the last "-"
   )
 
@@ -1420,6 +1594,20 @@ tmp_IMG <- tmp_IMG %>%
     followup_source = "Clinical data/IMMAGINE/Additional_relapse_dates_IMG_from_Esther.xlsx:Date_of_last_followup"
   )
 
+## Additional cleaned IMMAGINE follow-up table used for recovered WGS-baseline
+## cases not represented in Esther's relapse workbook. This is deliberately
+## follow-up/censor information only; relapse events are handled separately.
+tmp_IMG_cleaned_followup <- readr::read_csv(
+  "Clinical data/IMMAGINE/Cleaned_Patient_Follow-Up_Table_IMMAGINE.csv",
+  show_col_types = FALSE
+) %>%
+  transmute(
+    Patient = Patient_ID,
+    latest_date = normalize_clinical_date(Last_Followup_Date),
+    followup_source = "Clinical data/IMMAGINE/Cleaned_Patient_Follow-Up_Table_IMMAGINE.csv:Last_Followup_Date"
+  ) %>%
+  filter(!is.na(Patient), !is.na(latest_date))
+
 tmp_oicr_revision_followup <- oicr_revision_endpoints %>%
   rowwise() %>%
   mutate(
@@ -1429,7 +1617,8 @@ tmp_oicr_revision_followup <- oicr_revision_endpoints %>%
     latest_date = max_clinical_date_or_na(c(
       relapse_or_censor_date,
       latest_progression_date,
-      first_progression_date
+      first_progression_date,
+      sample_collection_date
     ))
   ) %>%
   ungroup() %>%
@@ -1440,6 +1629,8 @@ tmp_oicr_revision_followup <- oicr_revision_endpoints %>%
       # Record which revision field supported the follow-up date so downstream
       # audits can distinguish censored follow-up from progression-derived
       # follow-up.
+      !is.na(sample_collection_date) & sample_collection_date == latest_date ~
+        "Spring 2026 OICR revision metadata:Date_of_sample_collection",
       str_detect(str_to_lower(coalesce(relapse_or_censor_status, "")), "censor") ~
         "Spring 2026 OICR revision metadata:relapse_or_censor_date",
       !is.na(latest_progression_date) ~
@@ -1456,6 +1647,7 @@ tmp_oicr_revision_followup <- oicr_revision_endpoints %>%
 latest_dates <- bind_rows(
   latest_dates %>% mutate(followup_source = "latest clinical/sample date available in combined metadata"),
   tmp_IMG,
+  tmp_IMG_cleaned_followup,
   tmp_oicr_revision_followup
 )
 
@@ -1511,12 +1703,67 @@ d2 <- extract_latest(M4_dates_cmrg,  "M4_id",         "TIMEPOINT",      "LAB_DAT
 d3 <- extract_latest(processing_log_cleaned, "Patient","Timepoint",      "Cleaned_Date")
 d4 <- extract_latest(combined_clinical_data_updated, "Patient","Timepoint",      "Date_of_sample_collection")
 
-### Add the other CMRG table to try get latest date - issue is not fully updated
-M4_DEMO <- read_excel("M4_CMRG_Data/M4_COHORT_DEMO.xlsx")
+### Add the other CMRG table to try get latest date.
+M4_DEMO_current <- read_excel("M4_CMRG_Data/M4_COHORT_DEMO.xlsx") %>%
+  transmute(
+    Patient = as.character(M4_id),
+    Date = normalize_m4_endpoint_date(DATE_OF_LAST_FOLLOWUP),
+    endpoint_source = "M4_COHORT_DEMO.xlsx"
+  )
+
+M4_DEMO_march2026 <- read_march2026_csv_if_present("M4_COHORT_DEMO.csv") %>%
+  transmute(
+    Patient = as.character(M4_id),
+    Date = normalize_m4_endpoint_date(DATE_OF_LAST_FOLLOWUP),
+    endpoint_source = "March 2026/M4_COHORT_DEMO.csv"
+  )
+
+M4_DEMO <- bind_rows(M4_DEMO_current, M4_DEMO_march2026) %>%
+  filter(
+    !is.na(Patient),
+    stringr::str_detect(Patient, "^[A-Z]{2}-[0-9]{2}$"),
+    !is.na(Date)
+  )
+
+M4_DEMO_followup_march2026_comparison <- full_join(
+  M4_DEMO_current %>%
+    filter(!is.na(Patient), stringr::str_detect(Patient, "^[A-Z]{2}-[0-9]{2}$")) %>%
+    select(Patient, current_demo_followup = Date),
+  M4_DEMO_march2026 %>%
+    filter(!is.na(Patient), stringr::str_detect(Patient, "^[A-Z]{2}-[0-9]{2}$")) %>%
+    select(Patient, march2026_demo_followup = Date),
+  by = "Patient"
+) %>%
+  mutate(
+    march2026_followup_change = case_when(
+      is.na(current_demo_followup) & !is.na(march2026_demo_followup) ~ "new_march_followup",
+      !is.na(current_demo_followup) & is.na(march2026_demo_followup) ~ "missing_in_march_demo",
+      !is.na(current_demo_followup) & !is.na(march2026_demo_followup) &
+        march2026_demo_followup > current_demo_followup ~ "march_followup_later",
+      !is.na(current_demo_followup) & !is.na(march2026_demo_followup) &
+        march2026_demo_followup < current_demo_followup ~ "march_followup_earlier",
+      !is.na(current_demo_followup) & !is.na(march2026_demo_followup) &
+        march2026_demo_followup == current_demo_followup ~ "same_followup",
+      TRUE ~ "no_followup_in_either_demo"
+    ),
+    followup_days_added = as.numeric(march2026_demo_followup - current_demo_followup)
+  ) %>%
+  arrange(desc(march2026_followup_change == "march_followup_later"), Patient)
+
+readr::write_csv(
+  M4_DEMO_followup_march2026_comparison,
+  file.path(clinical_support_dir, "m4_demo_march2026_followup_comparison.csv"),
+  na = ""
+)
+
+readr::write_csv(
+  M4_DEMO %>%
+    arrange(Patient, Date, endpoint_source),
+  file.path(clinical_support_dir, "m4_last_followup_dates_with_march2026_augmentation.csv"),
+  na = ""
+)
 
 M4_DEMO <- M4_DEMO %>%
-  mutate(Date = as.Date(DATE_OF_LAST_FOLLOWUP),
-         Patient = M4_id) %>%
   select(Patient, Date) %>%
   group_by(Patient) %>%
   summarise(Date = max_clinical_date_or_na(Date), .groups = "drop") %>%
@@ -1548,7 +1795,7 @@ spore_dates <- spore_OS_info %>%
 
 latest_dates <- latest_dates %>% 
   left_join(spore_dates, by="Patient") %>% 
-  bind_rows(tmp_IMG, tmp_oicr_revision_followup) %>% 
+  bind_rows(tmp_IMG, tmp_IMG_cleaned_followup, tmp_oicr_revision_followup) %>% 
   rowwise() %>%
   mutate(latest_date = max_clinical_date_or_na(c(latest_date, status_date))) %>%
   ungroup() %>%
@@ -1684,6 +1931,16 @@ diagnosis_dates_m4 <- M4_diagnosis_date %>%
   filter(!is.na(Diagnosis_date)) %>%
   distinct()
 
+###  22.2b  M4 fallback: use Timepoint_01/Prior_TX when staging lacks a patient
+m4_timepoint01_baseline_dates <- M4_dates %>%
+  filter(Timepoint_Code == "01", !is.na(Date)) %>%
+  transmute(Patient, Diagnosis_date = as.Date(Date)) %>%
+  arrange(Patient, Diagnosis_date) %>%
+  group_by(Patient) %>%
+  slice(1) %>%
+  ungroup() %>%
+  anti_join(diagnosis_dates_m4 %>% distinct(Patient), by = "Patient")
+
 ###  22.3  IMMAGINE: from IMMAGINE_progression → Diagnosis_date
 diagnosis_dates_immagine <- IMMAGINE_progression %>%
   select(Patient = ID, Diagnosis_date) %>%
@@ -1698,6 +1955,7 @@ spore_baseline_clean <- spore_baseline_dates %>%
 baseline_dates_all <- bind_rows(
   spore_baseline_clean,
   diagnosis_dates_m4,
+  m4_timepoint01_baseline_dates,
   diagnosis_dates_immagine,
   oicr_revision_endpoints %>%
     select(Patient, Diagnosis_date = date_diagnosis) %>%
@@ -1709,6 +1967,19 @@ baseline_dates_all <- bind_rows(
 n_distinct(baseline_dates_all$Patient)
 
 baseline_dates_all$Baseline_Date <- baseline_dates_all$Diagnosis_date
+
+## WGS-baseline overrides for recovered IMG cases. These patients have historical
+## disease courses before the WGS sample; using original diagnosis dates would
+## make survival baselines scientifically wrong for the WGS MRD comparison.
+img_wgs_baseline_overrides <- recoverable_img_wgs_sample_dates %>%
+  transmute(Patient, Diagnosis_date = Date_of_sample_collection)
+
+baseline_dates_all <- baseline_dates_all %>%
+  filter(!Patient %in% img_wgs_baseline_overrides$Patient) %>%
+  bind_rows(img_wgs_baseline_overrides) %>%
+  arrange(Patient, Diagnosis_date) %>%
+  distinct(Patient, .keep_all = TRUE) %>%
+  mutate(Baseline_Date = Diagnosis_date)
 
 dir.create("exported_clinical_data_April2025", showWarnings = FALSE)
 write.csv(baseline_dates_all,
@@ -1749,11 +2020,40 @@ prog_info <- Relapse_dates_full %>%
   select(Patient, Censor_date, Other_Progression_Dates, Relapsed, High_Priority)
 
 # 2) Non-relapsed patients
-nonprog_info <- latest_dates %>%
+nonprog_info_pre_baseline_censor_audit <- latest_dates %>%
   # drop anyone who has at least one progression event
   filter(! Patient %in% prog_info$Patient) %>%
+  left_join(
+    baseline_dates_all %>% select(Patient, Baseline_Date),
+    by = "Patient"
+  ) %>%
   rename(Censor_date = latest_date) %>%
   mutate(
+    Censor_date = as.Date(Censor_date),
+    pre_baseline_nonprogress_censor = !is.na(Baseline_Date) &
+      !is.na(Censor_date) &
+      Censor_date < Baseline_Date
+  )
+
+readr::write_csv(
+  nonprog_info_pre_baseline_censor_audit %>%
+    filter(pre_baseline_nonprogress_censor) %>%
+    arrange(Patient),
+  file.path(clinical_support_dir, "nonrelapsed_pre_baseline_censor_dates_removed.csv"),
+  na = ""
+)
+
+nonprog_info <- nonprog_info_pre_baseline_censor_audit %>%
+  mutate(
+    # A non-relapsed/censored endpoint before the analysis baseline creates
+    # negative PFS and is not scientifically interpretable for baseline WGS
+    # survival analyses. Keep the patient visible, but remove that invalid
+    # censor date unless another later source is available upstream.
+    Censor_date = if_else(
+      pre_baseline_nonprogress_censor,
+      as.Date(NA),
+      Censor_date
+    ),
     Other_Progression_Dates = as.Date(NA),    # no “other” dates
     Relapsed                = 0,
     High_Priority           = as.integer(Patient %in% cohort_df$Patient)
@@ -1806,6 +2106,12 @@ final_tbl <-final_tbl %>%
 
 # Reorder
 final_tbl <- final_tbl %>%
+  mutate(
+    # `MA-VA` is a parser artifact, not a real patient ID. The associated
+    # censor/follow-up date is 2023-01-25, which is VA-25's Timepoint_01 /
+    # prior-treatment date in the M4 VA-series roster.
+    Patient = case_when(Patient == "MA-VA" ~ "VA-25", TRUE ~ Patient)
+  ) %>%
   select(Patient, Baseline_Date, Censor_date, Relapsed, Other_Progression_Dates, High_Priority)
 
 # Collapse
@@ -1838,12 +2144,23 @@ write.csv(
 
 saveRDS(final_tbl, "Exported_data_tables_clinical/Censor_dates_per_patient_for_PFS.rds")
 
+normalise_patient_id <- function(patient) {
+  dplyr::case_when(
+    # `MA-VA` is a parser artifact, not a real patient ID. The associated
+    # censor/follow-up date is 2023-01-25, which is VA-25's Timepoint_01 /
+    # prior-treatment date in the M4 VA-series roster.
+    patient == "MA-VA" ~ "VA-25",
+    TRUE ~ patient
+  )
+}
+
 final_tbl_for_update <- final_tbl %>%
   rename(
     baseline_date = Baseline_Date,
     censor_date = Censor_date,
     relapsed = Relapsed
   ) %>%
+  mutate(Patient = normalise_patient_id(Patient)) %>%
   arrange(Patient, baseline_date, censor_date) %>%
   distinct(Patient, .keep_all = TRUE)
 
@@ -1869,9 +2186,24 @@ max_integer_or_na <- function(x) {
 ### Add updated dates from Sarah 
 censor_dates_updated <- read.csv("Clinical data/M4/Censore_dates_per_patient_for_PFS_just_M4 SB.csv")
 
+sarah_endpoint_status <- censor_dates_updated %>%
+  select(Patient, Has.the.patient.Relapsed) %>%
+  mutate(
+    Patient = as.character(Patient),
+    sarah_relapse_status = case_when(
+      tolower(str_trim(Has.the.patient.Relapsed)) == "yes" ~ "yes",
+      tolower(str_trim(Has.the.patient.Relapsed)) == "no" ~ "no",
+      TRUE ~ NA_character_
+    )
+  ) %>%
+  select(Patient, sarah_relapse_status)
+
 censor_tbl <- censor_dates_updated %>% select(-CMRG.ID) %>%
   mutate(across(where(is.character), str_trim)) %>%      # remove stray blanks
   mutate(
+    # Preserve the historical Sarah B. update behavior: anything other than an
+    # explicit "yes" is treated as not relapsed within this update table. Newer
+    # March 2026 endpoint exports are applied below as a separate source layer.
     relapsed    = if_else(tolower(Has.the.patient.Relapsed) == "yes", 1L, 0L),
     relapse_dt  = dmy(If.yes..First.Relapse.Date , quiet = TRUE),
     followup_dt = dmy(If.no..Date.of.last.follow.up, quiet = TRUE),
@@ -1912,17 +2244,29 @@ write.csv(
 diff_by_patient_flt <- diff_by_patient %>%
   filter(Patient != "EK-09")
 
-# 2. Build the patch: keep baseline_date.final, the later censor_date,
-#    and now relapsed_new
+# 2. Build the patch: keep baseline_date.final. For patients with any event
+#    evidence, keep the earliest event date; for non-relapsed/censored
+#    patients, keep the latest follow-up date. This prevents a later
+#    progression/follow-up row from replacing the first PFS event.
 diff_update <- diff_by_patient_flt %>%
   mutate(
-    censor_date = pmax(censor_date.final, censor_date.new, na.rm = TRUE)
+    any_relapsed = relapsed.final == 1L | relapsed.new == 1L
   ) %>%
+  rowwise() %>%
+  mutate(
+    censor_date = if (isTRUE(any_relapsed)) {
+      first_date_or_na(sort(c(censor_date.final, censor_date.new), na.last = NA))
+    } else {
+      max_date_or_na(c(censor_date.final, censor_date.new))
+    },
+    relapsed = as.integer(any_relapsed)
+  ) %>%
+  ungroup() %>%
   transmute(
     Patient,
     baseline_date = baseline_date.final,
     censor_date,
-    relapsed      = relapsed.new
+    relapsed
   ) %>%
   group_by(Patient) %>%
   summarise(
@@ -1935,7 +2279,194 @@ diff_update <- diff_by_patient_flt %>%
 final_tbl_updated <- final_tbl_for_update %>%
   rows_update(diff_update, by = "Patient")
 
+## Apply March 2026 endpoint updates on top of the existing workflow.
+#
+# This is intentionally narrow:
+#   * March chemotherapy progression dates are added as newer progression
+#     evidence. March stem-cell-transplant progression dates are deliberately
+#     not used for this endpoint update.
+#   * March last-follow-up dates extend censoring only for patients with no
+#     progression date, and only when the March date is later than the current
+#     censor/follow-up date.
+march2026_progression_by_patient <- march2026_chemo_progression %>%
+  transmute(
+    Patient = as.character(M4_id),
+    march_progression_date = as.Date(PROGRESSION_DATE),
+    march_progression_source = endpoint_source
+  ) %>%
+  filter(
+    !is.na(Patient),
+    stringr::str_detect(Patient, "^[A-Z]{2}-[0-9]{2}$"),
+    !is.na(march_progression_date)
+  ) %>%
+  distinct(Patient, march_progression_date, .keep_all = TRUE) %>%
+  left_join(final_tbl_updated %>% select(Patient, baseline_date), by = "Patient") %>%
+  filter(is.na(baseline_date) | march_progression_date >= baseline_date) %>%
+  group_by(Patient) %>%
+  summarise(
+    march_first_progression = min(march_progression_date),
+    march_progression_dates = list(sort(unique(march_progression_date))),
+    march_progression_sources = paste(sort(unique(march_progression_source)), collapse = "; "),
+    .groups = "drop"
+  )
+
+march2026_followup_by_patient <- M4_DEMO_march2026 %>%
+  transmute(
+    Patient = as.character(Patient),
+    march_last_followup = as.Date(Date)
+  ) %>%
+  filter(
+    !is.na(Patient),
+    stringr::str_detect(Patient, "^[A-Z]{2}-[0-9]{2}$"),
+    !is.na(march_last_followup)
+  ) %>%
+  group_by(Patient) %>%
+  summarise(march_last_followup = max_clinical_date_or_na(march_last_followup), .groups = "drop")
+
+date_max_or_first <- function(...) {
+  vals <- as.Date(c(...), origin = "1970-01-01")
+  vals <- vals[!is.na(vals)]
+  if (!length(vals)) return(as.Date(NA))
+  max(vals)
+}
+
+march2026_endpoint_update_audit <- final_tbl_updated %>%
+  select(Patient, baseline_date, censor_date, relapsed, Other_Progression_Dates) %>%
+  left_join(sarah_endpoint_status, by = "Patient") %>%
+  left_join(march2026_progression_by_patient, by = "Patient") %>%
+  left_join(march2026_followup_by_patient, by = "Patient") %>%
+  mutate(
+    apply_march_progression = !is.na(march_first_progression),
+    march_progression_changes_endpoint = apply_march_progression &
+      (as.integer(relapsed) != 1L |
+         is.na(censor_date) |
+         march_first_progression < as.Date(censor_date)),
+    apply_march_followup = relapsed == 0L &
+      !apply_march_progression &
+      !is.na(march_last_followup) &
+      (is.na(censor_date) | march_last_followup > censor_date),
+    updated_relapsed = if_else(
+      march_progression_changes_endpoint,
+      1L,
+      as.integer(relapsed)
+    ),
+    updated_censor_date = case_when(
+      march_progression_changes_endpoint ~ march_first_progression,
+      apply_march_followup ~ march_last_followup,
+      TRUE ~ as.Date(censor_date)
+    ),
+    march_update_reason = case_when(
+      march_progression_changes_endpoint ~ "march_progression_updates_event",
+      apply_march_progression ~ "march_progression_confirmed_or_later_than_existing_event",
+      apply_march_followup ~ "march_followup_extended_nonrelapsed_censor",
+      TRUE ~ "no_march_endpoint_change"
+    )
+  )
+
+readr::write_csv(
+  march2026_endpoint_update_audit %>%
+    filter(march_update_reason != "no_march_endpoint_change") %>%
+    mutate(
+      march_progression_dates = purrr::map_chr(
+        march_progression_dates,
+        ~ paste(as.character(.x), collapse = ";")
+      )
+    ) %>%
+    select(
+      Patient, baseline_date, censor_date, relapsed,
+      sarah_relapse_status,
+      march_first_progression,
+      march_progression_dates,
+      march_last_followup, updated_censor_date, updated_relapsed,
+      march_update_reason
+    ),
+  file.path(clinical_support_dir, "march2026_endpoint_update_audit.csv"),
+  na = ""
+)
+
+march2026_endpoint_patch <- march2026_endpoint_update_audit %>%
+  filter(march_progression_changes_endpoint | apply_march_followup) %>%
+  transmute(
+    Patient,
+    censor_date = updated_censor_date,
+    relapsed = updated_relapsed
+  )
+
+if (nrow(march2026_endpoint_patch) > 0) {
+  final_tbl_updated <- final_tbl_updated %>%
+    rows_update(march2026_endpoint_patch, by = "Patient", unmatched = "ignore")
+}
+
+pfs_progression_events_for_other_dates <- Relapse_dates_full %>%
+  transmute(
+    Patient = as.character(Patient),
+    Progression_date = as.Date(Progression_date)
+  ) %>%
+  bind_rows(
+    final_tbl_updated %>%
+      filter(relapsed == 1L) %>%
+      transmute(
+        Patient = as.character(Patient),
+        Progression_date = as.Date(censor_date)
+      )
+  ) %>%
+  filter(!is.na(Patient), !is.na(Progression_date)) %>%
+  distinct()
+
+final_tbl_updated <- final_tbl_updated %>%
+  left_join(
+    pfs_progression_events_for_other_dates %>%
+      group_by(Patient) %>%
+      summarise(
+        all_pfs_progression_dates = list(sort(unique(Progression_date))),
+        .groups = "drop"
+      ),
+    by = "Patient"
+  ) %>%
+  mutate(
+    Other_Progression_Dates = purrr::pmap(
+      list(all_pfs_progression_dates, censor_date, relapsed),
+      function(events, censor, relapsed_flag) {
+        if (!isTRUE(as.integer(relapsed_flag) == 1L) ||
+            is.null(events) ||
+            length(events) == 0 ||
+            all(is.na(events)) ||
+            is.na(censor)) {
+          return(as.Date(NA))
+        }
+        later_events <- events[!is.na(events) & events > as.Date(censor)]
+        if (length(later_events) == 0) {
+          as.Date(NA)
+        } else {
+          later_events
+        }
+      }
+    )
+  ) %>%
+  select(-all_pfs_progression_dates)
+
 ## Now export 
+final_tbl_updated_csv <- final_tbl_updated %>%
+  rename(
+    Baseline_Date = baseline_date,
+    Censor_date = censor_date,
+    Relapsed = relapsed
+  ) %>%
+  mutate(
+    Other_Progression_Dates = map_chr(Other_Progression_Dates, function(dts) {
+      if (all(is.na(dts)) || length(dts) == 0) {
+        ""
+      } else {
+        paste(as.character(dts), collapse = ";")
+      }
+    })
+  )
+
+write.csv(
+  final_tbl_updated_csv,
+  "Exported_data_tables_clinical/Censore_dates_per_patient_for_PFS_updated.csv",
+  row.names = FALSE
+)
 saveRDS(final_tbl_updated, "Exported_data_tables_clinical/Censor_dates_per_patient_for_PFS_updated.rds")
 
 ## Add this to the previous relapse dates 
@@ -1947,9 +2478,18 @@ new_relapses <- final_tbl_updated %>%
   filter(relapsed == 1) %>%
   select(Patient, Progression_date = censor_date)
 
-# Add or update relapse dates
+# Add finalized patient-level PFS events to the relapse-date table without
+# deleting historical progression evidence. This table is an event inventory;
+# the current PFS event/censor per patient is controlled by `final_tbl_updated`
+# above, not by pruning this historical table.
 Relapse_dates_full <- Relapse_dates_full %>%
+  mutate(
+    Patient = as.character(Patient),
+    Progression_date = as.Date(Progression_date)
+  ) %>%
+  select(Patient, Progression_date) %>%
   bind_rows(new_relapses) %>%
+  filter(!is.na(Patient), !is.na(Progression_date)) %>%
   distinct(Patient, Progression_date, .keep_all = TRUE)
 
 # Check if any changes occurred
@@ -1965,6 +2505,78 @@ if (nrow(changes) > 0) {
 
 saveRDS(Relapse_dates_full, "Exported_data_tables_clinical/Relapse_dates_full_updated.rds")
 write.csv(Relapse_dates_full, "Exported_data_tables_clinical/Relapse dates cfWGS updated2.csv",   row.names = FALSE)
+
+# Write the final combined clinical CSV after all endpoint sources have been
+# integrated. Sample-level relapse fields are derived from the finalized
+# progression-date inventory so downstream tables start from the same endpoint
+# source of truth as the patient-level PFS table.
+recompute_sample_relapse_fields <- function(clinical_df, relapse_dates_tbl) {
+  relapse_dates_tbl <- relapse_dates_tbl %>%
+    transmute(
+      Patient = as.character(Patient),
+      Progression_date = as.Date(Progression_date)
+    ) %>%
+    filter(!is.na(Patient), !is.na(Progression_date)) %>%
+    distinct()
+
+  clinical_base <- clinical_df %>%
+    mutate(
+      .clinical_row_id = row_number(),
+      Patient = as.character(Patient),
+      Date_of_sample_collection = as.Date(Date_of_sample_collection)
+    ) %>%
+    select(-any_of(c(
+      "Num_days_to_closest_relapse",
+      "Relapsed",
+      "Num_days_to_closest_relapse_absolute",
+      "Num_days_to_closest_relapse_non_absolute"
+    )))
+
+  sample_relapse <- clinical_base %>%
+    select(.clinical_row_id, Patient, Date_of_sample_collection) %>%
+    left_join(relapse_dates_tbl, by = "Patient", relationship = "many-to-many") %>%
+    mutate(
+      days_to_relapse_non_absolute = case_when(
+        is.na(Date_of_sample_collection) | is.na(Progression_date) ~ NA_real_,
+        Progression_date > Date_of_sample_collection ~
+          as.numeric(Date_of_sample_collection - Progression_date),
+        Progression_date <= Date_of_sample_collection &
+          Progression_date >= Date_of_sample_collection - 35 ~ 0,
+        TRUE ~ NA_real_
+      )
+    ) %>%
+    group_by(.clinical_row_id) %>%
+    summarise(
+      Num_days_to_closest_relapse_absolute = {
+        valid_days <- days_to_relapse_non_absolute[!is.na(days_to_relapse_non_absolute)]
+        if (length(valid_days) == 0) NA_real_ else min(abs(valid_days))
+      },
+      Num_days_to_closest_relapse_non_absolute = {
+        valid_days <- days_to_relapse_non_absolute[!is.na(days_to_relapse_non_absolute)]
+        if (length(valid_days) == 0) NA_real_ else valid_days[which.min(abs(valid_days))]
+      },
+      .groups = "drop"
+    ) %>%
+    mutate(
+      Num_days_to_closest_relapse = Num_days_to_closest_relapse_absolute,
+      Relapsed = if_else(!is.na(Num_days_to_closest_relapse_absolute), "Y", "N")
+    )
+
+  clinical_base %>%
+    left_join(sample_relapse, by = ".clinical_row_id") %>%
+    select(-.clinical_row_id)
+}
+
+combined_clinical_data_updated <- recompute_sample_relapse_fields(
+  clinical_df = combined_clinical_data_updated,
+  relapse_dates_tbl = Relapse_dates_full
+)
+
+write.csv(
+  combined_clinical_data_updated,
+  "combined_clinical_data_updated_April2025.csv",
+  row.names = FALSE
+)
 
 # ─── 23.  Get the patient info, number of patients with each feature ───────────────────────
 

@@ -865,23 +865,44 @@ heatmap_matrix_blood <- t(heatmap_matrix_blood)  # Transpose the matrix
 
 
 
-### Now align the blood matrix to the BM
-#    Initialize everything as "No Mutation"
-# Capture the gene (row) names from your BM heatmap matrix
-bm_genes <- rownames(heatmap_matrix_BM)
+### Align BM and blood matrices to the union of observed feature rows.
+# The overlay figure needs identical row sets, but aligning cfDNA to BM-only rows
+# silently discards cfDNA-only mutation genes. This happened for valid calls such
+# as ATM/SETD2/RB1 that were present in cfDNA but absent from the retained BM
+# heatmap rows. Use the union of BM and cfDNA features, and fill modality-specific
+# absent calls with the biologically correct negative value for that feature type.
+binary_feature_rows <- c(cna_cols, "hyperdiploid", translocation_cols)
+all_feature_rows_for_alignment <- c(
+  intersect(myeloma_genes, union(rownames(heatmap_matrix_BM), rownames(heatmap_matrix_blood))),
+  intersect(binary_feature_rows, union(rownames(heatmap_matrix_BM), rownames(heatmap_matrix_blood)))
+) %>%
+  unique()
 
-blood_aligned <- matrix(
-  "No Mutation",
-  nrow = length(bm_genes),
-  ncol = ncol(heatmap_matrix_blood),
-  dimnames = list(bm_genes, colnames(heatmap_matrix_blood))
+align_heatmap_feature_matrix <- function(mat, target_rows) {
+  aligned <- matrix(
+    NA_character_,
+    nrow = length(target_rows),
+    ncol = ncol(mat),
+    dimnames = list(target_rows, colnames(mat))
+  )
+  mutation_rows <- intersect(target_rows, myeloma_genes)
+  binary_rows <- intersect(target_rows, binary_feature_rows)
+  aligned[mutation_rows, ] <- "No Mutation"
+  aligned[binary_rows, ] <- "No"
+
+  common_rows <- intersect(target_rows, rownames(mat))
+  aligned[common_rows, ] <- mat[common_rows, , drop = FALSE]
+  aligned
+}
+
+heatmap_matrix_BM <- align_heatmap_feature_matrix(
+  heatmap_matrix_BM,
+  all_feature_rows_for_alignment
 )
-
-# 3) For the genes that do exist in the Blood matrix, fill them in
-common_genes <- intersect(bm_genes, rownames(heatmap_matrix_blood))
-blood_aligned[common_genes, ] <- heatmap_matrix_blood[common_genes, ]
-
-heatmap_matrix_blood <- blood_aligned
+heatmap_matrix_blood <- align_heatmap_feature_matrix(
+  heatmap_matrix_blood,
+  all_feature_rows_for_alignment
+)
 
 # 2h. Create top annotation for blood
 top_annotation_blood <- HeatmapAnnotation(
@@ -953,7 +974,10 @@ saveRDS(combined_data_heatmap_blood, file = "combined_data_heatmap_blood_Sep2025
 # 2. figure out exactly which barcodes & genes are on your heatmap
 final_BM_barcodes    <- combined_data_heatmap_BM$Tumor_Sample_Barcode ## defined later
 final_blood_barcodes <- combined_data_heatmap_blood$Tumor_Sample_Barcode
-final_genes          <- intersect(myeloma_genes, colnames(combined_data_heatmap_BM))
+final_genes          <- intersect(
+  myeloma_genes,
+  union(colnames(combined_data_heatmap_BM), colnames(combined_data_heatmap_blood))
+)
 
 # 3. filter to those samples + genes
 bm_filt    <- maf_subset@data %>%
@@ -1238,11 +1262,22 @@ row_group <- factor(
 # 1. Find which row is bad
 bad_ix <- which(is.na(row_group))
 
-# 2. Drop it from everything
-all_rows <- all_rows[-bad_ix]
-row_group <- row_group[-bad_ix]
-bm_mat    <- bm_mat[-bad_ix, , drop = FALSE]
-cfDNA_mat <- cfDNA_mat[-bad_ix, , drop = FALSE]
+# 2. Drop it from everything. Guard the empty-index case explicitly:
+# in R, `x[-integer(0)]` returns an empty vector rather than leaving `x`
+# unchanged, which can silently erase every feature row.
+if (length(bad_ix) > 0) {
+  all_rows <- all_rows[-bad_ix]
+  row_group <- row_group[-bad_ix]
+  bm_mat    <- bm_mat[-bad_ix, , drop = FALSE]
+  cfDNA_mat <- cfDNA_mat[-bad_ix, , drop = FALSE]
+}
+
+if (!length(all_rows) || !nrow(bm_mat) || !nrow(cfDNA_mat)) {
+  stop(
+    "Overlay heatmap has zero feature rows after row grouping; check feature row definitions.",
+    call. = FALSE
+  )
+}
 
 # 7) build the top‐row annotation
 # 7a) Calculate mutation burdens from the same recovered MAF objects used in

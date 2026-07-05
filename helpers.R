@@ -96,12 +96,88 @@ spring2026_revision_primary_analysis_exclusion_path <- function() {
   )
 }
 
+manual_img_rescue_metadata_path <- function() {
+  # ## Manual rescue metadata for legacy IMMAGINE/MyP rows
+  # These rows are not inferred from cBioPortal relative intervals. They are
+  # activated only after an analyst supplies reviewed absolute sample-collection
+  # dates and marks the row ready in the CSV.
+  Sys.getenv(
+    "CFWGS_MANUAL_IMG_RESCUE_METADATA",
+    unset = file.path(
+      "New OICR Submissions",
+      "derived_metadata",
+      "manual_img146_163_rescue_metadata.csv"
+    )
+  )
+}
+
 spring2026_revision_enabled <- function() {
   # ## Global revision toggle
   # The default is ON because these scripts now represent the revision-aware
   # manuscript workflow. Setting CFWGS_USE_SPRING2026_REVISION=0 restores the
   # historical inputs for debugging without editing code.
   identical(Sys.getenv("CFWGS_USE_SPRING2026_REVISION", unset = "1"), "1")
+}
+
+load_manual_img_rescue_metadata <- function(required = FALSE) {
+  path <- manual_img_rescue_metadata_path()
+  if (!file.exists(path)) {
+    if (isTRUE(required)) stop("Missing manual IMG rescue metadata: ", path, call. = FALSE)
+    return(NULL)
+  }
+
+  rescue <- utils::read.csv(path, check.names = FALSE, stringsAsFactors = FALSE)
+  require_columns(
+    rescue,
+    c(
+      "Bam", "Patient", "Date_of_sample_collection", "Sample_type", "Timepoint",
+      "Study", "Sample_ID", "timepoint_info",
+      "integration_ready_for_combined_clinical_data"
+    ),
+    "Manual IMG rescue metadata"
+  )
+
+  ready <- rescue$integration_ready_for_combined_clinical_data %in% TRUE |
+    tolower(as.character(rescue$integration_ready_for_combined_clinical_data)) == "true"
+  rescue <- rescue[ready, , drop = FALSE]
+  if (!nrow(rescue)) return(NULL)
+
+  rescue$Date_of_sample_collection <- parse_date_safely(rescue$Date_of_sample_collection)
+
+  required_nonempty <- c(
+    "Bam", "Patient", "Date_of_sample_collection", "Sample_type", "Timepoint",
+    "Study", "Sample_ID", "timepoint_info"
+  )
+  missing_ready <- vapply(required_nonempty, function(col) {
+    vals <- rescue[[col]]
+    if (inherits(vals, "Date")) return(is.na(vals))
+    is.na(vals) | !nzchar(trimws(as.character(vals)))
+  }, logical(nrow(rescue)))
+  if (any(missing_ready)) {
+    bad <- unique(rescue$Sample_ID[rowSums(missing_ready) > 0])
+    stop(
+      "Manual IMG rescue metadata has ready rows with missing required fields: ",
+      paste(bad, collapse = ", "),
+      call. = FALSE
+    )
+  }
+
+  duplicate_sample_id <- rescue$Sample_ID[
+    !is.na(rescue$Sample_ID) & duplicated(rescue$Sample_ID)
+  ]
+  duplicate_bam <- rescue$Bam[
+    !is.na(rescue$Bam) & duplicated(rescue$Bam)
+  ]
+  if (length(duplicate_sample_id) || length(duplicate_bam)) {
+    stop(
+      "Manual IMG rescue metadata has duplicate identifiers.",
+      "\nDuplicate Sample_ID: ", paste(unique(duplicate_sample_id), collapse = ", "),
+      "\nDuplicate Bam: ", paste(unique(duplicate_bam), collapse = ", "),
+      call. = FALSE
+    )
+  }
+
+  rescue
 }
 
 require_columns <- function(data, required, label) {
@@ -263,18 +339,23 @@ augment_cohort_assignment_with_spring2026_revision <- function(cohort_df) {
   # Spring 2026 rows are treated as a test-cohort expansion. They should not
   # silently redefine the original training cohort, so new patients are appended
   # as Non-frontline while existing cohort labels are left unchanged.
+  strict_cfdna_mrd_excluded_patients <- c("CA-13", "IMG-066", "IMG-210")
   revision <- load_spring2026_revision_metadata(required = FALSE)
-  if (is.null(revision)) return(cohort_df)
 
   require_columns(cohort_df, c("Patient", "Cohort"), "Cohort assignment table")
+  cohort_df <- cohort_df %>%
+    dplyr::mutate(Patient = as.character(.data$Patient)) %>%
+    dplyr::filter(!.data$Patient %in% strict_cfdna_mrd_excluded_patients)
+
+  if (is.null(revision)) return(cohort_df)
 
   revision_cohort <- revision %>%
     dplyr::filter(!is.na(.data$Patient), nzchar(.data$Patient)) %>%
     dplyr::distinct(Patient = as.character(.data$Patient)) %>%
+    dplyr::filter(!.data$Patient %in% strict_cfdna_mrd_excluded_patients) %>%
     dplyr::mutate(Cohort = "Non-frontline")
 
   cohort_df %>%
-    dplyr::mutate(Patient = as.character(.data$Patient)) %>%
     dplyr::bind_rows(
       revision_cohort %>%
         dplyr::filter(!.data$Patient %in% cohort_df$Patient)
@@ -693,6 +774,20 @@ read_combined_clinical_metadata_with_revision <- function(
   current <- readr::read_csv(path, show_col_types = FALSE)
   current <- repair_historical_combined_clinical_metadata(current)
   revision <- load_spring2026_revision_metadata(required = FALSE)
+  manual_img_rescue <- load_manual_img_rescue_metadata(required = FALSE)
+  if (!is.null(manual_img_rescue)) {
+    if (is.null(revision)) {
+      revision <- manual_img_rescue
+    } else {
+      shared_rescue_cols <- union(names(revision), names(manual_img_rescue))
+      for (col in setdiff(shared_rescue_cols, names(revision))) revision[[col]] <- NA
+      for (col in setdiff(shared_rescue_cols, names(manual_img_rescue))) manual_img_rescue[[col]] <- NA
+      revision <- dplyr::bind_rows(
+        revision[, shared_rescue_cols, drop = FALSE],
+        manual_img_rescue[, shared_rescue_cols, drop = FALSE]
+      )
+    }
+  }
   if (is.null(revision)) return(current)
 
   current_original <- current
