@@ -139,6 +139,7 @@ required_columns(
   good_pts,
   c(
     "Patient",
+    "Date",
     "WGS_Evidence_of_Disease_BM_cells",
     "WGS_Evidence_of_Disease_Blood_plasma_cfDNA_Relaxed"
   ),
@@ -166,6 +167,27 @@ cfdna_good_pts <- good_pts %>%
   filter(WGS_Evidence_of_Disease_Blood_plasma_cfDNA_Relaxed == 1) %>%
   pull(Patient) %>%
   unique()
+
+mutation_source_anchor_dates <- good_pts %>%
+  transmute(
+    Patient,
+    Mutation_Source_Baseline_Date = as.Date(Date),
+    Mutation_Source_Baseline_Timepoint = Timepoint,
+    Mutation_Source_Baseline_Sample_Code = Sample_Code,
+    Mutation_Source_Baseline_Timepoint_Info = timepoint_info
+  )
+
+duplicate_anchor_patients <- mutation_source_anchor_dates %>%
+  count(Patient, name = "n") %>%
+  filter(n > 1)
+
+if (nrow(duplicate_anchor_patients) > 0) {
+  stop(
+    "Mutation-source baseline anchor table has duplicate Patient rows: ",
+    paste(duplicate_anchor_patients$Patient, collapse = ", "),
+    call. = FALSE
+  )
+}
 
 bm_feats <- c("zscore_BM", "z_score_detection_rate_BM", "detect_rate_BM", "sites_rate_BM")
 blood_feats <- c(
@@ -197,11 +219,14 @@ dat <- feature_df %>%
   ) %>%
   left_join(
     baseline_dates %>%
-      transmute(Patient, Baseline_Date = as.Date(baseline_date)),
+      transmute(Patient, Clinical_Baseline_Date = as.Date(baseline_date)),
     by = "Patient"
   ) %>%
+  left_join(mutation_source_anchor_dates, by = "Patient") %>%
   mutate(
+    Baseline_Date = Mutation_Source_Baseline_Date,
     Weeks_Since_Baseline = as.numeric(difftime(Date, Baseline_Date, units = "weeks")),
+    Weeks_Since_Clinical_Baseline = as.numeric(difftime(Date, Clinical_Baseline_Date, units = "weeks")),
     Weeks_Since_Baseline = case_when(
       Weeks_Since_Baseline >= -2 & Weeks_Since_Baseline < 0 ~ 0,
       TRUE ~ Weeks_Since_Baseline
@@ -211,7 +236,9 @@ dat <- feature_df %>%
 time_anchor_exclusions <- dat %>%
   filter(is.na(Weeks_Since_Baseline)) %>%
   select(
-    Patient, Cohort, Date, Baseline_Date, Num_days_to_closest_relapse,
+    Patient, Cohort, Date, Baseline_Date, Clinical_Baseline_Date,
+    Mutation_Source_Baseline_Timepoint, Mutation_Source_Baseline_Sample_Code,
+    Mutation_Source_Baseline_Timepoint_Info, Num_days_to_closest_relapse,
     all_of(c(bm_feats, blood_feats, "FS", "Mean.Coverage"))
   )
 
@@ -225,13 +252,26 @@ if (nrow(time_anchor_exclusions) > 0) {
 dat <- dat %>%
   filter(!is.na(Weeks_Since_Baseline))
 
+time_anchor_audit <- dat %>%
+  distinct(
+    Patient, Cohort, Date, Baseline_Date, Clinical_Baseline_Date,
+    Weeks_Since_Baseline, Weeks_Since_Clinical_Baseline,
+    Mutation_Source_Baseline_Timepoint, Mutation_Source_Baseline_Sample_Code,
+    Mutation_Source_Baseline_Timepoint_Info
+  ) %>%
+  mutate(
+    anchor_shift_weeks = Weeks_Since_Clinical_Baseline - Weeks_Since_Baseline,
+    anchor_shift_days = as.numeric(Baseline_Date - Clinical_Baseline_Date)
+  ) %>%
+  arrange(desc(abs(anchor_shift_weeks)), Patient, Date)
+
 if (nrow(dat) == 0) {
   stop("No evaluable longitudinal rows remain after all-evaluable filters.", call. = FALSE)
 }
 
 relapse_labels <- c(
-  `FALSE` = "No relapse <=180d",
-  `TRUE` = "Relapse <=180d"
+  `FALSE` = "No follow-up relapse <=180d",
+  `TRUE` = "Follow-up relapse <=180d"
 )
 cohort_linetypes <- c("Frontline" = "solid", "Non-frontline" = "22")
 cohort_display_labels <- c("Frontline" = "Training Cohort", "Non-frontline" = "Test Cohort")
@@ -246,6 +286,22 @@ add_patient_relapse_flag <- function(plot_df) {
       patient_relapse180 = factor(patient_relapse180, levels = c(FALSE, TRUE)),
       Cohort = factor(Cohort, levels = c("Frontline", "Non-frontline"))
     )
+}
+
+flag_followup_relapse_points <- function(plot_df) {
+  plot_df %>%
+    arrange(Patient, Metric, Weeks_Since_Baseline, Date) %>%
+    group_by(Patient, Metric) %>%
+    mutate(
+      is_effective_baseline_point = row_number() == 1,
+      relapse_within_180 = if_else(
+        !is_effective_baseline_point & Num_days_to_closest_relapse <= 180,
+        TRUE,
+        FALSE,
+        missing = FALSE
+      )
+    ) %>%
+    ungroup()
 }
 
 make_segment_df <- function(df, y_col = "Value") {
@@ -379,14 +435,24 @@ make_mutation_plot_df <- function(dat, assay) {
   if (assay == "BM") {
     out <- dat %>%
       select(
-        Patient, Cohort, Weeks_Since_Baseline, Num_days_to_closest_relapse,
+        Patient, Cohort, Date, Baseline_Date, Clinical_Baseline_Date,
+        Weeks_Since_Baseline, Weeks_Since_Clinical_Baseline,
+        Mutation_Source_Baseline_Timepoint,
+        Mutation_Source_Baseline_Sample_Code,
+        Mutation_Source_Baseline_Timepoint_Info,
+        Num_days_to_closest_relapse,
         cVAF_z = z_score_detection_rate_BM,
         sites_z = zscore_BM
       )
   } else if (assay == "blood") {
     out <- dat %>%
       select(
-        Patient, Cohort, Weeks_Since_Baseline, Num_days_to_closest_relapse,
+        Patient, Cohort, Date, Baseline_Date, Clinical_Baseline_Date,
+        Weeks_Since_Baseline, Weeks_Since_Clinical_Baseline,
+        Mutation_Source_Baseline_Timepoint,
+        Mutation_Source_Baseline_Sample_Code,
+        Mutation_Source_Baseline_Timepoint_Info,
+        Num_days_to_closest_relapse,
         cVAF_z = z_score_detection_rate_blood,
         sites_z = zscore_blood
       )
@@ -395,20 +461,13 @@ make_mutation_plot_df <- function(dat, assay) {
   }
 
   out %>%
-    mutate(
-      relapse_within_180 = if_else(
-        Num_days_to_closest_relapse <= 180,
-        TRUE,
-        FALSE,
-        missing = FALSE
-      )
-    ) %>%
     pivot_longer(
       cols = c(cVAF_z, sites_z),
       names_to = "Metric",
       values_to = "Value"
     ) %>%
     drop_na(Value) %>%
+    flag_followup_relapse_points() %>%
     add_patient_relapse_flag()
 }
 
@@ -443,16 +502,13 @@ make_mutation_panel <- function(plot_df, title, cvaf_cap_at = NA_real_,
 make_fragmentomics_plot_df <- function(dat) {
   dat %>%
     select(
-      Patient, Cohort, Weeks_Since_Baseline, Num_days_to_closest_relapse,
+      Patient, Cohort, Date, Baseline_Date, Clinical_Baseline_Date,
+      Weeks_Since_Baseline, Weeks_Since_Clinical_Baseline,
+      Mutation_Source_Baseline_Timepoint,
+      Mutation_Source_Baseline_Sample_Code,
+      Mutation_Source_Baseline_Timepoint_Info,
+      Num_days_to_closest_relapse,
       FS, Mean.Coverage
-    ) %>%
-    mutate(
-      relapse_within_180 = if_else(
-        Num_days_to_closest_relapse <= 180,
-        TRUE,
-        FALSE,
-        missing = FALSE
-      )
     ) %>%
     pivot_longer(
       cols = c(FS, Mean.Coverage),
@@ -460,6 +516,7 @@ make_fragmentomics_plot_df <- function(dat) {
       values_to = "Value"
     ) %>%
     drop_na(Value) %>%
+    flag_followup_relapse_points() %>%
     add_patient_relapse_flag()
 }
 
@@ -599,6 +656,10 @@ qc_tbl <- bind_rows(
   arrange(panel, Metric, Cohort)
 
 write_csv(qc_tbl, file.path(output_dir, "all_evaluable_longitudinal_panel_qc.csv"))
+write_csv(
+  time_anchor_audit,
+  file.path(output_dir, "all_evaluable_longitudinal_time_anchor_audit.csv")
+)
 capped300_audit <- blood_plot_df %>%
   mutate(capped_at_300 = Value > 300) %>%
   group_by(Metric) %>%

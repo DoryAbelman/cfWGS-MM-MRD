@@ -87,53 +87,79 @@ rm(.manuscript_helper)
 dat <- readRDS("Final_aggregate_table_cfWGS_features_with_clinical_and_demographics_updated9.rds")
 
 
-### Load the curated patient cohort list
-# `patient_cohort_assignment.csv` defines which patients enter Table 1 and the
-# cohort grouping shown as columns. The RDS cohort file is retained for the
-# exploratory audit block at the end of the script.
-# Define export directory
+### Load the current Table 1 cohort labels
+# Preserve the original Table 1 baseline-row selection logic below. The only
+# denominator change is to use the current full Table 1 cohort labels from
+# `baseline_high_quality_patients_updated.rds` instead of filtering by
+# Output_tables_2025/patient_cohort_assignment.csv, which is a narrower
+# 51-patient intermediate and excludes current Non-frontline/test cases.
 export_dir <- "Output_tables_2025"
+baseline_high_quality_path <- "baseline_high_quality_patients_updated.rds"
+if (!file.exists(baseline_high_quality_path)) {
+  stop("Missing current Table 1 cohort helper: ", baseline_high_quality_path, call. = FALSE)
+}
+baseline_high_quality_patients <- readRDS(baseline_high_quality_path)
 
-# Load from CSV (if you want to view/edit easily)
-patient_cohort_tbl_csv <- read.csv(file.path(export_dir, "patient_cohort_assignment.csv"))
+required_baseline_cols <- c("Patient", "Cohort")
+missing_baseline_cols <- setdiff(required_baseline_cols, names(baseline_high_quality_patients))
+if (length(missing_baseline_cols)) {
+  stop(
+    "Current Table 1 cohort helper is missing required columns: ",
+    paste(missing_baseline_cols, collapse = ", "),
+    call. = FALSE
+  )
+}
 
-cohort_df <- readRDS("cohort_assignment_table_updated.rds")
+table1_current_cohort_tbl <- baseline_high_quality_patients %>%
+  mutate(
+    Patient = as.character(Patient),
+    Cohort = as.character(Cohort)
+  ) %>%
+  distinct(Patient, Cohort)
 
+cohort_dups <- table1_current_cohort_tbl %>%
+  count(Patient) %>%
+  filter(n > 1)
+if (nrow(cohort_dups)) {
+  stop(
+    "Current Table 1 cohort labels must have one cohort per patient but duplicate patients were found: ",
+    paste(cohort_dups$Patient, collapse = ", "),
+    call. = FALSE
+  )
+}
 
-### Select baseline/diagnosis rows
-# Table 1 is a patient-level baseline table. This section keeps only baseline
-# or diagnosis rows and then resolves known duplicate baseline records.
+required_clinical_cols <- c(
+  "Patient", "Date", "Timepoint", "Sample_Code", "timepoint_info",
+  "Gender", "AGE_GROUP", "ISS_STAGE", "Cytogenetic_Risk", "Subtype",
+  "ECOG_SCORE", "T_4_14", "T_14_16", "DEL_17P"
+)
+missing_clinical_cols <- setdiff(required_clinical_cols, names(dat))
+if (length(missing_clinical_cols)) {
+  stop(
+    "Final aggregate Table 1 input is missing required clinical columns: ",
+    paste(missing_clinical_cols, collapse = ", "),
+    call. = FALSE
+  )
+}
+
+### Select baseline/diagnosis rows using the original Table 1 logic.
 # 1. Subset to only Diagnosis or Baseline timepoints
 dat_tb <- dat %>%
-  filter(timepoint_info %in% c("Diagnosis", "Baseline"))
-
-
-# 2. Check for duplicate rows per patient in this subset
-dup_patients <- dat_tb %>%
-  count(Patient) %>%
-  filter(n > 1) %>%
-  pull(Patient)
-
-# ensure Date is Date class
-dat_tb <- dat_tb %>%
+  filter(timepoint_info %in% c("Diagnosis", "Baseline")) %>%
   mutate(Date = as.Date(Date))
 
-# 1) Remove CA-03 timepoint 02
+# 2. Remove CA-03 timepoint 02 when encoded as timepoint_info
 dat_tb2 <- dat_tb %>%
   filter(!(Patient == "CA-03" & timepoint_info == "02"))
 
-# 2) Consolidate the two CA-02 rows
+# 3. Consolidate the two CA-02 rows
 resp_CA02 <- dat_tb2 %>%
   filter(Patient == "CA-02") %>%
-  # order so timepoint “01” comes before “02”
   arrange(factor(timepoint_info, levels = c("01","02"))) %>%
   summarise(across(everything(), ~{
     vals <- .
-    # first non-NA in order
     first_val <- vals[which(!is.na(vals))[1]]
-    # any other non-NA ≠ first_val
-    other    <- vals[!is.na(vals) & vals != first_val][1]
-    # if first_val is Unknown/Other but other is a “real” value, use other
+    other <- vals[!is.na(vals) & vals != first_val][1]
     if (!is.na(first_val) &&
         first_val %in% c("Unknown","Other") &&
         !is.na(other) &&
@@ -144,23 +170,20 @@ resp_CA02 <- dat_tb2 %>%
     }
   }))
 
-# 3) Drop all CA-02 originals
-dat_tb3 <- dat_tb2 %>% filter(Patient != "CA-02")
+if (!nrow(resp_CA02)) {
+  stop("Table 1 duplicate-resolution logic expected at least one CA-02 row.", call. = FALSE)
+}
 
-# 4) For SPORE_0009, keep only the 2016-08-24 Baseline row
-dat_tb4 <- dat_tb3 %>%
+# 4. Drop all CA-02 originals and keep the intended SPORE_0009 baseline row
+dat_tb_final <- dat_tb2 %>%
+  filter(Patient != "CA-02") %>%
   filter(!(Patient == "SPORE_0009" &
-             !(Date == as.Date("2016-08-24") & timepoint_info == "Baseline")))
-
-# 5) Re-bind the collapsed CA-02 row
-dat_tb_final <- bind_rows(dat_tb4, resp_CA02) %>%
+             !(Date == as.Date("2016-08-24") & timepoint_info == "Baseline"))) %>%
+  bind_rows(resp_CA02) %>%
   arrange(Patient)
 
 dat_base <- dat_tb_final %>%
-  filter(Patient %in% patient_cohort_tbl_csv$Patient)
-
-## Remove dup
-dat_base <- dat_base %>%
+  filter(Patient %in% table1_current_cohort_tbl$Patient) %>%
   filter(!(Patient == "CA-03" & Timepoint == "02"))
 
 baseline_duplicate_audit <- dat_base %>%
@@ -194,11 +217,11 @@ baseline_duplicate_audit <- dat_base %>%
   ) %>%
   ungroup()
 
+dir.create(file.path(export_dir, "clinical_support"), recursive = TRUE, showWarnings = FALSE)
 if (nrow(baseline_duplicate_audit) > 0L) {
-  dir.create(file.path("Output_tables_2025", "clinical_support"), showWarnings = FALSE, recursive = TRUE)
   readr::write_csv(
     baseline_duplicate_audit,
-    file.path("Output_tables_2025", "clinical_support", "table1_patient_baseline_duplicate_selection_audit.csv")
+    file.path(export_dir, "clinical_support", "table1_patient_baseline_duplicate_selection_audit.csv")
   )
   dat_base <- dat_base %>%
     left_join(
@@ -210,24 +233,84 @@ if (nrow(baseline_duplicate_audit) > 0L) {
     select(-selected_for_patient_baseline_table)
 }
 
-# 6) Quick duplicate check
 dups <- dat_base %>%
   count(Patient) %>%
   filter(n > 1)
 
 if (nrow(dups)) {
-  warning("Still multiple Diagnosis/Baseline rows for: ",
-          paste(unique(dups$Patient), collapse = ", "))
+  stop(
+    "Still multiple Diagnosis/Baseline rows after Table 1 duplicate selection for: ",
+    paste(unique(dups$Patient), collapse = ", "),
+    call. = FALSE
+  )
 } else {
   message("All patients now have at most one Diagnosis/Baseline row.")
 }
 
-
-# -----------------------------------------------------------
-# 2. Define cohorts for Table 1
-# -----------------------------------------------------------
 dat_base <- dat_base %>%
-  left_join(patient_cohort_tbl_csv, by = "Patient")
+  left_join(table1_current_cohort_tbl, by = "Patient")
+
+valid_cohorts <- c("Frontline", "Non-frontline")
+invalid_cohorts <- setdiff(unique(na.omit(dat_base$Cohort)), valid_cohorts)
+if (length(invalid_cohorts)) {
+  stop(
+    "Unexpected Table 1 cohort labels. Expected Frontline/Non-frontline but found: ",
+    paste(invalid_cohorts, collapse = ", "),
+    call. = FALSE
+  )
+}
+
+table1_special_case_audit <- dat_base %>%
+  filter(Patient %in% c("CA-02", "CA-03", "SPORE_0009", "IMG-142", "IMG-235")) %>%
+  transmute(
+    Patient,
+    Date,
+    Timepoint,
+    Sample_Code,
+    timepoint_info,
+    Cohort,
+    table1_special_case_expectation = case_when(
+      Patient == "CA-02" ~ "selected diagnosis row CA-02-01, not duplicate 02 row",
+      Patient == "CA-03" ~ "selected diagnosis row CA-03-01, not duplicate 02 row",
+      Patient == "SPORE_0009" ~ "selected 2016-08-24 baseline row, not 2020-03-11 baseline row",
+      Patient %in% c("IMG-142", "IMG-235") ~ "selected one raw T1/T0 baseline row with original Table 1 duplicate-ranking logic",
+      TRUE ~ NA_character_
+    )
+  )
+
+readr::write_csv(
+  table1_special_case_audit,
+  file.path(export_dir, "clinical_support", "table1_special_case_selection_audit.csv")
+)
+
+table1_special_case_failures <- table1_special_case_audit %>%
+  filter(
+    (Patient == "CA-02" & !(Sample_Code == "CA-02-01" & Timepoint == "01")) |
+      (Patient == "CA-03" & !(Sample_Code == "CA-03-01" & Timepoint == "01")) |
+      (Patient == "SPORE_0009" & Date != as.Date("2016-08-24"))
+  )
+if (nrow(table1_special_case_failures)) {
+  stop(
+    "Table 1 special-case baseline selection drifted for: ",
+    paste(table1_special_case_failures$Patient, collapse = ", "),
+    ". Inspect ",
+    file.path(export_dir, "clinical_support", "table1_special_case_selection_audit.csv"),
+    call. = FALSE
+  )
+}
+
+patient_cohort_assignment_path <- file.path(export_dir, "patient_cohort_assignment.csv")
+patient_cohort_tbl_csv <- if (file.exists(patient_cohort_assignment_path)) {
+  read.csv(patient_cohort_assignment_path, stringsAsFactors = FALSE)
+} else {
+  data.frame(Patient = character(), Cohort = character())
+}
+if (!all(c("Patient", "Cohort") %in% names(patient_cohort_tbl_csv))) {
+  warning("Narrow patient cohort assignment audit CSV lacks Patient/Cohort columns: ", patient_cohort_assignment_path)
+  patient_cohort_tbl_csv <- data.frame(Patient = character(), Cohort = character())
+}
+
+message("Table 1 baseline cohort patients: ", nrow(dat_base))
 
 
 dat_base <- dat_base %>%
@@ -372,10 +455,16 @@ write.csv(table1_source_counts, table1_source_counts_path, row.names = FALSE, qu
 
 table1_source_qc <- data.frame(
   input_rds = "Final_aggregate_table_cfWGS_features_with_clinical_and_demographics_updated9.rds",
-  cohort_csv = "Output_tables_2025/patient_cohort_assignment.csv",
+  baseline_row_selection = "original Table 1 raw baseline/diagnosis selection with CA-02, CA-03, SPORE_0009, and duplicate-ranking logic retained",
+  cohort_source = "current full Table 1 cohort labels from baseline_high_quality_patients_updated.rds",
+  baseline_high_quality_rds = baseline_high_quality_path,
+  narrow_cohort_csv_for_audit = patient_cohort_assignment_path,
+  n_narrow_cohort_csv_patients = length(unique(patient_cohort_tbl_csv$Patient)),
+  n_patients_added_beyond_narrow_csv = length(setdiff(dat_base$Patient, patient_cohort_tbl_csv$Patient)),
   n_baseline_table_patients = nrow(dat_base),
   n_frontline = sum(dat_base$cohort == "Frontline induction-transplant", na.rm = TRUE),
   n_non_frontline = sum(dat_base$cohort == "Non-frontline", na.rm = TRUE),
+  n_missing_cohort = sum(is.na(dat_base$cohort)),
   output_csv = table1_source_counts_path,
   stringsAsFactors = FALSE
 )
@@ -429,8 +518,10 @@ tbl1_cat <- dat_base %>%
   modify_header(label ~ "**Variable**") %>%
   bold_labels()
 
-# Export the scripted DOCX source. The final manuscript DOCX/PDF in the output
-# map appear to be edited/exported versions of this source table.
+# Export the scripted DOCX source. After Spring 2026 test-cohort integration,
+# the retained DA-edited DOCX/PDF can be stale relative to the regenerated
+# cohort counts, so this script also refreshes the mapped final DOCX/PDF from
+# this deterministic source table before staging manuscript artifacts.
 tbl1_flex <- as_flex_table(tbl1_cat)
 doc <- read_docx() %>%
   body_add_flextable(tbl1_flex) %>%
@@ -438,13 +529,116 @@ doc <- read_docx() %>%
 table1_generated_docx <- "table1_clinical_categorical_updated_final_3.docx"
 print(doc, target = table1_generated_docx)
 
+write_table1_pdf_from_source_counts <- function(table1_source_counts, table1_source_qc, pdf_path) {
+  if (!requireNamespace("gridExtra", quietly = TRUE)) {
+    warning("Package gridExtra is not available; cannot write fallback Table 1 PDF: ", pdf_path)
+    return(FALSE)
+  }
+  if (!requireNamespace("grid", quietly = TRUE)) {
+    warning("Package grid is not available; cannot write fallback Table 1 PDF: ", pdf_path)
+    return(FALSE)
+  }
+
+  dir.create(dirname(pdf_path), recursive = TRUE, showWarnings = FALSE)
+  pdf_device <- if (isTRUE(capabilities("cairo"))) {
+    grDevices::cairo_pdf
+  } else {
+    grDevices::pdf
+  }
+  pdf_device(pdf_path, width = 11, height = 8.5, onefile = TRUE)
+  on.exit(grDevices::dev.off(), add = TRUE)
+
+  grid::grid.newpage()
+  grid::grid.text(
+    "Table 1. Baseline clinical and demographic characteristics",
+    x = 0.03,
+    y = 0.965,
+    just = c("left", "top"),
+    gp = grid::gpar(fontsize = 12, fontface = "bold")
+  )
+  grid::grid.text(
+    paste0(
+      "Current cohort: n = ", table1_source_qc$n_baseline_table_patients,
+      " (Frontline induction-transplant n = ", table1_source_qc$n_frontline,
+      "; Non-frontline n = ", table1_source_qc$n_non_frontline, ")."
+    ),
+    x = 0.03,
+    y = 0.925,
+    just = c("left", "top"),
+    gp = grid::gpar(fontsize = 9)
+  )
+
+  table_grob <- gridExtra::tableGrob(
+    table1_source_counts,
+    rows = NULL,
+    theme = gridExtra::ttheme_minimal(
+      base_size = 7,
+      padding = grid::unit(c(3, 3), "pt"),
+      core = list(fg_params = list(hjust = 0, x = 0.02)),
+      colhead = list(fg_params = list(fontface = "bold"))
+    )
+  )
+  grid::grid.draw(gridExtra::arrangeGrob(table_grob, vp = grid::viewport(width = 0.98, height = 0.84)))
+  TRUE
+}
+
+render_table1_pdf <- function(docx_path, pdf_path, table1_source_counts, table1_source_qc) {
+  soffice <- Sys.which("soffice")
+  if (!nzchar(soffice)) {
+    warning(
+      "LibreOffice/soffice was not found; cannot refresh Table 1 PDF from current DOCX: ",
+      pdf_path
+    )
+    return(write_table1_pdf_from_source_counts(table1_source_counts, table1_source_qc, pdf_path))
+  }
+
+  temp_dir <- tempfile("table1_pdf_render_")
+  profile_dir <- tempfile("table1_lo_profile_")
+  dir.create(temp_dir, recursive = TRUE, showWarnings = FALSE)
+  dir.create(profile_dir, recursive = TRUE, showWarnings = FALSE)
+  on.exit(unlink(c(temp_dir, profile_dir), recursive = TRUE, force = TRUE), add = TRUE)
+
+  status <- system2(
+    soffice,
+    args = c(
+      paste0("-env:UserInstallation=file://", normalizePath(profile_dir, mustWork = TRUE)),
+      "--headless",
+      "--convert-to",
+      "pdf",
+      "--outdir",
+      normalizePath(temp_dir, mustWork = TRUE),
+      normalizePath(docx_path, mustWork = TRUE)
+    ),
+    stdout = TRUE,
+    stderr = TRUE
+  )
+  converted_pdf <- file.path(
+    temp_dir,
+    paste0(tools::file_path_sans_ext(basename(docx_path)), ".pdf")
+  )
+  if (!file.exists(converted_pdf)) {
+    warning(
+      "LibreOffice did not produce the expected Table 1 PDF: ",
+      converted_pdf,
+      "\nCommand output:\n",
+      paste(status, collapse = "\n")
+    )
+    return(write_table1_pdf_from_source_counts(table1_source_counts, table1_source_qc, pdf_path))
+  }
+
+  dir.create(dirname(pdf_path), recursive = TRUE, showWarnings = FALSE)
+  ok <- file.copy(converted_pdf, pdf_path, overwrite = TRUE)
+  if (!ok) {
+    stop("Failed to copy refreshed Table 1 PDF to: ", pdf_path, call. = FALSE)
+  }
+  TRUE
+}
+
 # MANUSCRIPT OUTPUT: Table 1
-# This script regenerates the categorical Table 1 source DOCX above. The mapped
-# final manuscript artifacts are the manually DA-edited DOCX and exported PDF in
-# Final Tables and Figures/. Those frozen files are copied when present because
-# they are the exact files used in the current manuscript. If the edited DOCX is
-# absent, we still export the regenerated source DOCX so a command-line run has
-# a usable Table 1 artifact, but the manifest will make the source filename clear.
+# This script regenerates the categorical Table 1 source DOCX above and promotes
+# it to the mapped final manuscript artifact paths. This keeps the manuscript
+# bundle synchronized with the current revision-inclusive cohort assignment
+# instead of preserving a stale manual Word/PDF export from an older cohort.
 table1_final_docx <- file.path(
   "Final Tables and Figures",
   "table1_clinical_categorical_updated_final_3_DA_edited.docx"
@@ -453,22 +647,57 @@ table1_final_pdf <- file.path(
   "Final Tables and Figures",
   "table1_clinical_categorical_updated_final_3_DA_edited.pdf"
 )
+table1_renamed_docx <- file.path(
+  "Figures_Exported",
+  "Tables_exported",
+  "Renamed",
+  "Table_1_Baseline_Clinical_Demographics.docx"
+)
+table1_renamed_pdf <- file.path(
+  "Figures_Exported",
+  "Tables_exported",
+  "Renamed",
+  "Table_1_Baseline_Clinical_Demographics.pdf"
+)
+table1_old_name_docx <- file.path(
+  "Figures_Exported",
+  "Tables_exported",
+  "Old name",
+  "table1_clinical_categorical_updated_final_3_DA_edited.docx"
+)
+table1_old_name_pdf <- file.path(
+  "Figures_Exported",
+  "Tables_exported",
+  "Old name",
+  "table1_clinical_categorical_updated_final_3_DA_edited.pdf"
+)
 
-table1_docx_to_copy <- if (file.exists(table1_final_docx)) {
-  table1_final_docx
-} else {
-  warning(
-    "Final edited Table 1 DOCX was not found; copying regenerated source DOCX instead: ",
-    table1_generated_docx
-  )
-  table1_generated_docx
+dir.create(dirname(table1_final_docx), recursive = TRUE, showWarnings = FALSE)
+if (!file.copy(table1_generated_docx, table1_final_docx, overwrite = TRUE)) {
+  stop("Failed to refresh final Table 1 DOCX from regenerated source: ", table1_final_docx, call. = FALSE)
+}
+render_table1_pdf(table1_final_docx, table1_final_pdf, table1_source_counts, table1_source_qc)
+
+for (docx_path in c(table1_renamed_docx, table1_old_name_docx)) {
+  dir.create(dirname(docx_path), recursive = TRUE, showWarnings = FALSE)
+  if (!file.copy(table1_final_docx, docx_path, overwrite = TRUE)) {
+    stop("Failed to refresh mapped Table 1 DOCX path: ", docx_path, call. = FALSE)
+  }
+}
+if (file.exists(table1_final_pdf)) {
+  for (pdf_path in c(table1_renamed_pdf, table1_old_name_pdf)) {
+    dir.create(dirname(pdf_path), recursive = TRUE, showWarnings = FALSE)
+    if (!file.copy(table1_final_pdf, pdf_path, overwrite = TRUE)) {
+      stop("Failed to refresh mapped Table 1 PDF path: ", pdf_path, call. = FALSE)
+    }
+  }
 }
 
 ms_copy_artifact(
-  source_path = table1_docx_to_copy,
+  source_path = table1_final_docx,
   artifact_id = "TABLE1_DOCX",
   role = "main_table_docx",
-  description = "Table 1: clinical and demographic baseline characteristics. Edited manuscript DOCX is preferred when present; otherwise the regenerated source DOCX is copied.",
+  description = "Table 1: clinical and demographic baseline characteristics regenerated from the current revision-inclusive cohort.",
   script_name = "2_1_Clinical_Demographics_Table.R"
 )
 
@@ -477,7 +706,7 @@ if (file.exists(table1_final_pdf)) {
     source_path = table1_final_pdf,
     artifact_id = "TABLE1_PDF",
     role = "main_table_pdf",
-    description = "Table 1: edited/exported manuscript PDF corresponding to the final DOCX table.",
+    description = "Table 1: PDF rendered from the current regenerated revision-inclusive DOCX table.",
     script_name = "2_1_Clinical_Demographics_Table.R"
   )
 } else {

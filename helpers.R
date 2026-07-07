@@ -505,6 +505,47 @@ repair_historical_combined_clinical_metadata <- function(
     repaired[[col]] <- dplyr::coalesce(repaired[[col]], repaired[[legacy_col]])
   }
 
+  # If the current handoff lost identifying fields and the same exact BAM exists
+  # in the legacy table, restore the legacy identity/date/study for that physical
+  # sample. Do not restore legacy `timepoint_info` here: downstream analyses use
+  # the current table's designated analysis timepoint label, where a sample
+  # collected at progression can still be the baseline mutation-list timepoint.
+  if ("Bam" %in% names(current_repair_input) && "Bam" %in% names(legacy)) {
+    bam_repair_cols <- intersect(
+      c("Sample_ID", "Date_of_sample_collection", "Study"),
+      names(current_repair_input)
+    )
+    bam_repair_cols <- intersect(bam_repair_cols, names(legacy))
+    if (length(bam_repair_cols) > 0L) {
+      legacy_bam_map <- normalize_key_fields(legacy) %>%
+        dplyr::filter(!is.na(.data$Bam), nzchar(trimws(as.character(.data$Bam)))) %>%
+        dplyr::select(dplyr::all_of(c("Bam", bam_repair_cols))) %>%
+        dplyr::group_by(.data$Bam) %>%
+        dplyr::summarise(
+          dplyr::across(dplyr::all_of(bam_repair_cols), first_non_missing),
+          .groups = "drop"
+        )
+
+      repaired <- repaired %>%
+        dplyr::left_join(legacy_bam_map, by = "Bam", suffix = c("", ".bam_legacy"))
+
+      needs_exact_bam_repair <- rep(FALSE, nrow(repaired))
+      for (col in intersect(c("Sample_ID", "Date_of_sample_collection", "Study"), bam_repair_cols)) {
+        needs_exact_bam_repair <- needs_exact_bam_repair |
+          (is.na(repaired[[col]]) | !nzchar(trimws(as.character(repaired[[col]]))))
+      }
+
+      for (col in bam_repair_cols) {
+        legacy_col <- paste0(col, ".bam_legacy")
+        if (!legacy_col %in% names(repaired)) next
+        has_legacy_value <- !is.na(repaired[[legacy_col]]) &
+          nzchar(trimws(as.character(repaired[[legacy_col]])))
+        replace_idx <- needs_exact_bam_repair & has_legacy_value
+        repaired[[col]][replace_idx] <- repaired[[legacy_col]][replace_idx]
+      }
+    }
+  }
+
   audit <- repaired %>%
     dplyr::transmute(
       dplyr::across(dplyr::all_of(key_cols)),
@@ -523,7 +564,7 @@ repair_historical_combined_clinical_metadata <- function(
   }
 
   repaired %>%
-    dplyr::select(-dplyr::ends_with(".legacy"))
+    dplyr::select(-dplyr::ends_with(".legacy"), -dplyr::ends_with(".bam_legacy"))
 }
 
 build_cfwgs_sample_identity_map <- function(

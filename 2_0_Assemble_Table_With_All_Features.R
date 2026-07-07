@@ -2301,6 +2301,73 @@ if (file.exists(legacy_submitted_identity_path)) {
 
 }
 
+## Restore analysis baseline labels from the WGS feature layer.
+#
+# The legacy submitted identity map preserves sample dates/codes, but some rows
+# collected at progression are deliberately used as the baseline mutation-list
+# timepoint for this analysis. When the upstream integrated WGS feature table
+# marks a Patient/Timepoint as Diagnosis or Baseline, that analysis role should
+# override older submitted labels such as Progression in the final aggregate.
+wgs_baseline_timepoint_labels <- All_feature_data %>%
+  mutate(
+    Patient = as.character(Patient),
+    Timepoint = as.character(Timepoint),
+    timepoint_info = as.character(timepoint_info)
+  ) %>%
+  filter(
+    !is.na(Patient),
+    nzchar(Patient),
+    !is.na(Timepoint),
+    nzchar(Timepoint),
+    timepoint_info %in% c("Diagnosis", "Baseline")
+  ) %>%
+  group_by(Patient, Timepoint) %>%
+  summarise(
+    wgs_analysis_timepoint_info = if_else(
+      any(timepoint_info == "Diagnosis", na.rm = TRUE),
+      "Diagnosis",
+      "Baseline"
+    ),
+    .groups = "drop"
+  )
+
+wgs_baseline_timepoint_label_audit <- filled_df %>%
+  mutate(
+    Patient = as.character(Patient),
+    Timepoint = as.character(Timepoint),
+    timepoint_info = as.character(timepoint_info)
+  ) %>%
+  left_join(wgs_baseline_timepoint_labels, by = c("Patient", "Timepoint")) %>%
+  filter(
+    !is.na(wgs_analysis_timepoint_info),
+    is.na(timepoint_info) | timepoint_info != wgs_analysis_timepoint_info
+  ) %>%
+  transmute(
+    Patient,
+    Sample_Code,
+    Timepoint,
+    Date,
+    timepoint_info_before_wgs_baseline_restore = timepoint_info,
+    timepoint_info_after_wgs_baseline_restore = wgs_analysis_timepoint_info
+  ) %>%
+  arrange(Patient, Timepoint, Sample_Code)
+
+readr::write_csv(
+  wgs_baseline_timepoint_label_audit,
+  file.path("Output_tables_2025", "clinical_support", "wgs_baseline_timepoint_label_restoration_audit.csv")
+)
+
+filled_df <- filled_df %>%
+  mutate(
+    Patient = as.character(Patient),
+    Timepoint = as.character(Timepoint)
+  ) %>%
+  left_join(wgs_baseline_timepoint_labels, by = c("Patient", "Timepoint")) %>%
+  mutate(
+    timepoint_info = coalesce(wgs_analysis_timepoint_info, as.character(timepoint_info))
+  ) %>%
+  select(-wgs_analysis_timepoint_info)
+
 baseline_timepoint_tokens <- c("0", "1", "01", "T0", "T1", "TP0", "TP1", "D0")
 nonbaseline_with_baseline_label_audit <- filled_df %>%
   mutate(Timepoint_upper = str_to_upper(as.character(Timepoint))) %>%

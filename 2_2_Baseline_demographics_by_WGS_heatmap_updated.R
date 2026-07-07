@@ -95,6 +95,7 @@ source(.helpers_path)
 rm(.helpers_path)
 
 baseline_heatmap_timepoints <- c("Diagnosis", "Baseline")
+strict_cfdna_mrd_excluded_patients_for_heatmap <- c("CA-13", "IMG-066", "IMG-210")
 heatmap_study_colors <- c(
   "M4" = "#984ea3",
   "MyC" = "#ff7f00",
@@ -260,25 +261,18 @@ metada_df_mutation_comparison <- read_combined_clinical_metadata_with_revision(
     Bam_clean_tmp = str_remove(Bam, "\\.bam$")
   )
 
-# Load cohort assignments
-cohort_df <- readRDS("cohort_assignment_table_updated.rds")
-
-# Spring 2026 revision patients are a frozen-training test-cohort expansion.
-# The historical cohort RDS predates these patients, so append rather than
-# retrain/reclassify them. Preserve an existing assignment for any true overlap.
-revision_cohort_df <- spring2026_revision_metadata_for_heatmap %>%
-  distinct(Patient) %>%
-  filter(!is.na(Patient), Patient != "") %>%
-  mutate(Cohort = "Non-frontline")
-cohort_df <- bind_rows(
-  cohort_df,
-  revision_cohort_df %>% filter(!Patient %in% cohort_df$Patient)
-) %>%
-  distinct(Patient, .keep_all = TRUE)
+# Load cohort assignments. Use the shared helper so Spring 2026 revision
+# additions and strict cfDNA MRD exclusions are applied consistently with the
+# final cohort/scoring tables.
+cohort_df <- readRDS("cohort_assignment_table_updated.rds") %>%
+  augment_cohort_assignment_with_spring2026_revision()
 
 if (length(spring2026_revision_sample_ids_for_heatmap)) {
   missing_revision_cohort <- setdiff(
-    unique(spring2026_revision_metadata_for_heatmap$Patient),
+    setdiff(
+      unique(spring2026_revision_metadata_for_heatmap$Patient),
+      strict_cfdna_mrd_excluded_patients_for_heatmap
+    ),
     cohort_df$Patient
   )
   if (length(missing_revision_cohort)) {
@@ -581,6 +575,7 @@ combined_data_heatmap_BM <- combined_data_heatmap_BM %>%
   mutate(
     timepoint_info = ifelse(timepoint_info == "Diagnosis", "Baseline", timepoint_info)
   ) %>%
+  filter(!.data$Patient %in% strict_cfdna_mrd_excluded_patients_for_heatmap) %>%
   filter(timepoint_info == "Baseline") %>%
   filter(Sample_type %in% c("BM_cells")) %>%
   deduplicate_spring2026_heatmap_baselines("BM_cells")
@@ -654,6 +649,7 @@ combined_data_heatmap_blood <- combined_data_heatmap_blood %>%
   mutate(
     timepoint_info = ifelse(timepoint_info == "Diagnosis", "Baseline", timepoint_info)
   ) %>%
+  filter(!.data$Patient %in% strict_cfdna_mrd_excluded_patients_for_heatmap) %>%
   filter(timepoint_info == "Baseline") %>%
   filter(Sample_type %in% c("Blood_plasma_cfDNA")) %>%
   deduplicate_spring2026_heatmap_baselines("Blood_plasma_cfDNA")
@@ -1280,62 +1276,333 @@ if (!length(all_rows) || !nrow(bm_mat) || !nrow(cfDNA_mat)) {
 }
 
 # 7) build the top‐row annotation
-# 7a) Calculate mutation burdens from the same recovered MAF objects used in
-# the oncoprint. The previous annotation read a stale aggregate table that
-# predated Spring 2026, so new test samples appeared as missing even when their
-# MAFs were present.
+# 7a) Calculate broad mutation burdens from the genome-wide no-rsID callsets.
+# Historical samples use the original VCF-derived count files after rsID removal.
+# Spring 2026 revision samples use Revision_cfWGS_remove_rsIDs_counts.tsv
+# kept_no_rsID values, parsed through the authoritative mutect2_pair_id metadata.
 patient_ids <- extract_pid(all_cols)
 
-count_maf_variants_by_heatmap_column <- function(maf_data, heatmap_metadata) {
-  variant_key <- c(
-    "Tumor_Sample_Barcode", "Chromosome", "Start_Position", "End_Position",
-    "Reference_Allele", "Tumor_Seq_Allele2"
+clean_mutation_count_key <- function(x) {
+  x <- basename(as.character(x))
+  x <- sub("[.]vcf(?:[.]gz)?$", "", x, perl = TRUE)
+  x <- sub("[.]bam$", "", x, perl = TRUE)
+  x <- sub("[.]fil.*$", "", x, perl = TRUE)
+  x <- sub("[.]mutect2.*$", "", x, perl = TRUE)
+  x
+}
+
+normalise_bm_count_key <- function(x) {
+  # Five early M4 BM BAMs were stored as PG in metadata but counted from the WG
+  # VCF names. This mirrors the correction in 2_0_Assemble_Table_With_All_Features.R.
+  dplyr::case_when(
+    x == "TFRIM4_0031_Bm_P_PG_M4-CA-02-01-O-DNA" ~ "TFRIM4_0031_Bm_P_WG_M4-CA-02-01-O-DNA",
+    x == "TFRIM4_0032_Bm_P_PG_M4-HP-01-01-O-DNA" ~ "TFRIM4_0032_Bm_P_WG_M4-HP-01-01-O-DNA",
+    x == "TFRIM4_0033_Bm_P_PG_M4-MJ-06-01-O-DNA" ~ "TFRIM4_0033_Bm_P_WG_M4-MJ-06-01-O-DNA",
+    x == "TFRIM4_0034_Bm_P_PG_M4-VA-02-01-O-DNA" ~ "TFRIM4_0034_Bm_P_WG_M4-VA-02-01-O-DNA",
+    x == "TFRIM4_0035_Bm_P_PG_M4-VA-06-01-O-DNA" ~ "TFRIM4_0035_Bm_P_WG_M4-VA-06-01-O-DNA",
+    TRUE ~ x
   )
-  missing_key <- setdiff(variant_key, names(maf_data))
-  if (length(missing_key)) {
-    stop("Cannot calculate mutation counts; missing MAF columns: ",
-         paste(missing_key, collapse = ", "), call. = FALSE)
+}
+
+read_historical_no_rsid_counts <- function(path, assay) {
+  if (!file.exists(path)) {
+    stop("Missing historical no-rsID mutation count file: ", path, call. = FALSE)
+  }
+  counts <- readr::read_tsv(path, show_col_types = FALSE)
+  require_columns(counts, c("File", "Mutation_Count"), paste("historical", assay, "mutation count table"))
+  counts <- counts %>%
+    mutate(
+      count_key = clean_mutation_count_key(.data$File),
+      count_key = if (assay == "BM") normalise_bm_count_key(.data$count_key) else .data$count_key,
+      count_key = if_else(
+        .data$count_key == "TFRIM4_0189_Bm_P_WG_ZC-02",
+        "TFRIM4_0189_Bm_P_WG_ZC-02-01-O-DNA",
+        .data$count_key
+      ),
+      Mutation_Count = as.integer(.data$Mutation_Count),
+      mutation_count_source = paste0("historical_", assay, "_no_rsid_vcf_count_file"),
+      count_filter_priority = case_when(
+        str_detect(.data$File, "encode_filtered_STR_filtered") ~ 2L,
+        str_detect(.data$File, "encode_STR_filtered") ~ 1L,
+        TRUE ~ 0L
+      )
+    ) %>%
+    arrange(.data$count_key, desc(.data$count_filter_priority), desc(.data$Mutation_Count)) %>%
+    group_by(.data$count_key) %>%
+    mutate(
+      top_duplicate_tie = .data$count_filter_priority == first(.data$count_filter_priority) &
+        .data$Mutation_Count == first(.data$Mutation_Count)
+    ) %>%
+    filter(row_number() == 1L | .data$top_duplicate_tie) %>%
+    ungroup() %>%
+    select(-.data$count_filter_priority, -.data$top_duplicate_tie)
+  duplicated_counts <- counts %>%
+    count(.data$count_key) %>%
+    filter(.data$n > 1L)
+  if (nrow(duplicated_counts)) {
+    stop(
+      "Historical ", assay, " no-rsID mutation counts are not unique after key cleaning: ",
+      paste(head(duplicated_counts$count_key, 10), collapse = ", "),
+      call. = FALSE
+    )
+  }
+  counts %>%
+    select(.data$count_key, .data$Mutation_Count, .data$mutation_count_source)
+}
+
+read_revision_no_rsid_count_table <- function(
+    path = "Revision_cfWGS_remove_rsIDs_counts.tsv",
+    required = TRUE) {
+  # ## Read revision VCF no-rsID counts
+  # The cluster log is the preferred source for revision broad mutation burdens.
+  # A subset of rows has the first numeric field glued to the ".vcf" suffix
+  # (e.g. ".vcf5099\t3651\t1448"), so parse lines explicitly at the .vcf
+  # boundary rather than relying on read_tsv() column alignment.
+  metadata <- load_spring2026_revision_metadata(required = required)
+  if (is.null(metadata)) return(tibble())
+  require_columns(
+    metadata,
+    c("Patient", "Timepoint", "Sample_ID", "Sample_type", "timepoint_info", "mutect2_pair_id"),
+    "Spring 2026 revision metadata"
+  )
+  if (!file.exists(path)) {
+    if (required) stop("Missing revision no-rsID count table: ", path, call. = FALSE)
+    return(tibble())
   }
 
-  counts <- maf_data %>%
-    distinct(across(all_of(variant_key))) %>%
-    count(Tumor_Sample_Barcode, name = "Mutation_Count")
+  lines <- readLines(path, warn = FALSE)
+  if (length(lines) < 2L) {
+    stop("Revision no-rsID count table has no data rows: ", path, call. = FALSE)
+  }
 
-  heatmap_metadata %>%
-    select(Patient_Timepoint, Tumor_Sample_Barcode) %>%
-    distinct() %>%
-    left_join(counts, by = "Tumor_Sample_Barcode") %>%
-    group_by(Patient_Timepoint) %>%
-    # A retained heatmap column normally maps to one sample. Summing is an
-    # explicit fallback if multiple aliquots remain after baseline deduplication.
-    summarise(
-      Mutation_Count = if (all(is.na(Mutation_Count))) NA_integer_ else sum(Mutation_Count, na.rm = TRUE),
-      .groups = "drop"
+  parse_count_line <- function(line) {
+    parts <- strsplit(line, "\t", fixed = TRUE)[[1]]
+    if (length(parts) == 4L) {
+      return(tibble(
+        file = parts[[1]],
+        total_variants = suppressWarnings(as.integer(parts[[2]])),
+        kept_no_rsID = suppressWarnings(as.integer(parts[[3]])),
+        removed_rsID = suppressWarnings(as.integer(parts[[4]])),
+        parse_note = "tab_delimited"
+      ))
+    }
+    file <- str_match(parts[[1]], "^(.*[.]vcf)([0-9]*)$")
+    if (is.na(file[1, 1])) {
+      stop("Could not parse revision no-rsID count row: ", line, call. = FALSE)
+    }
+    glued_total <- if (nzchar(file[1, 3])) suppressWarnings(as.integer(file[1, 3])) else NA_integer_
+    if (length(parts) == 3L) {
+      return(tibble(
+        file = file[1, 2],
+        total_variants = glued_total,
+        kept_no_rsID = suppressWarnings(as.integer(parts[[2]])),
+        removed_rsID = suppressWarnings(as.integer(parts[[3]])),
+        parse_note = "total_glued_to_vcf_suffix"
+      ))
+    }
+    if (length(parts) == 1L && !is.na(glued_total) && glued_total == 0L) {
+      return(tibble(
+        file = file[1, 2],
+        total_variants = NA_integer_,
+        kept_no_rsID = NA_integer_,
+        removed_rsID = NA_integer_,
+        parse_note = "missing_counts_glued_to_vcf_suffix"
+      ))
+    }
+    stop("Could not parse revision no-rsID count row: ", line, call. = FALSE)
+  }
+
+  count_rows <- purrr::map_dfr(lines[-1], parse_count_line) %>%
+    mutate(mutect2_pair_id = sub("[.]somatic[.].*$", "", .data$file))
+
+  duplicate_rows <- count_rows %>%
+    count(.data$mutect2_pair_id) %>%
+    filter(.data$n > 1L)
+  if (nrow(duplicate_rows)) {
+    stop(
+      "Revision no-rsID count table has duplicate mutect2_pair_id rows: ",
+      paste(head(duplicate_rows$mutect2_pair_id, 10), collapse = ", "),
+      call. = FALSE
+    )
+  }
+
+  maf_count_fallback <- spring2026_revision_mutation_counts(required = required) %>%
+    transmute(
+      .data$Sample_ID,
+      maf_fallback_count = as.integer(.data$Mutation_Count)
+    )
+
+  metadata %>%
+    filter(
+      .data$Sample_type %in% c("BM_cells", "Blood_plasma_cfDNA"),
+      !is.na(.data$mutect2_pair_id),
+      nzchar(.data$mutect2_pair_id)
+    ) %>%
+    distinct(
+      .data$Patient, .data$Timepoint, .data$Sample_ID, .data$Sample_type,
+      .data$timepoint_info, .data$mutect2_pair_id
+    ) %>%
+    left_join(count_rows, by = "mutect2_pair_id") %>%
+    left_join(maf_count_fallback, by = "Sample_ID") %>%
+    mutate(
+      Mutation_Count = coalesce(.data$kept_no_rsID, .data$maf_fallback_count),
+      mutation_count_definition = if_else(
+        !is.na(.data$kept_no_rsID),
+        "kept_no_rsID from Revision_cfWGS_remove_rsIDs_counts.tsv",
+        "fallback MAF row count excluding dbSNP_RS values beginning with rs"
+      ),
+      mutation_count_source_file = path
     )
 }
 
-bm_mutation_counts <- count_maf_variants_by_heatmap_column(
-  maf_object_bm@data, combined_data_heatmap_BM
+sample_count_map <- function(data, assay, historical_counts, revision_counts) {
+  require_columns(
+    data,
+    c("Patient_Timepoint", "Patient", "Timepoint", "Sample_ID", "Bam"),
+    paste(assay, "heatmap sample table")
+  )
+  revision_assay <- if (assay == "BM") "BM_cells" else "Blood_plasma_cfDNA"
+  revision_lookup <- revision_counts %>%
+    filter(.data$Sample_type == revision_assay) %>%
+    transmute(
+      Sample_ID = .data$Sample_ID,
+      revision_count = as.integer(.data$Mutation_Count),
+      revision_count_source = case_when(
+        .data$mutation_count_definition == "kept_no_rsID from Revision_cfWGS_remove_rsIDs_counts.tsv" ~
+          "spring2026_revision_no_rsid_vcf_count_file",
+        .data$mutation_count_definition == "fallback MAF row count excluding dbSNP_RS values beginning with rs" ~
+          "spring2026_revision_maf_no_rsid_fallback",
+        TRUE ~ "spring2026_revision_no_rsid_count"
+      )
+    )
+  duplicate_revision <- revision_lookup %>%
+    count(.data$Sample_ID) %>%
+    filter(.data$n > 1L)
+  if (nrow(duplicate_revision)) {
+    stop(
+      "Spring 2026 ", assay, " mutation counts are not unique by Sample_ID: ",
+      paste(head(duplicate_revision$Sample_ID, 10), collapse = ", "),
+      call. = FALSE
+    )
+  }
+
+  data %>%
+    transmute(
+      Patient_Timepoint = .data$Patient_Timepoint,
+      Patient = .data$Patient,
+      Timepoint = .data$Timepoint,
+      Sample_ID = .data$Sample_ID,
+      Bam = .data$Bam,
+      count_key = clean_mutation_count_key(.data$Bam),
+      count_key = if (assay == "BM") normalise_bm_count_key(.data$count_key) else .data$count_key
+    ) %>%
+    distinct() %>%
+    left_join(revision_lookup, by = "Sample_ID") %>%
+    left_join(historical_counts, by = "count_key") %>%
+    mutate(
+      Mutation_Count = coalesce(.data$revision_count, .data$Mutation_Count),
+      mutation_count_source = coalesce(.data$revision_count_source, .data$mutation_count_source)
+    ) %>%
+    select(
+      .data$Patient_Timepoint, .data$Patient, .data$Timepoint, .data$Sample_ID,
+      .data$Bam, .data$count_key, .data$Mutation_Count, .data$mutation_count_source
+    )
+}
+
+bm_historical_counts <- read_historical_no_rsid_counts(
+  "Mutation_counts/mutation_counts_table_BM_no_RSID.txt",
+  assay = "BM"
 )
-blood_mutation_counts <- count_maf_variants_by_heatmap_column(
-  maf_object_blood@data, combined_data_heatmap_blood
+blood_historical_counts <- read_historical_no_rsid_counts(
+  "Mutation_counts/mutation_counts_table_Blood_no_RSID.txt",
+  assay = "Blood"
+)
+spring2026_heatmap_mutation_count_audit <- read_revision_no_rsid_count_table(required = TRUE)
+missing_revision_counts <- spring2026_heatmap_mutation_count_audit %>%
+  filter(is.na(.data$Mutation_Count))
+if (nrow(missing_revision_counts)) {
+  stop(
+    "Revision no-rsID count table is missing counts for mutect2_pair_id values: ",
+    paste(head(missing_revision_counts$mutect2_pair_id, 10), collapse = ", "),
+    call. = FALSE
+  )
+}
+dir.create(file.path("Output_tables_2025", "clinical_support"), recursive = TRUE, showWarnings = FALSE)
+write_csv(
+  spring2026_heatmap_mutation_count_audit,
+  file.path(
+    "Output_tables_2025", "clinical_support",
+    "spring2026_revision_mutation_count_audit.csv"
+  )
 )
 
-bm_counts <- bm_mutation_counts$Mutation_Count[
-  match(all_cols, bm_mutation_counts$Patient_Timepoint)
-]
-blood_counts <- blood_mutation_counts$Mutation_Count[
-  match(all_cols, blood_mutation_counts$Patient_Timepoint)
-]
+bm_count_map <- sample_count_map(
+  combined_data_heatmap_BM,
+  assay = "BM",
+  historical_counts = bm_historical_counts,
+  revision_counts = spring2026_heatmap_mutation_count_audit
+)
+blood_count_map <- sample_count_map(
+  combined_data_heatmap_blood,
+  assay = "Blood",
+  historical_counts = blood_historical_counts,
+  revision_counts = spring2026_heatmap_mutation_count_audit
+)
+
+duplicate_bm_counts <- bm_count_map %>%
+  count(.data$Patient_Timepoint) %>%
+  filter(.data$n > 1L)
+duplicate_blood_counts <- blood_count_map %>%
+  count(.data$Patient_Timepoint) %>%
+  filter(.data$n > 1L)
+if (nrow(duplicate_bm_counts) || nrow(duplicate_blood_counts)) {
+  stop(
+    "Mutation-count maps are not unique by heatmap column. BM duplicates: ",
+    paste(head(duplicate_bm_counts$Patient_Timepoint, 10), collapse = ", "),
+    "; blood duplicates: ",
+    paste(head(duplicate_blood_counts$Patient_Timepoint, 10), collapse = ", "),
+    call. = FALSE
+  )
+}
+
+bm_counts <- bm_count_map$Mutation_Count[match(all_cols, bm_count_map$Patient_Timepoint)]
+blood_counts <- blood_count_map$Mutation_Count[match(all_cols, blood_count_map$Patient_Timepoint)]
+
+mutation_count_audit <- bind_rows(
+  bm_count_map %>% mutate(Assay = "BM"),
+  blood_count_map %>% mutate(Assay = "Blood")
+) %>%
+  arrange(.data$Assay, .data$Patient_Timepoint)
+
+dir.create("Output_tables_2025_updated", recursive = TRUE, showWarnings = FALSE)
+write_csv(
+  mutation_count_audit,
+  "Output_tables_2025_updated/patient_mutation_counts_source_audit.csv"
+)
 
 # Export mutation counts table
 mutation_counts_table <- tibble(
   Patient_Timepoint = all_cols,
   Patient = patient_ids,
   BM_Mutation_Count = bm_counts,
-  Blood_Mutation_Count = blood_counts
+  Blood_Mutation_Count = blood_counts,
+  BM_Mutation_Count_Source = bm_count_map$mutation_count_source[match(all_cols, bm_count_map$Patient_Timepoint)],
+  Blood_Mutation_Count_Source = blood_count_map$mutation_count_source[match(all_cols, blood_count_map$Patient_Timepoint)]
 ) %>%
   arrange(factor(Patient_Timepoint, levels = all_cols))
+
+zero_or_negative_counts <- mutation_counts_table %>%
+  filter(
+    (!is.na(.data$BM_Mutation_Count) & .data$BM_Mutation_Count <= 0) |
+      (!is.na(.data$Blood_Mutation_Count) & .data$Blood_Mutation_Count <= 0)
+  )
+if (nrow(zero_or_negative_counts)) {
+  stop(
+    "Mutation-count annotation contains zero/negative genome-wide no-rsID counts for: ",
+    paste(zero_or_negative_counts$Patient_Timepoint, collapse = ", "),
+    call. = FALSE
+  )
+}
 
 write_csv(mutation_counts_table, "Output_tables_2025_updated/patient_mutation_counts.csv")
 saveRDS(mutation_counts_table,   "Output_tables_2025_updated/patient_mutation_counts.rds")
@@ -1346,13 +1613,25 @@ cat("  Patients:", nrow(mutation_counts_table), "\n\n")
 # 2) set up continuous palette for all muts:
 library(circlize)
 all_counts <- c(bm_counts, blood_counts)
-qnts       <- quantile(all_counts, probs = c(0, 0.5, 1), na.rm = TRUE)
+count_values <- all_counts[!is.na(all_counts)]
+count_upper <- max(count_values, na.rm = TRUE)
+qnts <- unique(c(0, 500, 1500, 3000, 6000, count_upper))
+qnts <- qnts[qnts <= count_upper]
+qnts <- unique(c(qnts, count_upper))
+if (length(qnts) < 2L) {
+  qnts <- c(0, count_upper)
+}
 
 count_pal <- colorRamp2(
   qnts,
-  c("#f7fbff",   # light 
-    "#6baed6",   # mid-tone blue 
-    "#08306b")   # deep blue
+  colorRampPalette(c(
+    "#f7fbff",   # light
+    "#deebf7",
+    "#9ecae1",
+    "#4292c6",
+    "#08519c",
+    "#08306b"    # deep blue
+  ))(length(qnts))
 )
 
 # 7b) Re-build the top annotation to include a little barplot of mutation counts
@@ -1520,30 +1799,145 @@ dev.off()
 
 
 
-#### Now add a star if also found by FISH 
+#### Now add a star if also found by FISH
 #### Since so many FISH unknown, not sure if good idea or concentration of effort for now
-# FISH remains sourced from the integrated clinical feature table; only the
-# mutation-count annotation above was replaced with direct MAF-derived counts.
+fish_features <- c(
+  "IGH_FGFR3",
+  "IGH_CCND1",
+  "IGH_MAF",
+  "del17p",
+  "del1p",
+  "amp1q",
+  "del13q",
+  "hyperdiploid"
+)
+
+normalise_fish_call <- function(x) {
+  # Clinical tables use several conventions for the same binary FISH call. Keep
+  # unknown/pending/unreported values as NA so they are not counted as negatives.
+  x_chr <- str_squish(as.character(x))
+  case_when(
+    is.na(x_chr) | x_chr == "" ~ NA,
+    str_to_lower(x_chr) %in% c("positive", "pos", "yes", "y", "true", "1") ~ TRUE,
+    str_to_lower(x_chr) %in% c("negative", "neg", "no", "n", "false", "0") ~ FALSE,
+    str_detect(str_to_lower(x_chr), "unknown|pending|not available|not done") ~ NA,
+    TRUE ~ NA
+  )
+}
+
+ensure_fish_schema <- function(x, source_label) {
+  for (feature in fish_features) {
+    if (!feature %in% names(x)) x[[feature]] <- NA
+  }
+  x %>%
+    mutate(fish_call_source = source_label) %>%
+    select(Patient, all_of(fish_features), fish_call_source)
+}
+
+parse_img_diagnosis_fish_text <- function(text) {
+  txt <- str_squish(as.character(text))
+  txt_lower <- str_to_lower(txt)
+  if (is.na(txt) || txt == "" || str_detect(txt_lower, "pending|unknown")) {
+    return(tibble(
+      IGH_FGFR3 = NA, IGH_CCND1 = NA, IGH_MAF = NA, del17p = NA,
+      del1p = NA, amp1q = NA, del13q = NA, hyperdiploid = NA
+    ))
+  }
+
+  has_positive <- function(pattern) str_detect(txt_lower, regex(pattern, ignore_case = TRUE))
+  has_negative <- function(pattern) str_detect(txt_lower, regex(pattern, ignore_case = TRUE))
+
+  tibble(
+    IGH_FGFR3 = case_when(
+      has_negative("fgfr3/igh[^.;,]*negative|t\\(4;14\\)[^.;,]*negative|t4;14[^.;,]*negative") ~ FALSE,
+      has_positive("fgfr3/igh[^.;,]*positive|t\\(4;14\\)|t4;14") ~ TRUE,
+      TRUE ~ NA
+    ),
+    IGH_CCND1 = case_when(
+      has_negative("ccnd1/igh[^.;,]*negative|t\\(11;14\\)[^.;,]*negative|t11;14[^.;,]*negative") ~ FALSE,
+      has_positive("ccnd1/igh[^.;,]*positive|t\\(11;14\\)|t11;14") ~ TRUE,
+      TRUE ~ NA
+    ),
+    IGH_MAF = case_when(
+      has_negative("t\\(14;16\\)[^.;,]*negative|t14;16[^.;,]*negative") ~ FALSE,
+      has_positive("t\\(14;16\\)|t14;16|14;16") ~ TRUE,
+      TRUE ~ NA
+    ),
+    del17p = case_when(
+      has_negative("tp53 deletion[^,;]*negative|17p[^,;]*(loss|deletion|del)[^,;]*negative|del\\s*17p[^,;]*negative") ~ FALSE,
+      has_positive("tp53 deletion[^.;,]*positive|del\\s*17p|17p deletion|17p\\+") ~ TRUE,
+      TRUE ~ NA
+    ),
+    del1p = case_when(
+      has_negative("cdkn2c loss\\s*(1p32(\\.3)? loss)?\\s*negative|1p32(\\.3)? loss\\s*negative|1p loss\\s*negative|del\\s*1p\\s*negative") ~ FALSE,
+      has_positive("cdkn2c loss[^,;]*positive|1p loss|del\\s*1p|1p32[^,;]*loss") ~ TRUE,
+      TRUE ~ NA
+    ),
+    amp1q = case_when(
+      has_negative("cks1b gain\\s*(1q21(\\.3)? gain)?\\s*negative|1q21(\\.3)? gain\\s*negative|1q gain\\s*negative") ~ FALSE,
+      has_positive("cks1b gain\\s*(1q21(\\.3)? gain)?\\s*positive|1q21(\\.3)? gain\\s*positive|1q gain|amp\\s*1q") ~ TRUE,
+      TRUE ~ NA
+    ),
+    del13q = case_when(
+      has_negative("13q[^.;,]*(del|deletion|loss)[^.;,]*negative|monosomy 13[^.;,]*negative") ~ FALSE,
+      has_positive("13q\\s*del|del\\s*13q|monosomy 13") ~ TRUE,
+      TRUE ~ NA
+    ),
+    hyperdiploid = case_when(
+      has_positive("hyperdiploid") ~ TRUE,
+      TRUE ~ NA
+    )
+  )
+}
+
+read_img_pcm_fish_calls <- function(path) {
+  if (!file.exists(path)) return(tibble())
+  readr::read_tsv(path, comment = "#", show_col_types = FALSE) %>%
+    transmute(
+      Patient = PATIENT_ID,
+      IGH_FGFR3 = normalise_fish_call(TX_T4_14),
+      IGH_CCND1 = normalise_fish_call(TX_T11_14),
+      IGH_MAF = normalise_fish_call(TX_T14_16),
+      del17p = normalise_fish_call(CNV_DEL17P),
+      del1p = normalise_fish_call(CNV_DEL1P),
+      amp1q = normalise_fish_call(CNV_AMP1Q),
+      del13q = normalise_fish_call(CNV_DEL13),
+      hyperdiploid = normalise_fish_call(CHROMOSOME_NUMBER)
+    ) %>%
+    ensure_fish_schema("IMMAGINE PCM clinical patient table")
+}
+
+read_img_diagnosis_fish_calls <- function(path) {
+  if (!file.exists(path)) return(tibble())
+  readr::read_csv(path, show_col_types = FALSE) %>%
+    filter(Study %in% c("MyC", "IMMAGINE", "IMMAGINE_revision_OICR") | str_detect(Patient, "^IMG-")) %>%
+    filter(timepoint_info %in% baseline_heatmap_timepoints | is.na(timepoint_info)) %>%
+    filter(!is.na(Fish_abnormalities), str_squish(Fish_abnormalities) != "") %>%
+    distinct(Patient, Fish_abnormalities) %>%
+    mutate(parsed = purrr::map(Fish_abnormalities, parse_img_diagnosis_fish_text)) %>%
+    tidyr::unnest(parsed) %>%
+    group_by(Patient) %>%
+    summarise(across(all_of(fish_features), ~ {
+      vals <- .x[!is.na(.x)]
+      if (!length(vals)) NA else any(vals)
+    }), .groups = "drop") %>%
+    ensure_fish_schema("IMMAGINE diagnosis FISH free text")
+}
+
+# FISH starts with the integrated clinical feature table used historically, then
+# fills missing IMG revision calls from deeper IMMAGINE clinical sources. The
+# older exported IMMAGINE boolean flags are intentionally not used directly:
+# some rows mark probe names as positive even when the adjacent result text says
+# Negative (for example TP53 deletion/loss).
 clinical_feature_baseline <- readRDS(
   "Final_aggregate_table_cfWGS_features_with_clinical_and_demographics_updated9.rds"
 )
 dat_baseline <- clinical_feature_baseline %>%
-  # only keep diagnosis / baseline rows
-  filter(timepoint_info %in% c("Diagnosis","Baseline")) %>%
+  filter(timepoint_info %in% baseline_heatmap_timepoints) %>%
   arrange(Patient, timepoint_info) %>%
   group_by(Patient) %>%
   slice(1) %>%
   ungroup() %>%
-  
-  # pick exactly the FISH columns that map to your heatmap rows:
-  #   • T_4_14   → IGH_FGFR3
-  #   • T_11_14  → IGH_CCND1
-  #   • T_14_16  → IGH_MAF
-  #   • DEL_17P  → del17p
-  #   • DEL_1P   → del1p
-  #   • AMP_1Q   → amp1q
-  #   • DEL_13   → del13q
-  #   • hyperdiploid → hyperdiploid
   select(
     Patient,
     T_4_14,
@@ -1555,28 +1949,62 @@ dat_baseline <- clinical_feature_baseline %>%
     DEL_13,
     hyperdiploid
   ) %>%
-  
-  mutate(across(-Patient, ~ case_when(
-    .x == "Positive" ~ TRUE,
-    .x == "Negative" ~ FALSE,
-    TRUE             ~ NA   # Unknown or anything else becomes NA
-  ))) %>%
-
-  # (optional) rename to match your heatmap row‐names exactly:
+  mutate(across(-Patient, normalise_fish_call)) %>%
   rename(
     IGH_FGFR3 = T_4_14,
     IGH_CCND1 = T_11_14,
-    IGH_MAF   = T_14_16,
-    del17p     = DEL_17P,
-    del1p      = DEL_1P,
-    amp1q      = AMP_1Q,
-    del13q     = DEL_13,
+    IGH_MAF = T_14_16,
+    del17p = DEL_17P,
+    del1p = DEL_1P,
+    amp1q = AMP_1Q,
+    del13q = DEL_13,
     hyperdiploid = hyperdiploid
+  ) %>%
+  ensure_fish_schema("Final aggregate clinical feature table")
+
+img_pcm_fish_calls <- read_img_pcm_fish_calls(
+  "Clinical data/IMMAGINE/IMMAGINE_PCM_Import_24Mar2023/data_clinical_patients.txt"
+)
+img_diagnosis_fish_calls <- read_img_diagnosis_fish_calls(
+  "Clinical data/Master_clinical_data_table_all_projects_May2025_updated2.csv"
+)
+
+fish_sources <- bind_rows(dat_baseline, img_pcm_fish_calls, img_diagnosis_fish_calls)
+
+dat_baseline <- fish_sources %>%
+  mutate(.source_rank = match(
+    fish_call_source,
+    c(
+      "Final aggregate clinical feature table",
+      "IMMAGINE PCM clinical patient table",
+      "IMMAGINE diagnosis FISH free text"
+    )
+  )) %>%
+  arrange(Patient, .source_rank) %>%
+  group_by(Patient) %>%
+  summarise(
+    across(all_of(fish_features), ~ {
+      vals <- .x[!is.na(.x)]
+      if (!length(vals)) NA else vals[[1]]
+    }),
+    fish_call_sources_used = paste(unique(fish_call_source), collapse = "; "),
+    .groups = "drop"
   )
+
+if (length(spring2026_revision_sample_ids_for_heatmap)) {
+  revision_fish_audit <- dat_baseline %>%
+    filter(Patient %in% spring2026_revision_metadata_for_heatmap$Patient) %>%
+    arrange(Patient)
+  readr::write_csv(
+    revision_fish_audit,
+    "Output_tables_2025/spring2026_revision_fish_calls_for_heatmap.csv"
+  )
+}
 
 # make a matrix of flags, rows = patient, cols = fish assay
 library(tibble)
 fish_flags <- dat_baseline %>%
+  select(Patient, all_of(fish_features)) %>%
   column_to_rownames("Patient") %>%
   as.matrix()   
 
@@ -2829,6 +3257,14 @@ fish_long <- fish_flags %>%
     cols      = -Patient,
     names_to  = "Feature",
     values_to = "Fish_Pos"
+  ) %>%
+  mutate(
+    Fish_Pos = dplyr::case_when(
+      is.na(Fish_Pos) ~ NA,
+      Fish_Pos %in% c(TRUE, "TRUE", "True", "true", 1, "1", "Yes", "YES", "yes") ~ TRUE,
+      Fish_Pos %in% c(FALSE, "FALSE", "False", "false", 0, "0", "No", "NO", "no") ~ FALSE,
+      TRUE ~ NA
+    )
   )
 
 # 2) Melt the WGS-BM translocation calls

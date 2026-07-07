@@ -156,16 +156,12 @@ if (file.exists(PATH_THRESHOLD_LIST)) {
 # ===========================================================================
 # 3_1_A produces the following key files:
 #   1. EasyM_all_samples_with_optimized_calls.csv
-#      Contains: Patient, Timepoint, EasyM_value, EasyM_clinician_binary,
-#                EasyM_optimized_binary, EasyM_reference_threshold_binary,
-#                EasyM_optimized_call, threshold_method
-#   2. EasyM_threshold_values_by_timepoint.csv
-#      Contains: Timepoint and corresponding threshold cutoff (%) used
+#      Contains: Patient, Timepoint, EasyM_value, and the manuscript-facing
+#                EasyM_reference_threshold_binary call.
 
 cat("\nLoading EasyM data from script 3_1_A...\n")
 
 EasyM_file <- file.path(OUTPUT_DIR_EASYM, "EasyM_all_samples_with_optimized_calls.csv")
-EasyM_thresholds <- NULL
 
 if (file.exists(EasyM_file)) {
   EasyM_data <- readr::read_csv(EasyM_file, show_col_types = FALSE)
@@ -187,11 +183,7 @@ if (file.exists(EasyM_file)) {
         select(
           Patient, Timepoint, 
           EasyM_value,
-          EasyM_clinician_binary,
-          EasyM_optimized_binary,
-          EasyM_reference_threshold_binary,
-          EasyM_optimized_call,
-          threshold_method
+          EasyM_reference_threshold_binary
         ) %>%
         mutate(Patient = as.character(Patient), Timepoint = as.character(Timepoint)),
       by = c("Patient", "Timepoint"),
@@ -200,21 +192,7 @@ if (file.exists(EasyM_file)) {
   
   n_easy_m_matched <- sum(!is.na(dat$EasyM_value))
   cat(sprintf("✓ Merged EasyM data: %d samples matched with cfWGS\n", n_easy_m_matched))
-  cat(sprintf("  - EasyM_clinician_binary: %d samples\n", sum(!is.na(dat$EasyM_clinician_binary))))
-  cat(sprintf("  - EasyM_optimized_binary: %d samples\n", sum(!is.na(dat$EasyM_optimized_binary))))
   cat(sprintf("  - EasyM_reference_threshold_binary: %d samples\n", sum(!is.na(dat$EasyM_reference_threshold_binary))))
-  cat(sprintf("  - Using optimized thresholds: %d samples\n", 
-              sum(dat$threshold_method == "optimized", na.rm = TRUE)))
-  cat(sprintf("  - Using clinician calls: %d samples\n", 
-              sum(dat$threshold_method == "clinician", na.rm = TRUE)))
-  
-  # Load threshold reference table
-  threshold_ref_file <- file.path(OUTPUT_DIR_EASYM, "tables", "EasyM_threshold_values_by_timepoint.csv")
-  if (file.exists(threshold_ref_file)) {
-    EasyM_thresholds <- readr::read_csv(threshold_ref_file, show_col_types = FALSE)
-    cat(sprintf("✓ Loaded threshold reference: %d timepoints\n", nrow(EasyM_thresholds)))
-  }
-  
 } else {
   cat(sprintf("⚠ EasyM file not found at: %s\n", EasyM_file))
   cat("   Creating placeholder columns to prevent downstream errors...\n")
@@ -223,14 +201,9 @@ if (file.exists(EasyM_file)) {
   dat <- dat %>%
     mutate(
       EasyM_value = NA_real_,
-      EasyM_clinician_binary = NA_integer_,
-      EasyM_optimized_binary = NA_integer_,
-      EasyM_reference_threshold_binary = NA_integer_,
-      EasyM_optimized_call = NA_character_,
-      threshold_method = NA_character_
+      EasyM_reference_threshold_binary = NA_integer_
     )
   
-  EasyM_thresholds <- NULL
 }
 
 cat("\n")
@@ -273,10 +246,11 @@ front_tbl <- dat %>%
     !is.na(landmark_tp),
     !is.na(BM_zscore_only_detection_rate_call)
   ) %>%
-  ## Compare both EasyM methods (any-detect and optimized) with other modalities
+  ## Use the isotype-specific Rapid Novor reference-threshold EasyM call as the
+  ## manuscript-facing EasyM binary comparator.
   pivot_longer(
     cols      = c(Flow_Binary, Adaptive_Binary, BM_zscore_only_detection_rate_call, 
-                  EasyM_clinician_binary, EasyM_optimized_binary, EasyM_reference_threshold_binary),
+                  EasyM_reference_threshold_binary),
     names_to  = "Technology",
     values_to = "Result"
   ) %>%
@@ -294,9 +268,7 @@ front_tbl <- dat %>%
       Flow_Binary         = "MFC",
       Adaptive_Binary     = "clonoSEQ",
       BM_zscore_only_detection_rate_call = "cfWGS",
-      EasyM_clinician_binary = "EasyM (any)",
-      EasyM_optimized_binary = "EasyM (opt)",
-      EasyM_reference_threshold_binary = "EasyM (ref)"
+      EasyM_reference_threshold_binary = "EasyM"
     )
   )
 
@@ -312,7 +284,7 @@ front_long <- dat %>%
   filter(!is.na(BM_zscore_only_detection_rate_call)) %>%
   pivot_longer(
     cols      = c(Flow_Binary, Adaptive_Binary, BM_zscore_only_detection_rate_call, 
-                  EasyM_clinician_binary, EasyM_optimized_binary, EasyM_reference_threshold_binary),
+                  EasyM_reference_threshold_binary),
     names_to  = "Technology",
     values_to = "Result"
   ) %>%
@@ -323,9 +295,7 @@ front_long <- dat %>%
       Flow_Binary                     = "MFC",
       Adaptive_Binary                 = "clonoSEQ",
       BM_zscore_only_detection_rate_call = "cfWGS",
-      EasyM_clinician_binary          = "EasyM (any)",
-      EasyM_optimized_binary          = "EasyM (opt)",
-      EasyM_reference_threshold_binary = "EasyM (ref)"
+      EasyM_reference_threshold_binary = "EasyM"
     )
   )
 
@@ -484,7 +454,7 @@ plot_theme <- theme_minimal(base_size = 11) +
 # ===========================================================================
 # SECTION 3: FIGURE GENERATION - POSITIVITY RATE COMPARISONS BY TIMEPOINT
 # ===========================================================================
-# Compare MRD+ detection rates across cfWGS, EasyM clinician, and EasyM optimized
+# Compare MRD+ detection rates across cfWGS, clinical MRD, and EasyM reference-threshold calls.
 # Stratified by treatment phase (post-ASCT vs maintenance)
 
 # ---------------------------------------------------------------------------
@@ -506,7 +476,7 @@ front_tbl <- front_tbl %>%
   # Reorder Technology for consistent display order across all plots
   mutate(
     Technology = factor(Technology,
-                        levels = c("cfWGS", "clonoSEQ", "MFC", "EasyM (opt)", "EasyM (ref)", "EasyM (any)"))
+                        levels = c("cfWGS", "clonoSEQ", "MFC", "EasyM"))
   )
 
 # Build grouped barplot comparing MRD+ rates across technologies and timepoints
@@ -633,7 +603,7 @@ non_tbl <- non_tbl %>%
   # Reorder Technology for consistent display order across all plots
   mutate(
     Technology = factor(Technology,
-                        levels = c("cfWGS", "clonoSEQ", "MFC", "EasyM (opt)", "EasyM (ref)", "EasyM (any)"))
+                        levels = c("cfWGS", "clonoSEQ", "MFC", "EasyM"))
   )
 
 # Build a standalone non-frontline/test-cohort plot for provenance.
@@ -756,7 +726,7 @@ combo_tbl <- combo_tbl %>%
                                     "Maintenance-1yr",
                                     "All timepoints")),
     Technology = factor(Technology,
-                        levels = c("cfWGS", "clonoSEQ", "MFC", "EasyM (opt)", "EasyM (ref)", "EasyM (any)"))
+                        levels = c("cfWGS", "clonoSEQ", "MFC", "EasyM"))
   )
 
 # Single faceted plot used as the final Figure 3D component.
@@ -897,7 +867,7 @@ front_tbl <- dat %>%
   ) %>%
   pivot_longer(
     cols      = c(Flow_Binary, Adaptive_Binary, Blood_zscore_only_sites_call, Blood_zscore_screen_call, 
-                  EasyM_clinician_binary, EasyM_optimized_binary, EasyM_reference_threshold_binary),
+                  EasyM_reference_threshold_binary),
     names_to  = "Technology",
     values_to = "Result"
   ) %>%
@@ -916,9 +886,7 @@ front_tbl <- dat %>%
       Adaptive_Binary     = "clonoSEQ",
       Blood_zscore_only_sites_call = "cfWGS (confirm)",
       Blood_zscore_screen_call = "cfWGS (screen)",
-      EasyM_clinician_binary = "EasyM (any)",
-      EasyM_optimized_binary = "EasyM (opt)",
-      EasyM_reference_threshold_binary = "EasyM (ref)"
+      EasyM_reference_threshold_binary = "EasyM"
     )
   )
 #      Blood_zscore_only_sites_call = "cfWGS (confirm)",
@@ -938,7 +906,7 @@ front_long <- dat %>%
   filter(!is.na(Blood_zscore_only_sites_call)) %>%
   pivot_longer(
     cols      = c(Flow_Binary, Adaptive_Binary, Blood_zscore_only_sites_call, 
-                  EasyM_clinician_binary, EasyM_optimized_binary, EasyM_reference_threshold_binary),
+                  EasyM_reference_threshold_binary),
     names_to  = "Technology",
     values_to = "Result"
   ) %>%
@@ -949,9 +917,7 @@ front_long <- dat %>%
       Flow_Binary                     = "MFC",
       Adaptive_Binary                 = "clonoSEQ",
       Blood_zscore_only_sites_call = "cfWGS",
-      EasyM_clinician_binary          = "EasyM (any)",
-      EasyM_optimized_binary          = "EasyM (opt)",
-      EasyM_reference_threshold_binary = "EasyM (ref)"
+      EasyM_reference_threshold_binary = "EasyM"
     )
   )
 
@@ -1011,7 +977,7 @@ non_tbl <- dat %>%
   ) %>%
   pivot_longer(
     cols      = c(Flow_Binary, Adaptive_Binary, Blood_zscore_only_sites_call, Blood_zscore_screen_call, 
-                  EasyM_clinician_binary, EasyM_optimized_binary, EasyM_reference_threshold_binary),
+                  EasyM_reference_threshold_binary),
     names_to  = "Technology",
     values_to = "Result"
   ) %>%
@@ -1030,9 +996,7 @@ non_tbl <- dat %>%
       Adaptive_Binary     = "clonoSEQ",
       Blood_zscore_only_sites_call = "cfWGS (confirm)",
       Blood_zscore_screen_call = "cfWGS (screen)",
-      EasyM_clinician_binary = "EasyM (any)",
-      EasyM_optimized_binary = "EasyM (opt)",
-      EasyM_reference_threshold_binary = "EasyM (ref)"
+      EasyM_reference_threshold_binary = "EasyM"
     )
   )
 
@@ -1077,9 +1041,7 @@ combo_tbl <- combo_tbl %>%
                            "cfWGS (confirm)",
                            "clonoSEQ",
                            "MFC",
-                           "EasyM (opt)",
-                           "EasyM (ref)",
-                           "EasyM (any)"
+                           "EasyM"
                          ))
     
   )
@@ -3469,12 +3431,6 @@ if (file.exists(EasyM_data_file)) {
     mutate(EasyM_value = NA_real_)
 }
 
-# Load EasyM thresholds by timepoint (for reference lines)
-easyM_thresholds <- readr::read_csv(
-  file.path(OUTPUT_DIR_EASYM, "EasyM_threshold_values_by_timepoint.csv"),
-  show_col_types = FALSE
-)
-
 # Build Figure 3E plotting data with EasyM as an additional comparator.
 plot_df_with_easym <- bind_rows(
   # Original clonoSEQ and MFC rows.
@@ -3537,23 +3493,16 @@ corr_df_with_easym <- plot_df_with_easym %>%
     Comparator = factor(Comparator, levels = c("clonoSEQ", "MFC", "EasyM"))
   )
 
-# Map EasyM thresholds by timepoint for reference lines.
-# Timepoint codes: 05 = Post-ASCT (Post-Transplant), 07 = Maintenance-1yr (1-Year Maintenance)
-easyM_threshold_lines <- easyM_thresholds %>%
-  filter(Timepoint %in% c("05", "07")) %>%
+# EasyM reference-threshold lines. The manuscript-facing EasyM binary call is
+# isotype-specific, so the EasyM facet shows both reference thresholds rather
+# than the older timepoint-optimized cutoffs.
+easyM_threshold_lines <- tidyr::crossing(
+  landmark_timepoint = c("Post-ASCT", "Maintenance-1yr"),
+  xintercept = c(0.0005, 0.01)
+) %>%
   mutate(
-    landmark_timepoint = case_when(
-      Timepoint == "05" ~ "Post-ASCT",
-      Timepoint == "07" ~ "Maintenance-1yr",
-      TRUE ~ NA_character_
-    ),
-    # Convert percentage (0-100 scale) to proportion (0-1 scale).
-    xintercept = Threshold_raw_percent / 100,
-    Comparator = "EasyM",
-    # Match comparator factor levels to the plot data.
-    Comparator = factor(Comparator, levels = c("clonoSEQ", "MFC", "EasyM"))
-  ) %>%
-  select(landmark_timepoint, Comparator, xintercept)
+    Comparator = factor("EasyM", levels = c("clonoSEQ", "MFC", "EasyM"))
+  )
 
 # Re-apply factor ordering directly before plotting to avoid ordering drift from
 # row binding or joins.
@@ -3581,7 +3530,7 @@ p_scatter_with_easym_bm <- ggplot(plot_df_with_easym,
                                    levels = c("clonoSEQ", "MFC", "EasyM")),
                xintercept = lod_clonoMF
              )) +
-  # EasyM thresholds by landmark timepoint.
+  # EasyM reference thresholds by isotype group.
   geom_vline(aes(xintercept = xintercept), linetype = "dashed", colour = "grey80",
              data = easyM_threshold_lines) +
   
@@ -4065,22 +4014,16 @@ if (!exists("dat_with_easym")) {
 # Blood-specific comparator LOD floor used for plotting.
 lod_blood <- 1e-5
 
-# Map EasyM thresholds by timepoint for reference lines.
-easyM_threshold_lines_blood <- easyM_thresholds %>%
-  filter(Timepoint %in% c("05", "07")) %>%
+# EasyM reference-threshold lines. The manuscript-facing EasyM binary call is
+# isotype-specific, so the EasyM facet shows both reference thresholds rather
+# than the older timepoint-optimized cutoffs.
+easyM_threshold_lines_blood <- tidyr::crossing(
+  landmark_timepoint = c("Post-ASCT", "Maintenance-1yr"),
+  xintercept = c(0.0005, 0.01)
+) %>%
   mutate(
-    landmark_timepoint = case_when(
-      Timepoint == "05" ~ "Post-ASCT",
-      Timepoint == "07" ~ "Maintenance-1yr",
-      TRUE ~ NA_character_
-    ),
-    # Convert percentage (0-100 scale) to proportion (0-1 scale).
-    xintercept = Threshold_raw_percent / 100,
-    Comparator = "EasyM",
-    # Match comparator factor levels to the plot data.
-    Comparator = factor(Comparator, levels = c("clonoSEQ", "MFC", "EasyM"))
-  ) %>%
-  select(landmark_timepoint, Comparator, xintercept)
+    Comparator = factor("EasyM", levels = c("clonoSEQ", "MFC", "EasyM"))
+  )
 
 plot_df_blood_with_easym <- bind_rows(
   # Original clonoSEQ and MFC rows.
@@ -4172,7 +4115,7 @@ p_scatter_with_easym_blood <- ggplot(plot_df_blood_with_easym,
     aes(xintercept = xintercept),
     linetype = "dashed", colour = "grey80"
   ) +
-  # EasyM thresholds by landmark timepoint.
+  # EasyM reference thresholds by isotype group.
   geom_vline(
     data = easyM_threshold_lines_blood,
     aes(xintercept = xintercept),
@@ -4424,42 +4367,13 @@ cat(sprintf(
   100 * sum(!is.na(dat$EasyM_value)) / nrow(dat)
 ))
 cat(sprintf(
-  "  EasyM optimized-threshold rows: %d\n",
-  sum(dat$threshold_method == "optimized", na.rm = TRUE)
-))
-cat(sprintf(
-  "  EasyM clinician-call rows: %d\n",
-  sum(dat$threshold_method == "clinician", na.rm = TRUE)
+  "  EasyM reference-threshold rows: %d\n",
+  sum(!is.na(dat$EasyM_reference_threshold_binary))
 ))
 cat("\n")
 
-cat("EASYM THRESHOLD REFERENCE\n")
+cat("EASYM REFERENCE THRESHOLDS\n")
 cat("----------------------------------------------------------------------------\n")
-threshold_summary_tbl <- NULL
-if (exists("EasyM_thresholds", inherits = FALSE) && !is.null(EasyM_thresholds)) {
-  threshold_summary_tbl <- EasyM_thresholds
-} else if (exists("easyM_thresholds", inherits = FALSE) && !is.null(easyM_thresholds)) {
-  threshold_summary_tbl <- easyM_thresholds
-}
-
-if (!is.null(threshold_summary_tbl) && nrow(threshold_summary_tbl) > 0) {
-  threshold_col <- dplyr::case_when(
-    "opt_cut_raw" %in% names(threshold_summary_tbl) ~ "opt_cut_raw",
-    "Threshold_raw_percent" %in% names(threshold_summary_tbl) ~ "Threshold_raw_percent",
-    TRUE ~ NA_character_
-  )
-
-  for (i in seq_len(nrow(threshold_summary_tbl))) {
-    row <- threshold_summary_tbl[i, ]
-    tp <- row$Timepoint
-    cut <- if (!is.na(threshold_col)) row[[threshold_col]] else NA_real_
-    if (is.na(cut)) {
-      cat(sprintf("  TP%s: threshold value column not found\n", tp))
-    } else {
-      cat(sprintf("  TP%s: threshold = %.4f%%\n", tp, cut))
-    }
-  }
-} else {
-  cat("  (Threshold table not available)\n")
-}
+cat("  IgG: EasyM positive/residual if >1% of baseline M-protein\n")
+cat("  IgA or light-chain-only: EasyM positive/residual if >0.05% of baseline M-protein\n")
 cat("\n")

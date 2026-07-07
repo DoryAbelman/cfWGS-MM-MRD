@@ -674,6 +674,10 @@ if (USE_PRESERVED_MODELS_ONLY) {
     dplyr::bind_rows(figure3b_training_confusion, figure3b_test_confusion),
     file.path(outdir, "preserved_model_current_figure3b_confusion_source_data.csv")
   )
+  readr::write_csv(
+    figure3b_test_confusion,
+    "Final Tables and Figures/Figure_3B_BM_test_confusion_source_data.csv"
+  )
 
   figure3b_training_plot <- plot_preserved_confusion_df(
     figure3b_training_confusion,
@@ -722,6 +726,13 @@ if (USE_PRESERVED_MODELS_ONLY) {
     description = "Source confusion counts for Figure 3B after applying preserved February 2026 BM models to the current cohort.",
     script_name = "3_1_Optimize_cfWGS_thresholds.R"
   )
+  ms_copy_artifact(
+    source_path = "Final Tables and Figures/Figure_3B_BM_test_confusion_source_data.csv",
+    artifact_id = "FIG3B",
+    role = "supporting_data_csv_test_confusion",
+    description = "Test-cohort source confusion counts for Figure 3B after applying preserved February 2026 BM models to the current cohort.",
+    script_name = "3_1_Optimize_cfWGS_thresholds.R"
+  )
 
   selected_blood_models <- c("Blood_zscore_only_sites", "Blood_plus_fragment")
   selected_blood_labels <- c(
@@ -755,6 +766,10 @@ if (USE_PRESERVED_MODELS_ONLY) {
     dplyr::bind_rows(figure4b_training_confusion, figure4b_test_confusion),
     file.path(outdir, "preserved_model_current_figure4b_confusion_source_data.csv")
   )
+  readr::write_csv(
+    figure4b_test_confusion,
+    "Final Tables and Figures/Figure_4B_blood_test_confusion_source_data.csv"
+  )
   ggsave(
     "Final Tables and Figures/Fig5C_confusion_tables_primary_blood6.png",
     plot = plot_preserved_confusion_df(
@@ -787,6 +802,12 @@ if (USE_PRESERVED_MODELS_ONLY) {
     source_path = file.path(outdir, "preserved_model_current_figure4b_confusion_source_data.csv"),
     artifact_id = "FIG4B", role = "source_data_csv",
     description = "Source confusion counts for Figure 4B from preserved blood models.",
+    script_name = "3_1_Optimize_cfWGS_thresholds.R"
+  )
+  ms_copy_artifact(
+    source_path = "Final Tables and Figures/Figure_4B_blood_test_confusion_source_data.csv",
+    artifact_id = "FIG4B", role = "supporting_data_csv_test_confusion",
+    description = "Test-cohort source confusion counts for Figure 4B from preserved blood models.",
     script_name = "3_1_Optimize_cfWGS_thresholds.R"
   )
 

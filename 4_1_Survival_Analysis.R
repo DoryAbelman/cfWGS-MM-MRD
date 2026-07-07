@@ -298,9 +298,9 @@ cat("  ✓ Data preparation complete\n\n")
 ##
 ##  EasyM Data Sources (from script 3_1_A):
 ##    - EasyM_value: continuous M-protein measure (%)
-##    - EasyM_optimized_binary: binary call (1=positive, 0=negative) using
-##                            optimized thresholds from script 3_1_A
-##    - EasyM_optimized_call: character label of call for reporting
+##    - EasyM_reference_threshold_binary: binary call (1=positive, 0=negative)
+##                            using isotype-specific Rapid Novor reference thresholds
+##    - EasyM_reference_threshold_call: character label of call for reporting
 ##
 ## ────────────────────────────────────────────────────────────────────────────
 
@@ -318,7 +318,7 @@ if (file.exists(EasyM_file)) {
   # Join key: Patient (character) + Timepoint (character)
   # relationship = "many-to-one": multiple samples per patient, but one EasyM value per timepoint
   easym_join_tbl <- EasyM_data %>%
-    select(Patient, Timepoint, EasyM_value, EasyM_optimized_binary, EasyM_optimized_call) %>%
+    select(Patient, Timepoint, EasyM_value, EasyM_reference_threshold_binary, EasyM_reference_threshold_call) %>%
     mutate(Patient = as.character(Patient), Timepoint = as.character(Timepoint))
 
   dat <- dat %>%
@@ -337,8 +337,8 @@ if (file.exists(EasyM_file)) {
       relationship = "many-to-one"
     )
   
-  n_easym_matched <- sum(!is.na(dat$EasyM_optimized_binary))
-  n_easym_matched_all <- sum(!is.na(dat_all$EasyM_optimized_binary))
+  n_easym_matched <- sum(!is.na(dat$EasyM_reference_threshold_binary))
+  n_easym_matched_all <- sum(!is.na(dat_all$EasyM_reference_threshold_binary))
   cat(sprintf("  ✓ Merged EasyM data: %d frontline samples and %d all-cohort samples with EasyM calls\n",
               n_easym_matched, n_easym_matched_all))
   
@@ -350,14 +350,14 @@ if (file.exists(EasyM_file)) {
   dat <- dat %>%
     mutate(
       EasyM_value = NA_real_,
-      EasyM_optimized_binary = NA_integer_,
-      EasyM_optimized_call = NA_character_
+      EasyM_reference_threshold_binary = NA_integer_,
+      EasyM_reference_threshold_call = NA_character_
     )
   dat_all <- dat_all %>%
     mutate(
       EasyM_value = NA_real_,
-      EasyM_optimized_binary = NA_integer_,
-      EasyM_optimized_call = NA_character_
+      EasyM_reference_threshold_binary = NA_integer_,
+      EasyM_reference_threshold_call = NA_character_
     )
 }
 
@@ -421,7 +421,7 @@ survival_df <- dat %>%
     # Fragmentomics models
     Fragmentomics_mean_coverage_only_prob, Fragmentomics_mean_coverage_only_call,
     # EasyM proteomic MRD
-    EasyM_optimized_binary, EasyM_value
+    EasyM_reference_threshold_binary, EasyM_value
   )
 
 cat(sprintf("  ✓ Survival table created: %d samples from %d patients\n", 
@@ -479,7 +479,7 @@ survival_df_train_test <- dat_all %>%
     Blood_plus_fragment_prob, Blood_plus_fragment_call,
     Blood_plus_fragment_min_prob, Blood_plus_fragment_min_call,
     Fragmentomics_mean_coverage_only_prob, Fragmentomics_mean_coverage_only_call,
-    EasyM_optimized_binary, EasyM_value
+    EasyM_reference_threshold_binary, EasyM_value
   ) %>%
   dplyr::filter(
     !is.na(sample_date),
@@ -516,7 +516,7 @@ train_test_assay_availability <- survival_df_train_test %>%
     n_blood_combined_call = sum(!is.na(Blood_plus_fragment_call)),
     n_flow_call = sum(!is.na(Flow_Binary)),
     n_clonoseq_call = sum(!is.na(Adaptive_Binary)),
-    n_easym_call = sum(!is.na(EasyM_optimized_binary)),
+    n_easym_call = sum(!is.na(EasyM_reference_threshold_binary)),
     .groups = "drop"
   )
 
@@ -572,7 +572,7 @@ techs <- c(
   # Clinical MRD assays
   Flow_Binary        = "MFC",
   Adaptive_Binary    = "clonoSEQ",
-  EasyM_optimized_binary = "EasyM (Proteomic MRD)",
+  EasyM_reference_threshold_binary = "EasyM",
   # Bone Marrow-derived WGS mutations
   BM_zscore_only_detection_rate_call    = "cfWGS of BM-Derived Mutations (cVAF Model)", 
   BM_zscore_only_detection_rate_screen_call = "cfWGS of BM-derived mutations (High Sensitivity)", 
@@ -640,8 +640,8 @@ km_manuscript_artifacts <- tibble::tribble(
   "1yr maintenance",  "Adaptive_Binary",                           "EDFIG6D",   "Extended Data Figure 6D: one-year maintenance PFS by clonoSEQ MRD status.",
   "post_transplant",  "BM_zscore_only_detection_rate_call",        "EDFIG6E",   "Extended Data Figure 6E: post-ASCT PFS by BM-derived cfWGS MRD status.",
   "post_transplant",  "Flow_Binary",                               "EDFIG6F",   "Extended Data Figure 6F: post-ASCT PFS by MFC MRD status.",
-  "1yr maintenance",  "EasyM_optimized_binary",                    "EDFIG6G",   "Extended Data Figure 6G: one-year maintenance PFS by EasyM MRD status.",
-  "post_transplant",  "EasyM_optimized_binary",                    "EDFIG6H",   "Extended Data Figure 6H: post-ASCT PFS by EasyM MRD status.",
+  "1yr maintenance",  "EasyM_reference_threshold_binary",           "EDFIG6G",   "Extended Data Figure 6G: one-year maintenance PFS by EasyM MRD status.",
+  "post_transplant",  "EasyM_reference_threshold_binary",           "EDFIG6H",   "Extended Data Figure 6H: post-ASCT PFS by EasyM MRD status.",
   "post_transplant",  "Blood_zscore_only_sites_call",              "EDFIG8C",   "Extended Data Figure 8C: post-ASCT PFS by cfDNA-derived cfWGS MRD status."
 )
 
@@ -1548,7 +1548,7 @@ write_csv(followup_stats, file.path(outdir, paste0("frontline_followup_summary_"
 
 # 4.  Assays & timepoint definitions ------------------------------------------
 assays <- c(
-  EasyM    = "EasyM_optimized_binary",
+  EasyM    = "EasyM_reference_threshold_binary",
   clonoSEQ = "Adaptive_Binary",
   Flow     = "Flow_Binary",
   cfWGS_BM    = "BM_zscore_only_detection_rate_call",
@@ -1696,12 +1696,12 @@ sens_df_bm <- bind_rows(
     Sens_pct   = Sensitivity * 100,
     # Manuscript-friendly assay names
     Assay      = recode(Assay,
-                        EasyM          = "EasyM (Opt)",
+                        EasyM          = "EasyM",
                         clonoSEQ       = "clonoSEQ",
                         Flow           = "MFC",
                         cfWGS_BM       = "cfWGS"),
-    # Enforce display order: cfWGS, clonoSEQ, MFC, then EasyM (Opt) rightmost
-    Assay = factor(Assay, levels = c("cfWGS", "clonoSEQ", "MFC", "EasyM (Opt)")),
+    # Enforce display order: cfWGS, clonoSEQ, MFC, then EasyM rightmost
+    Assay = factor(Assay, levels = c("cfWGS", "clonoSEQ", "MFC", "EasyM")),
     # Enforce timepoint order for legend and grouping
     Timepoint = factor(Timepoint, levels = c("Post-ASCT", "Maintenance-1yr"))
   )
@@ -1822,7 +1822,7 @@ sens_df_blood <- bind_rows(
     Sens_pct   = Sensitivity * 100,
     # Manuscript-friendly assay names (with line breaks for blood cfWGS variants)
     Assay      = recode(Assay,
-                        EasyM                 = "EasyM (Opt)",
+                        EasyM                 = "EasyM",
                         clonoSEQ              = "clonoSEQ",
                         Flow                  = "MFC",
                         cfWGS_Blood_Sites     = "cfWGS\n(Sites Model)",
@@ -1831,13 +1831,13 @@ sens_df_blood <- bind_rows(
     Timepoint = factor(Timepoint, levels = c("Post-ASCT", "Maintenance-1yr"))
   ) 
 
-# Enforce assay ordering: cfWGS variants (blood) first, then clonoSEQ, MFC, EasyM (Opt) rightmost
-# Note: Blood models use "\n" for line break in x-axis labels; EasyM (Opt) is rightmost for consistency
+# Enforce assay ordering: cfWGS variants (blood) first, then clonoSEQ, MFC, EasyM rightmost.
+# Note: Blood models use "\n" for line break in x-axis labels; EasyM is rightmost for consistency.
 sens_df_blood <- sens_df_blood %>%
   mutate(Assay = factor(Assay,
                         levels = c("cfWGS\n(Sites Model)",
                                    "cfWGS\n(Combined Model)", 
-                                   "clonoSEQ", "MFC", "EasyM (Opt)")))
+                                   "clonoSEQ", "MFC", "EasyM")))
 
 # ─────────────────────────────────────────────────────────────────────────────
 # SOURCE DATA EXPORT: Supp_8A (Blood sensitivity barplot)
@@ -2031,7 +2031,7 @@ build_landmark_progression_row <- function(survival_df,
     seq = summarise_binary_survival(df_km, "Adaptive_Binary")
   )
   if (isTRUE(include_easym)) {
-    assay_summaries$em <- summarise_binary_survival(df_km, "EasyM_optimized_binary")
+    assay_summaries$em <- summarise_binary_survival(df_km, "EasyM_reference_threshold_binary")
   }
 
   prob_cor <- safe_spearman(df_km[[primary_prob_col]], df_km$Time_to_event)
@@ -2278,9 +2278,9 @@ hr_plot_df_blood <- progression_metrics_blood %>%
                    cf = "cfWGS (Sites Model)",
                    fl = "MFC",
                    seq = "clonoSEQ",
-                   em = "EasyM (Opt)"),
+                   em = "EasyM"),
     Assay = factor(Assay,
-                   levels = c("cfWGS (Sites Model)", "clonoSEQ", "MFC", "EasyM (Opt)")),
+                   levels = c("cfWGS (Sites Model)", "clonoSEQ", "MFC", "EasyM")),
     Landmark = factor(Landmark,
                       levels = c("post_transplant", "1yr_maintenance"),
                       labels = c("Post-ASCT", "Maintenance-1yr"))
@@ -2298,7 +2298,7 @@ hr_plot_df_combined <- progression_metrics_blood_combined %>%
   mutate(
     Assay = "cfWGS (Combined Model)",
     Assay = factor(Assay,
-                   levels = c("cfWGS (Sites Model)", "cfWGS (Combined Model)", "clonoSEQ", "MFC", "EasyM (Opt)")),
+                   levels = c("cfWGS (Sites Model)", "cfWGS (Combined Model)", "clonoSEQ", "MFC", "EasyM")),
     Landmark = factor(Landmark,
                       levels = c("post_transplant", "1yr_maintenance"),
                       labels = c("Post-ASCT", "Maintenance-1yr"))
@@ -2308,7 +2308,7 @@ hr_plot_df_combined <- progression_metrics_blood_combined %>%
 # bind together Sites + Combined models
 hr_plot_df_blood <- bind_rows(hr_plot_df_blood, hr_plot_df_combined) %>%
   mutate(Assay = factor(Assay,
-                        levels = c("cfWGS (Sites Model)", "cfWGS (Combined Model)", "clonoSEQ", "MFC", "EasyM (Opt)")))
+                        levels = c("cfWGS (Sites Model)", "cfWGS (Combined Model)", "clonoSEQ", "MFC", "EasyM")))
 
 # ─────────────────────────────────────────────────────────────────────────────
 # SOURCE DATA EXPORT: SuppFig8B (Blood HR plot)
@@ -2366,7 +2366,7 @@ p_hr <- ggplot(hr_plot_df_blood,
                "cfWGS (Combined Model)" = "#440154FF",
                "MFC"   = "#43BF71FF",
                "clonoSEQ"= "#E69F00FF",   # orange for clonoSEQ
-               "EasyM (Opt)" = "#D81B60FF")  # magenta for EasyM
+               "EasyM" = "#D81B60FF")  # magenta for EasyM
   ) +
   
   labs(
@@ -2420,9 +2420,9 @@ hr_plot_df_bm <- progression_metrics %>%
                    cf = "cfWGS",
                    fl = "MFC",
                    seq = "clonoSEQ",
-                   em = "EasyM (Opt)"),
+                   em = "EasyM"),
     Assay = factor(Assay,
-                   levels = c("cfWGS", "clonoSEQ", "MFC", "EasyM (Opt)")),
+                   levels = c("cfWGS", "clonoSEQ", "MFC", "EasyM")),
     Landmark = factor(Landmark,
                       levels = c("post_transplant", "1yr_maintenance"),
                       labels = c("Post-ASCT", "Maintenance-1yr"))
@@ -2508,7 +2508,7 @@ p_hr_bm <- ggplot(hr_plot_df_bm_display,
     values = c("cfWGS" = "#35608DFF",
                "MFC"   = "#43BF71FF",
                "clonoSEQ"= "#E69F00FF",   # orange for clonoSEQ
-               "EasyM (Opt)" = "#D81B60FF")    # magenta/pink for EasyM
+               "EasyM" = "#D81B60FF")    # magenta/pink for EasyM
   ) +
   
   labs(
@@ -2849,7 +2849,7 @@ ggsave(file.path(outdir, "Fig_time_to_relapse_vs_prob2.png"),
 
 
 ### Show non-relapsers as infinity
-# 1) compute days & a “days_plot” that sends non-relapsers to ∞
+# 1) compute days & a “days_plot” that sends non-relapsers to Inf
 plot_df2 <- df %>%
   mutate(days_before_event = months_before_event * 30.44) %>%        # months→days
   group_by(Patient) %>%
@@ -2938,7 +2938,7 @@ pval_pre <- spearman_pre$p.value
 pval_all_str <- ifelse(pval_all < 0.001, "<0.001", sprintf("%.3f", pval_all))
 pval_pre_str <- ifelse(pval_pre < 0.001, "<0.001", sprintf("%.3f", pval_pre))
 
-annot_text <- sprintf("All relapse samples:\nρ=%.2f, p=%s\nPre-relapse only:\nρ=%.2f, p=%s",
+annot_text <- sprintf("All relapse samples:\nrho=%.2f, p=%s\nPre-relapse only:\nrho=%.2f, p=%s",
                       rho_all, pval_all_str,
                       rho_pre, pval_pre_str)
 
@@ -2955,12 +2955,12 @@ p_time_inf <- ggplot(plot_df2,
                  fill   = progress_status),
              shape = 21, size = 3, colour = "black") +
   
-  # ∞‐aware y‐axis
+  # Inf‐aware y‐axis
   scale_y_continuous(
-    "Days until relapse (or ∞ for censor)",
+    "Days until relapse (or Inf for censor)",
     limits = c(0, overflow),
     breaks = c(seq(0, 1620, by = 180), overflow),
-    labels = c(seq(0, 1620, by = 180), "∞")
+    labels = c(seq(0, 1620, by = 180), "Inf")
   ) +
   
   # x‐axis as percent
@@ -2985,7 +2985,7 @@ p_time_inf <- ggplot(plot_df2,
   # annotate("text",
   #          x = 0.01,      # left margin
   #          y = 1650,
-  #          label = sprintf("ρ = %.2f\np = %s", rho, pval_str),
+  #          label = sprintf("rho = %.2f\np = %s", rho, pval_str),
   #          hjust = 0,
   #          size = 3.5) +
   annotate("text",
@@ -3032,10 +3032,10 @@ p_main <- ggplot(plot_df2,
   geom_point(aes(colour = progress_status, fill = progress_status),
              shape = 21, size = 3, colour = "black") +
   scale_y_continuous(
-    "Days until relapse (or ∞ for censor)",
+    "Days until relapse (or Inf for censor)",
     limits = c(0, overflow),
     breaks = c(seq(0, 1620, by = 180), overflow),
-    labels = c(seq(0, 1620, by = 180), "∞")
+    labels = c(seq(0, 1620, by = 180), "Inf")
   ) +
   scale_x_continuous(
     "cfWGS MRD probability",
@@ -3090,8 +3090,8 @@ p_legend_only <- ggplot(legend_df, aes(x, y, fill = progress_status)) +
   )
 
 # --- 3) make two small “text boxes” for the right columns ---
-txt_all <- sprintf("All relapse samples:\nρ=%.2f, p=%s", rho_all, pval_all_str)
-txt_pre <- sprintf("Pre-relapse only:\nρ=%.2f, p=%s", rho_pre, pval_pre_str)
+txt_all <- sprintf("All relapse samples:\nrho=%.2f, p=%s", rho_all, pval_all_str)
+txt_pre <- sprintf("Pre-relapse only:\nrho=%.2f, p=%s", rho_pre, pval_pre_str)
 
 mini_box <- function(s) {
   ggplot() +
@@ -3438,7 +3438,7 @@ ggsave(file.path(outdir, "Fig_time_to_relapse_vs_prob2.png"),
 
 
 ### Show non-relapsers as infinity
-# 1) compute days & a “days_plot” that sends non-relapsers to ∞
+# 1) compute days & a “days_plot” that sends non-relapsers to Inf
 plot_df2 <- df %>%
   mutate(days_before_event = months_before_event * 30.44) %>%        # months→days
   group_by(Patient) %>%
@@ -3507,7 +3507,7 @@ pval_pre <- spearman_pre$p.value
 pval_all_str <- ifelse(pval_all < 0.001, "<0.001", sprintf("%.3f", pval_all))
 pval_pre_str <- ifelse(pval_pre < 0.001, "<0.001", sprintf("%.3f", pval_pre))
 
-annot_text <- sprintf("All relapse samples:\nρ=%.2f, p=%s\nPre-relapse only:\nρ=%.2f, p=%s",
+annot_text <- sprintf("All relapse samples:\nrho=%.2f, p=%s\nPre-relapse only:\nrho=%.2f, p=%s",
                       rho_all, pval_all_str,
                       rho_pre, pval_pre_str)
 
@@ -3533,12 +3533,12 @@ p_time_inf <- ggplot(plot_df2,
                  fill   = progress_status),
              shape = 21, size = 3, colour = "black") +
   
-  # ∞‐aware y‐axis
+  # Inf‐aware y‐axis
   scale_y_continuous(
-    "Days until relapse (or ∞ for censor)",
+    "Days until relapse (or Inf for censor)",
     limits = c(0, overflow),
     breaks = c(seq(0, 1620, by = 180), overflow),
-    labels = c(seq(0, 1620, by = 180), "∞")
+    labels = c(seq(0, 1620, by = 180), "Inf")
   ) +
   
   # x‐axis as percent
@@ -3563,7 +3563,7 @@ p_time_inf <- ggplot(plot_df2,
   # annotate("text",
   #          x = 0.90,      # left margin
   #          y = 1650,
-  #          label = sprintf("ρ = %.2f\np = %s", rho, pval_fmt),
+  #          label = sprintf("rho = %.2f\np = %s", rho, pval_fmt),
   #          hjust = 0,
   #          size = 3.5) +
   annotate("text",
@@ -3618,12 +3618,12 @@ p_main <-  ggplot(plot_df2,
                  fill   = progress_status),
              shape = 21, size = 3, colour = "black") +
   
-  # ∞‐aware y‐axis
+  # Inf‐aware y‐axis
   scale_y_continuous(
-    "Days until relapse (or ∞ for censor)",
+    "Days until relapse (or Inf for censor)",
     limits = c(0, overflow),
     breaks = c(seq(0, 1620, by = 180), overflow),
-    labels = c(seq(0, 1620, by = 180), "∞")
+    labels = c(seq(0, 1620, by = 180), "Inf")
   ) +
   
   # x‐axis as percent
@@ -3686,8 +3686,8 @@ p_legend_only <- ggplot(legend_df, aes(x, y, fill = progress_status)) +
   )
 
 # --- 3) make two small “text boxes” for the right columns ---
-txt_all <- sprintf("All relapse samples:\nρ=%.2f, p=%s", rho_all, pval_all_str)
-txt_pre <- sprintf("Pre-relapse only:\nρ=%.2f, p=%s", rho_pre, pval_pre_str)
+txt_all <- sprintf("All relapse samples:\nrho=%.2f, p=%s", rho_all, pval_all_str)
+txt_pre <- sprintf("Pre-relapse only:\nrho=%.2f, p=%s", rho_pre, pval_pre_str)
 
 mini_box <- function(s) {
   ggplot() +
@@ -4113,7 +4113,7 @@ dat <- dat %>%
 
 # 1) Your assays vector
 assays <- c(
-  EasyM        = "EasyM_optimized_binary",
+  EasyM        = "EasyM_reference_threshold_binary",
   Flow         = "Flow_Binary",
   cfWGS_BM     = "BM_zscore_only_detection_rate_call",
   cfWGS_Blood  = "Blood_zscore_only_sites_call", 

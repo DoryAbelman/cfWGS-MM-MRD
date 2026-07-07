@@ -501,7 +501,7 @@ if (!is.null(calls)) {
   assay_cols <- c(
     MFC = "Flow_Binary",
     clonoSEQ = "Adaptive_Binary",
-    EasyM = "EasyM_optimized_binary",
+    EasyM = "EasyM_reference_threshold_binary",
     BM_cfWGS = "BM_zscore_only_detection_rate_call",
     Blood_cfWGS_sites = "Blood_zscore_only_sites_call",
     Blood_cfWGS_combined = "Blood_plus_fragment_call"

@@ -103,6 +103,46 @@ support_file <- function(filename) {
   file.path(support_table_dir, filename)
 }
 
+reconcile_joined_identity_columns <- function(df, columns, audit_filename) {
+  audit_rows <- purrr::map_dfr(columns, function(base_col) {
+    candidates <- intersect(c(base_col, paste0(base_col, ".x"), paste0(base_col, ".y")), names(df))
+    if (length(candidates) <= 1L) {
+      return(tibble())
+    }
+
+    values <- df %>%
+      mutate(.row_id = row_number()) %>%
+      select(any_of(c("Sample", "Bam", "Patient", "Sample_ID", "Timepoint", "timepoint_info")),
+             .row_id, all_of(candidates)) %>%
+      pivot_longer(
+        cols = all_of(candidates),
+        names_to = "source_column",
+        values_to = "source_value",
+        values_transform = list(source_value = as.character)
+      ) %>%
+      filter(!is.na(source_value), nzchar(source_value))
+
+    values %>%
+      group_by(.row_id) %>%
+      filter(n_distinct(source_value) > 1L) %>%
+      ungroup() %>%
+      mutate(canonical_column = base_col) %>%
+      select(canonical_column, everything())
+  })
+
+  readr::write_csv(audit_rows, support_file(audit_filename))
+
+  for (base_col in columns) {
+    candidates <- intersect(c(base_col, paste0(base_col, ".x"), paste0(base_col, ".y")), names(df))
+    if (length(candidates) > 1L) {
+      df[[base_col]] <- dplyr::coalesce(!!!df[candidates])
+      df <- df %>% select(-any_of(setdiff(candidates, base_col)))
+    }
+  }
+
+  df
+}
+
 require_files <- function(paths, description) {
   missing_paths <- paths[!file.exists(paths)]
   if (length(missing_paths) > 0L) {
@@ -235,10 +275,11 @@ maf_object_bm    <- read.maf(bm_maf_path)
 #saveRDS(CNA_translocation, "CNA_translocation_original_Feb2025.rds")
 
 # Define caller-source rules by sample matrix before merging CNA calls.
-# Publication-facing analyses use Sequenza for BM-cell CNA calls and ichorCNA
-# for cfDNA/non-BM CNA calls. BM rows found only in ichorCNA are therefore
-# excluded from the active CNA feature table rather than mixed with Sequenza BM
-# calls. They are written to a support table for traceability.
+# Publication-facing analyses use Sequenza for BM-cell CNA calls when available
+# and ichorCNA for cfDNA/non-BM CNA calls. BM rows found only in ichorCNA are
+# retained as fallback CNA evidence rather than being forced missing. Only
+# ichorCNA rows for BAMs that also have Sequenza calls are dropped, so Sequenza
+# takes precedence without losing BM samples lacking Sequenza output.
 metadata_sample_types <- metada_df_mutation_comparison %>%
   transmute(
     Sample = as.character(Bam_clean_tmp),
@@ -309,6 +350,11 @@ metada_df_mutation_comparison <- metada_df_mutation_comparison %>%
 CNA_translocation <- left_join(CNA_translocation, 
                                metada_df_mutation_comparison, 
                                by = c("Sample" = "Bam_clean_tmp"))
+CNA_translocation <- reconcile_joined_identity_columns(
+  CNA_translocation,
+  columns = c("Date_of_sample_collection", "Study", "Sample_ID"),
+  audit_filename = "cna_translocation_identity_column_reconciliation_audit.csv"
+)
 
 ## Add the tumor fraction info 
 # Tumor_Fraction is the ichorCNA estimate of the fraction of cfDNA
@@ -1223,6 +1269,19 @@ readr::write_csv(
 All_feature_data_logical <- ranked_biological_replicates %>%
   dplyr::filter(.keep_biological_replicate) %>%
   dplyr::select(-dplyr::starts_with("."))
+
+identity_suffix_columns <- grep(
+  "^(Date_of_sample_collection|Study|Sample_ID)\\.(x|y)$",
+  names(All_feature_data_logical),
+  value = TRUE
+)
+if (length(identity_suffix_columns) > 0L) {
+  stop(
+    "All_feature_data still contains unreconciled joined identity columns: ",
+    paste(identity_suffix_columns, collapse = ", "),
+    call. = FALSE
+  )
+}
 
 retained_active_samples <- unique(All_feature_data_logical$Sample)
 CNA_translocation <- CNA_translocation %>%
