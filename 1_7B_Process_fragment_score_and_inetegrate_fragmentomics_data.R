@@ -571,6 +571,7 @@ print(missing_samples)
 
 
 ## Add missing data for VA-07 - changed when 05 timepoint became R in script 1_0 due to relapse at this timepoint update
+va07_recode <- manual_clinical_correction_rows("va07_relapse_sample_recode")
 merged_data_grouped <- merged_data_grouped %>%
   mutate(
     Patient = case_when(
@@ -578,7 +579,7 @@ merged_data_grouped <- merged_data_grouped %>%
       TRUE ~ Patient
     ),
     Date_of_sample_collection = case_when(
-      Sample == "VA-07-05-P" ~ as.Date("2021-01-01"),
+      Sample == "VA-07-05-P" ~ va07_recode$Date_of_sample_collection[[1]],
       TRUE ~ Date_of_sample_collection
     )
   )

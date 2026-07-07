@@ -79,6 +79,13 @@ if (!file.exists(.manuscript_helper)) {
 source(.manuscript_helper)
 rm(.manuscript_helper)
 
+.helpers_path <- file.path("Scripts_2025", "Final_Scripts", "helpers.R")
+if (!file.exists(.helpers_path)) {
+  .helpers_path <- "helpers.R"
+}
+source(.helpers_path)
+rm(.helpers_path)
+
 
 # -----------------------------------------------------------
 # 1. Load baseline table inputs
@@ -177,8 +184,7 @@ if (!nrow(resp_CA02)) {
 # 4. Drop all CA-02 originals and keep the intended SPORE_0009 baseline row
 dat_tb_final <- dat_tb2 %>%
   filter(Patient != "CA-02") %>%
-  filter(!(Patient == "SPORE_0009" &
-             !(Date == as.Date("2016-08-24") & timepoint_info == "Baseline"))) %>%
+  filter_manual_baseline_row_selection("spore0009_baseline_only") %>%
   bind_rows(resp_CA02) %>%
   arrange(Patient)
 
@@ -260,6 +266,326 @@ if (length(invalid_cohorts)) {
   )
 }
 
+### Fill missing Table 1 clinical fields from curated patient-level sources.
+# This preserves the original row-selection logic above and only rescues missing
+# patient-level fields for Table 1. Every filled value is audited below.
+is_missing_label <- function(x) {
+  x_chr <- trimws(as.character(x))
+  is.na(x_chr) | !nzchar(x_chr) |
+    toupper(x_chr) %in% c("NA", "N/A", "UNKNOWN", "UNKNOWN/MISSING", "MISSING")
+}
+
+first_non_missing_value <- function(x) {
+  x_chr <- trimws(as.character(x))
+  x_chr <- x_chr[!is_missing_label(x_chr)]
+  if (length(x_chr)) x_chr[[1]] else NA_character_
+}
+
+coalesce_missing_label <- function(current, rescue) {
+  dplyr::if_else(is_missing_label(current) & !is_missing_label(rescue), as.character(rescue), as.character(current))
+}
+
+normalize_gender <- function(x) {
+  x_chr <- trimws(as.character(x))
+  dplyr::case_when(
+    toupper(x_chr) %in% c("M", "MALE") ~ "Male",
+    toupper(x_chr) %in% c("F", "FEMALE") ~ "Female",
+    TRUE ~ x_chr
+  )
+}
+
+age_group_from_age <- function(age) {
+  age_num <- suppressWarnings(as.numeric(age))
+  dplyr::case_when(
+    age_num < 50 ~ "<50",
+    age_num >= 50 & age_num < 60 ~ "50-59",
+    age_num >= 60 & age_num < 70 ~ "60-69",
+    age_num >= 70 & age_num < 80 ~ "70-79",
+    age_num >= 80 ~ "80+",
+    TRUE ~ NA_character_
+  )
+}
+
+normalize_stage <- function(x) {
+  x_chr <- stringr::str_squish(as.character(x))
+  dplyr::case_when(
+    stringr::str_detect(x_chr, stringr::regex("^stage\\s*1$|^stage\\s*i$", ignore_case = TRUE)) ~ "Stage I",
+    stringr::str_detect(x_chr, stringr::regex("^stage\\s*2$|^stage\\s*ii$", ignore_case = TRUE)) ~ "Stage II",
+    stringr::str_detect(x_chr, stringr::regex("^stage\\s*3$|^stage\\s*iii$", ignore_case = TRUE)) ~ "Stage III",
+    TRUE ~ x_chr
+  )
+}
+
+normalize_marker <- function(x) {
+  x_chr <- trimws(as.character(x))
+  dplyr::case_when(
+    toupper(x_chr) %in% c("YES", "Y", "TRUE", "1", "POSITIVE") ~ "Positive",
+    toupper(x_chr) %in% c("NO", "N", "FALSE", "0", "NEGATIVE") ~ "Negative",
+    TRUE ~ NA_character_
+  )
+}
+
+build_isotype_subtype <- function(heavy_chain, light_chain) {
+  heavy <- trimws(as.character(heavy_chain))
+  light <- trimws(as.character(light_chain))
+  heavy[is_missing_label(heavy)] <- NA_character_
+  light[is_missing_label(light)] <- NA_character_
+  dplyr::case_when(
+    is.na(heavy) & is.na(light) ~ NA_character_,
+    toupper(heavy) %in% c("FLC", "LIGHT CHAIN", "LIGHT CHAIN ONLY", "NEGATIVE") & !is.na(light) ~
+      paste("Light Chain", light),
+    !is.na(heavy) & !is.na(light) ~ paste(heavy, light),
+    !is.na(heavy) ~ paste(heavy, "(Subtype Unknown)"),
+    TRUE ~ NA_character_
+  )
+}
+
+normalize_img_patient_id <- function(x) {
+  x_chr <- trimws(as.character(x))
+  direct <- stringr::str_extract(x_chr, "IMG-[0-9]+")
+  numeric_id <- stringr::str_extract(x_chr, "[0-9]+")
+  dplyr::case_when(
+    !is.na(direct) ~ sprintf("IMG-%03d", as.integer(stringr::str_extract(direct, "[0-9]+"))),
+    !is.na(numeric_id) ~ sprintf("IMG-%03d", as.integer(numeric_id)),
+    TRUE ~ NA_character_
+  )
+}
+
+read_table1_patient_clinical_sources <- function() {
+  clinical_sources <- list()
+
+  imagine_curated_path <- "Clinical data/IMMAGINE/Clinical data for IMG patients at diagnosis_filled_DA_edited.xlsx"
+  if (file.exists(imagine_curated_path)) {
+    clinical_sources[["imagine_curated_diagnosis"]] <- readxl::read_excel(imagine_curated_path) %>%
+      transmute(
+        Patient = as.character(Patient_ID),
+        Gender = normalize_gender(GENDER),
+        AGE_GROUP = age_group_from_age(AGE_AT_CONSENT),
+        ISS_STAGE = normalize_stage(ISS_STAGE),
+        Cytogenetic_Risk = as.character(Cytogenetic_Risk),
+        Subtype = as.character(Subtype),
+        ECOG_SCORE = as.character(ECOG_score),
+        T_4_14 = NA_character_,
+        T_14_16 = NA_character_,
+        DEL_17P = NA_character_,
+        table1_clinical_rescue_source = imagine_curated_path
+      )
+  }
+
+  spore_curated_path <- "Clinical data/SPORE/Spore_baseline_clinical_demographics_DA_edited.xlsx"
+  if (file.exists(spore_curated_path)) {
+    clinical_sources[["spore_curated_baseline"]] <- readxl::read_excel(spore_curated_path) %>%
+      transmute(
+        Patient = as.character(Patient_ID),
+        Gender = normalize_gender(GENDER),
+        AGE_GROUP = age_group_from_age(AGE_AT_CONSENT),
+        ISS_STAGE = normalize_stage(ISS_STAGE),
+        Cytogenetic_Risk = NA_character_,
+        Subtype = as.character(Subtype),
+        ECOG_SCORE = as.character(ECOG_score),
+        T_4_14 = NA_character_,
+        T_14_16 = NA_character_,
+        DEL_17P = NA_character_,
+        table1_clinical_rescue_source = spore_curated_path
+      )
+  }
+
+  oicr_summary_path <- "New OICR Submissions/derived_metadata/oicr_submission_patient_clinical_summary.csv"
+  if (file.exists(oicr_summary_path)) {
+    clinical_sources[["oicr_patient_summary"]] <- readr::read_csv(oicr_summary_path, show_col_types = FALSE) %>%
+      transmute(
+        Patient = as.character(patient_img_id),
+        Gender = normalize_gender(Sex),
+        AGE_GROUP = age_group_from_age(`Age at Diagnosis`),
+        ISS_STAGE = normalize_stage(`Risk Status at Diagnosis`),
+        Cytogenetic_Risk = NA_character_,
+        Subtype = build_isotype_subtype(`Heavy Chain Isotype`, `Light Chain Isotype`),
+        ECOG_SCORE = NA_character_,
+        T_4_14 = normalize_marker(`t(4;14)`),
+        T_14_16 = normalize_marker(`t(14;16)`),
+        DEL_17P = normalize_marker(del17p),
+        table1_clinical_rescue_source = oicr_summary_path
+      )
+  }
+
+  esther_liberate_paths <- c(
+    "Clinical data/IMMAGINE/IMMAGINE  LIBERATE_ID_noMRNorDoB_6Feb2026.xlsx",
+    "Clinical data/IMMAGINE/IMMAGINE  LIBERATE_ID_noMRN_6Feb2026.xlsx",
+    "Clinical data/IMMAGINE/IMMAGINE  LIBERATE_MRD_withoutMRN_or_DOB_18Dec2025.xlsx"
+  )
+  for (esther_path in esther_liberate_paths[file.exists(esther_liberate_paths)]) {
+    esther_sheets <- readxl::excel_sheets(esther_path)
+    for (sheet_name in esther_sheets) {
+      esther_sheet <- tryCatch(
+        readxl::read_excel(esther_path, sheet = sheet_name),
+        error = function(e) tibble()
+      )
+      if (!nrow(esther_sheet) || !"GENDER" %in% names(esther_sheet)) {
+        next
+      }
+      id_column <- dplyr::case_when(
+        "STUDY_NAME" %in% names(esther_sheet) ~ "STUDY_NAME",
+        "PATIENT_ID" %in% names(esther_sheet) ~ "PATIENT_ID",
+        TRUE ~ NA_character_
+      )
+      if (is.na(id_column)) {
+        next
+      }
+      source_name <- paste0(esther_path, " [", sheet_name, "]")
+      clinical_sources[[paste0("esther_imagine_liberate_", length(clinical_sources) + 1L)]] <-
+        esther_sheet %>%
+        transmute(
+          Patient = normalize_img_patient_id(.data[[id_column]]),
+          Gender = normalize_gender(GENDER),
+          AGE_GROUP = NA_character_,
+          ISS_STAGE = NA_character_,
+          Cytogenetic_Risk = NA_character_,
+          Subtype = NA_character_,
+          ECOG_SCORE = NA_character_,
+          T_4_14 = NA_character_,
+          T_14_16 = NA_character_,
+          DEL_17P = NA_character_,
+          table1_clinical_rescue_source = source_name
+        )
+    }
+  }
+
+  imagine_pcm_path <- "Clinical data/IMMAGINE/IMMAGINE_PCM_Import_24Mar2023/data_clinical_patients.txt"
+  if (file.exists(imagine_pcm_path)) {
+    clinical_sources[["imagine_cbio_patient_table"]] <- readr::read_tsv(
+      imagine_pcm_path,
+      comment = "#",
+      show_col_types = FALSE
+    ) %>%
+      transmute(
+        Patient = as.character(PATIENT_ID),
+        Gender = normalize_gender(SEX_AT_BIRTH),
+        AGE_GROUP = age_group_from_age(AGE),
+        ISS_STAGE = normalize_stage(RISK_STATUS_DIAGNOSIS),
+        Cytogenetic_Risk = NA_character_,
+        Subtype = build_isotype_subtype(IGH_ISOTYPE, IGL_ISOTYPE),
+        ECOG_SCORE = NA_character_,
+        T_4_14 = normalize_marker(TX_T4_14),
+        T_14_16 = normalize_marker(TX_T14_16),
+        DEL_17P = normalize_marker(CNV_DEL17P),
+        table1_clinical_rescue_source = imagine_pcm_path
+      )
+  }
+
+  if (!length(clinical_sources)) {
+    return(tibble())
+  }
+
+  rescue_fields <- c(
+    "Gender", "AGE_GROUP", "ISS_STAGE", "Cytogenetic_Risk", "Subtype",
+    "ECOG_SCORE", "T_4_14", "T_14_16", "DEL_17P"
+  )
+
+  rescue_raw <- bind_rows(clinical_sources) %>%
+    filter(!is_missing_label(Patient))
+
+  rescue_values <- rescue_raw %>%
+    filter(!is_missing_label(Patient)) %>%
+    group_by(Patient) %>%
+    summarise(
+      across(
+        all_of(rescue_fields),
+        first_non_missing_value
+      ),
+      table1_clinical_rescue_source = paste(unique(table1_clinical_rescue_source), collapse = "; "),
+      .groups = "drop"
+    )
+
+  rescue_field_sources <- rescue_raw %>%
+    pivot_longer(
+      cols = all_of(rescue_fields),
+      names_to = "field",
+      values_to = "value"
+    ) %>%
+    filter(!is_missing_label(value)) %>%
+    group_by(Patient, field) %>%
+    summarise(
+      table1_clinical_rescue_field_source = first(table1_clinical_rescue_source),
+      .groups = "drop"
+    ) %>%
+    pivot_wider(
+      names_from = field,
+      values_from = table1_clinical_rescue_field_source,
+      names_prefix = "table1_clinical_rescue_source_"
+    )
+
+  rescue_values %>%
+    left_join(rescue_field_sources, by = "Patient")
+}
+
+table1_clinical_rescue <- read_table1_patient_clinical_sources()
+
+table1_rescue_fields <- c(
+  "Gender", "AGE_GROUP", "ISS_STAGE", "Cytogenetic_Risk", "Subtype",
+  "ECOG_SCORE", "T_4_14", "T_14_16", "DEL_17P"
+)
+
+if (nrow(table1_clinical_rescue)) {
+  dat_before_clinical_rescue <- dat_base %>%
+    select(Patient, all_of(table1_rescue_fields)) %>%
+    mutate(across(all_of(table1_rescue_fields), as.character))
+
+  dat_base_rescue_joined <- dat_base %>%
+    left_join(
+      table1_clinical_rescue %>%
+        rename_with(~ paste0(.x, "_table1_rescue"), all_of(table1_rescue_fields)),
+      by = "Patient"
+    )
+
+  for (field in table1_rescue_fields) {
+    rescue_field <- paste0(field, "_table1_rescue")
+    dat_base_rescue_joined[[field]] <- coalesce_missing_label(
+      dat_base_rescue_joined[[field]],
+      dat_base_rescue_joined[[rescue_field]]
+    )
+  }
+
+  dat_base <- dat_base_rescue_joined %>%
+    select(-ends_with("_table1_rescue"))
+
+  dat_after_clinical_rescue <- dat_base %>%
+    select(Patient, all_of(table1_rescue_fields)) %>%
+    mutate(across(all_of(table1_rescue_fields), as.character))
+
+  table1_clinical_rescue_field_sources_long <- table1_clinical_rescue %>%
+    select(Patient, starts_with("table1_clinical_rescue_source_")) %>%
+    pivot_longer(
+      cols = -Patient,
+      names_to = "field",
+      values_to = "table1_clinical_rescue_field_source",
+      names_prefix = "table1_clinical_rescue_source_"
+    )
+
+  table1_clinical_rescue_audit <- dat_before_clinical_rescue %>%
+    rename_with(~ paste0(.x, "_before"), all_of(table1_rescue_fields)) %>%
+    left_join(
+      dat_after_clinical_rescue %>%
+        rename_with(~ paste0(.x, "_after"), all_of(table1_rescue_fields)),
+      by = "Patient"
+    ) %>%
+    pivot_longer(
+      cols = -Patient,
+      names_to = c("field", ".value"),
+      names_pattern = "(.+)_(before|after)"
+    ) %>%
+    left_join(
+      table1_clinical_rescue_field_sources_long,
+      by = c("Patient", "field")
+    ) %>%
+    filter(is_missing_label(before), !is_missing_label(after)) %>%
+    arrange(Patient, field)
+
+  readr::write_csv(
+    table1_clinical_rescue_audit,
+    file.path(export_dir, "clinical_support", "table1_patient_clinical_rescue_audit.csv")
+  )
+}
+
 table1_special_case_audit <- dat_base %>%
   filter(Patient %in% c("CA-02", "CA-03", "SPORE_0009", "IMG-142", "IMG-235")) %>%
   transmute(
@@ -272,7 +598,7 @@ table1_special_case_audit <- dat_base %>%
     table1_special_case_expectation = case_when(
       Patient == "CA-02" ~ "selected diagnosis row CA-02-01, not duplicate 02 row",
       Patient == "CA-03" ~ "selected diagnosis row CA-03-01, not duplicate 02 row",
-      Patient == "SPORE_0009" ~ "selected 2016-08-24 baseline row, not 2020-03-11 baseline row",
+      Patient == "SPORE_0009" ~ "selected audited baseline row from docs/manual_baseline_row_selection.csv",
       Patient %in% c("IMG-142", "IMG-235") ~ "selected one raw T1/T0 baseline row with original Table 1 duplicate-ranking logic",
       TRUE ~ NA_character_
     )
@@ -287,7 +613,7 @@ table1_special_case_failures <- table1_special_case_audit %>%
   filter(
     (Patient == "CA-02" & !(Sample_Code == "CA-02-01" & Timepoint == "01")) |
       (Patient == "CA-03" & !(Sample_Code == "CA-03-01" & Timepoint == "01")) |
-      (Patient == "SPORE_0009" & Date != as.Date("2016-08-24"))
+      (Patient == "SPORE_0009" & Date != load_manual_baseline_row_selection("spore0009_baseline_only")$Date[[1]])
   )
 if (nrow(table1_special_case_failures)) {
   stop(
@@ -330,7 +656,10 @@ dat_base <- dat_base %>%
     Subtype,
     IgG              = c("IgG Kappa", "IgG Lambda", "IgG (Subtype Unknown)"),
     IgA              = c("IgA Kappa", "IgA Lambda"),
-    `Light Chain Only` = "Light Chain Only (Kappa)",
+    `Light Chain Only` = c(
+      "Light Chain Only (Kappa)", "Light Chain Only (Lambda)",
+      "Light Chain Kappa", "Light Chain Lambda", "FLC Kappa", "FLC Lambda"
+    ),
     Other            = c("Other", NA),
     .default         = "Other"
   ))

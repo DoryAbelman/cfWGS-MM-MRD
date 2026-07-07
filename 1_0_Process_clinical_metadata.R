@@ -75,6 +75,13 @@ library(data.table)   # fast fread/fwrite if needed
 library(tidyverse)    # dplyr, tidyr, ggplot2, etc.
 library(lubridate)    # date parsing
 
+.helpers_path <- file.path("Scripts_2025", "Final_Scripts", "helpers.R")
+if (!file.exists(.helpers_path)) {
+  .helpers_path <- "helpers.R"
+}
+source(.helpers_path)
+rm(.helpers_path)
+
 clinical_support_dir <- file.path("Output_tables_2025", "clinical_metadata_support")
 clinical_support_plot_dir <- file.path(clinical_support_dir, "plots")
 dir.create(clinical_support_dir, recursive = TRUE, showWarnings = FALSE)
@@ -886,9 +893,9 @@ patient_date_range <- patient_date_range %>%
 write.csv(patient_date_range, "Oct2024_exported_data/patient_date_range_M4_PFS.csv", row.names = FALSE)
 
 
-##  17.5 Update the VA-05 with updated info 
-# Define the specific Bam value to update
-target_bam <- "TFRIM4_0181_Cf_P_PG_VA-07-05-P-DNA.filter.deduped.recalibrated.bam"
+##  17.5 Update the VA-05 with updated info
+va07_recode <- manual_clinical_correction_rows("va07_relapse_sample_recode")
+target_bam <- va07_recode$Bam[[1]]
 
 # Update Date_of_sample_collection, Timepoint, timepoint_info, and modify Sample_ID
 combined_clinical_data_updated <- combined_clinical_data_updated %>%
@@ -898,12 +905,16 @@ combined_clinical_data_updated <- combined_clinical_data_updated %>%
   mutate(
     Date_of_sample_collection = if_else(
       Bam == target_bam,
-      as.Date("2021-01-01", format = "%Y-%m-%d"),
+      va07_recode$Date_of_sample_collection[[1]],
       as.Date(Date_of_sample_collection)
     ),
-    Timepoint = ifelse(Bam == target_bam, "R-", Timepoint),
-    timepoint_info = ifelse(Bam == target_bam, "Relapse", timepoint_info),
-    Sample_ID = ifelse(Bam == target_bam, gsub("05-P", "R-P", Sample_ID), Sample_ID)
+    Timepoint = ifelse(Bam == target_bam, va07_recode$Timepoint[[1]], Timepoint),
+    timepoint_info = ifelse(Bam == target_bam, va07_recode$timepoint_info[[1]], timepoint_info),
+    Sample_ID = ifelse(
+      Bam == target_bam,
+      gsub(va07_recode$Sample_ID_find[[1]], va07_recode$Sample_ID_replace[[1]], Sample_ID),
+      Sample_ID
+    )
   )
 
 combined_clinical_data_updated$Date_of_sample_collection <- as.Date(combined_clinical_data_updated$Date_of_sample_collection)
@@ -1055,12 +1066,11 @@ test <- combined_clinical_data_updated %>%
     Relapsed = ifelse(Patient %in% Relapse_dates_full$Patient, "Y", "N")
   )
 
-## Add the other dates got from David 
-# Create a data frame with the new entries
-new_dates <- data.frame(
-  Patient = c("IMG-060", "IMG-098"),
-  Progression_date = as.Date(c("2022-08-29", "2024-06-03")) # Check these
-)
+## Add the other dates got from David
+new_dates <- manual_clinical_correction_rows(
+  c("img060_additional_progression", "img098_additional_progression")
+) %>%
+  transmute(Patient, Progression_date)
 
 # Add the new dates to the existing data frame
 Relapse_dates_full <- bind_rows(Relapse_dates_full, new_dates) %>% unique()
@@ -1095,11 +1105,11 @@ updated_relapse <- bind_rows(updated_relapse, new_dates_esther) %>%
 ## Fix back to original name for consistency 
 Relapse_dates_full <- updated_relapse
 
-## Add additional dates from Sarah 
-new_rows <- tibble(
-  Patient = c("VA-24", "HP-05"),
-  Progression_date = as.Date(c("2024-12-11","2024-07-02"))
-)
+## Add additional dates from Sarah
+new_rows <- manual_clinical_correction_rows(
+  c("va24_additional_progression", "hp05_additional_progression")
+) %>%
+  transmute(Patient, Progression_date)
 
 Relapse_dates_full <- bind_rows(Relapse_dates_full, new_rows)
 
@@ -1901,10 +1911,17 @@ cat("Filtered BAM lists exported under ", clinical_support_dir, "\n", sep = "")
 # When adding new samples, regenerate this file before rerunning feature
 # integration, clinical-demographics tables, swim plots, and survival analyses.
 combined_clinical_data_updated <- combined_clinical_data_updated %>%
-  mutate(timepoint_info = if_else(
-    Patient == "SPORE_0007" & Date_of_sample_collection == as.Date("2019-08-21"),
-    "Post_transplant", timepoint_info
-  ))
+  left_join(
+    manual_clinical_correction_rows("spore0007_timepoint_info") %>%
+      transmute(
+        Patient,
+        Date_of_sample_collection = Date_of_sample_collection,
+        manual_timepoint_info = timepoint_info
+      ),
+    by = c("Patient", "Date_of_sample_collection")
+  ) %>%
+  mutate(timepoint_info = coalesce(manual_timepoint_info, timepoint_info)) %>%
+  select(-manual_timepoint_info)
 
 write.csv(combined_clinical_data_updated,
           "combined_clinical_data_updated_April2025.csv",
@@ -2086,19 +2103,18 @@ final_tbl <- bind_rows(prog_info, nonprog_info)
 
 ## Add baseline
 ## Edit to be correct for EK-09 and EK-06 since current dates are for smouldering 
+manual_baseline_date_corrections <- manual_clinical_correction_rows(
+  c("ek09_baseline_date", "ek06_baseline_date")
+) %>%
+  transmute(Patient, manual_diagnosis_date = Diagnosis_date, manual_baseline_date = Baseline_Date)
+
 baseline_dates_all <- baseline_dates_all %>%
+  left_join(manual_baseline_date_corrections, by = "Patient") %>%
   mutate(
-    Diagnosis_date = case_when(
-      Patient == "EK-09" ~ as.Date("2020-08-12"),
-      Patient == "EK-06" ~ as.Date("2019-09-23"),
-      TRUE               ~ Diagnosis_date
-    ),
-    Baseline_Date   = case_when(
-      Patient == "EK-09" ~ as.Date("2020-08-12"),
-      Patient == "EK-06" ~ as.Date("2019-09-23"),
-      TRUE               ~ Baseline_Date
-    )
-  )
+    Diagnosis_date = coalesce(manual_diagnosis_date, Diagnosis_date),
+    Baseline_Date = coalesce(manual_baseline_date, Baseline_Date)
+  ) %>%
+  select(-manual_diagnosis_date, -manual_baseline_date)
 
 final_tbl <-final_tbl %>%
   # 1) join baseline
@@ -2107,9 +2123,8 @@ final_tbl <-final_tbl %>%
 # Reorder
 final_tbl <- final_tbl %>%
   mutate(
-    # `MA-VA` is a parser artifact, not a real patient ID. The associated
-    # censor/follow-up date is 2023-01-25, which is VA-25's Timepoint_01 /
-    # prior-treatment date in the M4 VA-series roster.
+    # `MA-VA` is a parser artifact, not a real patient ID; map it back to the
+    # corresponding VA-series participant before writing PFS support tables.
     Patient = case_when(Patient == "MA-VA" ~ "VA-25", TRUE ~ Patient)
   ) %>%
   select(Patient, Baseline_Date, Censor_date, Relapsed, Other_Progression_Dates, High_Priority)
@@ -2146,9 +2161,8 @@ saveRDS(final_tbl, "Exported_data_tables_clinical/Censor_dates_per_patient_for_P
 
 normalise_patient_id <- function(patient) {
   dplyr::case_when(
-    # `MA-VA` is a parser artifact, not a real patient ID. The associated
-    # censor/follow-up date is 2023-01-25, which is VA-25's Timepoint_01 /
-    # prior-treatment date in the M4 VA-series roster.
+    # `MA-VA` is a parser artifact, not a real patient ID; map it back to the
+    # corresponding VA-series participant before writing PFS support tables.
     patient == "MA-VA" ~ "VA-25",
     TRUE ~ patient
   )

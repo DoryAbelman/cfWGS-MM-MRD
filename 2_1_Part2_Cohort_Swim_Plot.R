@@ -3043,15 +3043,9 @@ lab_fun <- function(y) {
 # This is the order the plot actually uses (it is reversed later):
 y_levels <- rev(levels(events_combined2$patient))
 
-# Mask duplicate 
+# Apply audited duplicate-event masks before marking progression layers.
 events_combined2 <- events_combined2 %>%
-  mutate(
-    is_progression = if_else(
-      patient == "SPORE_0012" & event == "Progression" & start == as.Date("2016-04-28"),
-      FALSE,
-      is_progression
-    )
-  )
+  apply_manual_swim_plot_event_masks("spore0012_duplicate_progression_mask")
 
 
 # 2) Numeric y for the progression layer that matches the plotted order (top row = 1)

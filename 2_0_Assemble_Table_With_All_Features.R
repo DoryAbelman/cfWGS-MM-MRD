@@ -2990,7 +2990,7 @@ readr::write_csv(
 )
 
 tmp <- tmp %>%
-  filter(!(Patient == "SPORE_0009" & Date == as.Date("2020-03-11")))
+  filter_manual_baseline_row_selection("spore0009_baseline_only")
 
 ## The baseline high-quality helper is consumed downstream as a patient-level
 ## eligibility mask (Patient + BM evidence + relaxed cfDNA evidence). Keep it

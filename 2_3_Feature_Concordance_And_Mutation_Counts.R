@@ -173,10 +173,9 @@ resp_CA02 <- dat_tb2 %>%
 # 3) Drop all CA-02 originals
 dat_tb3 <- dat_tb2 %>% filter(Patient != "CA-02")
 
-# 4) For SPORE_0009, keep only the 2016-08-24 Baseline row
+# 4) Apply audited manual baseline-row selection for duplicate candidates.
 dat_tb4 <- dat_tb3 %>%
-  filter(!(Patient == "SPORE_0009" &
-             !(Date == as.Date("2016-08-24") & timepoint_info == "Baseline")))
+  filter_manual_baseline_row_selection("spore0009_baseline_only")
 
 # 5) Re-bind the collapsed CA-02 row
 dat_tb_final <- bind_rows(dat_tb4, resp_CA02) %>%

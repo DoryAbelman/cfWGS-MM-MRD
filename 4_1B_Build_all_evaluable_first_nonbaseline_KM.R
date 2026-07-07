@@ -37,6 +37,10 @@
 ##       all_evaluable_model_comparison_summary.csv
 ##       all_evaluable_first_nonbaseline_method_note.md
 ##
+## Manuscript outputs created/updated:
+##   - Additional all-evaluable first-nonbaseline KM review outputs under
+##     final_manuscript_objects/additional_all_evaluable_first_nonbaseline_km/.
+##
 ## How to run:
 ##   Rscript Scripts_2025/Final_Scripts/4_1B_Build_all_evaluable_first_nonbaseline_KM.R
 ################################################################################

@@ -78,6 +78,13 @@ if (!file.exists(.manuscript_helper)) {
 source(.manuscript_helper)
 rm(.manuscript_helper)
 
+.helpers_path <- file.path("Scripts_2025", "Final_Scripts", "helpers.R")
+if (!file.exists(.helpers_path)) {
+  .helpers_path <- "helpers.R"
+}
+source(.helpers_path)
+rm(.helpers_path)
+
 ## ───── 1. Load data ──────────────────────────────────────────────────────────
 ### Set paths
 outdir   <- "Output_tables_2025"
@@ -186,14 +193,9 @@ dat <- dat %>%
            ~ if_else(Patient %in% cfDNA_good_pts, .x, NA_real_))
   )
 
-# Remove IMG-127-T15 ichorCNA since not a complete case? But have BM for it so keep in count? 
+# Apply audited manual longitudinal masks before deriving baseline/follow-up rows.
 dat2 <- dat %>%
-  mutate(
-    WGS_Tumor_Fraction_Blood_plasma_cfDNA =
-      if_else(Patient == "IMG-127" & Date == as.Date("2022-08-15"),
-              NA_real_,
-              WGS_Tumor_Fraction_Blood_plasma_cfDNA)
-  )
+  apply_manual_longitudinal_feature_masks("img127_blood_tf_mask")
 
 ## ───── 2. Identify BASELINE and FIRST-FOLLOW rows (start-date logic) ────────
 baseline_tbl <- dat2 %>%

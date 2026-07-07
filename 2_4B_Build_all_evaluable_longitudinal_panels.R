@@ -210,13 +210,9 @@ dat <- feature_df %>%
   ) %>%
   mutate(
     across(all_of(bm_feats), ~ if_else(Patient %in% bm_good_pts, .x, NA_real_)),
-    across(all_of(blood_feats), ~ if_else(Patient %in% cfdna_good_pts, .x, NA_real_)),
-    WGS_Tumor_Fraction_Blood_plasma_cfDNA = if_else(
-      Patient == "IMG-127" & Date == as.Date("2022-08-15"),
-      NA_real_,
-      WGS_Tumor_Fraction_Blood_plasma_cfDNA
-    )
+    across(all_of(blood_feats), ~ if_else(Patient %in% cfdna_good_pts, .x, NA_real_))
   ) %>%
+  apply_manual_longitudinal_feature_masks("img127_blood_tf_mask") %>%
   left_join(
     baseline_dates %>%
       transmute(Patient, Clinical_Baseline_Date = as.Date(baseline_date)),

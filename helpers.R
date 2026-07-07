@@ -111,12 +111,194 @@ manual_img_rescue_metadata_path <- function() {
   )
 }
 
+manual_baseline_row_selection_path <- function() {
+  Sys.getenv(
+    "CFWGS_MANUAL_BASELINE_ROW_SELECTION",
+    unset = file.path("docs", "manual_baseline_row_selection.csv")
+  )
+}
+
+manual_clinical_metadata_date_corrections_path <- function() {
+  Sys.getenv(
+    "CFWGS_MANUAL_CLINICAL_METADATA_DATE_CORRECTIONS",
+    unset = file.path("docs", "manual_clinical_metadata_date_corrections.csv")
+  )
+}
+
+manual_longitudinal_feature_masks_path <- function() {
+  Sys.getenv(
+    "CFWGS_MANUAL_LONGITUDINAL_FEATURE_MASKS",
+    unset = file.path("docs", "manual_longitudinal_feature_masks.csv")
+  )
+}
+
+manual_swim_plot_event_masks_path <- function() {
+  Sys.getenv(
+    "CFWGS_MANUAL_SWIM_PLOT_EVENT_MASKS",
+    unset = file.path("docs", "manual_swim_plot_event_masks.csv")
+  )
+}
+
 spring2026_revision_enabled <- function() {
   # ## Global revision toggle
   # The default is ON because these scripts now represent the revision-aware
   # manuscript workflow. Setting CFWGS_USE_SPRING2026_REVISION=0 restores the
   # historical inputs for debugging without editing code.
   identical(Sys.getenv("CFWGS_USE_SPRING2026_REVISION", unset = "1"), "1")
+}
+
+load_manual_swim_plot_event_masks <- function(required = TRUE) {
+  path <- manual_swim_plot_event_masks_path()
+  if (!file.exists(path)) {
+    if (isTRUE(required)) stop("Missing manual swim-plot event-mask table: ", path, call. = FALSE)
+    return(NULL)
+  }
+
+  masks <- utils::read.csv(path, check.names = FALSE, stringsAsFactors = FALSE)
+  require_columns(
+    masks,
+    c("correction_id", "patient", "event", "start", "mask_is_progression", "active"),
+    "Manual swim-plot event-mask table"
+  )
+  masks$active <- tolower(as.character(masks$active)) %in% c("true", "t", "1", "yes", "y")
+  masks$mask_is_progression <- tolower(as.character(masks$mask_is_progression)) %in% c("true", "t", "1", "yes", "y")
+  masks$start <- parse_date_safely(masks$start)
+  masks <- masks[masks$active, , drop = FALSE]
+  if (any(is.na(masks$start))) {
+    stop("Manual swim-plot event-mask table contains unparseable start dates.", call. = FALSE)
+  }
+  masks
+}
+
+apply_manual_swim_plot_event_masks <- function(data, correction_ids) {
+  masks <- load_manual_swim_plot_event_masks(required = TRUE)
+  masks <- masks[masks$correction_id %in% correction_ids, , drop = FALSE]
+  missing <- setdiff(correction_ids, masks$correction_id)
+  if (length(missing)) {
+    stop("Missing active manual swim-plot event-mask correction(s): ", paste(missing, collapse = ", "), call. = FALSE)
+  }
+
+  data$start <- parse_date_safely(data$start)
+  for (idx in seq_len(nrow(masks))) {
+    mask <- masks[idx, , drop = FALSE]
+    row_idx <- data$patient == mask$patient & data$event == mask$event & data$start == mask$start
+    data$is_progression[row_idx] <- mask$mask_is_progression
+  }
+  data
+}
+
+load_manual_baseline_row_selection <- function(correction_id, required = TRUE) {
+  path <- manual_baseline_row_selection_path()
+  if (!file.exists(path)) {
+    if (isTRUE(required)) stop("Missing manual baseline row-selection table: ", path, call. = FALSE)
+    return(NULL)
+  }
+
+  selections <- utils::read.csv(path, check.names = FALSE, stringsAsFactors = FALSE)
+  require_columns(
+    selections,
+    c("correction_id", "Patient", "Date", "timepoint_info", "active"),
+    "Manual baseline row-selection table"
+  )
+  selections$active <- tolower(as.character(selections$active)) %in% c("true", "t", "1", "yes", "y")
+  selections$Date <- parse_date_safely(selections$Date)
+  selected <- selections[selections$active & selections$correction_id == correction_id, , drop = FALSE]
+  if (!nrow(selected) && isTRUE(required)) {
+    stop("Missing active manual baseline row-selection correction: ", correction_id, call. = FALSE)
+  }
+  if (any(is.na(selected$Date))) {
+    stop("Manual baseline row-selection correction has unparseable Date: ", correction_id, call. = FALSE)
+  }
+  selected
+}
+
+filter_manual_baseline_row_selection <- function(data, correction_id) {
+  selection <- load_manual_baseline_row_selection(correction_id, required = TRUE)
+  for (idx in seq_len(nrow(selection))) {
+    sel <- selection[idx, , drop = FALSE]
+    matches_patient <- data$Patient == sel$Patient
+    keep_selected <- data$Date == sel$Date & data$timepoint_info == sel$timepoint_info
+    data <- data[!(matches_patient & !keep_selected), , drop = FALSE]
+  }
+  data
+}
+
+load_manual_clinical_metadata_date_corrections <- function(required = TRUE) {
+  path <- manual_clinical_metadata_date_corrections_path()
+  if (!file.exists(path)) {
+    if (isTRUE(required)) stop("Missing manual clinical metadata date-correction table: ", path, call. = FALSE)
+    return(NULL)
+  }
+
+  corrections <- utils::read.csv(path, check.names = FALSE, stringsAsFactors = FALSE)
+  require_columns(
+    corrections,
+    c(
+      "correction_id", "Patient", "Bam", "Date_of_sample_collection",
+      "Timepoint", "timepoint_info", "Sample_ID_find", "Sample_ID_replace",
+      "Progression_date", "Diagnosis_date", "Baseline_Date", "active"
+    ),
+    "Manual clinical metadata date-correction table"
+  )
+  corrections$active <- tolower(as.character(corrections$active)) %in% c("true", "t", "1", "yes", "y")
+  for (date_col in c("Date_of_sample_collection", "Progression_date", "Diagnosis_date", "Baseline_Date")) {
+    corrections[[date_col]] <- parse_date_safely(corrections[[date_col]])
+  }
+  corrections[corrections$active, , drop = FALSE]
+}
+
+manual_clinical_correction_rows <- function(correction_ids, required = TRUE) {
+  corrections <- load_manual_clinical_metadata_date_corrections(required = required)
+  rows <- corrections[corrections$correction_id %in% correction_ids, , drop = FALSE]
+  missing <- setdiff(correction_ids, rows$correction_id)
+  if (length(missing) && isTRUE(required)) {
+    stop("Missing active manual clinical correction(s): ", paste(missing, collapse = ", "), call. = FALSE)
+  }
+  rows
+}
+
+load_manual_longitudinal_feature_masks <- function(required = TRUE) {
+  path <- manual_longitudinal_feature_masks_path()
+  if (!file.exists(path)) {
+    if (isTRUE(required)) stop("Missing manual longitudinal feature-mask table: ", path, call. = FALSE)
+    return(NULL)
+  }
+
+  masks <- utils::read.csv(path, check.names = FALSE, stringsAsFactors = FALSE)
+  require_columns(
+    masks,
+    c("correction_id", "Patient", "Date", "feature_column", "replacement_value", "active"),
+    "Manual longitudinal feature-mask table"
+  )
+  masks$active <- tolower(as.character(masks$active)) %in% c("true", "t", "1", "yes", "y")
+  masks$Date <- parse_date_safely(masks$Date)
+  masks <- masks[masks$active, , drop = FALSE]
+  if (any(is.na(masks$Date))) {
+    stop("Manual longitudinal feature-mask table contains unparseable Date values.", call. = FALSE)
+  }
+  masks
+}
+
+apply_manual_longitudinal_feature_masks <- function(data, correction_ids) {
+  masks <- load_manual_longitudinal_feature_masks(required = TRUE)
+  masks <- masks[masks$correction_id %in% correction_ids, , drop = FALSE]
+  missing <- setdiff(correction_ids, masks$correction_id)
+  if (length(missing)) {
+    stop("Missing active manual longitudinal feature-mask correction(s): ", paste(missing, collapse = ", "), call. = FALSE)
+  }
+
+  data$Date <- parse_date_safely(data$Date)
+  for (idx in seq_len(nrow(masks))) {
+    mask <- masks[idx, , drop = FALSE]
+    if (!mask$feature_column %in% names(data)) {
+      stop("Manual longitudinal feature-mask references missing column: ", mask$feature_column, call. = FALSE)
+    }
+    replacement <- mask$replacement_value
+    replacement_value <- if (is.na(replacement) || identical(replacement, "NA")) NA_real_ else as.numeric(replacement)
+    row_idx <- data$Patient == mask$Patient & data$Date == mask$Date
+    data[[mask$feature_column]][row_idx] <- replacement_value
+  }
+  data
 }
 
 load_manual_img_rescue_metadata <- function(required = FALSE) {
