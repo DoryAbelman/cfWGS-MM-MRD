@@ -3178,6 +3178,245 @@ shape_pal <- c(
   `not detected` = 4    # open cross
 )
 
+# Helper for additive all-timepoint MFC-only versions of the probability-vs-MFC
+# panels. These use the same scored cfWGS table as the landmark panels but do
+# not restrict to post-ASCT or maintenance; rows are included whenever the
+# primary model probability/call and quantitative MFC value are evaluable.
+safe_spearman_for_plot <- function(df) {
+  complete <- complete.cases(df$x_plot, df$y_plot)
+  n_complete <- sum(complete)
+  if (n_complete < 3 ||
+      n_distinct(df$x_plot[complete]) < 2 ||
+      n_distinct(df$y_plot[complete]) < 2) {
+    return(tibble(rho = NA_real_, p = NA_real_, n = n_complete))
+  }
+  test <- suppressWarnings(cor.test(df$x_plot, df$y_plot, method = "spearman", exact = FALSE))
+  tibble(rho = unname(test$estimate), p = test$p.value, n = n_complete)
+}
+
+format_spearman_label_for_plot <- function(rho, p, n) {
+  if (is.na(rho) || is.na(p)) {
+    return(sprintf("n = %d\nrho = NA\np = NA", n))
+  }
+  sprintf("n = %d\nrho = %.2f\np = %.2g", n, rho, p)
+}
+
+build_all_timepoint_mfc_points <- function(data, prob_col, call_col, threshold, model_label) {
+  cohort_view_levels <- c("Training Cohort", "Test Cohort", "Training + Test")
+  relapse_levels <- c("Relapsed <=365 d", "No relapse >365 d")
+
+  required_cols <- c(
+    "Patient", "Sample_Code", "Timepoint", "Date", "timepoint_info", "Cohort",
+    "Num_days_to_closest_relapse", "Flow_pct_cells", "Flow_Binary",
+    prob_col, call_col
+  )
+  missing_cols <- setdiff(required_cols, names(data))
+  if (length(missing_cols) > 0) {
+    stop(
+      "Cannot build all-timepoint MFC panel; missing required columns: ",
+      paste(missing_cols, collapse = ", "),
+      call. = FALSE
+    )
+  }
+
+  points <- data %>%
+    mutate(
+      Patient = as.character(Patient),
+      Sample_Code = as.character(Sample_Code),
+      Timepoint = as.character(Timepoint),
+      Date = as.Date(Date),
+      Cohort = as.character(Cohort)
+    ) %>%
+    filter(
+      Cohort %in% c("Frontline", "Non-frontline"),
+      !is.na(Flow_pct_cells),
+      !is.na(.data[[prob_col]]),
+      !is.na(.data[[call_col]])
+    ) %>%
+    transmute(
+      Patient,
+      Sample_Code,
+      Timepoint,
+      Date,
+      timepoint_info = str_squish(as.character(timepoint_info)),
+      source_cohort = Cohort,
+      cohort_view = recode(
+        Cohort,
+        "Frontline" = "Training Cohort",
+        "Non-frontline" = "Test Cohort"
+      ),
+      relapse_cat = if_else(
+        !is.na(Num_days_to_closest_relapse) & Num_days_to_closest_relapse <= 365,
+        "Relapsed <=365 d",
+        "No relapse >365 d"
+      ),
+      Num_days_to_closest_relapse,
+      Comparator = "MFC",
+      x_val = as.numeric(Flow_pct_cells) / 100,
+      comparator_binary = as.integer(Flow_Binary),
+      cfwgs_probability = as.numeric(.data[[prob_col]]),
+      cfwgs_call = as.integer(.data[[call_col]]),
+      cfwgs_threshold = threshold,
+      model_label = model_label
+    ) %>%
+    filter(is.finite(x_val), is.finite(cfwgs_probability), x_val >= 0)
+
+  if (nrow(points) == 0) {
+    stop("No evaluable all-timepoint MFC rows for ", model_label, ".", call. = FALSE)
+  }
+  if (any(points$cfwgs_probability < 0 | points$cfwgs_probability > 1, na.rm = TRUE)) {
+    stop("cfWGS probabilities must be in [0, 1] for ", model_label, ".", call. = FALSE)
+  }
+
+  points <- points %>%
+    mutate(
+      x_plot = pmin(pmax(x_val, 1e-6), 1),
+      y_plot = pmax(cfwgs_probability, 1e-5),
+      relapse_cat = factor(relapse_cat, levels = relapse_levels),
+      cohort_view = factor(cohort_view, levels = cohort_view_levels),
+      Comparator = factor(Comparator, levels = "MFC")
+    )
+
+  bind_rows(
+    points,
+    points %>% mutate(cohort_view = factor("Training + Test", levels = cohort_view_levels))
+  )
+}
+
+write_all_timepoint_mfc_panel <- function(data, prob_col, call_col, threshold,
+                                          title, stem, model_label,
+                                          final_fig_dir = "Final Tables and Figures",
+                                          source_data_dir = outdir_source_data,
+                                          date_tag = version_date) {
+  cohort_view_levels <- c("Training Cohort", "Test Cohort", "Training + Test")
+  relapse_levels <- c("Relapsed <=365 d", "No relapse >365 d")
+
+  dir.create(final_fig_dir, recursive = TRUE, showWarnings = FALSE)
+  dir.create(source_data_dir, recursive = TRUE, showWarnings = FALSE)
+
+  plot_df <- build_all_timepoint_mfc_points(
+    data = data,
+    prob_col = prob_col,
+    call_col = call_col,
+    threshold = threshold,
+    model_label = model_label
+  )
+
+  corr_df <- plot_df %>%
+    group_by(cohort_view, Comparator) %>%
+    group_modify(~safe_spearman_for_plot(.x)) %>%
+    ungroup() %>%
+    mutate(
+      label = pmap_chr(list(rho, p, n), format_spearman_label_for_plot),
+      x = 0.035,
+      y = 0.99,
+      cohort_view = factor(cohort_view, levels = cohort_view_levels),
+      Comparator = factor(Comparator, levels = "MFC")
+    )
+
+  counts_df <- plot_df %>%
+    group_by(cohort_view, Comparator, relapse_cat) %>%
+    summarise(
+      n_rows = dplyr::n(),
+      n_patients = dplyr::n_distinct(Patient),
+      .groups = "drop"
+    ) %>%
+    complete(
+      cohort_view = factor(cohort_view_levels, levels = cohort_view_levels),
+      Comparator = factor("MFC", levels = "MFC"),
+      relapse_cat = factor(relapse_levels, levels = relapse_levels),
+      fill = list(n_rows = 0L, n_patients = 0L)
+    ) %>%
+    arrange(cohort_view, Comparator, relapse_cat)
+
+  readr::write_csv(
+    plot_df,
+    file.path(source_data_dir, paste0(stem, "_source_data_", date_tag, ".csv"))
+  )
+  readr::write_csv(
+    corr_df,
+    file.path(source_data_dir, paste0(stem, "_correlations_", date_tag, ".csv"))
+  )
+  readr::write_csv(
+    counts_df,
+    file.path(source_data_dir, paste0(stem, "_counts_", date_tag, ".csv"))
+  )
+
+  lod_line <- tidyr::crossing(
+    cohort_view = factor(cohort_view_levels, levels = cohort_view_levels),
+    Comparator = factor("MFC", levels = "MFC")
+  ) %>%
+    mutate(xintercept = lod_clonoMF)
+
+  plot <- ggplot(plot_df, aes(x = x_plot, y = y_plot, fill = relapse_cat)) +
+    geom_hline(yintercept = threshold, linetype = "dashed", colour = "grey80") +
+    geom_vline(
+      data = lod_line,
+      aes(xintercept = xintercept),
+      linetype = "dashed",
+      colour = "grey80",
+      inherit.aes = FALSE
+    ) +
+    geom_point(shape = 21, size = 1.9, alpha = 0.85, colour = "black", stroke = 0.25) +
+    geom_text(
+      data = corr_df,
+      aes(x = x, y = y, label = label),
+      hjust = 0,
+      vjust = 1,
+      size = 2.7,
+      lineheight = 0.9,
+      inherit.aes = FALSE
+    ) +
+    scale_fill_manual(
+      name = "Relapse <=1 year",
+      values = c("Relapsed <=365 d" = "red", "No relapse >365 d" = "black"),
+      drop = FALSE
+    ) +
+    scale_x_log10(
+      breaks = c(1e-6, 1e-5, 1e-4, 1e-3, 1e-2, 1e-1, 1),
+      labels = c("Not detected", "0.001%", "0.01%", "0.1%", "1%", "10%", "100%"),
+      expand = expansion(mult = c(0.05, 0.05))
+    ) +
+    scale_y_continuous(
+      limits = c(0.12, 1),
+      breaks = seq(0, 1, by = 0.2),
+      labels = scales::percent_format(accuracy = 1)
+    ) +
+    facet_grid(rows = vars(cohort_view), cols = vars(Comparator), drop = FALSE, as.table = TRUE) +
+    labs(
+      title = title,
+      x = "MFC MRD level",
+      y = "cfWGS Model Probability"
+    ) +
+    theme_bw(base_size = 11) +
+    theme(
+      panel.border = element_rect(colour = "black", fill = NA, size = 0.5),
+      panel.grid.major = element_blank(),
+      panel.grid.minor = element_blank(),
+      strip.background = element_rect(fill = "white", colour = "black"),
+      strip.text = element_text(face = "bold", size = 10),
+      axis.title = element_text(size = 11),
+      axis.text.x = element_text(angle = 30, hjust = 1, size = 8),
+      axis.text.y = element_text(size = 9),
+      plot.title = element_text(face = "bold", hjust = 0.5, size = 13),
+      legend.position = "right",
+      legend.title = element_text(face = "bold", size = 9),
+      legend.text = element_text(size = 8),
+      panel.spacing = grid::unit(0.7, "lines")
+    )
+
+  png_path <- file.path(final_fig_dir, paste0(stem, ".png"))
+  ggsave(png_path, plot, width = 5.8, height = 7.2, dpi = 600, bg = "white")
+
+  invisible(list(
+    plot = plot,
+    source_data = plot_df,
+    correlations = corr_df,
+    counts = counts_df,
+    png_path = png_path
+  ))
+}
+
 # Figure 3E input: build BM-informed plotting data for frontline landmark
 # samples with at least one quantitative clinical comparator.
 plot_df <- dat %>%
@@ -3623,6 +3862,27 @@ ms_copy_artifact(
 readr::write_csv(
   plot_df_with_easym %>% mutate(Figure = "Fig4K_cfWGS_vs_clinical_assays_EasyM_BM"),
   file.path(outdir_source_data, "Fig4K_cfWGS_vs_clinical_assays_EasyM_BM_source_data.csv")
+)
+
+# Additive all-timepoint version requested for the training cohort, test cohort,
+# and both cohorts combined. This version is MFC-only because the test cohort
+# has evaluable MFC comparator pairs in the current integrated source table.
+all_timepoint_mfc_bm <- write_all_timepoint_mfc_panel(
+  data = dat,
+  prob_col = "BM_zscore_only_detection_rate_prob",
+  call_col = "BM_zscore_only_detection_rate_call",
+  threshold = 0.4215524,
+  title = "cfWGS of BM-Derived Mutations MRD\nProbability vs. MFC\nAll evaluable timepoints",
+  stem = "Fig4K_all_timepoints_train_test_combined_BM_primary_model",
+  model_label = "BM primary model"
+)
+
+ms_copy_artifact(
+  source_path = all_timepoint_mfc_bm$png_path,
+  artifact_id = "FIG3E",
+  role = "all_samples_mfc_only_figure_panel_png",
+  description = "All-evaluable-timepoint training/test/combined MFC-only version of Main Figure 3E.",
+  script_name = "3_2_Plot_optimal_cutoff_and_clinical_concordance.R"
 )
 
 
@@ -4210,6 +4470,27 @@ ms_copy_artifact(
 readr::write_csv(
   plot_df_blood_with_easym %>% mutate(Figure = "Fig5K_cfWGS_vs_clinical_assays_EasyM_blood"),
   file.path(outdir_source_data, "Fig5K_cfWGS_vs_clinical_assays_EasyM_blood_source_data.csv")
+)
+
+# Additive all-timepoint version requested for the training cohort, test cohort,
+# and both cohorts combined. This version is MFC-only because the test cohort
+# has evaluable MFC comparator pairs in the current integrated source table.
+all_timepoint_mfc_blood <- write_all_timepoint_mfc_panel(
+  data = dat,
+  prob_col = "Blood_zscore_only_sites_prob",
+  call_col = "Blood_zscore_only_sites_call",
+  threshold = 0.5166693,
+  title = "cfWGS of cfDNA-Derived Mutations MRD\nProbability vs. MFC\nAll evaluable timepoints",
+  stem = "Fig5K_all_timepoints_train_test_combined_blood_primary_model",
+  model_label = "Blood primary model"
+)
+
+ms_copy_artifact(
+  source_path = all_timepoint_mfc_blood$png_path,
+  artifact_id = "FIG4D",
+  role = "all_samples_mfc_only_figure_panel_png",
+  description = "All-evaluable-timepoint training/test/combined MFC-only version of Main Figure 4D.",
+  script_name = "3_2_Plot_optimal_cutoff_and_clinical_concordance.R"
 )
 
 

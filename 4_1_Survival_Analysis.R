@@ -95,6 +95,13 @@ if (!file.exists(.manuscript_helper)) {
 source(.manuscript_helper)
 rm(.manuscript_helper)
 
+.endpoint_helper <- file.path("Scripts_2025", "Final_Scripts", "next_event_endpoint_helpers.R")
+if (!file.exists(.endpoint_helper)) {
+  .endpoint_helper <- "next_event_endpoint_helpers.R"
+}
+source(.endpoint_helper)
+rm(.endpoint_helper)
+
 ## ─────────────────────────────────────────────────────────────────────────────
 ## INPUT FILES: Clinical outcomes and cfWGS results
 ## ─────────────────────────────────────────────────────────────────────────────
@@ -111,6 +118,8 @@ final_tbl_rds <- "Exported_data_tables_clinical/Censor_dates_per_patient_for_PFS
 patient_followup_rds <- "Exported_data_tables_clinical/patient_followup_dates_updated.rds"
 patient_followup_csv <- "Exported_data_tables_clinical/patient_followup_dates_updated.csv"
 latest_dates_csv     <- "Exported_data_tables_clinical/latest_dates_per_patient.csv"
+latest_dates_updated_csv <- "Exported_data_tables_clinical/latest_dates_per_patient_updated.csv"
+relapse_dates_full_rds <- "Exported_data_tables_clinical/Relapse_dates_full_updated.rds"
 
 # File 2: Main data table with all cfWGS model calls and clinical MRD results
 #         Each row = one sample (patient + timepoint)
@@ -384,45 +393,64 @@ cat("  ✓ EasyM data preparation complete\n\n")
 
 cat("2. Building survival analysis table...\n")
 
-survival_df <- dat %>%
-  mutate(
-    Patient     = as.character(Patient),
-    sample_date = as.Date(Date)  # standardize date column name and type
-  ) %>%
-  # Merge in patient-level outcomes (censor_date, relapsed status)
-  left_join(
-    final_tbl %>% 
-      select(Patient, censor_date, relapsed),
-    by = "Patient"
-  ) %>%
-  # Calculate time from sample draw to event/censoring
-  mutate(
-    Time_to_event   = as.numeric(censor_date - sample_date),  # days
-    Relapsed_Binary = as.integer(relapsed)                     # 1=event, 0=censored
-  ) %>%
-  # Select only columns needed for survival analyses
-  # (This reduces memory footprint and makes code more readable)
-  select(
-    Patient, Cohort, Timepoint, sample_date, censor_date, timepoint_info,
-    Time_to_event, Relapsed_Binary,
-    # Clinical MRD assays
-    Flow_Binary, Adaptive_Binary, Rapid_Novor_Binary,
-    Flow_pct_cells, Adaptive_Frequency,
-    # PET imaging (if needed)
-    PET_Binary,
-    # cfWGS BM-derived models
-    BM_zscore_only_detection_rate_call, BM_zscore_only_detection_rate_prob, 
-    BM_zscore_only_detection_rate_screen_call,
-    # cfWGS blood-derived models (multiple variants)
-    Blood_zscore_only_sites_call, Blood_zscore_only_sites_prob, 
-    Blood_base_prob, Blood_base_call,
-    Blood_plus_fragment_prob, Blood_plus_fragment_call,
-    Blood_plus_fragment_min_prob, Blood_plus_fragment_min_call, 
-    # Fragmentomics models
-    Fragmentomics_mean_coverage_only_prob, Fragmentomics_mean_coverage_only_call,
-    # EasyM proteomic MRD
-    EasyM_reference_threshold_binary, EasyM_value
-  )
+next_event_endpoint_resources <- load_next_event_endpoint_resources(
+  pfs_path = final_tbl_rds,
+  relapse_dates_path = relapse_dates_full_rds,
+  followup_rds_path = patient_followup_rds,
+  followup_csv_path = patient_followup_csv,
+  latest_dates_paths = c(latest_dates_updated_csv, latest_dates_csv),
+  sample_data = dat_all,
+  patient_col = "Patient",
+  sample_date_col = "Date"
+)
+
+build_sample_survival_df <- function(sample_tbl) {
+  sample_tbl %>%
+    mutate(
+      Patient = as.character(Patient),
+      sample_date = as.Date(Date)
+    ) %>%
+    add_next_event_endpoint(
+      endpoint_resources = next_event_endpoint_resources,
+      sample_date_col = "sample_date",
+      event_grace_days = 30L
+    ) %>%
+    mutate(
+      censor_date = endpoint_date,
+      relapsed = endpoint_status,
+      Time_to_event = endpoint_days_from_sample,
+      Relapsed_Binary = as.integer(endpoint_status)
+    ) %>%
+    select(
+      Patient, Cohort, Timepoint, sample_date, censor_date, timepoint_info,
+      Time_to_event, Relapsed_Binary,
+      baseline_date, first_pfs_date, first_pfs_event, first_pfs_days_from_sample,
+      next_progression_date, next_progression_days_raw, next_progression_days,
+      endpoint_date, endpoint_status, endpoint_type, endpoint_source,
+      endpoint_days_from_sample, n_prior_progressions_before_sample,
+      latest_prior_progression_date, endpoint_uses_later_progression_after_first_pfs,
+      endpoint_ignores_prior_progression, force_relapse_sample_day0,
+      # Clinical MRD assays
+      Flow_Binary, Adaptive_Binary, Rapid_Novor_Binary,
+      Flow_pct_cells, Adaptive_Frequency,
+      # PET imaging (if needed)
+      PET_Binary,
+      # cfWGS BM-derived models
+      BM_zscore_only_detection_rate_call, BM_zscore_only_detection_rate_prob,
+      BM_zscore_only_detection_rate_screen_call,
+      # cfWGS blood-derived models (multiple variants)
+      Blood_zscore_only_sites_call, Blood_zscore_only_sites_prob,
+      Blood_base_prob, Blood_base_call,
+      Blood_plus_fragment_prob, Blood_plus_fragment_call,
+      Blood_plus_fragment_min_prob, Blood_plus_fragment_min_call,
+      # Fragmentomics models
+      Fragmentomics_mean_coverage_only_prob, Fragmentomics_mean_coverage_only_call,
+      # EasyM proteomic MRD
+      EasyM_reference_threshold_binary, EasyM_value
+    )
+}
+
+survival_df <- build_sample_survival_df(dat)
 
 cat(sprintf("  ✓ Survival table created: %d samples from %d patients\n", 
             nrow(survival_df), n_distinct(survival_df$Patient)))
@@ -452,42 +480,34 @@ cat("  ✓ Survival table validation complete\n\n")
 # rows whose sample was collected well after the PFS event/censor anchor.
 train_test_cohorts <- c("Frontline", "Non-frontline")
 
-survival_df_train_test <- dat_all %>%
+survival_df_train_test <- build_sample_survival_df(dat_all) %>%
   dplyr::filter(Cohort %in% train_test_cohorts) %>%
-  dplyr::mutate(
-    Patient     = as.character(Patient),
-    sample_date = as.Date(Date)
-  ) %>%
-  dplyr::left_join(
-    final_tbl %>%
-      dplyr::select(Patient, censor_date, relapsed),
-    by = "Patient"
-  ) %>%
-  dplyr::mutate(
-    Time_to_event   = as.numeric(censor_date - sample_date),
-    Relapsed_Binary = as.integer(relapsed)
-  ) %>%
-  dplyr::select(
-    Patient, Cohort, Timepoint, sample_date, censor_date, timepoint_info,
-    Time_to_event, Relapsed_Binary,
-    Flow_Binary, Adaptive_Binary, Rapid_Novor_Binary,
-    Flow_pct_cells, Adaptive_Frequency, PET_Binary,
-    BM_zscore_only_detection_rate_call, BM_zscore_only_detection_rate_prob,
-    BM_zscore_only_detection_rate_screen_call,
-    Blood_zscore_only_sites_call, Blood_zscore_only_sites_prob,
-    Blood_base_prob, Blood_base_call,
-    Blood_plus_fragment_prob, Blood_plus_fragment_call,
-    Blood_plus_fragment_min_prob, Blood_plus_fragment_min_call,
-    Fragmentomics_mean_coverage_only_prob, Fragmentomics_mean_coverage_only_call,
-    EasyM_reference_threshold_binary, EasyM_value
-  ) %>%
   dplyr::filter(
     !is.na(sample_date),
     !is.na(censor_date),
     !is.na(Relapsed_Binary),
     !is.na(Time_to_event),
-    Time_to_event >= -30
+    Time_to_event >= 0
   )
+
+next_event_endpoint_audit <- survival_df_train_test %>%
+  dplyr::filter(endpoint_ignores_prior_progression |
+                  endpoint_uses_later_progression_after_first_pfs |
+                  force_relapse_sample_day0) %>%
+  dplyr::select(
+    Patient, Cohort, Timepoint, sample_date, timepoint_info,
+    first_pfs_date, first_pfs_days_from_sample,
+    latest_prior_progression_date, n_prior_progressions_before_sample,
+    next_progression_date, endpoint_date, endpoint_status,
+    endpoint_type, endpoint_source, endpoint_days_from_sample,
+    endpoint_uses_later_progression_after_first_pfs, force_relapse_sample_day0
+  ) %>%
+  dplyr::arrange(Patient, sample_date)
+
+readr::write_csv(
+  next_event_endpoint_audit,
+  file.path(outdir_source_data, paste0("All_train_test_next_event_endpoint_audit_", date_tag, ".csv"))
+)
 
 train_test_evaluable_summary <- survival_df_train_test %>%
   dplyr::summarise(
@@ -496,7 +516,12 @@ train_test_evaluable_summary <- survival_df_train_test %>%
     n_frontline_samples = sum(Cohort == "Frontline", na.rm = TRUE),
     n_non_frontline_samples = sum(Cohort == "Non-frontline", na.rm = TRUE),
     n_relapsed_patients = dplyr::n_distinct(Patient[Relapsed_Binary == 1]),
-    n_nonrelapsed_patients = dplyr::n_distinct(Patient[Relapsed_Binary == 0])
+    n_nonrelapsed_patients = dplyr::n_distinct(Patient[Relapsed_Binary == 0]),
+    n_samples_ignoring_prior_progression = sum(endpoint_ignores_prior_progression, na.rm = TRUE),
+    n_samples_using_later_progression_after_first_pfs =
+      sum(endpoint_uses_later_progression_after_first_pfs, na.rm = TRUE),
+    n_samples_censored_after_prior_progression =
+      sum(endpoint_ignores_prior_progression & Relapsed_Binary == 0, na.rm = TRUE)
   )
 
 readr::write_csv(
@@ -603,6 +628,35 @@ min_n <- 5
 # COLOR PALETTE FOR KM CURVES
 # MRD negative = black, MRD positive = red
 pal_2 <- c("black", "red")
+
+safe_logrank_pval_display <- function(surv_obj, data, group_col = "Group") {
+  tryCatch(
+    {
+      group_values <- stats::na.omit(data[[group_col]])
+      if (length(unique(group_values)) < 2) return(FALSE)
+
+      lr <- survival::survdiff(
+        stats::as.formula(paste("surv_obj ~", group_col)),
+        data = data
+      )
+      if (!is.finite(lr$chisq) || length(lr$n) < 2 || any(lr$n == 0)) {
+        return(FALSE)
+      }
+
+      p_val <- stats::pchisq(lr$chisq, df = length(lr$n) - 1, lower.tail = FALSE)
+      if (!is.finite(p_val)) return(FALSE)
+
+      p_text <- dplyr::case_when(
+        p_val < 1e-4 ~ "p < 1e-4",
+        p_val < 1e-3 ~ "p < 0.001",
+        p_val < 1e-2 ~ "p < 0.01",
+        TRUE ~ sprintf("p = %.2f", p_val)
+      )
+      p_text
+    },
+    error = function(e) FALSE
+  )
+}
 
 # HUMAN-READABLE LABELS FOR TIMEPOINTS
 # Maps internal names (as stored in timepoint_info column) to plot labels
@@ -768,7 +822,7 @@ for(tp in tps) {
     #   - Customized colors, labels, and formatting
     km <- ggsurvplot(
       fit, data       = df_sub,
-      pval            = TRUE,
+      pval            = safe_logrank_pval_display(surv_obj, df_sub),
       break.time.by   = 12,        # put ticks every 12 “units” (i.e. every 12 months)
       conf.int        = FALSE,
       risk.table      = TRUE,
@@ -901,7 +955,7 @@ for (tp in tps_train_test) {
       dplyr::filter(
         timepoint_info == tp,
         !is.na(Time_to_event),
-        Time_to_event >= -30,
+        Time_to_event >= 0,
         !is.na(Relapsed_Binary),
         !is.na(.data[[var]])
       ) %>%
@@ -982,7 +1036,7 @@ for (tp in tps_train_test) {
       ylab = "Progression-free survival",
       title = stringr::str_wrap(
         paste0(
-          "PFS Stratified by ", assay_lab, " at ", nice_tp,
+          "Next-event-free survival stratified by ", assay_lab, " at ", nice_tp,
           "\nTraining Cohort + Test Cohort outcome-available samples"
         ),
         width = 54
@@ -1020,6 +1074,23 @@ for (tp in tps_train_test) {
 
     ggsave(fname, combined, width = 7, height = 7, dpi = dpi_target)
     ggsave(fname_stable, combined, width = 7, height = 7, dpi = dpi_target)
+
+    km_artifact <- km_manuscript_artifacts %>%
+      dplyr::filter(timepoint_info == tp, assay_variable == var)
+
+    if (nrow(km_artifact) == 1) {
+      ms_copy_artifact(
+        source_path = fname_stable,
+        artifact_id = km_artifact$artifact_id,
+        role = "all_samples_figure_panel_png",
+  description = paste0(
+    "All-evaluable training/test outcome-available version of ",
+    km_artifact$description,
+    " Uses first known progression after the MRD assessment, or censoring if no later progression is available."
+  ),
+        script_name = "4_1_Survival_Analysis.R"
+      )
+    }
   }
 }
 
@@ -1091,7 +1162,7 @@ for(tp in tps) {
     
     km <- ggsurvplot(
       fit, data       = df_sub,
-      pval            = TRUE,
+      pval            = safe_logrank_pval_display(surv_obj, df_sub),
       break.time.by   = 12,        # put ticks every 12 “units” (i.e. every 12 months)
       conf.int        = FALSE,
       risk.table      = TRUE,
@@ -1204,7 +1275,7 @@ for(tp in tps) {
     
     km <- ggsurvplot(
       fit, data       = df_sub,
-      pval            = TRUE,
+      pval            = safe_logrank_pval_display(surv_obj, df_sub),
       break.time.by   = 12,        # put ticks every 12 “units” (i.e. every 12 months)
       conf.int        = FALSE,
       conf.int.alpha  = 0.1,    
@@ -3777,7 +3848,7 @@ plot_train_test_longitudinal_probability <- function(survival_data,
       !is.na(.data[[call_col]]),
       !is.na(Time_to_event),
       !is.na(Relapsed_Binary),
-      Time_to_event >= -30
+      Time_to_event >= 0
     ) %>%
     dplyr::mutate(
       days_before_event = pmax(Time_to_event, 0),
@@ -3845,7 +3916,7 @@ plot_train_test_longitudinal_probability <- function(survival_data,
       size = 2
     ) +
     scale_x_reverse(
-      name = "Months before event or censor",
+      name = "Months before next event or censor",
       breaks = seq(0, max_mo, by = 12),
       minor_breaks = seq(0, max_mo, by = 6)
     ) +
@@ -3872,7 +3943,7 @@ plot_train_test_longitudinal_probability <- function(survival_data,
     ) +
     labs(
       title = paste0(
-        "Longitudinal cfWGS MRD Probability by Patient Outcome\n",
+        "Longitudinal cfWGS MRD Probability by Next Patient Outcome\n",
         title_suffix, "\n",
         cohort_title_note
       )
@@ -3984,7 +4055,7 @@ plot_train_test_time_to_relapse <- function(plot_df,
       colour = "black"
     ) +
     scale_y_continuous(
-      "Days until relapse (or infinity for censor)",
+      "Days until next relapse/progression (or infinity for censor)",
       limits = c(0, overflow),
       breaks = c(seq(0, max_days, by = 180), overflow),
       labels = c(seq(0, max_days, by = 180), "infinity")
@@ -4010,7 +4081,7 @@ plot_train_test_time_to_relapse <- function(plot_df,
     ) +
     labs(
       title = paste0(
-        "cfWGS MRD Probability vs Time to Relapse\n",
+        "cfWGS MRD Probability vs Time to Next Relapse/Progression\n",
         title_suffix, "\n",
         cohort_title_note
       )
@@ -4046,6 +4117,14 @@ bm_train_test_longitudinal_df <- plot_train_test_longitudinal_probability(
   y_limits = c(0, 1)
 )
 
+ms_copy_artifact(
+  source_path = "Final Tables and Figures/F4C_cfWGS_prob_vs_time_all_train_test_BM_outcome_available.png",
+  artifact_id = "EDFIG6J",
+  role = "all_samples_figure_panel_png",
+  description = "All-evaluable-sample training/test combined version of Extended Data Figure 6J using the next progression/censor endpoint after each sample.",
+  script_name = "4_1_Survival_Analysis.R"
+)
+
 plot_train_test_time_to_relapse(
   plot_df = bm_train_test_longitudinal_df,
   prob_col = "BM_zscore_only_detection_rate_prob",
@@ -4054,6 +4133,14 @@ plot_train_test_time_to_relapse(
   title_suffix = "Using BM-Derived Mutations",
   output_stem = "Fig_4D_time_to_relapse_footer3cols_BM_muts_all_train_test_outcome_available",
   x_limits = c(0, 1)
+)
+
+ms_copy_artifact(
+  source_path = "Final Tables and Figures/Fig_4D_time_to_relapse_footer3cols_BM_muts_all_train_test_outcome_available.png",
+  artifact_id = "EDFIG6K",
+  role = "all_samples_figure_panel_png",
+  description = "All-evaluable-sample training/test combined version of Extended Data Figure 6K using the next progression/censor endpoint after each sample.",
+  script_name = "4_1_Survival_Analysis.R"
 )
 
 blood_train_test_longitudinal_df <- plot_train_test_longitudinal_probability(
@@ -4067,6 +4154,14 @@ blood_train_test_longitudinal_df <- plot_train_test_longitudinal_probability(
   y_limits = c(0.3, 1)
 )
 
+ms_copy_artifact(
+  source_path = "Final Tables and Figures/F4C_cfWGS_prob_vs_time_all_train_test_blood_outcome_available.png",
+  artifact_id = "EDFIG8_UNLABELED_BOTTOM_LEFT",
+  role = "all_samples_figure_panel_png",
+  description = "All-evaluable-sample training/test combined version of Extended Data Figure 8 bottom-left longitudinal panel using the next progression/censor endpoint after each sample.",
+  script_name = "4_1_Survival_Analysis.R"
+)
+
 plot_train_test_time_to_relapse(
   plot_df = blood_train_test_longitudinal_df,
   prob_col = "Blood_zscore_only_sites_prob",
@@ -4075,6 +4170,14 @@ plot_train_test_time_to_relapse(
   title_suffix = "Using cfDNA-Derived Mutations",
   output_stem = "Fig_4D_time_to_relapse_footer3cols_blood_muts_all_train_test_outcome_available",
   x_limits = c(0.3, 1)
+)
+
+ms_copy_artifact(
+  source_path = "Final Tables and Figures/Fig_4D_time_to_relapse_footer3cols_blood_muts_all_train_test_outcome_available.png",
+  artifact_id = "EDFIG8_UNLABELED_BOTTOM_RIGHT",
+  role = "all_samples_figure_panel_png",
+  description = "All-evaluable-sample training/test combined version of Extended Data Figure 8 bottom-right time-to-relapse panel using the next progression/censor endpoint after each sample.",
+  script_name = "4_1_Survival_Analysis.R"
 )
 
 

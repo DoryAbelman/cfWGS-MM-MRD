@@ -650,13 +650,162 @@ if (USE_PRESERVED_MODELS_ONLY) {
       )
   }
 
+  # -----------------------------------------------------------------------
+  # Annotate the sequencing platform used for fragmentomics evaluation
+  #
+  # Why: the Spring 2026 expansion introduced genuinely new NovaSeq XPlus
+  # libraries, whereas the original analysis cohort was generated on NovaSeq
+  # 6000. Platform labels let us report performance separately and detect a
+  # platform-associated shift without changing the frozen model predictions.
+  # -----------------------------------------------------------------------
+  FRAGMENTOMICS_PLATFORM_NOVASEQ6000 <- "NovaSeq 6000"
+  FRAGMENTOMICS_PLATFORM_XPLUS <- "NovaSeq XPlus"
+  FRAGMENTOMICS_PLATFORM_COMBINED <- "NovaSeq 6000 + NovaSeq XPlus"
+
+  # Construct a case- and separator-insensitive patient/sample join key.
+  # Sample_Code is preferred; patient-timepoint is a fallback for older rows.
+  # Plasma/DNA suffixes are removed because they are inconsistently present
+  # across the scored table and the revision metadata.
+  normalize_fragmentomics_platform_key <- function(patient, sample_code, timepoint = NULL) {
+    key_sample <- dplyr::coalesce(as.character(sample_code), paste(patient, timepoint, sep = "-"))
+    key_sample <- stringr::str_replace_all(toupper(key_sample), "_", "-")
+    key_sample <- stringr::str_replace_all(key_sample, "\\s+", "")
+    key_sample <- stringr::str_remove(key_sample, "-(P|PL|PLASMA|CFDNA|DNA)$")
+    paste(stringr::str_replace_all(toupper(as.character(patient)), "_", "-"), key_sample, sep = "||")
+  }
+
+  # Add auditable platform columns to a scored sample table.
+  #
+  # Classification rule: only revision rows explicitly marked as having no
+  # pre-existing patient-timepoint-type overlap are new XPlus samples. All
+  # original or overlapping rows remain NovaSeq 6000. If optional revision
+  # metadata is unavailable, retain the original-cohort default and record the
+  # fallback in fragmentomics_platform_reason rather than silently guessing.
+  annotate_fragmentomics_platform <- function(df) {
+    revision <- load_spring2026_revision_metadata(required = FALSE)
+    out <- df %>%
+      dplyr::mutate(
+        fragmentomics_platform_key = normalize_fragmentomics_platform_key(
+          .data$Patient,
+          .data$Sample_Code,
+          .data$Timepoint
+        ),
+        fragmentomics_revision_metadata_match = FALSE,
+        fragmentomics_revision_new_xplus = FALSE,
+        fragmentomics_sequencing_platform = FRAGMENTOMICS_PLATFORM_NOVASEQ6000,
+        fragmentomics_platform_reason = "No matching new Spring 2026 revision row"
+      )
+
+    if (is.null(revision) || nrow(revision) == 0L) {
+      out$fragmentomics_platform_reason <- "Spring 2026 revision metadata unavailable; defaulted to original cohort"
+      return(out)
+    }
+
+    required_cols <- c("Patient", "Sample_ID", "existing_repo_patient_timepoint_type_overlap")
+    missing_cols <- setdiff(required_cols, names(revision))
+    if (length(missing_cols) > 0L) {
+      stop(
+        "Cannot classify fragmentomics sequencing platform because revision metadata is missing columns: ",
+        paste(missing_cols, collapse = ", "),
+        call. = FALSE
+      )
+    }
+
+    # Collapse duplicate revision records to one key. `any(FALSE overlap)` is
+    # intentionally conservative: one confirmed new library is sufficient to
+    # classify the matched scored sample as XPlus.
+    revision_keys <- revision %>%
+      dplyr::transmute(
+        fragmentomics_platform_key = normalize_fragmentomics_platform_key(
+          .data$Patient,
+          .data$Sample_ID,
+          NA_character_
+        ),
+        revision_existing_overlap = .data$existing_repo_patient_timepoint_type_overlap,
+        revision_bam = if ("Bam" %in% names(revision)) as.character(.data$Bam) else NA_character_
+      ) %>%
+      dplyr::group_by(.data$fragmentomics_platform_key) %>%
+      dplyr::summarise(
+        revision_metadata_match = TRUE,
+        revision_new_xplus = any(.data$revision_existing_overlap %in% FALSE, na.rm = TRUE),
+        revision_overlap_missing = any(is.na(.data$revision_existing_overlap)),
+        revision_bam = paste(unique(stats::na.omit(.data$revision_bam)), collapse = ";"),
+        .groups = "drop"
+      )
+
+    out <- out %>%
+      dplyr::left_join(revision_keys, by = "fragmentomics_platform_key") %>%
+      dplyr::mutate(
+        fragmentomics_revision_metadata_match = dplyr::coalesce(.data$revision_metadata_match, FALSE),
+        fragmentomics_revision_new_xplus = dplyr::coalesce(.data$revision_new_xplus, FALSE),
+        fragmentomics_sequencing_platform = dplyr::case_when(
+          .data$fragmentomics_revision_new_xplus ~ FRAGMENTOMICS_PLATFORM_XPLUS,
+          TRUE ~ FRAGMENTOMICS_PLATFORM_NOVASEQ6000
+        ),
+        fragmentomics_platform_reason = dplyr::case_when(
+          .data$fragmentomics_revision_new_xplus ~
+            "Matched Spring 2026 revision row with no existing repo patient-timepoint-type overlap",
+          .data$fragmentomics_revision_metadata_match ~
+            "Matched Spring 2026 revision row that overlaps the original repo cohort",
+          TRUE ~
+            "No matching new Spring 2026 revision row"
+        )
+      ) %>%
+      dplyr::select(-dplyr::any_of(c("revision_metadata_match", "revision_new_xplus")))
+
+    out
+  }
+
+  # Persist the annotated scored object because all downstream platform-split
+  # tables must be traceable to the same sample-level predictions.
+  data_scored_masked <- annotate_fragmentomics_platform(data_scored_masked)
+  saveRDS(data_scored_masked, file = file.path(outdir, "all_patients_with_BM_and_blood_calls_updated6.rds"))
+  write_csv(data_scored_masked, file = file.path(outdir, "all_patients_with_BM_and_blood_calls_updated6.csv"))
+
+  # Write a row-level audit containing the join outcome, platform rationale,
+  # BAM provenance (when available), and whether any full model was evaluable.
+  fragmentomics_probability_cols <- grep("^Fragmentomics_.*_Full_prob$", names(data_scored_masked), value = TRUE)
+  fragmentomics_platform_audit <- data_scored_masked %>%
+    dplyr::mutate(
+      fragmentomics_any_full_model_evaluable = if (length(fragmentomics_probability_cols) == 0L) {
+        FALSE
+      } else {
+        rowSums(!is.na(dplyr::pick(dplyr::all_of(fragmentomics_probability_cols)))) > 0
+      }
+    ) %>%
+    dplyr::select(
+      dplyr::any_of(c(
+        "Patient", "Timepoint", "Sample_Code", "timepoint_info", "Cohort", "Study",
+        "MRD_truth", "fragmentomics_sequencing_platform", "fragmentomics_platform_reason",
+        "fragmentomics_revision_metadata_match", "fragmentomics_revision_new_xplus",
+        "fragmentomics_any_full_model_evaluable", "revision_bam"
+      ))
+    )
+  readr::write_csv(
+    fragmentomics_platform_audit,
+    file.path(outdir, "fragmentomics_platform_split_audit.csv")
+  )
+
+  # Define mutually exclusive evaluation cohorts after excluding baseline and
+  # diagnosis rows, where MRD response classification is not meaningful.
+  # "Frontline" preserves the development/training cohort; "Non-frontline"
+  # is the independent test cohort, including newly incorporated samples.
   preserved_train_eval <- data_scored_masked %>%
     dplyr::filter(
       !.data$timepoint_info %in% c("Baseline", "Diagnosis"),
       .data$Cohort == "Frontline",
       !is.na(.data$MRD_truth)
     )
+  preserved_test_eval <- data_scored_masked %>%
+    dplyr::filter(
+      !.data$timepoint_info %in% c("Baseline", "Diagnosis"),
+      .data$Cohort == "Non-frontline",
+      !is.na(.data$MRD_truth)
+    )
 
+  # Regenerate Figure 3B by applying the frozen February 2026 BM models and
+  # thresholds. These calls are evaluation only: no fitting or threshold
+  # optimization occurs in preserved-model mode.
   figure3b_training_confusion <- build_preserved_confusion_df(
     preserved_train_eval,
     cohort_label = "Training Cohort",
@@ -734,6 +883,8 @@ if (USE_PRESERVED_MODELS_ONLY) {
     script_name = "3_1_Optimize_cfWGS_thresholds.R"
   )
 
+  # Repeat the frozen-model confusion workflow for the blood/cfDNA models used
+  # in Figure 4B, failing early if either a model or threshold is absent.
   selected_blood_models <- c("Blood_zscore_only_sites", "Blood_plus_fragment")
   selected_blood_labels <- c(
     Blood_zscore_only_sites = "Sites model",
@@ -811,6 +962,8 @@ if (USE_PRESERVED_MODELS_ONLY) {
     script_name = "3_1_Optimize_cfWGS_thresholds.R"
   )
 
+  # Select the two fragmentomics models used in the ED Figure 9 confusion
+  # panels. The broader three-model set below is used for performance summaries.
   selected_fragmentomics_models <- c(
     "Fragmentomics_mean_coverage_only_Full",
     "Fragmentomics_min_Full"
@@ -842,6 +995,705 @@ if (USE_PRESERVED_MODELS_ONLY) {
     model_names = selected_fragmentomics_models,
     model_labels = selected_fragmentomics_labels
   )
+
+  # Models shown in the platform-aware performance comparison: the combined
+  # model and its two principal single-feature counterparts.
+  fragmentomics_platform_models <- c(
+    "Fragmentomics_full_Full",
+    "Fragmentomics_mean_coverage_only_Full",
+    "Fragmentomics_prop_short_only_Full"
+  )
+  fragmentomics_platform_labels <- c(
+    Fragmentomics_full_Full = "Combined model",
+    Fragmentomics_mean_coverage_only_Full = "Coverage model",
+    Fragmentomics_prop_short_only_Full = "Prop. short model"
+  )
+  missing_platform_models <- setdiff(fragmentomics_platform_models, names(selected_models))
+  missing_platform_thresholds <- setdiff(fragmentomics_platform_models, names(selected_thr))
+  if (length(missing_platform_models) > 0L || length(missing_platform_thresholds) > 0L) {
+    stop(
+      "Cannot regenerate platform-split fragmentomics performance panels. ",
+      "Missing models: ", paste(missing_platform_models, collapse = ", "),
+      "; missing thresholds: ", paste(missing_platform_thresholds, collapse = ", "),
+      call. = FALSE
+    )
+  }
+
+  # Calculate threshold-dependent binary performance after complete-case
+  # filtering. Undefined denominators remain NA through safe_div(); an empty
+  # subset returns a typed one-row result so downstream binding is stable.
+  calc_binary_metrics <- function(truth, prob, threshold) {
+    keep <- !is.na(truth) & !is.na(prob)
+    truth <- as.integer(truth[keep])
+    prob <- as.numeric(prob[keep])
+    if (length(truth) == 0L) {
+      return(tibble(
+        threshold = threshold, n_evaluable = 0L, n_mrd_positive = NA_integer_,
+        n_mrd_negative = NA_integer_, sensitivity = NA_real_, specificity = NA_real_,
+        bal_accuracy = NA_real_, f1 = NA_real_
+      ))
+    }
+    pred <- as.integer(prob >= threshold)
+    tp <- sum(pred == 1L & truth == 1L)
+    tn <- sum(pred == 0L & truth == 0L)
+    fp <- sum(pred == 1L & truth == 0L)
+    fn <- sum(pred == 0L & truth == 1L)
+    sensitivity <- safe_div(tp, tp + fn)
+    specificity <- safe_div(tn, tn + fp)
+    precision <- safe_div(tp, tp + fp)
+    f1 <- ifelse(
+      is.na(precision) | is.na(sensitivity) | (precision + sensitivity) == 0,
+      NA_real_,
+      2 * precision * sensitivity / (precision + sensitivity)
+    )
+    tibble(
+      threshold = threshold,
+      n_evaluable = length(truth),
+      n_mrd_positive = sum(truth == 1L),
+      n_mrd_negative = sum(truth == 0L),
+      sensitivity = sensitivity,
+      specificity = specificity,
+      bal_accuracy = mean(c(sensitivity, specificity), na.rm = TRUE),
+      f1 = f1
+    )
+  }
+
+  # Derive the best-specificity ROC threshold among points reaching at least
+  # 94% empirical sensitivity (the discrete-sample approximation to the named
+  # 95% target). If the subset cannot support an ROC curve, use the preserved
+  # Youden threshold so figure generation remains deterministic and explicit.
+  current_95sens_threshold <- function(eval_dat, model_name) {
+    prob_col <- paste0(model_name, "_prob")
+    model_eval <- eval_dat %>%
+      dplyr::transmute(
+        MRD_truth = as.integer(.data$MRD_truth),
+        prob = as.numeric(.data[[prob_col]])
+      ) %>%
+      dplyr::filter(!is.na(.data$MRD_truth), !is.na(.data$prob))
+
+    if (nrow(model_eval) < 2L || dplyr::n_distinct(model_eval$MRD_truth) < 2L) {
+      return(as.numeric(selected_thr[[model_name]]))
+    }
+
+    roc_obj <- pROC::roc(
+      response = model_eval$MRD_truth,
+      predictor = model_eval$prob,
+      levels = c(0, 1),
+      direction = "<",
+      quiet = TRUE
+    )
+    roc_df <- pROC::coords(
+      roc_obj,
+      x = "all",
+      ret = c("threshold", "sensitivity", "specificity"),
+      transpose = FALSE
+    ) %>%
+      as_tibble()
+
+    candidate <- roc_df %>%
+      dplyr::filter(.data$sensitivity >= 0.94) %>%
+      dplyr::arrange(dplyr::desc(.data$specificity), dplyr::desc(.data$sensitivity)) %>%
+      dplyr::slice(1)
+    if (nrow(candidate) == 0L) {
+      candidate <- roc_df %>%
+        dplyr::arrange(dplyr::desc(.data$sensitivity), dplyr::desc(.data$specificity)) %>%
+        dplyr::slice(1)
+    }
+    as.numeric(candidate$threshold[[1]])
+  }
+
+  # Generate one current test-cohort performance panel and all of its source
+  # data/provenance copies. Bars show preserved Youden-threshold metrics;
+  # triangles show metrics at the current cohort's high-sensitivity operating
+  # point. Legacy copies are refreshed because manuscript assembly still reads
+  # those stable paths, while ms_copy_artifact registers canonical outputs.
+  write_current_test_performance_panel <- function(eval_dat,
+                                                   model_names,
+                                                   model_labels,
+                                                   output_png,
+                                                   source_csv,
+                                                   artifact_id,
+                                                   description,
+                                                   legacy_component_png = NULL,
+                                                   legacy_component_source_csv = NULL,
+                                                   legacy_export_sidecar_csv = NULL) {
+    missing_models <- setdiff(model_names, names(selected_models))
+    missing_thresholds <- setdiff(model_names, names(selected_thr))
+    if (length(missing_models) > 0L || length(missing_thresholds) > 0L) {
+      stop(
+        "Cannot regenerate ", artifact_id, " current test-cohort performance panel. ",
+        "Missing models: ", paste(missing_models, collapse = ", "),
+        "; missing thresholds: ", paste(missing_thresholds, collapse = ", "),
+        call. = FALSE
+      )
+    }
+
+    # Keep one row per model and operating point in the source CSV before
+    # pivoting to the long plotting representation.
+    perf_df <- purrr::map_dfr(model_names, function(model_name) {
+      prob_col <- paste0(model_name, "_prob")
+      if (!prob_col %in% names(eval_dat)) {
+        stop("Missing preserved-model probability column: ", prob_col, call. = FALSE)
+      }
+      dplyr::bind_rows(
+        calc_binary_metrics(
+          truth = eval_dat$MRD_truth,
+          prob = eval_dat[[prob_col]],
+          threshold = as.numeric(selected_thr[[model_name]])
+        ) %>% dplyr::mutate(operating_point = "Youden"),
+        calc_binary_metrics(
+          truth = eval_dat$MRD_truth,
+          prob = eval_dat[[prob_col]],
+          threshold = current_95sens_threshold(eval_dat, model_name)
+        ) %>% dplyr::mutate(operating_point = "95% sensitivity")
+      ) %>%
+        dplyr::mutate(model = model_name, combo = unname(model_labels[[model_name]]))
+    })
+
+    plot_df <- perf_df %>%
+      dplyr::select(
+        .data$combo, .data$operating_point, .data$sensitivity,
+        .data$specificity, .data$bal_accuracy, .data$f1
+      ) %>%
+      tidyr::pivot_longer(
+        cols = c(.data$sensitivity, .data$specificity, .data$bal_accuracy, .data$f1),
+        names_to = "metric",
+        values_to = "value"
+      ) %>%
+      dplyr::mutate(
+        metric = dplyr::recode(
+          .data$metric,
+          sensitivity = "Sens",
+          specificity = "Spec",
+          bal_accuracy = "Acc",
+          f1 = "F1"
+        )
+      )
+
+    readr::write_csv(perf_df, source_csv)
+    ggsave(
+      output_png,
+      plot = ggplot(
+        plot_df %>% dplyr::filter(.data$operating_point == "Youden"),
+        aes(x = .data$combo, y = .data$value, fill = .data$combo)
+      ) +
+        geom_col(width = 0.6) +
+        geom_point(
+          data = plot_df %>% dplyr::filter(.data$operating_point == "95% sensitivity"),
+          aes(y = .data$value, shape = "95% sensitivity"),
+          size = 2,
+          colour = "black"
+        ) +
+        scale_shape_manual(name = NULL, values = c("95% sensitivity" = 17)) +
+        facet_wrap(
+          ~ metric,
+          nrow = 1,
+          labeller = labeller(metric = c(
+            F1 = "F1",
+            Sens = "Sensitivity",
+            Spec = "Specificity",
+            Acc = "Bal. Accuracy"
+          ))
+        ) +
+        scale_fill_viridis_d(option = "D", begin = 0.15, end = 0.8, guide = "none") +
+        scale_y_continuous(limits = c(0, 1), labels = scales::percent_format(accuracy = 1)) +
+        labs(
+          x = NULL,
+          y = NULL,
+          title = "Test Cohort Performance at Youden and 95%\nSensitivity Thresholds"
+        ) +
+        theme_classic(base_size = 9) +
+        theme(
+          plot.title = element_text(face = "bold", size = 12, hjust = 0.5),
+          strip.text = element_text(face = "bold", size = 8),
+          axis.text.x = element_text(angle = 40, hjust = 1, size = 7),
+          axis.text.y = element_text(size = 7),
+          panel.spacing = unit(0.8, "lines"),
+          legend.position = "bottom",
+          legend.box.margin = margin(t = -10),
+          plot.margin = margin(t = 5, r = 5, b = 5, l = 20)
+        ),
+      width = 5,
+      height = 3.5,
+      dpi = 600,
+      bg = "white"
+    )
+
+    # Create parent directories before synchronizing compatibility copies; any
+    # failed copy is fatal to prevent a partially updated submission package.
+    legacy_paths <- c(legacy_component_png, legacy_component_source_csv, legacy_export_sidecar_csv)
+    legacy_paths <- legacy_paths[!is.na(legacy_paths)]
+    for (legacy_path in legacy_paths) {
+      dir.create(dirname(legacy_path), recursive = TRUE, showWarnings = FALSE)
+    }
+    if (!is.null(legacy_component_png)) {
+      copied_png <- file.copy(output_png, legacy_component_png, overwrite = TRUE)
+      if (!isTRUE(copied_png)) {
+        stop("Failed to update legacy generated-component PNG for ", artifact_id, ": ", legacy_component_png, call. = FALSE)
+      }
+    }
+    if (!is.null(legacy_component_source_csv)) {
+      for (legacy_source_csv in legacy_component_source_csv) {
+        copied_source <- file.copy(source_csv, legacy_source_csv, overwrite = TRUE)
+        if (!isTRUE(copied_source)) {
+          stop("Failed to update legacy generated-component source CSV for ", artifact_id, ": ", legacy_source_csv, call. = FALSE)
+        }
+      }
+    }
+    if (!is.null(legacy_export_sidecar_csv)) {
+      for (legacy_sidecar_csv in legacy_export_sidecar_csv) {
+        copied_sidecar <- file.copy(source_csv, legacy_sidecar_csv, overwrite = TRUE)
+        if (!isTRUE(copied_sidecar)) {
+          stop("Failed to update legacy manuscript-export sidecar CSV for ", artifact_id, ": ", legacy_sidecar_csv, call. = FALSE)
+        }
+      }
+    }
+
+    ms_copy_artifact(
+      source_path = output_png,
+      artifact_id = artifact_id,
+      role = "figure_panel_png",
+      description = description,
+      script_name = "3_1_Optimize_cfWGS_thresholds.R"
+    )
+    ms_copy_artifact(
+      source_path = source_csv,
+      artifact_id = artifact_id,
+      role = "source_data_csv_current_test_cohort",
+      description = paste(description, "Source data generated from the current preserved-model test cohort."),
+      script_name = "3_1_Optimize_cfWGS_thresholds.R"
+    )
+    invisible(perf_df)
+  }
+
+  # Register training/refit panels that are intentionally not recomputed by
+  # the expanded test-cohort workflow. This preserves the scientific boundary
+  # between frozen training results and newly evaluated test results.
+  sync_existing_panel_copy <- function(source_png,
+                                       artifact_id,
+                                       description,
+                                       legacy_component_png = NULL) {
+    if (!file.exists(source_png)) {
+      stop("Cannot synchronize existing panel for ", artifact_id, ". Missing file: ", source_png, call. = FALSE)
+    }
+    if (!is.null(legacy_component_png)) {
+      dir.create(dirname(legacy_component_png), recursive = TRUE, showWarnings = FALSE)
+      copied_png <- file.copy(source_png, legacy_component_png, overwrite = TRUE)
+      if (!isTRUE(copied_png)) {
+        stop("Failed to update legacy generated-component PNG for ", artifact_id, ": ", legacy_component_png, call. = FALSE)
+      }
+    }
+    ms_copy_artifact(
+      source_path = source_png,
+      artifact_id = artifact_id,
+      role = "figure_panel_png",
+      description = description,
+      script_name = "3_1_Optimize_cfWGS_thresholds.R"
+    )
+    invisible(source_png)
+  }
+
+  sync_existing_panel_copy(
+    source_png = "Final Tables and Figures/Supp5A_classifier_performance_bar_updated3.png",
+    artifact_id = "EDFIG5B",
+    description = "BM training-cohort performance panel synchronized from the canonical manuscript output; not recomputed for test-cohort expansion.",
+    legacy_component_png = file.path(
+      "Scripts_2025/Final_Scripts/final_manuscript_objects/generated/figure_components/Extended_Data_Figure_5/panel_B",
+      "Supp5A_classifier_performance_bar_updated3.png"
+    )
+  )
+
+  sync_existing_panel_copy(
+    source_png = "Final Tables and Figures/Supp7A_classifier_performance_bar_updated_blood_muts2.png",
+    artifact_id = "EDFIG7B",
+    description = "Blood/cfDNA training-cohort performance panel synchronized from the canonical manuscript output; not recomputed for test-cohort expansion.",
+    legacy_component_png = file.path(
+      "Scripts_2025/Final_Scripts/final_manuscript_objects/generated/figure_components/Extended_Data_Figure_7/panel_B",
+      "Supp7A_classifier_performance_bar_updated_blood_muts2.png"
+    )
+  )
+
+  sync_existing_panel_copy(
+    source_png = "Final Tables and Figures/Supp9D_classifier_performance_bar_updated_frag2.png",
+    artifact_id = "EDFIG9C",
+    description = "Fragmentomics training-cohort performance panel synchronized from the canonical manuscript output; not recomputed for test-cohort expansion.",
+    legacy_component_png = file.path(
+      "Scripts_2025/Final_Scripts/final_manuscript_objects/generated/figure_components/Extended_Data_Figure_9/panel_C",
+      "Supp9D_classifier_performance_bar_updated_frag2.png"
+    )
+  )
+
+  sync_existing_panel_copy(
+    source_png = "Final Tables and Figures/Supp7D_ROC_performance_blood_updated4.png",
+    artifact_id = "EDFIG7E",
+    description = "Blood/cfDNA full-cohort refit ROC panel synchronized from the canonical manuscript output; this training/refit panel is not recomputed for test-cohort expansion.",
+    legacy_component_png = file.path(
+      "Scripts_2025/Final_Scripts/final_manuscript_objects/generated/figure_components/Extended_Data_Figure_7/panel_E",
+      "Supp7D_ROC_performance_blood_updated4.png"
+    )
+  )
+
+  # Recompute only the three independent test-cohort performance panels (BM,
+  # blood/cfDNA, and fragmentomics) from the current scored sample table.
+  write_current_test_performance_panel(
+    eval_dat = preserved_test_eval,
+    model_names = c("BM_base_zscore", "BM_zscore_only_detection_rate", "BM_zscore_only_sites"),
+    model_labels = c(
+      BM_base_zscore = "Combined model",
+      BM_zscore_only_detection_rate = "cVAF model",
+      BM_zscore_only_sites = "Sites model"
+    ),
+    output_png = "Final Tables and Figures/Supp5A_classifier_performance_bar_test_cohort_updated3.png",
+    source_csv = file.path(outdir, "current_test_cohort_EDFIG5C_BM_performance_source_data.csv"),
+    artifact_id = "EDFIG5C",
+    description = "BM classifier test-cohort performance summary regenerated from current preserved-model scored calls for Extended Data Figure 5C.",
+    legacy_component_png = file.path(
+      "Scripts_2025/Final_Scripts/final_manuscript_objects/generated/figure_components/Extended_Data_Figure_5/panel_C",
+      "Supp5A_classifier_performance_bar_test_cohort_updated3.png"
+    ),
+    legacy_component_source_csv = file.path(
+      c(
+        "Scripts_2025/Final_Scripts/final_manuscript_objects/generated/figure_components/Extended_Data_Figure_5/panel_C",
+        "CodeOcean_GitHub_Staging/reproducible_workflow/outputs/generated/figure_components/Extended_Data_Figure_5/panel_C"
+      ),
+      "Extended_Data_Figure_5C_BM_test_performance_source_data.csv"
+    ),
+    legacy_export_sidecar_csv = file.path(
+      c(
+        "Scripts_2025/Final_Scripts/outputs/manuscript/02_extended_data_figures/Extended_Data_Figure_5/generated_outputs",
+        "CodeOcean_GitHub_Staging/Scripts_2025/Final_Scripts/outputs/manuscript/02_extended_data_figures/Extended_Data_Figure_5/generated_outputs"
+      ),
+      "EDFIG5C__C__generated_sidecar_file__Extended_Data_Figure_5C_BM_test_performance_source_data.csv"
+    )
+  )
+
+  write_current_test_performance_panel(
+    eval_dat = preserved_test_eval,
+    model_names = c("Blood_plus_fragment", "Blood_rate_only", "Blood_zscore_only_sites"),
+    model_labels = c(
+      Blood_plus_fragment = "Combined model",
+      Blood_rate_only = "cVAF model",
+      Blood_zscore_only_sites = "Sites model"
+    ),
+    output_png = "Final Tables and Figures/Supp_7B_classifier_performance_bar_test_cohort_updated3.png",
+    source_csv = file.path(outdir, "current_test_cohort_EDFIG7C_blood_performance_source_data.csv"),
+    artifact_id = "EDFIG7C",
+    description = "Blood/cfDNA classifier test-cohort performance summary regenerated from current preserved-model scored calls for Extended Data Figure 7C.",
+    legacy_component_png = file.path(
+      "Scripts_2025/Final_Scripts/final_manuscript_objects/generated/figure_components/Extended_Data_Figure_7/panel_C",
+      "Supp_7B_classifier_performance_bar_test_cohort_updated3.png"
+    ),
+    legacy_component_source_csv = file.path(
+      c(
+        "Scripts_2025/Final_Scripts/final_manuscript_objects/generated/figure_components/Extended_Data_Figure_7/panel_C",
+        "CodeOcean_GitHub_Staging/reproducible_workflow/outputs/generated/figure_components/Extended_Data_Figure_7/panel_C"
+      ),
+      "Extended_Data_Figure_7C_blood_test_performance_source_data.csv"
+    ),
+    legacy_export_sidecar_csv = file.path(
+      c(
+        "Scripts_2025/Final_Scripts/outputs/manuscript/02_extended_data_figures/Extended_Data_Figure_7/generated_outputs",
+        "CodeOcean_GitHub_Staging/Scripts_2025/Final_Scripts/outputs/manuscript/02_extended_data_figures/Extended_Data_Figure_7/generated_outputs"
+      ),
+      "EDFIG7C__C__generated_sidecar_file__Extended_Data_Figure_7C_blood_test_performance_source_data.csv"
+    )
+  )
+
+  write_current_test_performance_panel(
+    eval_dat = preserved_test_eval,
+    model_names = c(
+      "Fragmentomics_full_Full",
+      "Fragmentomics_mean_coverage_only_Full",
+      "Fragmentomics_prop_short_only_Full"
+    ),
+    model_labels = c(
+      Fragmentomics_full_Full = "Combined model",
+      Fragmentomics_mean_coverage_only_Full = "Coverage model",
+      Fragmentomics_prop_short_only_Full = "Prop. short model"
+    ),
+    output_png = "Final Tables and Figures/Supp_Fig9F_classifier_performance_bar_test_cohort_updated2_frag2.png",
+    source_csv = file.path(outdir, "current_test_cohort_EDFIG9D_fragmentomics_performance_source_data.csv"),
+    artifact_id = "EDFIG9D",
+    description = "Fragmentomics classifier test-cohort performance summary regenerated from current preserved-model scored calls for Extended Data Figure 9D.",
+    legacy_component_png = file.path(
+      "Scripts_2025/Final_Scripts/final_manuscript_objects/generated/figure_components/Extended_Data_Figure_9/panel_D",
+      "Supp_Fig9F_classifier_performance_bar_test_cohort_updated2_frag2.png"
+    ),
+    legacy_component_source_csv = file.path(
+      c(
+        "Scripts_2025/Final_Scripts/final_manuscript_objects/generated/figure_components/Extended_Data_Figure_9/panel_D",
+        "CodeOcean_GitHub_Staging/reproducible_workflow/outputs/generated/figure_components/Extended_Data_Figure_9/panel_D"
+      ),
+      "Extended_Data_Figure_9D_fragmentomics_test_performance_source_data.csv"
+    ),
+    legacy_export_sidecar_csv = file.path(
+      c(
+        "Scripts_2025/Final_Scripts/outputs/manuscript/02_extended_data_figures/Extended_Data_Figure_9/generated_outputs",
+        "CodeOcean_GitHub_Staging/Scripts_2025/Final_Scripts/outputs/manuscript/02_extended_data_figures/Extended_Data_Figure_9/generated_outputs"
+      ),
+      "EDFIG9D__D__generated_sidecar_file__Extended_Data_Figure_9D_fragmentomics_test_performance_source_data.csv"
+    )
+  )
+
+  # For platform comparisons, derive the high-sensitivity thresholds once in
+  # the training cohort and freeze them before evaluating either platform.
+  # This avoids test-set-specific threshold optimization and information leak.
+  training_95sens_thresholds <- purrr::map_dbl(fragmentomics_platform_models, function(model_name) {
+    prob_col <- paste0(model_name, "_prob")
+    train_eval <- preserved_train_eval %>%
+      dplyr::transmute(MRD_truth = as.integer(.data$MRD_truth), prob = as.numeric(.data[[prob_col]])) %>%
+      dplyr::filter(!is.na(.data$MRD_truth), !is.na(.data$prob))
+    if (nrow(train_eval) < 2L || dplyr::n_distinct(train_eval$MRD_truth) < 2L) {
+      return(as.numeric(selected_thr[[model_name]]))
+    }
+    roc_obj <- pROC::roc(
+      response = train_eval$MRD_truth,
+      predictor = train_eval$prob,
+      levels = c(0, 1),
+      direction = "<",
+      quiet = TRUE
+    )
+    roc_df <- pROC::coords(
+      roc_obj,
+      x = "all",
+      ret = c("threshold", "sensitivity", "specificity"),
+      transpose = FALSE
+    ) %>%
+      as_tibble()
+    candidate <- roc_df %>%
+      dplyr::filter(.data$sensitivity >= 0.94) %>%
+      dplyr::arrange(dplyr::desc(.data$specificity), dplyr::desc(.data$sensitivity)) %>%
+      dplyr::slice(1)
+    if (nrow(candidate) == 0L) {
+      candidate <- roc_df %>%
+        dplyr::arrange(dplyr::desc(.data$sensitivity), dplyr::desc(.data$specificity)) %>%
+        dplyr::slice(1)
+    }
+    as.numeric(candidate$threshold[[1]])
+  })
+  names(training_95sens_thresholds) <- fragmentomics_platform_models
+
+  # Apply both fixed operating points to every model in a supplied cohort or
+  # platform subset, returning tidy metrics with explicit cohort labels.
+  build_fragmentomics_platform_performance_df <- function(eval_dat, cohort_label, platform_label) {
+    purrr::map_dfr(fragmentomics_platform_models, function(model_name) {
+      prob_col <- paste0(model_name, "_prob")
+      if (!prob_col %in% names(eval_dat)) {
+        stop("Missing preserved-model probability column: ", prob_col, call. = FALSE)
+      }
+      fixed_youden <- calc_binary_metrics(
+        truth = eval_dat$MRD_truth,
+        prob = eval_dat[[prob_col]],
+        threshold = as.numeric(selected_thr[[model_name]])
+      ) %>%
+        dplyr::mutate(operating_point = "Youden")
+      fixed_95sens <- calc_binary_metrics(
+        truth = eval_dat$MRD_truth,
+        prob = eval_dat[[prob_col]],
+        threshold = as.numeric(training_95sens_thresholds[[model_name]])
+      ) %>%
+        dplyr::mutate(operating_point = "Training-derived 95% sensitivity")
+      dplyr::bind_rows(fixed_youden, fixed_95sens) %>%
+        dplyr::mutate(
+          model = model_name,
+          combo = fragmentomics_platform_labels[[model_name]],
+          cohort = cohort_label,
+          platform = platform_label
+        )
+    })
+  }
+
+  # Render the same metric layout for each platform subset so visual
+  # comparisons reflect data differences rather than plotting differences.
+  plot_fragmentomics_platform_performance <- function(perf_df, plot_title) {
+    plot_df <- perf_df %>%
+      dplyr::select(
+        .data$combo, .data$operating_point, .data$sensitivity,
+        .data$specificity, .data$bal_accuracy, .data$f1
+      ) %>%
+      tidyr::pivot_longer(
+        cols = c(.data$sensitivity, .data$specificity, .data$bal_accuracy, .data$f1),
+        names_to = "metric",
+        values_to = "value"
+      ) %>%
+      dplyr::mutate(
+        metric = dplyr::recode(
+          .data$metric,
+          sensitivity = "Sens",
+          specificity = "Spec",
+          bal_accuracy = "Acc",
+          f1 = "F1"
+        ),
+        combo = factor(.data$combo, levels = unname(fragmentomics_platform_labels[fragmentomics_platform_models]))
+      )
+
+    ggplot(
+      plot_df %>% dplyr::filter(.data$operating_point == "Youden"),
+      aes(x = .data$combo, y = .data$value, fill = .data$combo)
+    ) +
+      geom_col(width = 0.6) +
+      geom_point(
+        data = plot_df %>% dplyr::filter(.data$operating_point == "Training-derived 95% sensitivity"),
+        aes(y = .data$value, shape = "95% sensitivity"),
+        size = 2,
+        colour = "black"
+      ) +
+      scale_shape_manual(name = NULL, values = c("95% sensitivity" = 17)) +
+      facet_wrap(
+        ~ metric,
+        nrow = 1,
+        labeller = labeller(metric = c(
+          F1 = "F1",
+          Sens = "Sensitivity",
+          Spec = "Specificity",
+          Acc = "Bal. Accuracy"
+        ))
+      ) +
+      scale_fill_viridis_d(option = "D", begin = 0.15, end = 0.8, guide = "none") +
+      scale_y_continuous(limits = c(0, 1), labels = scales::percent_format(accuracy = 1)) +
+      labs(x = NULL, y = NULL, title = plot_title) +
+      theme_classic(base_size = 9) +
+      theme(
+        plot.title = element_text(face = "bold", size = 12, hjust = 0.5),
+        strip.text = element_text(face = "bold", size = 8),
+        axis.text.x = element_text(angle = 40, hjust = 1, size = 7),
+        axis.text.y = element_text(size = 7),
+        panel.spacing = unit(0.8, "lines"),
+        legend.position = "bottom",
+        legend.box.margin = margin(t = -10),
+        plot.margin = margin(t = 5, r = 5, b = 5, l = 20)
+      )
+  }
+
+  # Convert human-readable platform labels into stable filename tokens.
+  platform_slug <- function(x) {
+    dplyr::case_when(
+      identical(x, FRAGMENTOMICS_PLATFORM_COMBINED) ~ "combined",
+      stringr::str_detect(x, "XPlus") ~ "novaseqxplus",
+      TRUE ~ "novaseq6000"
+    )
+  }
+
+  # Return every observed platform subset and, only when both platforms are
+  # present, an additional combined set. This avoids empty or misleading
+  # "combined" panels for single-platform cohorts.
+  platform_eval_options <- function(cohort_df) {
+    observed_platforms <- sort(unique(cohort_df$fragmentomics_sequencing_platform))
+    options <- purrr::map(observed_platforms, function(platform_label) {
+      list(
+        platform_label = platform_label,
+        eval_df = cohort_df %>%
+          dplyr::filter(.data$fragmentomics_sequencing_platform == platform_label)
+      )
+    })
+    if (length(observed_platforms) > 1L) {
+      options <- c(
+        options,
+        list(list(
+          platform_label = FRAGMENTOMICS_PLATFORM_COMBINED,
+          eval_df = cohort_df
+        ))
+      )
+    }
+    options
+  }
+
+  # Evaluate training, test, and pooled descriptive cohorts. The pooled result
+  # is for platform context only and is not used to tune thresholds or claim
+  # independent validation. Source rows are accumulated before one final write.
+  platform_split_performance_source <- list()
+  platform_split_confusion_source <- list()
+  platform_eval_sets <- list(
+    "Training Cohort" = preserved_train_eval,
+    "Test Cohort" = preserved_test_eval,
+    "Training + Test Cohort" = dplyr::bind_rows(preserved_train_eval, preserved_test_eval)
+  )
+
+  for (cohort_label in names(platform_eval_sets)) {
+    cohort_df <- platform_eval_sets[[cohort_label]]
+    for (platform_option in platform_eval_options(cohort_df)) {
+      platform_label <- platform_option$platform_label
+      platform_df <- platform_option$eval_df
+      if (nrow(platform_df) == 0L) next
+
+      # Skip subsets without an observed truth/probability pair. Retaining the
+      # class count in this check also makes future one-class handling visible,
+      # although fixed-threshold metrics themselves do not require an ROC fit.
+      has_fragmentomics_eval <- platform_df %>%
+        dplyr::summarise(
+          n = sum(!is.na(.data$MRD_truth) & !is.na(.data$Fragmentomics_full_Full_prob)),
+          n_classes = dplyr::n_distinct(.data$MRD_truth[!is.na(.data$MRD_truth) & !is.na(.data$Fragmentomics_full_Full_prob)])
+        )
+      if (has_fragmentomics_eval$n[[1]] == 0L) next
+
+      slug <- platform_slug(platform_label)
+      cohort_slug <- dplyr::case_when(
+        cohort_label == "Training Cohort" ~ "train",
+        cohort_label == "Test Cohort" ~ "test",
+        cohort_label == "Training + Test Cohort" ~ "train_test",
+        TRUE ~ stringr::str_replace_all(stringr::str_to_lower(cohort_label), "[^a-z0-9]+", "_")
+      )
+      # Produce paired metric and confusion outputs from the identical subset
+      # so panel values and exported source data share one denominator.
+      perf_df <- build_fragmentomics_platform_performance_df(platform_df, cohort_label, platform_label)
+      platform_split_performance_source[[paste(cohort_slug, slug, sep = "_")]] <- perf_df
+
+      perf_title <- paste0(
+        cohort_label,
+        " Fragmentomics Performance\n",
+        platform_label
+      )
+      perf_path <- file.path(
+        "Final Tables and Figures",
+        paste0("fragmentomics_", cohort_slug, "_performance_bar_", slug, ".png")
+      )
+      ggsave(
+        perf_path,
+        plot = plot_fragmentomics_platform_performance(perf_df, perf_title),
+        width = 5,
+        height = 3.5,
+        dpi = 600,
+        bg = "white"
+      )
+
+      cm_df <- build_preserved_confusion_df(
+        platform_df,
+        cohort_label = paste(cohort_label, platform_label, sep = " - "),
+        model_names = selected_fragmentomics_models,
+        model_labels = selected_fragmentomics_labels
+      ) %>%
+        dplyr::mutate(platform = platform_label)
+      platform_split_confusion_source[[paste(cohort_slug, slug, sep = "_")]] <- cm_df
+
+      cm_path <- file.path(
+        "Final Tables and Figures",
+        paste0("fragmentomics_", cohort_slug, "_confusion_tables_", slug, ".png")
+      )
+      ggsave(
+        cm_path,
+        plot = plot_preserved_confusion_df(
+          cm_df,
+          paste0("Confusion Matrix at Youden Index\n", cohort_label, " - ", platform_label)
+        ),
+        width = 5,
+        height = 2.75,
+        dpi = 600,
+        bg = "white"
+      )
+    }
+  }
+
+  # Write consolidated source tables after all subsets complete successfully;
+  # this prevents partial per-platform CSVs from looking like a full analysis.
+  readr::write_csv(
+    dplyr::bind_rows(platform_split_performance_source),
+    file.path(outdir, "fragmentomics_platform_split_performance_source_data.csv")
+  )
+  readr::write_csv(
+    dplyr::bind_rows(platform_split_confusion_source),
+    file.path(outdir, "fragmentomics_platform_split_confusion_source_data.csv")
+  )
+
   readr::write_csv(
     dplyr::bind_rows(edfigure9_training_confusion, edfigure9_test_confusion),
     file.path(outdir, "preserved_model_current_edfigure9_confusion_source_data.csv")

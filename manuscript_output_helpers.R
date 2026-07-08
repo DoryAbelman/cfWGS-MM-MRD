@@ -233,16 +233,41 @@ ms_destination_path <- function(source_path, artifact_id, role, project_root = m
 
   ext <- tools::file_ext(source_path)
   ext <- if (nzchar(ext)) paste0(".", ext) else ""
-  source_stem <- tools::file_path_sans_ext(basename(source_path))
-  filename <- paste0(
+  artifact_role_stem <- paste0(
     ms_slug(ms_artifact_label(meta)),
     "__",
-    ms_slug(role),
-    "__",
-    ms_slug(source_stem),
+    ms_slug(role)
+  )
+  filename <- paste0(
+    artifact_role_stem,
     ext
   )
   file.path(destination_dir, filename)
+}
+
+ms_remove_legacy_primary_artifact_versions <- function(destination_path) {
+  destination_dir <- dirname(destination_path)
+  if (!dir.exists(destination_dir)) return(invisible(character()))
+
+  ext <- tools::file_ext(destination_path)
+  ext_pattern <- if (nzchar(ext)) paste0("\\.", ext) else ""
+  destination_stem <- tools::file_path_sans_ext(basename(destination_path))
+  legacy_pattern <- paste0(
+    "^",
+    gsub("([][{}()+*^$|\\\\?.])", "\\\\\\1", destination_stem),
+    "__.+",
+    ext_pattern,
+    "$"
+  )
+
+  legacy_paths <- list.files(
+    destination_dir,
+    pattern = legacy_pattern,
+    full.names = TRUE
+  )
+  legacy_paths <- setdiff(normalizePath(legacy_paths, mustWork = FALSE), destination_path)
+  if (length(legacy_paths)) unlink(legacy_paths)
+  invisible(legacy_paths)
 }
 
 ms_panel_dirname <- function(panel_or_sheet) {
@@ -504,6 +529,118 @@ ms_copy_generated_mirror <- function(copied_artifact_path,
   }
 
   paste(copied_paths, collapse = "; ")
+}
+
+ms_legacy_export_panel_token <- function(panel_or_sheet) {
+  panel <- ifelse(is.na(panel_or_sheet) | !nzchar(panel_or_sheet), "all", panel_or_sheet)
+  ms_slug(panel)
+}
+
+ms_copy_legacy_export_mirrors <- function(source_path,
+                                          artifact_id,
+                                          role,
+                                          project_root = ms_find_project_root(),
+                                          overwrite = TRUE) {
+  meta <- ms_artifact_metadata(artifact_id, project_root)
+  category_dir <- ms_category_dirname(meta$artifact_category[[1]])
+  artifact_dir <- ms_slug(meta$artifact[[1]])
+  panel_token <- ms_legacy_export_panel_token(meta$panel_or_sheet[[1]])
+  copied_paths <- character()
+
+  legacy_roots <- c(
+    file.path(project_root, "Manuscript_Exports"),
+    file.path(ms_final_scripts_dir(project_root), "outputs", "manuscript"),
+    file.path(project_root, "CodeOcean_GitHub_Staging", "Scripts_2025", "Final_Scripts", "outputs", "manuscript")
+  )
+  legacy_roots <- legacy_roots[dir.exists(legacy_roots)]
+
+  for (legacy_root in legacy_roots) {
+    source_component_path <- file.path(
+      legacy_root,
+      category_dir,
+      artifact_dir,
+      "source_components",
+      paste0(artifact_id, "__", panel_token, "__", basename(source_path))
+    )
+    copied_paths <- c(
+      copied_paths,
+      ms_copy_file_quietly(source_path, source_component_path, overwrite = overwrite)
+    )
+
+    if (grepl("Scripts_2025/Final_Scripts/outputs/manuscript$", legacy_root)) {
+      generated_role <- if (grepl("source|sidecar|csv|tsv|xlsx|table", role, ignore.case = TRUE)) {
+        "generated_sidecar_file"
+      } else {
+        "generated_output"
+      }
+      generated_path <- file.path(
+        legacy_root,
+        category_dir,
+        artifact_dir,
+        "generated_outputs",
+        paste0(artifact_id, "__", panel_token, "__", generated_role, "__", basename(source_path))
+      )
+      copied_paths <- c(
+        copied_paths,
+        ms_copy_file_quietly(source_path, generated_path, overwrite = overwrite)
+      )
+    }
+  }
+
+  paste(unique(copied_paths), collapse = "; ")
+}
+
+ms_copy_codeocean_staging_mirrors <- function(source_path,
+                                              destination_path,
+                                              generated_mirror_path,
+                                              artifact_id,
+                                              project_root = ms_find_project_root(),
+                                              overwrite = TRUE) {
+  staging_root <- file.path(project_root, "CodeOcean_GitHub_Staging")
+  if (!dir.exists(staging_root)) return("")
+
+  copied_paths <- character()
+  local_output_root <- normalizePath(ms_output_root(project_root), mustWork = TRUE)
+  staging_output_root <- file.path(staging_root, "Scripts_2025", "Final_Scripts", "final_manuscript_objects")
+
+  mirror_final_object_path <- function(path) {
+    if (is.na(path) || !nzchar(path) || !file.exists(path)) return(invisible(NULL))
+    path_abs <- normalizePath(path, mustWork = TRUE)
+    if (!startsWith(path_abs, local_output_root)) return(invisible(NULL))
+    rel_path <- sub(paste0("^", gsub("([][{}()+*^$|\\\\?.])", "\\\\\\1", local_output_root), "/?"), "", path_abs)
+    staging_path <- file.path(staging_output_root, rel_path)
+    ms_remove_legacy_primary_artifact_versions(staging_path)
+    copied_paths <<- c(
+      copied_paths,
+      ms_copy_file_quietly(path_abs, staging_path, overwrite = overwrite)
+    )
+    invisible(NULL)
+  }
+
+  mirror_final_object_path(destination_path)
+  generated_paths <- unlist(strsplit(generated_mirror_path, ";", fixed = TRUE), use.names = FALSE)
+  generated_paths <- trimws(generated_paths)
+  invisible(lapply(generated_paths[nzchar(generated_paths)], mirror_final_object_path))
+
+  meta <- ms_artifact_metadata(artifact_id, project_root)
+  if (meta$artifact_category[[1]] %in% c("main_figure", "extended_data_figure", "supplementary_figure")) {
+    staged_generated_path <- file.path(
+      staging_root,
+      "reproducible_workflow",
+      "outputs",
+      "generated",
+      "figure_components",
+      ms_slug(meta$artifact[[1]]),
+      ms_panel_dirname(meta$panel_or_sheet[[1]]),
+      basename(source_path)
+    )
+    copied_paths <- c(
+      copied_paths,
+      ms_copy_file_quietly(source_path, staged_generated_path, overwrite = overwrite)
+    )
+  }
+
+  paste(unique(copied_paths), collapse = "; ")
 }
 
 ms_final_category_dirname <- function(artifact_category) {
@@ -1167,6 +1304,7 @@ ms_copy_artifact <- function(source_path,
                              overwrite = TRUE) {
   source_abs <- ms_normalize_source_path(source_path, project_root)
   destination <- ms_destination_path(source_abs, artifact_id, role, project_root)
+  ms_remove_legacy_primary_artifact_versions(destination)
   if (file.exists(destination) && !overwrite) {
     stop("Destination already exists and overwrite = FALSE: ", destination, call. = FALSE)
   }
@@ -1185,6 +1323,21 @@ ms_copy_artifact <- function(source_path,
     artifact_id = artifact_id,
     project_root = project_root,
     overwrite = TRUE
+  )
+  legacy_export_destination <- ms_copy_legacy_export_mirrors(
+    source_path = source_abs,
+    artifact_id = artifact_id,
+    role = role,
+    project_root = project_root,
+    overwrite = overwrite
+  )
+  codeocean_staging_destination <- ms_copy_codeocean_staging_mirrors(
+    source_path = source_abs,
+    destination_path = destination,
+    generated_mirror_path = generated_destination,
+    artifact_id = artifact_id,
+    project_root = project_root,
+    overwrite = overwrite
   )
 
   meta <- ms_artifact_metadata(artifact_id, project_root)
@@ -1206,6 +1359,8 @@ ms_copy_artifact <- function(source_path,
         "",
         current_final_destination
       ),
+      legacy_export_mirror_path = legacy_export_destination,
+      codeocean_staging_mirror_path = codeocean_staging_destination,
       md5 = md5,
       script_name = ifelse(is.null(script_name), "", script_name)
     ),
@@ -1234,6 +1389,7 @@ ms_save_plot <- function(plot,
   }
 
   destination <- ms_destination_path(filename, artifact_id, role, project_root)
+  ms_remove_legacy_primary_artifact_versions(destination)
   ggplot2::ggsave(
     filename = destination,
     plot = plot,

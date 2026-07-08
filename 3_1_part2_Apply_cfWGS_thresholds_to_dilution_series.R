@@ -95,10 +95,16 @@ rm(.helpers_path)
 # workstation after the expected input folders are staged.
 PATH_MODEL_LIST       <- file.path("Output_tables_2025", "selected_combo_models_2025-09-17.rds")
 PATH_THRESHOLD_LIST   <- file.path("Output_tables_2025", "selected_combo_thresholds_2025-09-17.rds")
+# The September 2025 objects reproduce the historical BM/blood analysis. The
+# February 2026 objects are loaded separately for the cohort-qualified
+# fragmentomics models added to the current manuscript panels.
+PATH_CURRENT_MODEL_LIST <- file.path("Output_tables_2025", "selected_combo_models_2026-02-16.rds")
+PATH_CURRENT_THRESHOLD_LIST <- file.path("Output_tables_2025", "selected_combo_thresholds_2026-02-16.rds")
 PATH_DILUTION_FRAGMENTOMICS <- file.path("Results_Fragmentomics", "Dilution_series", "key_fragmentomics_info_dilution_series.rds")
 PATH_DILUTION_PROCESSED_MRDetect <- file.path("MRDetect_output_winter_2025", "Processed_R_outputs", "cfWGS_Winter2025Dilution_series_May2025_with_zscore.rds")
 PATH_DILUTION_CLINICAL <- file.path("Fragmentomics_data", "Dilution_series", "Metadata_dilution_series.csv")
 PATH_TUMOR_FRACTION <- file.path("Fragmentomics_data", "Dilution_series", "tumor_fraction_dilution_series.txt")
+PATH_CURRENT_AGGREGATE <- "Final_aggregate_table_cfWGS_features_with_clinical_and_demographics_updated9.rds"
 
 OUTPUT_DIR            <- "Dilution_Series_Scoring_2025"
 OUTPUT_DIR_TABLES     <- "Output_tables_2025"
@@ -246,6 +252,134 @@ dilution_df <- dilution_df %>% left_join(tumor_fraction_dilution %>% dplyr::sele
 dilution_df <- dilution_df %>%
   rename(WGS_Tumor_Fraction_Blood_plasma_cfDNA = Tumor_fraction) # for consistency
 
+# The PWGVAL release workbook contains only the newly prepared nonzero mixture
+# libraries. The patient-specific low-source plasma libraries used as the
+# physical diluent were sequenced previously and therefore live in the current
+# aggregate table rather than the 36-row M4CHIP release metadata. They are the
+# experimentally correct 0% endpoints and must be appended explicitly.
+# This explicit map is deliberately small and reviewable: each new dilution
+# series is linked to the previously sequenced low-source plasma library that
+# was physically used as its zero-tumour-fraction diluent.
+pwgval_zero_control_map <- tribble(
+  ~Patient, ~Sample_Code, ~zero_control_role,
+  "VA-09", "VA-09-05", "patient-specific low-source plasma used as diluent",
+  "VA-12", "VA-12-05", "patient-specific low-source plasma used as diluent",
+  "VA-13", "VA-13-07", "patient-specific low-source plasma used as diluent"
+)
+
+if (!file.exists(PATH_CURRENT_AGGREGATE)) {
+  stop("Missing current aggregate table required for PWGVAL zero controls: ",
+       PATH_CURRENT_AGGREGATE, call. = FALSE)
+}
+
+# Pull already processed features from the current aggregate table rather than
+# recomputing these older libraries with a potentially different pipeline.
+current_aggregate <- readRDS(PATH_CURRENT_AGGREGATE) %>% as_tibble()
+required_zero_control_columns <- c(
+  "Patient", "Sample_Code",
+  "detect_rate_BM", "zscore_BM", "z_score_detection_rate_BM",
+  "detect_rate_blood", "zscore_blood", "z_score_detection_rate_blood",
+  "FS", "Proportion.Short", "Mean.Coverage"
+)
+missing_zero_control_columns <- setdiff(required_zero_control_columns, names(current_aggregate))
+if (length(missing_zero_control_columns)) {
+  stop(
+    "Current aggregate table is missing PWGVAL zero-control feature columns: ",
+    paste(missing_zero_control_columns, collapse = ", "),
+    call. = FALSE
+  )
+}
+
+# Use an inner join so only the three prespecified controls can enter the
+# dilution dataset; the cardinality check below requires exactly one row each.
+pwgval_zero_controls <- current_aggregate %>%
+  inner_join(pwgval_zero_control_map, by = c("Patient", "Sample_Code"))
+
+zero_control_counts <- pwgval_zero_controls %>% count(.data$Patient, .data$Sample_Code)
+if (nrow(zero_control_counts) != nrow(pwgval_zero_control_map) ||
+    any(zero_control_counts$n != 1L)) {
+  stop(
+    "Expected exactly one current aggregate row for each PWGVAL zero control; found: ",
+    paste0(zero_control_counts$Patient, "/", zero_control_counts$Sample_Code,
+           " n=", zero_control_counts$n, collapse = "; "),
+    call. = FALSE
+  )
+}
+
+# Complete features are required because a nominal 0% point with missing model
+# inputs would not anchor the patient trajectories and could be misinterpreted.
+missing_zero_control_features <- pwgval_zero_controls %>%
+  dplyr::select(all_of(required_zero_control_columns)) %>%
+  pivot_longer(
+    cols = -all_of(c("Patient", "Sample_Code")),
+    names_to = "feature",
+    values_to = "value"
+  ) %>%
+  filter(is.na(.data$value))
+if (nrow(missing_zero_control_features)) {
+  stop(
+    "PWGVAL zero controls have missing required features: ",
+    paste0(missing_zero_control_features$Patient, "/",
+           missing_zero_control_features$Sample_Code, ":",
+           missing_zero_control_features$feature, collapse = "; "),
+    call. = FALSE
+  )
+}
+
+# Harmonize the controls to the dilution-table schema. LOD and CNA tumour
+# fraction are set to zero by experimental role; feature values remain the
+# measured values from the aggregate table. BAM basenames are recorded
+# explicitly to make the source libraries auditable.
+pwgval_zero_controls <- pwgval_zero_controls %>%
+  mutate(
+    Sample_ID = paste0(.data$Sample_Code, "-P"),
+    Sample = .data$Sample_ID,
+    Bam = case_when(
+      .data$Patient == "VA-09" ~ "TFRIM4_0183_Cf_P_PG_VA-09-05-P-DNA.filter.deduped.recalibrated.bam",
+      .data$Patient == "VA-12" ~ "TFRIM4_0186_Cf_P_PG_VA-12-05-P-DNA.filter.deduped.recalibrated.bam",
+      .data$Patient == "VA-13" ~ "TFRIM4_0187_Cf_P_PG_VA-13-07-P-DNA.filter.deduped.recalibrated.bam",
+      TRUE ~ NA_character_
+    ),
+    LOD = 0,
+    dilution_series = "PWGVAL_M4CHIP",
+    timepoint_info = "Patient-specific low-source plasma used as 0% diluent",
+    Sample_type = "Blood_plasma_cfDNA",
+    mrdetect_status = "available",
+    mrdetect_missing_reason = NA_character_,
+    WGS_Tumor_Fraction_Blood_plasma_cfDNA = 0,
+    is_preexisting_pwgval_zero_control = TRUE,
+    sequencing_platform_context = "Pre-existing NovaSeq 6000 low-source plasma"
+  )
+
+# Tag provenance before row-binding. The tag is retained downstream so plots
+# and exports can choose release-only or cross-platform views explicitly.
+dilution_df <- dilution_df %>%
+  mutate(
+    is_preexisting_pwgval_zero_control = FALSE,
+    sequencing_platform_context = if_else(
+      coalesce(.data$dilution_series == "PWGVAL_M4CHIP", FALSE),
+      "New PWGVAL/M4CHIP dilution library",
+      "Historical dilution series"
+    )
+  ) %>%
+  bind_rows(pwgval_zero_controls)
+
+# Export a compact integration ledger linking every appended control to its
+# source object and role; this is the primary audit trail for the manual map.
+write_csv(
+  pwgval_zero_controls %>%
+    transmute(
+      Patient,
+      Sample_ID,
+      Bam,
+      LOD,
+      zero_control_role,
+      source_table = PATH_CURRENT_AGGREGATE,
+      integration_status = "appended_as_measured_zero_control"
+    ),
+  file.path(OUTPUT_DIR_TABLES, "pwgval_dilution_zero_control_integration_audit.csv")
+)
+
 # ── 5. PREDICTION FUNCTION based on pre-trained model ────────────────────
 apply_selected <- function(dat, models, thresholds, positive_class = "pos") {
   # ## Score dilution rows with frozen manuscript models
@@ -303,6 +437,48 @@ dilution_df <- apply_selected(
   positive_class= "pos"
 )
 
+# Score the preserved full-cohort fragmentomics models used in the current
+# Extended Data Figure 9 performance panel. The older generic model objects
+# above predate cohort-qualified fragmentomics names and cannot score them.
+# Keep this list identical to the three models displayed in the current
+# fragmentomics performance summary; names are also used to locate probability
+# columns and fixed thresholds later in the plotting workflow.
+main_fragmentomics_model_names <- c(
+  "Fragmentomics_full_Full",
+  "Fragmentomics_mean_coverage_only_Full",
+  "Fragmentomics_prop_short_only_Full"
+)
+
+if (!file.exists(PATH_CURRENT_MODEL_LIST) || !file.exists(PATH_CURRENT_THRESHOLD_LIST)) {
+  stop(
+    "Missing current preserved model or threshold file required for fragmentomics dilution scoring.",
+    call. = FALSE
+  )
+}
+
+current_selected_models <- readRDS(PATH_CURRENT_MODEL_LIST)
+current_selected_thresholds <- readRDS(PATH_CURRENT_THRESHOLD_LIST)
+missing_fragmentomics_models <- setdiff(main_fragmentomics_model_names, names(current_selected_models))
+missing_fragmentomics_thresholds <- setdiff(main_fragmentomics_model_names, names(current_selected_thresholds))
+if (length(missing_fragmentomics_models) || length(missing_fragmentomics_thresholds)) {
+  stop(
+    "Current fragmentomics dilution scoring inputs are incomplete. Missing models: ",
+    paste(missing_fragmentomics_models, collapse = ", "),
+    "; missing thresholds: ",
+    paste(missing_fragmentomics_thresholds, collapse = ", "),
+    call. = FALSE
+  )
+}
+
+# Apply only the requested current fragmentomics models, preventing unrelated
+# objects in the RDS from adding unstable or obsolete output columns.
+dilution_df <- apply_selected(
+  dat = dilution_df,
+  models = current_selected_models[main_fragmentomics_model_names],
+  thresholds = current_selected_thresholds[main_fragmentomics_model_names],
+  positive_class = "pos"
+)
+
 ### Now edit the dilution LOD to the correct one 
 # these are your true measured VAFs (%)
 baseline_vaf <- 0.688    # baseline‐only library
@@ -331,6 +507,19 @@ dilution_df <- dilution_df %>%
 ## For consistency
 dilution_df$LOD <- dilution_df$LOD_updated
 
+# Preserve both scientifically distinct views. The primary/release-only object
+# contains the 36 new PWGVAL/M4CHIP libraries. The cross-platform object also
+# contains the three pre-existing NovaSeq 6000 low-source plasma controls used
+# as physical diluent. Keeping both avoids silently mixing platform contexts.
+# Snapshot the combined object before removing pre-existing controls from the
+# manuscript's primary 36-library release table.
+dilution_df_with_preexisting_zero_controls <- dilution_df
+dilution_df <- dilution_df %>%
+  filter(!.data$is_preexisting_pwgval_zero_control)
+
+# Quantify feature and probability availability after all joins. Missingness is
+# reported rather than imputed because preserved models must only score rows
+# with their genuinely observed predictor set.
 pwgval_feature_availability <- dilution_df %>%
   # Export one row per PWGVAL sample describing which MRDetect/model features
   # were present after all joins. This is a key diagnostic for interpreting
@@ -2566,8 +2755,55 @@ format_lod_percent <- function(x) {
   paste0(out, "%")
 }
 
-summarise_spearman_for_panels <- function(dat, x_col = "LOD") {
+# All patient-facing plot/source-data exports use the project's stable ID map.
+# A missing or non-bijective map is fatal to avoid accidental identifier leaks
+# or ambiguous labels between regenerated figures.
+deidentified_id_map_path <- file.path(ms_find_project_root(), "id_map.rds")
+if (!file.exists(deidentified_id_map_path)) {
+  stop("Missing de-identified patient ID map: ", deidentified_id_map_path, call. = FALSE)
+}
+
+deidentified_id_map <- readRDS(deidentified_id_map_path) %>%
+  as_tibble() %>%
+  dplyr::select("Patient", "New_ID") %>%
+  distinct()
+
+if (anyDuplicated(deidentified_id_map$Patient) || anyDuplicated(deidentified_id_map$New_ID)) {
+  stop("The de-identified patient ID map must be one-to-one.", call. = FALSE)
+}
+
+# Replace Patient with its stable de-identified ID while preserving all other
+# columns. Requiring complete map coverage makes newly introduced patients
+# visible during regeneration instead of passing through with clinical IDs.
+deidentify_dilution_patients <- function(dat) {
+  missing_patients <- setdiff(unique(dat$Patient), deidentified_id_map$Patient)
+  if (length(missing_patients)) {
+    stop(
+      "Missing de-identified IDs for dilution-series patient(s): ",
+      paste(sort(missing_patients), collapse = ", "),
+      call. = FALSE
+    )
+  }
+
   dat %>%
+    left_join(deidentified_id_map, by = "Patient") %>%
+    mutate(Patient = .data$New_ID) %>%
+    dplyr::select(-"New_ID")
+}
+
+# Compute descriptive Spearman correlations for raw feature panels only.
+# Shared 0% controls are duplicated for drawing two replicate lines, so they
+# are deduplicated here to avoid pseudoreplication in rho and its nominal p
+# value. Correlations require >=3 complete observations and variation in both
+# axes; otherwise the annotation is explicitly NA.
+summarise_spearman_for_panels <- function(dat, x_col = "LOD") {
+  correlation_dat <- if ("zero_control_shared_across_replicates" %in% names(dat)) {
+    dat %>% distinct(.data$Patient, .data$Sample_ID, .data$feature, .keep_all = TRUE)
+  } else {
+    dat
+  }
+
+  correlation_dat %>%
     filter(.data$panel_type == "Feature") %>%
     group_by(.data$feature) %>%
     summarise(
@@ -2600,14 +2836,42 @@ summarise_spearman_for_panels <- function(dat, x_col = "LOD") {
     )
 }
 
+# Duplicate each measured PWGVAL 0% control for plotting because one physical
+# diluent anchors both technical dilution replicates. The duplicated rows are
+# marked so inferential summaries can count the physical sample only once.
+expand_shared_zero_controls_for_lines <- function(dat) {
+  shared_zero <- dat %>%
+    filter(str_starts(.data$series_label, "PWGVAL M4CHIP"), .data$LOD_zero_final == 0) %>%
+    tidyr::uncount(2, .id = "zero_control_replicate_index") %>%
+    mutate(
+      replicate_id = paste0("rep0", .data$zero_control_replicate_index),
+      line_group = paste(.data$Patient, .data$series_label, .data$replicate_id, sep = "__"),
+      zero_control_shared_across_replicates = TRUE
+    ) %>%
+    dplyr::select(-"zero_control_replicate_index")
+
+  dat %>%
+    filter(!(str_starts(.data$series_label, "PWGVAL M4CHIP") & .data$LOD_zero_final == 0)) %>%
+    mutate(zero_control_shared_across_replicates = FALSE) %>%
+    bind_rows(shared_zero)
+}
+
+# Build the release-only long-form cfDNA source table. Patient and grouping
+# labels are reconstructed after de-identification so raw IDs cannot remain
+# embedded in compound plotting keys.
 blood_patient_source <- dilution_df %>%
   mutate(
     series_label = if_else(
       .data$is_pwgval_dilution,
       "PWGVAL M4CHIP",
-      "VA-02 historical"
+      "Historical series"
     ),
     replicate_id = extract_dilution_replicate(.data$Sample_ID),
+    patient_series = paste(.data$Patient, .data$series_label, sep = " | "),
+    line_group = paste(.data$Patient, .data$series_label, .data$replicate_id, sep = "__")
+  ) %>%
+  deidentify_dilution_patients() %>%
+  mutate(
     patient_series = paste(.data$Patient, .data$series_label, sep = " | "),
     line_group = paste(.data$Patient, .data$series_label, .data$replicate_id, sep = "__")
   ) %>%
@@ -2650,6 +2914,10 @@ write_csv(
   file.path(SOURCE_DATA_DIR, "SourceData_Fig5G_Blood_patient_series_points.csv")
 )
 
+# Generic patient-line renderer shared by cfDNA, BM-informed, and
+# fragmentomics panels. Feature labels, probability thresholds, and the
+# optional confirmatory boundary are parameters so all assay views use the
+# same axis transformation, replicate grouping, and visual grammar.
 make_blood_patient_line_plot <- function(plot_dat,
                                          plot_title,
                                          patient_specific = FALSE,
@@ -2657,7 +2925,11 @@ make_blood_patient_line_plot <- function(plot_dat,
                                          x_col = "LOD",
                                          x_breaks = major_breaks,
                                          x_minor_breaks = minor_breaks,
-                                         x_labels = format_lod_percent) {
+                                         x_labels = format_lod_percent,
+                                         facet_label_map = facet_labels_blood_hc,
+                                         probability_thresholds = blood_thresholds,
+                                         confirmatory_feature = "Blood_zscore_only_sites_prob",
+                                         confirmatory_threshold = 0.380) {
   if (nrow(plot_dat) == 0) {
     stop("No rows available for patient-line dilution plot.")
   }
@@ -2679,7 +2951,7 @@ make_blood_patient_line_plot <- function(plot_dat,
     facet_wrap(
       ~ feature,
       scales = "free_y",
-      labeller = as_labeller(facet_labels_blood_hc)
+      labeller = as_labeller(facet_label_map)
     ) +
     geom_text(
       data = annotation_df,
@@ -2719,17 +2991,21 @@ make_blood_patient_line_plot <- function(plot_dat,
     aes(x = .data[[x_col]], y = .data$value, group = .data$line_group)
   ) +
     geom_hline(
-      data = blood_thresholds,
+      data = probability_thresholds,
       aes(yintercept = .data$thr),
       linetype = "dashed",
       color = "gray40"
     ) +
-    geom_hline(
-      data = data.frame(feature = "Blood_zscore_only_sites_prob", thr = 0.380),
-      aes(yintercept = .data$thr),
-      linetype = "dashed",
-      color = "steelblue"
-    ) +
+    {
+      if (!is.null(confirmatory_feature) && !is.null(confirmatory_threshold)) {
+        geom_hline(
+          data = data.frame(feature = confirmatory_feature, thr = confirmatory_threshold),
+          aes(yintercept = .data$thr),
+          linetype = "dashed",
+          color = "steelblue"
+        )
+      }
+    } +
     geom_line(aes(color = .data[[color_var]], linetype = .data$replicate_id),
               linewidth = 0.45, alpha = 0.75) +
     geom_point(aes(fill = .data$call), shape = 21, color = "black",
@@ -2737,7 +3013,7 @@ make_blood_patient_line_plot <- function(plot_dat,
     facet_wrap(
       ~ feature,
       scales = "free_y",
-      labeller = as_labeller(facet_labels_blood_hc)
+      labeller = as_labeller(facet_label_map)
     ) +
     scale_x_continuous(
       trans = compose_trans("log10", "reverse"),
@@ -2851,16 +3127,20 @@ ggsave(
 message("Saved: Fig5G_LOD_individual_patient_plots.png")
 
 # -------------------------------------------------------------------------
-# Sensitivity version: historical VA-02 final timepoint treated as 0% TF
+# Release-only version plus historical-series 0% endpoint sensitivity
 #
 # The current main dilution_df keeps the original VA-02 recalibration:
 #   adjusted TF = baseline_vaf * dilution + neg_vaf * (1 - dilution)
 # where neg_vaf is the MRDetect-estimated tumor fraction at the longitudinal
 # low/negative endpoint. For comparison with the newer PWGVAL/M4CHIP dilution
 # cases, this sensitivity view keeps the baseline scaling but forces the VA-02
-# final endpoint contribution to 0. PWGVAL/M4CHIP rows are not recalculated.
+# final endpoint contribution to 0. The release-only PWGVAL/M4CHIP rows stop at
+# 0.0001%; a separate cross-platform view below adds their pre-existing 0% controls.
 # -------------------------------------------------------------------------
 
+# A true zero cannot be drawn on a log axis. Place it at 35% of the smallest
+# positive displayed TF and label that plotting coordinate "0%"; retain the
+# exact scientific value separately in LOD_zero_final.
 zero_final_plot_x <- min(
   dilution_df %>%
     mutate(
@@ -2892,6 +3172,10 @@ zero_final_minor_breaks <- minor_ext[
     minor_ext <= max(c(xr, zero_final_plot_x), na.rm = TRUE)
 ]
 
+# Build the release-only cfDNA sensitivity source. Historical endpoints are
+# recalculated with a zero final contribution, while PWGVAL values remain the
+# workbook-defined TFs. The preserved 0.380 boundary is shown as a distinct
+# confirmatory category for the sites-only blood model.
 blood_patient_zero_final_source <- dilution_df %>%
   mutate(
     LOD_current_recalibrated = .data$LOD,
@@ -2907,15 +3191,22 @@ blood_patient_zero_final_source <- dilution_df %>%
     ),
     LOD_zero_final_update_method = if_else(
       .data$is_pwgval_dilution,
-      "PWGVAL workbook TF_Dilution retained; not recalculated",
+      if_else(.data$LOD == 0,
+              "Patient-specific low-source plasma used as measured 0% diluent",
+              "PWGVAL workbook TF_Dilution retained; not recalculated"),
       "historical VA-02 dilution recalibration with final endpoint TF set to 0"
     ),
     series_label = if_else(
       .data$is_pwgval_dilution,
       "PWGVAL M4CHIP",
-      "VA-02 historical"
+      "Historical series"
     ),
     replicate_id = extract_dilution_replicate(.data$Sample_ID),
+    patient_series = paste(.data$Patient, .data$series_label, sep = " | "),
+    line_group = paste(.data$Patient, .data$series_label, .data$replicate_id, sep = "__")
+  ) %>%
+  deidentify_dilution_patients() %>%
+  mutate(
     patient_series = paste(.data$Patient, .data$series_label, sep = " | "),
     line_group = paste(.data$Patient, .data$series_label, .data$replicate_id, sep = "__")
   ) %>%
@@ -2954,11 +3245,87 @@ blood_patient_zero_final_source <- dilution_df %>%
       TRUE ~ NA_character_
     ),
     call = factor(.data$call, levels = c("Negative", "Confirmatory", "Positive"))
-  )
+  ) %>%
+  expand_shared_zero_controls_for_lines()
 
 write_csv(
   blood_patient_zero_final_source,
   file.path(SOURCE_DATA_DIR, "SourceData_Fig5G_Blood_patient_series_points_zero_final_tf.csv")
+)
+
+# Build the analogous BM-informed source table. It uses the same samples and
+# x-axis sensitivity definition but BM features/models and binary calls only.
+bm_patient_zero_final_source <- dilution_df %>%
+  mutate(
+    LOD_current_recalibrated = .data$LOD,
+    LOD_zero_final = if_else(
+      .data$is_pwgval_dilution,
+      .data$LOD,
+      (.data$LOD_original / orig_full) * baseline_vaf
+    ),
+    LOD_plot_zero_final = if_else(
+      .data$LOD_zero_final > 0,
+      .data$LOD_zero_final,
+      zero_final_plot_x
+    ),
+    LOD_zero_final_update_method = if_else(
+      .data$is_pwgval_dilution,
+      if_else(.data$LOD == 0,
+              "Patient-specific low-source plasma used as measured 0% diluent",
+              "PWGVAL workbook TF_Dilution retained; not recalculated"),
+      "historical dilution recalibration with final endpoint TF set to 0"
+    ),
+    series_label = if_else(
+      .data$is_pwgval_dilution,
+      "PWGVAL M4CHIP",
+      "Historical series"
+    ),
+    replicate_id = extract_dilution_replicate(.data$Sample_ID),
+    patient_series = paste(.data$Patient, .data$series_label, sep = " | "),
+    line_group = paste(.data$Patient, .data$series_label, .data$replicate_id, sep = "__")
+  ) %>%
+  deidentify_dilution_patients() %>%
+  mutate(
+    patient_series = paste(.data$Patient, .data$series_label, sep = " | "),
+    line_group = paste(.data$Patient, .data$series_label, .data$replicate_id, sep = "__")
+  ) %>%
+  dplyr::select(
+    Patient,
+    Sample_ID,
+    Sample,
+    Bam,
+    LOD_current_recalibrated,
+    LOD_zero_final,
+    LOD_plot_zero_final,
+    LOD_zero_final_update_method,
+    series_label,
+    replicate_id,
+    patient_series,
+    line_group,
+    all_of(c(bm_feat_names, bm_prob_feats))
+  ) %>%
+  pivot_longer(
+    cols = all_of(c(bm_feat_names, bm_prob_feats)),
+    names_to = "feature",
+    values_to = "value"
+  ) %>%
+  mutate(
+    panel_type = if_else(.data$feature %in% bm_feat_names, "Feature", "Probability")
+  ) %>%
+  left_join(bm_thresholds, by = "feature") %>%
+  mutate(
+    call = case_when(
+      .data$panel_type == "Probability" & .data$value >= .data$thr ~ "Positive",
+      .data$panel_type == "Probability" ~ "Negative",
+      TRUE ~ NA_character_
+    ),
+    call = factor(.data$call, levels = c("Negative", "Positive"))
+  ) %>%
+  expand_shared_zero_controls_for_lines()
+
+write_csv(
+  bm_patient_zero_final_source,
+  file.path(SOURCE_DATA_DIR, "SourceData_Fig4G_BM_patient_series_points_zero_final_tf.csv")
 )
 
 make_blood_zero_final_point_plot <- function(plot_dat) {
@@ -3048,7 +3415,7 @@ make_blood_zero_final_point_plot <- function(plot_dat) {
   p_features + p_probabilities +
     plot_layout(nrow = 1, widths = c(3, 2)) +
     plot_annotation(
-      title = "cfDNA Dilution-Series Feature Values with VA-02 Final Timepoint Set to 0% TF",
+      title = "cfDNA Dilution-Series Feature Values: New Release Only",
       theme = theme(
         plot.title = element_text(hjust = 0.5, face = "bold", size = 13),
         plot.margin = margin(5, 5, 5, 5),
@@ -3076,7 +3443,7 @@ message("Saved: Fig5G_LOD_combined_zero_final_tf_points.png")
 
 zero_final_line_plot <- make_blood_patient_line_plot(
   plot_dat = blood_patient_zero_final_source,
-  plot_title = "cfDNA Dilution-Series Patient Lines with VA-02 Final Timepoint Set to 0% TF",
+  plot_title = "cfDNA Dilution-Series Patient Lines: New Release Only",
   patient_specific = FALSE,
   x_col = "LOD_plot_zero_final",
   x_breaks = zero_final_breaks,
@@ -3093,12 +3460,375 @@ ggsave(
 )
 message("Saved: Fig5G_LOD_combined_patient_series_lines_zero_final_tf.png")
 
+ms_copy_artifact(
+  source_path = file.path(OUTPUT_DIR_FIGURES, "Fig5G_LOD_combined_patient_series_lines_zero_final_tf.png"),
+  artifact_id = "EDFIG7D",
+  role = "alternate_patient_lines_zero_final_tf_png",
+  description = paste(
+    "De-identified blood/cfDNA dilution-series patient-line alternative;",
+    "PWGVAL series contain only the new dilution release and end at 0.0001% TF."
+  ),
+  script_name = "3_1_part2_Apply_cfWGS_thresholds_to_dilution_series.R"
+)
+
+# Reuse the generic renderer with BM-specific labels and thresholds; disabling
+# confirmatory_feature prevents the blood-only 0.380 rule from leaking into
+# the BM panel.
+zero_final_bm_line_plot <- make_blood_patient_line_plot(
+  plot_dat = bm_patient_zero_final_source,
+  plot_title = "BM-Informed Dilution-Series Patient Lines: New Release Only",
+  patient_specific = FALSE,
+  x_col = "LOD_plot_zero_final",
+  x_breaks = zero_final_breaks,
+  x_minor_breaks = zero_final_minor_breaks,
+  x_labels = zero_final_break_labels,
+  facet_label_map = facet_labels_bm_hc,
+  probability_thresholds = bm_thresholds,
+  confirmatory_feature = NULL,
+  confirmatory_threshold = NULL
+)
+
+ggsave(
+  filename = file.path(OUTPUT_DIR_FIGURES, "Fig4G_LOD_combined_patient_series_lines_zero_final_tf.png"),
+  plot = zero_final_bm_line_plot,
+  width = 12.8,
+  height = 4.8,
+  dpi = 600
+)
+message("Saved: Fig4G_LOD_combined_patient_series_lines_zero_final_tf.png")
+
+ms_copy_artifact(
+  source_path = file.path(OUTPUT_DIR_FIGURES, "Fig4G_LOD_combined_patient_series_lines_zero_final_tf.png"),
+  artifact_id = "EDFIG5D",
+  role = "alternate_patient_lines_zero_final_tf_png",
+  description = paste(
+    "De-identified BM-informed dilution-series patient-line alternative;",
+    "PWGVAL series contain only the new dilution release and end at 0.0001% TF."
+  ),
+  script_name = "3_1_part2_Apply_cfWGS_thresholds_to_dilution_series.R"
+)
+
+# -------------------------------------------------------------------------
+# Cross-platform alternatives with the pre-existing NovaSeq 6000 diluent
+# controls appended at 0% TF. These remain separate from the release-only
+# figures above because the zero controls were not sequenced in the new batch.
+# -------------------------------------------------------------------------
+build_cross_platform_patient_source <- function(dat,
+                                                feature_names,
+                                                probability_names,
+                                                thresholds,
+                                                has_confirmatory_call = FALSE) {
+  # Standardize provenance, de-identification, long-format conversion, and
+  # threshold calls for any assay family. The source includes platform context
+  # so the appended 0% points cannot be mistaken for new XPlus libraries.
+  dat %>%
+    mutate(
+      LOD_current_recalibrated = .data$LOD,
+      LOD_zero_final = if_else(
+        .data$is_pwgval_dilution,
+        .data$LOD,
+        (.data$LOD_original / orig_full) * baseline_vaf
+      ),
+      LOD_plot_zero_final = if_else(
+        .data$LOD_zero_final > 0,
+        .data$LOD_zero_final,
+        zero_final_plot_x
+      ),
+      LOD_zero_final_update_method = case_when(
+        .data$is_preexisting_pwgval_zero_control ~
+          "Pre-existing NovaSeq 6000 low-source plasma used as measured 0% diluent",
+        .data$is_pwgval_dilution ~
+          "New PWGVAL/M4CHIP dilution library; workbook TF_Dilution retained",
+        TRUE ~ "Historical dilution recalibration with final endpoint TF set to 0"
+      ),
+      series_label = case_when(
+        .data$is_pwgval_dilution ~ "PWGVAL M4CHIP + NovaSeq 6000 0% control",
+        TRUE ~ "Historical series"
+      ),
+      replicate_id = extract_dilution_replicate(.data$Sample_ID),
+      patient_series = paste(.data$Patient, .data$series_label, sep = " | "),
+      line_group = paste(.data$Patient, .data$series_label, .data$replicate_id, sep = "__")
+    ) %>%
+    deidentify_dilution_patients() %>%
+    mutate(
+      patient_series = paste(.data$Patient, .data$series_label, sep = " | "),
+      line_group = paste(.data$Patient, .data$series_label, .data$replicate_id, sep = "__")
+    ) %>%
+    dplyr::select(
+      Patient,
+      Sample_ID,
+      LOD_current_recalibrated,
+      LOD_zero_final,
+      LOD_plot_zero_final,
+      LOD_zero_final_update_method,
+      sequencing_platform_context,
+      series_label,
+      replicate_id,
+      patient_series,
+      line_group,
+      all_of(c(feature_names, probability_names))
+    ) %>%
+    pivot_longer(
+      cols = all_of(c(feature_names, probability_names)),
+      names_to = "feature",
+      values_to = "value"
+    ) %>%
+    mutate(
+      panel_type = if_else(.data$feature %in% feature_names, "Feature", "Probability")
+    ) %>%
+    left_join(thresholds, by = "feature") %>%
+    mutate(
+      call = case_when(
+        has_confirmatory_call &
+          .data$feature == "Blood_zscore_only_sites_prob" &
+          .data$value >= .data$thr ~ "Positive",
+        has_confirmatory_call &
+          .data$feature == "Blood_zscore_only_sites_prob" &
+          .data$value >= 0.380 & .data$value < .data$thr ~ "Confirmatory",
+        has_confirmatory_call & .data$feature == "Blood_zscore_only_sites_prob" ~ "Negative",
+        .data$panel_type == "Probability" & .data$value >= .data$thr ~ "Positive",
+        .data$panel_type == "Probability" ~ "Negative",
+        TRUE ~ NA_character_
+      ),
+      call = factor(.data$call, levels = c("Negative", "Confirmatory", "Positive"))
+    ) %>%
+    expand_shared_zero_controls_for_lines()
+}
+
+blood_cross_platform_source <- build_cross_platform_patient_source(
+  dilution_df_with_preexisting_zero_controls,
+  blood_feat_names,
+  blood_prob_feats,
+  blood_thresholds,
+  has_confirmatory_call = TRUE
+)
+bm_cross_platform_source <- build_cross_platform_patient_source(
+  dilution_df_with_preexisting_zero_controls,
+  bm_feat_names,
+  bm_prob_feats,
+  bm_thresholds,
+  has_confirmatory_call = FALSE
+)
+
+write_csv(
+  blood_cross_platform_source,
+  file.path(SOURCE_DATA_DIR, "SourceData_Fig5G_Blood_patient_series_with_NovaSeq6000_zero_controls.csv")
+)
+write_csv(
+  bm_cross_platform_source,
+  file.path(SOURCE_DATA_DIR, "SourceData_Fig4G_BM_patient_series_with_NovaSeq6000_zero_controls.csv")
+)
+
+blood_cross_platform_plot <- make_blood_patient_line_plot(
+  plot_dat = blood_cross_platform_source,
+  plot_title = "cfDNA Dilution-Series Patient Lines with Pre-existing NovaSeq 6000 0% Diluent Controls",
+  patient_specific = FALSE,
+  x_col = "LOD_plot_zero_final",
+  x_breaks = zero_final_breaks,
+  x_minor_breaks = zero_final_minor_breaks,
+  x_labels = zero_final_break_labels
+)
+bm_cross_platform_plot <- make_blood_patient_line_plot(
+  plot_dat = bm_cross_platform_source,
+  plot_title = "BM-Informed Dilution-Series Patient Lines with Pre-existing NovaSeq 6000 0% Diluent Controls",
+  patient_specific = FALSE,
+  x_col = "LOD_plot_zero_final",
+  x_breaks = zero_final_breaks,
+  x_minor_breaks = zero_final_minor_breaks,
+  x_labels = zero_final_break_labels,
+  facet_label_map = facet_labels_bm_hc,
+  probability_thresholds = bm_thresholds,
+  confirmatory_feature = NULL,
+  confirmatory_threshold = NULL
+)
+
+blood_cross_platform_path <- file.path(
+  OUTPUT_DIR_FIGURES,
+  "Fig5G_LOD_patient_series_with_preexisting_NovaSeq6000_zero_controls.png"
+)
+bm_cross_platform_path <- file.path(
+  OUTPUT_DIR_FIGURES,
+  "Fig4G_LOD_patient_series_with_preexisting_NovaSeq6000_zero_controls.png"
+)
+ggsave(blood_cross_platform_path, blood_cross_platform_plot, width = 13.8, height = 4.8, dpi = 600)
+ggsave(bm_cross_platform_path, bm_cross_platform_plot, width = 13.8, height = 4.8, dpi = 600)
+
+ms_copy_artifact(
+  source_path = blood_cross_platform_path,
+  artifact_id = "EDFIG7D",
+  role = "alternate_cross_platform_patient_lines_with_novaseq6000_zero_controls_png",
+  description = paste(
+    "De-identified blood/cfDNA dilution-series patient-line alternative with patient-specific 0% diluent controls;",
+    "nonzero mixtures are from the new PWGVAL/M4CHIP release and zero controls are pre-existing NovaSeq 6000 libraries."
+  ),
+  script_name = "3_1_part2_Apply_cfWGS_thresholds_to_dilution_series.R"
+)
+ms_copy_artifact(
+  source_path = bm_cross_platform_path,
+  artifact_id = "EDFIG5D",
+  role = "alternate_cross_platform_patient_lines_with_novaseq6000_zero_controls_png",
+  description = paste(
+    "De-identified BM-informed dilution-series patient-line alternative with patient-specific 0% diluent controls;",
+    "nonzero mixtures are from the new PWGVAL/M4CHIP release and zero controls are pre-existing NovaSeq 6000 libraries."
+  ),
+  script_name = "3_1_part2_Apply_cfWGS_thresholds_to_dilution_series.R"
+)
+
+# -------------------------------------------------------------------------
+# Fragmentomics main-model dilution-series patient lines
+#
+# These are the same three preserved full-cohort fragmentomics models shown
+# in the current Extended Data Figure 9 performance summary. The raw feature
+# panels make each model's behavior interpretable across the measured series.
+# -------------------------------------------------------------------------
+fragmentomics_patient_features <- c(
+  "FS",
+  "Mean.Coverage",
+  "Proportion.Short",
+  "WGS_Tumor_Fraction_Blood_plasma_cfDNA"
+)
+fragmentomics_patient_probabilities <- paste0(main_fragmentomics_model_names, "_prob")
+fragmentomics_patient_thresholds <- tibble(
+  feature = fragmentomics_patient_probabilities,
+  thr = unname(current_selected_thresholds[main_fragmentomics_model_names])
+)
+fragmentomics_patient_labels <- c(
+  FS = "Fragment-size score",
+  Mean.Coverage = "MM-sites coverage",
+  Proportion.Short = "Short-fragment proportion",
+  WGS_Tumor_Fraction_Blood_plasma_cfDNA = "CNA tumour fraction",
+  Fragmentomics_full_Full_prob = "Combined fragmentomics\nmodel probability",
+  Fragmentomics_mean_coverage_only_Full_prob = "MM-sites coverage\nmodel probability",
+  Fragmentomics_prop_short_only_Full_prob = "Short-fragment\nmodel probability"
+)
+
+missing_fragmentomics_plot_columns <- setdiff(
+  c(fragmentomics_patient_features, fragmentomics_patient_probabilities),
+  names(dilution_df)
+)
+if (length(missing_fragmentomics_plot_columns)) {
+  stop(
+    "Missing columns required for fragmentomics dilution plot: ",
+    paste(missing_fragmentomics_plot_columns, collapse = ", "),
+    call. = FALSE
+  )
+}
+
+fragmentomics_patient_zero_final_source <- dilution_df %>%
+  mutate(
+    LOD_current_recalibrated = .data$LOD,
+    LOD_zero_final = if_else(
+      .data$is_pwgval_dilution,
+      .data$LOD,
+      (.data$LOD_original / orig_full) * baseline_vaf
+    ),
+    LOD_plot_zero_final = if_else(
+      .data$LOD_zero_final > 0,
+      .data$LOD_zero_final,
+      zero_final_plot_x
+    ),
+    LOD_zero_final_update_method = if_else(
+      .data$is_pwgval_dilution,
+      if_else(.data$LOD == 0,
+              "Patient-specific low-source plasma used as measured 0% diluent",
+              "PWGVAL workbook TF_Dilution retained; not recalculated"),
+      "historical dilution recalibration with final endpoint TF set to 0"
+    ),
+    series_label = if_else(
+      .data$is_pwgval_dilution,
+      "PWGVAL M4CHIP",
+      "Historical series"
+    ),
+    replicate_id = extract_dilution_replicate(.data$Sample_ID),
+    patient_series = paste(.data$Patient, .data$series_label, sep = " | "),
+    line_group = paste(.data$Patient, .data$series_label, .data$replicate_id, sep = "__")
+  ) %>%
+  deidentify_dilution_patients() %>%
+  mutate(
+    patient_series = paste(.data$Patient, .data$series_label, sep = " | "),
+    line_group = paste(.data$Patient, .data$series_label, .data$replicate_id, sep = "__")
+  ) %>%
+  dplyr::select(
+    Patient,
+    Sample_ID,
+    LOD_current_recalibrated,
+    LOD_zero_final,
+    LOD_plot_zero_final,
+    LOD_zero_final_update_method,
+    series_label,
+    replicate_id,
+    patient_series,
+    line_group,
+    all_of(c(fragmentomics_patient_features, fragmentomics_patient_probabilities))
+  ) %>%
+  pivot_longer(
+    cols = all_of(c(fragmentomics_patient_features, fragmentomics_patient_probabilities)),
+    names_to = "feature",
+    values_to = "value"
+  ) %>%
+  mutate(
+    panel_type = if_else(
+      .data$feature %in% fragmentomics_patient_features,
+      "Feature",
+      "Probability"
+    )
+  ) %>%
+  left_join(fragmentomics_patient_thresholds, by = "feature") %>%
+  mutate(
+    call = case_when(
+      .data$panel_type == "Probability" & .data$value >= .data$thr ~ "Positive",
+      .data$panel_type == "Probability" ~ "Negative",
+      TRUE ~ NA_character_
+    ),
+    call = factor(.data$call, levels = c("Negative", "Positive"))
+  ) %>%
+  expand_shared_zero_controls_for_lines()
+
+write_csv(
+  fragmentomics_patient_zero_final_source,
+  file.path(SOURCE_DATA_DIR, "SourceData_Fragmentomics_main_models_patient_series_zero_final_tf.csv")
+)
+
+fragmentomics_patient_line_plot <- make_blood_patient_line_plot(
+  plot_dat = fragmentomics_patient_zero_final_source,
+  plot_title = "Fragmentomics Dilution-Series Patient Lines: New Release Only",
+  patient_specific = FALSE,
+  x_col = "LOD_plot_zero_final",
+  x_breaks = zero_final_breaks,
+  x_minor_breaks = zero_final_minor_breaks,
+  x_labels = zero_final_break_labels,
+  facet_label_map = fragmentomics_patient_labels,
+  probability_thresholds = fragmentomics_patient_thresholds,
+  confirmatory_feature = NULL,
+  confirmatory_threshold = NULL
+)
+
+ggsave(
+  filename = file.path(OUTPUT_DIR_FIGURES, "Fig_LOD_fragmentomics_main_models_patient_series_zero_final_tf.png"),
+  plot = fragmentomics_patient_line_plot,
+  width = 15.5,
+  height = 5.1,
+  dpi = 600
+)
+message("Saved: Fig_LOD_fragmentomics_main_models_patient_series_zero_final_tf.png")
+
+ms_copy_artifact(
+  source_path = file.path(OUTPUT_DIR_FIGURES, "Fig_LOD_fragmentomics_main_models_patient_series_zero_final_tf.png"),
+  artifact_id = "EDFIG9D",
+  role = "supporting_dilution_patient_lines_zero_final_tf_png",
+  description = paste(
+    "De-identified dilution-series patient lines for the three preserved main fragmentomics models;",
+    "PWGVAL series contain only the new dilution release and end at 0.0001% TF."
+  ),
+  script_name = "3_1_part2_Apply_cfWGS_thresholds_to_dilution_series.R"
+)
+
 zero_final_patient_line_plots <- lapply(
   sort(unique(blood_patient_zero_final_source$Patient)),
   function(patient_id) {
     patient_plot <- make_blood_patient_line_plot(
       plot_dat = blood_patient_zero_final_source %>% filter(.data$Patient == patient_id),
-      plot_title = paste0("cfDNA Dilution-Series Feature Values: ", patient_id, " (VA-02 zero-final TF sensitivity)"),
+      plot_title = paste0("cfDNA Dilution-Series Feature Values: ", patient_id, " (including 0% diluent control)"),
       patient_specific = TRUE,
       x_col = "LOD_plot_zero_final",
       x_breaks = zero_final_breaks,

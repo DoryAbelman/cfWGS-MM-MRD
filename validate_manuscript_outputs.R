@@ -572,10 +572,13 @@ main <- function() {
     nrow(native_script_runs_manifest) &&
       all(c("snapshot", "artifact_id", "snapshot_path", "status") %in% names(native_script_runs_manifest))
   ) {
+    snapshot_paths <- as.character(native_script_runs_manifest$snapshot_path)
+    snapshot_paths[is.na(snapshot_paths)] <- ""
+    snapshot_exists <- nzchar(snapshot_paths) & file.exists(snapshot_paths)
     unique(native_script_runs_manifest$artifact_id[
       native_script_runs_manifest$snapshot == "FIG1A_swim_plot" &
         native_script_runs_manifest$status == "copied" &
-        file.exists(native_script_runs_manifest$snapshot_path)
+        snapshot_exists
     ])
   } else {
     character()

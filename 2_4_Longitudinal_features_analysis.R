@@ -85,6 +85,13 @@ if (!file.exists(.helpers_path)) {
 source(.helpers_path)
 rm(.helpers_path)
 
+.endpoint_helper <- file.path("Scripts_2025", "Final_Scripts", "next_event_endpoint_helpers.R")
+if (!file.exists(.endpoint_helper)) {
+  .endpoint_helper <- "next_event_endpoint_helpers.R"
+}
+source(.endpoint_helper)
+rm(.endpoint_helper)
+
 ## ───── 1. Load data ──────────────────────────────────────────────────────────
 ### Set paths
 outdir   <- "Output_tables_2025"
@@ -153,6 +160,54 @@ dat <- dat %>%
 dat <- dat %>% mutate(Date = as.Date(Date))
 
 dat <- dat %>% filter(Cohort == "Frontline")
+
+next_event_endpoint_resources <- load_next_event_endpoint_resources(
+  pfs_path = "Exported_data_tables_clinical/Censor_dates_per_patient_for_PFS_updated.rds",
+  relapse_dates_path = "Exported_data_tables_clinical/Relapse_dates_full_updated.rds",
+  followup_rds_path = "Exported_data_tables_clinical/patient_followup_dates_updated.rds",
+  followup_csv_path = "Exported_data_tables_clinical/patient_followup_dates_updated.csv",
+  latest_dates_paths = c(
+    "Exported_data_tables_clinical/latest_dates_per_patient_updated.csv",
+    "Exported_data_tables_clinical/latest_dates_per_patient.csv"
+  ),
+  sample_data = file,
+  patient_col = "Patient",
+  sample_date_col = "Date"
+)
+
+dat <- dat %>%
+  add_next_event_endpoint(
+    endpoint_resources = next_event_endpoint_resources,
+    sample_date_col = "Date",
+    event_grace_days = 30L
+  ) %>%
+  mutate(
+    Original_Num_days_to_closest_relapse = Num_days_to_closest_relapse,
+    Num_days_to_closest_relapse = if_else(
+      endpoint_status == 1L,
+      endpoint_days_from_sample,
+      NA_real_
+    ),
+    Relapsed_Binary = as.integer(endpoint_status)
+  )
+
+write_csv(
+  dat %>%
+    filter(endpoint_ignores_prior_progression |
+             endpoint_uses_later_progression_after_first_pfs |
+             force_relapse_sample_day0) %>%
+    select(
+      Patient, Cohort, Date, timepoint_info,
+      Original_Num_days_to_closest_relapse, Num_days_to_closest_relapse,
+      first_pfs_date, first_pfs_days_from_sample,
+      latest_prior_progression_date, n_prior_progressions_before_sample,
+      next_progression_date, endpoint_date, endpoint_status,
+      endpoint_type, endpoint_source, endpoint_days_from_sample,
+      endpoint_uses_later_progression_after_first_pfs, force_relapse_sample_day0
+    ) %>%
+    arrange(Patient, Date),
+  file.path(outdir, "frontline_longitudinal_next_event_endpoint_audit.csv")
+)
 
 dat <- dat %>%
   filter(!is.na(zscore_BM) | !is.na(zscore_blood) | !is.na(FS))

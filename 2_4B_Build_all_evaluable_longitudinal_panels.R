@@ -11,6 +11,8 @@
 #
 # Outputs:
 #   Scripts_2025/Final_Scripts/final_manuscript_objects/
+#     01_main_figures/Figure_2/<panel>/
+#       <panel>__all_evaluable_figure_panel_png__*.png
 #     additional_all_evaluable_longitudinal_panels/
 #       Figure_2B_all_evaluable_BM_zscore_longitudinal.png
 #       Figure_2C_all_evaluable_blood_zscore_longitudinal.png
@@ -36,6 +38,20 @@ if (!file.exists(.helpers_path)) {
 source(.helpers_path)
 rm(.helpers_path)
 
+.manuscript_helper <- file.path("Scripts_2025", "Final_Scripts", "manuscript_output_helpers.R")
+if (!file.exists(.manuscript_helper)) {
+  .manuscript_helper <- "manuscript_output_helpers.R"
+}
+source(.manuscript_helper)
+rm(.manuscript_helper)
+
+.endpoint_helper <- file.path("Scripts_2025", "Final_Scripts", "next_event_endpoint_helpers.R")
+if (!file.exists(.endpoint_helper)) {
+  .endpoint_helper <- "next_event_endpoint_helpers.R"
+}
+source(.endpoint_helper)
+rm(.endpoint_helper)
+
 output_dir <- file.path(
   "Scripts_2025", "Final_Scripts", "final_manuscript_objects",
   "additional_all_evaluable_longitudinal_panels"
@@ -51,7 +67,8 @@ required_files <- c(
   "Final_aggregate_table_cfWGS_features_with_clinical_and_demographics_updated9.rds",
   "cohort_assignment_table_updated.rds",
   "baseline_high_quality_patients_updated.csv",
-  "Exported_data_tables_clinical/Censor_dates_per_patient_for_PFS_updated.rds"
+  "Exported_data_tables_clinical/Censor_dates_per_patient_for_PFS_updated.rds",
+  "Exported_data_tables_clinical/Relapse_dates_full_updated.rds"
 )
 missing_files <- required_files[!file.exists(required_files)]
 if (length(missing_files) > 0) {
@@ -132,6 +149,20 @@ good_pts <- read.csv(
 )
 baseline_dates <- readRDS(
   "Exported_data_tables_clinical/Censor_dates_per_patient_for_PFS_updated.rds"
+)
+
+next_event_endpoint_resources <- load_next_event_endpoint_resources(
+  pfs_path = "Exported_data_tables_clinical/Censor_dates_per_patient_for_PFS_updated.rds",
+  relapse_dates_path = "Exported_data_tables_clinical/Relapse_dates_full_updated.rds",
+  followup_rds_path = "Exported_data_tables_clinical/patient_followup_dates_updated.rds",
+  followup_csv_path = "Exported_data_tables_clinical/patient_followup_dates_updated.csv",
+  latest_dates_paths = c(
+    "Exported_data_tables_clinical/latest_dates_per_patient_updated.csv",
+    "Exported_data_tables_clinical/latest_dates_per_patient.csv"
+  ),
+  sample_data = feature_df,
+  patient_col = "Patient",
+  sample_date_col = "Date"
 )
 
 required_columns(cohort_df, c("Patient", "Cohort"), "cohort_df")
@@ -227,7 +258,37 @@ dat <- feature_df %>%
       Weeks_Since_Baseline >= -2 & Weeks_Since_Baseline < 0 ~ 0,
       TRUE ~ Weeks_Since_Baseline
     )
+  ) %>%
+  add_next_event_endpoint(
+    endpoint_resources = next_event_endpoint_resources,
+    sample_date_col = "Date",
+    event_grace_days = 30L
+  ) %>%
+  mutate(
+    Original_Num_days_to_closest_relapse = Num_days_to_closest_relapse,
+    Num_days_to_closest_relapse = endpoint_days_from_sample,
+    Relapsed_Binary = as.integer(endpoint_status)
   )
+
+longitudinal_next_event_endpoint_audit <- dat %>%
+  filter(endpoint_ignores_prior_progression |
+           endpoint_uses_later_progression_after_first_pfs |
+           force_relapse_sample_day0) %>%
+  select(
+    Patient, Cohort, Date, timepoint_info,
+    Original_Num_days_to_closest_relapse, Num_days_to_closest_relapse,
+    first_pfs_date, first_pfs_days_from_sample,
+    latest_prior_progression_date, n_prior_progressions_before_sample,
+    next_progression_date, endpoint_date, endpoint_status,
+    endpoint_type, endpoint_source, endpoint_days_from_sample,
+    endpoint_uses_later_progression_after_first_pfs, force_relapse_sample_day0
+  ) %>%
+  arrange(Patient, Date)
+
+write_csv(
+  longitudinal_next_event_endpoint_audit,
+  file.path(output_dir, "all_evaluable_longitudinal_next_event_endpoint_audit.csv")
+)
 
 time_anchor_exclusions <- dat %>%
   filter(is.na(Weeks_Since_Baseline)) %>%
@@ -291,7 +352,9 @@ flag_followup_relapse_points <- function(plot_df) {
     mutate(
       is_effective_baseline_point = row_number() == 1,
       relapse_within_180 = if_else(
-        !is_effective_baseline_point & Num_days_to_closest_relapse <= 180,
+        !is_effective_baseline_point &
+          Relapsed_Binary == 1L &
+          Num_days_to_closest_relapse <= 180,
         TRUE,
         FALSE,
         missing = FALSE
@@ -436,7 +499,7 @@ make_mutation_plot_df <- function(dat, assay) {
         Mutation_Source_Baseline_Timepoint,
         Mutation_Source_Baseline_Sample_Code,
         Mutation_Source_Baseline_Timepoint_Info,
-        Num_days_to_closest_relapse,
+        Num_days_to_closest_relapse, Relapsed_Binary,
         cVAF_z = z_score_detection_rate_BM,
         sites_z = zscore_BM
       )
@@ -448,7 +511,7 @@ make_mutation_plot_df <- function(dat, assay) {
         Mutation_Source_Baseline_Timepoint,
         Mutation_Source_Baseline_Sample_Code,
         Mutation_Source_Baseline_Timepoint_Info,
-        Num_days_to_closest_relapse,
+        Num_days_to_closest_relapse, Relapsed_Binary,
         cVAF_z = z_score_detection_rate_blood,
         sites_z = zscore_blood
       )
@@ -503,7 +566,7 @@ make_fragmentomics_plot_df <- function(dat) {
       Mutation_Source_Baseline_Timepoint,
       Mutation_Source_Baseline_Sample_Code,
       Mutation_Source_Baseline_Timepoint_Info,
-      Num_days_to_closest_relapse,
+      Num_days_to_closest_relapse, Relapsed_Binary,
       FS, Mean.Coverage
     ) %>%
     pivot_longer(
@@ -596,6 +659,35 @@ ggsave(
   dpi = 600
 )
 
+ms_copy_artifact(
+  source_path = file.path(output_dir, "Figure_2B_all_evaluable_BM_zscore_longitudinal.png"),
+  artifact_id = "FIG2B",
+  role = "all_evaluable_figure_panel_png",
+  description = "All-evaluable training/test companion version of Main Figure 2B longitudinal BM mutation z-score panel; red follow-up points use next progression within 180 days after the sample.",
+  script_name = "2_4B_Build_all_evaluable_longitudinal_panels.R"
+)
+ms_copy_artifact(
+  source_path = file.path(output_dir, "Figure_2C_all_evaluable_blood_zscore_longitudinal.png"),
+  artifact_id = "FIG2C",
+  role = "all_evaluable_figure_panel_png",
+  description = "All-evaluable training/test companion version of Main Figure 2C longitudinal cfDNA mutation z-score panel; red follow-up points use next progression within 180 days after the sample.",
+  script_name = "2_4B_Build_all_evaluable_longitudinal_panels.R"
+)
+ms_copy_artifact(
+  source_path = file.path(output_dir, "Figure_2C_all_evaluable_blood_zscore_longitudinal_capped300.png"),
+  artifact_id = "FIG2C",
+  role = "all_evaluable_capped300_figure_panel_png",
+  description = "All-evaluable training/test companion version of Main Figure 2C with cfDNA z-score display capped at 300; red follow-up points use next progression within 180 days after the sample.",
+  script_name = "2_4B_Build_all_evaluable_longitudinal_panels.R"
+)
+ms_copy_artifact(
+  source_path = file.path(output_dir, "Figure_2D_all_evaluable_fragmentomics_longitudinal.png"),
+  artifact_id = "FIG2D",
+  role = "all_evaluable_figure_panel_png",
+  description = "All-evaluable training/test companion version of Main Figure 2D longitudinal fragmentomics panel; red follow-up points use next progression within 180 days after the sample.",
+  script_name = "2_4B_Build_all_evaluable_longitudinal_panels.R"
+)
+
 write_csv(
   bm_plot_df,
   file.path(output_dir, "Figure_2B_all_evaluable_BM_zscore_longitudinal_source_data.csv")
@@ -625,8 +717,8 @@ all_evaluable_support_manifest <- tribble(
     exists = file.exists(path),
     md5 = if_else(exists, map_chr(path, ~ unname(tools::md5sum(.x))), NA_character_),
     note = paste(
-      "Support-only all-evaluable panel. Do not copy into 01_main_figures/Figure_2,",
-      "because the manuscript Figure 2 panels intentionally remain frontline-only."
+      "All-evaluable companion panel staged beside the normal Figure 2 panel",
+      "using an all_evaluable role; the normal manuscript panel remains frontline-only."
     )
   )
 
@@ -640,11 +732,13 @@ qc_tbl <- bind_rows(
   blood_plot_df %>% mutate(panel = "Figure_2C_all_evaluable_blood"),
   fragmentomics_plot_df %>% mutate(panel = "Figure_2D_all_evaluable_fragmentomics")
 ) %>%
-  distinct(panel, Metric, Cohort, Patient, Weeks_Since_Baseline) %>%
+  distinct(panel, Metric, Cohort, Patient, Weeks_Since_Baseline, relapse_within_180) %>%
   group_by(panel, Metric, Cohort) %>%
   summarise(
     n_patients = n_distinct(Patient),
     n_timepoints = n(),
+    n_red_followup_points = sum(relapse_within_180, na.rm = TRUE),
+    n_red_followup_patients = n_distinct(Patient[relapse_within_180]),
     min_week = min(Weeks_Since_Baseline, na.rm = TRUE),
     max_week = max(Weeks_Since_Baseline, na.rm = TRUE),
     .groups = "drop"
