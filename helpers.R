@@ -1348,6 +1348,17 @@ build_baseline_mutation_count_plot_data <- function(dat_base) {
     dplyr::filter(tolower(.data$timepoint_info) %in% c("baseline", "diagnosis"))
   revision_patients <- unique(revision_counts$Patient)
 
+  selected_baseline_counts <- dat_base %>%
+    dplyr::select(
+      "Patient", "cohort",
+      "BM_Mutation_Count", "Blood_Mutation_Count"
+    ) %>%
+    dplyr::rename(
+      cohort_selected_baseline = "cohort",
+      BM_Mutation_Count_selected_baseline = "BM_Mutation_Count",
+      Blood_Mutation_Count_selected_baseline = "Blood_Mutation_Count"
+    )
+
   revision_wide <- revision_counts %>%
     dplyr::mutate(
       count_column = dplyr::case_when(
@@ -1359,7 +1370,28 @@ build_baseline_mutation_count_plot_data <- function(dat_base) {
     dplyr::filter(!is.na(.data$count_column)) %>%
     dplyr::select("Patient", "count_column", "Mutation_Count") %>%
     tidyr::pivot_wider(names_from = "count_column", values_from = "Mutation_Count") %>%
-    dplyr::mutate(Timepoint = "revision_baseline", cohort = "Non-frontline")
+    dplyr::mutate(Timepoint = "revision_baseline", cohort = "Non-frontline") %>%
+    dplyr::left_join(selected_baseline_counts, by = "Patient") %>%
+    dplyr::mutate(
+      # The Spring 2026 revision mutation-count panel is the preferred source
+      # when it contains a modality count. If a manually designated baseline
+      # row has a valid count for a modality absent from the revision panel
+      # (e.g. SPORE_0012 T4 BM), retain that selected-baseline count so the
+      # modality is not silently dropped from the mutation-count figure.
+      BM_Mutation_Count = dplyr::coalesce(
+        .data$BM_Mutation_Count,
+        .data$BM_Mutation_Count_selected_baseline
+      ),
+      Blood_Mutation_Count = dplyr::coalesce(
+        .data$Blood_Mutation_Count,
+        .data$Blood_Mutation_Count_selected_baseline
+      ),
+      cohort = dplyr::coalesce(.data$cohort, .data$cohort_selected_baseline)
+    ) %>%
+    dplyr::select(
+      "Patient", "Timepoint", "cohort",
+      "BM_Mutation_Count", "Blood_Mutation_Count"
+    )
 
   duplicate_revision <- revision_wide %>%
     dplyr::count(.data$Patient) %>%

@@ -193,7 +193,12 @@ baseline_duplicate_audit <- dat_base %>%
   ungroup() %>%
   filter(n_patient_baseline_candidates > 1) %>%
   mutate(
+    manually_designated_baseline = .data$Patient == "SPORE_0012" &
+      as.character(.data$Sample_Code) == "SPORE_0012_T4" &
+      as.character(.data$Timepoint) == "4" &
+      as.character(.data$timepoint_info) == "Baseline",
     patient_baseline_timepoint_rank = case_when(
+      .data$manually_designated_baseline ~ 0L,
       str_detect(as.character(Timepoint), regex("^T?0$", ignore_case = TRUE)) ~ 0L,
       str_detect(as.character(Timepoint), regex("^T?1$|^0?1$", ignore_case = TRUE)) ~ 1L,
       TRUE ~ 2L
@@ -202,6 +207,7 @@ baseline_duplicate_audit <- dat_base %>%
   ) %>%
   group_by(Patient) %>%
   arrange(
+    desc(manually_designated_baseline),
     is.na(Date),
     Date,
     patient_baseline_timepoint_rank,
@@ -212,6 +218,8 @@ baseline_duplicate_audit <- dat_base %>%
   mutate(
     selected_for_patient_baseline_concordance = row_number() == 1L,
     patient_baseline_selection_reason = case_when(
+      selected_for_patient_baseline_concordance & manually_designated_baseline ~
+        "selected manually designated SPORE_0012 T4 BM baseline for BM-informed baseline analyses",
       selected_for_patient_baseline_concordance ~ "selected earliest dated baseline/diagnosis candidate, preferring T0/T1 and rows with WGS mutation evidence",
       TRUE ~ "not selected for patient-level baseline concordance to enforce one baseline/diagnosis row per patient"
     )
@@ -1416,6 +1424,18 @@ readr::write_csv(
   file.path(
     "Output_tables_2025", "clinical_support",
     "extended_data_figure_2e_mutation_count_plot_audit.csv"
+  )
+)
+edfig2e_generated_source_dir <- file.path(
+  "Scripts_2025", "Final_Scripts", "final_manuscript_objects",
+  "generated", "figure_components", "Extended_Data_Figure_2", "panel_E"
+)
+dir.create(edfig2e_generated_source_dir, recursive = TRUE, showWarnings = FALSE)
+readr::write_csv(
+  plot_df %>% dplyr::select("Patient", "cohort", "Assay", "MutCount"),
+  file.path(
+    edfig2e_generated_source_dir,
+    "Extended_Data_Figure_2E_mutation_counts_by_cohort_source_data.csv"
   )
 )
 

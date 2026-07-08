@@ -1159,6 +1159,35 @@ combined_data_plot <- restrict_to_single_baseline_mutation_source(
   audit_prefix = "bm"
 )
 
+## SPORE_0012 uses its T4 BM as the designated baseline mutation source. The
+## MRDetect input matrix also contains older T1/T2 plasma queries for this BM
+## panel; those samples predate the mutation source and therefore cannot be
+## scored prospectively. Keep the T4->T5 comparison and audit/remove only the
+## temporally impossible pre-T4 pairs.
+spore0012_prebaseline_query_audit <- combined_data_plot %>%
+  filter(
+    Patient == "SPORE_0012",
+    Sample_ID == "SPORE_0012_T4_BM_cells",
+    !is.na(START_DATE),
+    START_DATE < 0
+  ) %>%
+  mutate(exclusion_reason = "tested plasma predates designated T4 BM baseline")
+
+readr::write_csv(
+  spore0012_prebaseline_query_audit,
+  file.path(export_dir, "spore0012_prebaseline_bm_query_exclusion_audit.csv")
+)
+
+combined_data_plot <- combined_data_plot %>%
+  filter(
+    !(
+      Patient == "SPORE_0012" &
+        Sample_ID == "SPORE_0012_T4_BM_cells" &
+        !is.na(START_DATE) &
+        START_DATE < 0
+    )
+  )
+
 combined_data_plot <- deduplicate_baseline_source_alias_query_rows(
   combined_data_plot,
   audit_dir = export_dir,

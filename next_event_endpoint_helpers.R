@@ -299,6 +299,12 @@ add_next_event_endpoint <- function(data,
         endpoint_source
       ),
       endpoint_days_from_sample = as.numeric(endpoint_date - sample_date),
+      endpoint_days_from_sample = dplyr::if_else(
+        endpoint_status == 1L & endpoint_days_from_sample < 0 &
+          endpoint_days_from_sample >= -event_grace_days,
+        0,
+        endpoint_days_from_sample
+      ),
       endpoint_uses_later_progression_after_first_pfs = dplyr::if_else(
         force_relapse_sample_day0,
         FALSE,

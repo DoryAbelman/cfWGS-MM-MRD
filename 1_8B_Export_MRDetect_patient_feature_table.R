@@ -70,6 +70,41 @@ dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
 
 mrdetect <- readRDS(input_file)
 
+sample_identity_path <- file.path(
+  "Output_tables_2025", "clinical_support", "cfwgs_sample_identity_map.csv"
+)
+if (!file.exists(sample_identity_path)) {
+  stop("cfWGS sample identity map not found: ", sample_identity_path, call. = FALSE)
+}
+
+clinical_sample_dates <- readr::read_csv(
+  sample_identity_path,
+  show_col_types = FALSE
+) %>%
+  transmute(
+    Patient = as.character(Patient),
+    sample_id_tested = as.character(Sample_ID),
+    tested_sample_date = as.Date(Date_of_sample_collection)
+  ) %>%
+  filter(
+    !is.na(Patient),
+    !is.na(sample_id_tested),
+    nzchar(sample_id_tested),
+    !is.na(tested_sample_date)
+  ) %>%
+  distinct()
+
+duplicate_clinical_sample_dates <- clinical_sample_dates %>%
+  count(Patient, sample_id_tested, name = "n") %>%
+  filter(n > 1)
+if (nrow(duplicate_clinical_sample_dates) > 0L) {
+  stop(
+    "Clinical metadata has duplicate Patient/Sample_ID date mappings; ",
+    "cannot enforce mutation-source temporal ordering.",
+    call. = FALSE
+  )
+}
+
 required_cols <- c(
   "Patient", "Patient_Bam", "Sample_ID", "Sample_ID_Bam", "BAM", "VCF",
   "VCF_clean", "Sample_type", "Sample_type_Bam", "timepoint_info",
@@ -92,7 +127,7 @@ if (length(missing_cols) > 0) {
   )
 }
 
-patient_features <- mrdetect %>%
+patient_feature_candidates <- mrdetect %>%
   filter(
     plotting_type == "Matched_plasma",
     Filter_source == "STR_encode",
@@ -101,6 +136,51 @@ patient_features <- mrdetect %>%
     !is.na(Patient),
     !is.na(Patient_Bam),
     Patient == Patient_Bam
+  ) %>%
+  mutate(
+    mutation_source_date = as.Date(Date_of_sample_collection),
+    sample_id_tested = as.character(Sample_ID_Bam)
+  ) %>%
+  left_join(
+    clinical_sample_dates,
+    by = c("Patient", "sample_id_tested")
+  )
+
+temporally_invalid_pairs <- patient_feature_candidates %>%
+  filter(
+    Patient == "SPORE_0012",
+    Sample_ID == "SPORE_0012_T4_BM_cells",
+    !is.na(mutation_source_date),
+    !is.na(tested_sample_date),
+    tested_sample_date < mutation_source_date
+  ) %>%
+  transmute(
+    Patient,
+    mutation_source_sample_id = Sample_ID,
+    mutation_source_date,
+    sample_id_tested,
+    tested_sample_date,
+    Mut_source,
+    exclusion_reason = "tested plasma predates mutation-source sample"
+  ) %>%
+  distinct() %>%
+  arrange(Patient, mutation_source_date, tested_sample_date)
+
+write_csv(
+  temporally_invalid_pairs,
+  file.path(output_dir, "MRDetect_temporally_invalid_source_query_pairs.csv"),
+  na = ""
+)
+
+patient_features <- patient_feature_candidates %>%
+  filter(
+    !(
+      Patient == "SPORE_0012" &
+        Sample_ID == "SPORE_0012_T4_BM_cells" &
+        !is.na(mutation_source_date) &
+        !is.na(tested_sample_date) &
+        tested_sample_date < mutation_source_date
+    )
   ) %>%
   mutate(
     baseline_source = case_when(
@@ -132,9 +212,11 @@ patient_features <- mrdetect %>%
     sample_id_tested = Sample_ID_Bam,
     bam_tested = BAM,
     sample_type_tested = Sample_type_Bam,
+    tested_sample_date,
     timepoint_tested = timepoint_info_Bam,
     mutation_source_sample_id = Sample_ID,
     mutation_source_type = Sample_type,
+    mutation_source_date,
     mutation_source_timepoint = timepoint_info,
     mutation_source_vcf = VCF,
     mutation_source_vcf_clean = VCF_clean,
