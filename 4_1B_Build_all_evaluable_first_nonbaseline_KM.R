@@ -6,10 +6,11 @@
 ##   both the training/frontline and test/non-frontline cohorts. Because the two
 ##   cohorts have different sampling schedules, this script uses a patient-level
 ##   first prospective non-baseline assessment as a broad descriptive landmark,
-##   and a first maintenance-phase assessment as the biologically aligned
-##   expansion of the original one-year maintenance analysis. The script exports
-##   timing/QC tables plus Cox models adjusted for cohort and months from
-##   baseline.
+##   and audits the former label-defined first-maintenance analysis. The promoted
+##   Figure 3F companion now uses a clinically anchored assessment collected
+##   during documented frontline maintenance, 12-18 months after maintenance
+##   initiation, with no prior progression and >=30 event-free days. A pooled
+##   all-treatment-line version is exported only as an exploratory sensitivity.
 ##
 ## Scientific estimand:
 ##   Among patients who are progression-free and under observation at a selected
@@ -26,6 +27,12 @@
 ##     progression concerns.
 ##   - Exports fixed-window availability summaries for 6 and 12 months, but
 ##     does not treat them as primary because counts are smaller.
+##   - Does not equate a `timepoint_info` Maintenance label with documented
+##     maintenance exposure for the promoted Figure 3F companion.
+##   - Caps documented maintenance intervals at recorded progression and, for
+##     SPORE, at the next treatment start.
+##   - Keeps the primary documented-maintenance landmark frontline-only because
+##     the current 12-18-month test-cohort denominator is one later-line patient.
 ##
 ## Outputs:
 ##   Scripts_2025/Final_Scripts/final_manuscript_objects/
@@ -88,6 +95,25 @@ input_followup_rds <- "Exported_data_tables_clinical/patient_followup_dates_upda
 input_followup_csv <- "Exported_data_tables_clinical/patient_followup_dates_updated.csv"
 input_latest_dates_csv <- "Exported_data_tables_clinical/latest_dates_per_patient.csv"
 input_latest_dates_updated_csv <- "Exported_data_tables_clinical/latest_dates_per_patient_updated.csv"
+input_m4_chemotherapy_csv <- "M4_CMRG_Data/March 2026/M4_COHORT_CHEMOTHERAPY.csv"
+input_img_review_treatment_csv <- file.path(
+  "New OICR Submissions", "derived_metadata",
+  "oicr_submission_clinical_treatment_rows.csv"
+)
+input_img_review_summary_csv <- file.path(
+  "New OICR Submissions", "derived_metadata",
+  "oicr_submission_patient_clinical_summary.csv"
+)
+input_img_revision_metadata_csv <- file.path(
+  "New OICR Submissions", "derived_metadata",
+  "oicr_revision_repo_style_metadata.csv"
+)
+input_img_followup_csv <- file.path(
+  "Clinical data", "IMMAGINE", "Cleaned_Patient_Follow-Up_Table_IMMAGINE.csv"
+)
+input_spore_treatments_csv <- file.path(
+  "Clinical data", "SPORE", "tidy_treatments.csv"
+)
 
 output_dir <- file.path(
   "Scripts_2025", "Final_Scripts", "final_manuscript_objects",
@@ -144,6 +170,289 @@ format_model_p <- function(p) {
     p < 0.001 ~ "<0.001",
     TRUE ~ sprintf("%.3f", p)
   )
+}
+
+read_documented_maintenance_intervals <- function() {
+  required_paths <- c(
+    input_m4_chemotherapy_csv,
+    input_relapse_dates_rds,
+    input_img_review_treatment_csv,
+    input_img_review_summary_csv,
+    input_img_followup_csv,
+    input_spore_treatments_csv
+  )
+  missing_paths <- required_paths[!file.exists(required_paths)]
+  if (length(missing_paths) > 0L) {
+    stop(
+      "Missing documented-maintenance input(s): ",
+      paste(missing_paths, collapse = ", "),
+      call. = FALSE
+    )
+  }
+
+  # The March 2026 M4 CSV contains unquoted embedded newlines in trailing
+  # free-text notes. Reading it as an ordinary CSV creates spurious rows and
+  # parser warnings. The treatment fields required here are the first ten
+  # comma-free columns of each physical record line, so extract and validate
+  # those fields explicitly rather than depending on the damaged note columns.
+  m4_lines <- readLines(input_m4_chemotherapy_csv, warn = FALSE)
+  m4_header <- str_split_fixed(m4_lines[[1]], fixed(","), 11)[1, 1:10]
+  expected_m4_header <- c(
+    "M4_id", "study_patient_id", "REGIMEN_NAME", "LINE_OF_TREATMENT",
+    "START_DATE", "END_DATE", "PLANNED_NUMBER_CYCLES", "NUM_CYCLES_GIVEN",
+    "STUDY_DRUG", "INTENT"
+  )
+  if (!identical(m4_header, expected_m4_header)) {
+    stop(
+      "Unexpected first ten columns in malformed M4 chemotherapy CSV: ",
+      paste(m4_header, collapse = ", "),
+      call. = FALSE
+    )
+  }
+  m4_record_lines <- m4_lines[str_detect(m4_lines, "^[A-Za-z]{2}-[0-9]{2},")]
+  if (length(m4_record_lines) == 0L) {
+    stop("No M4 chemotherapy record lines were recognized.", call. = FALSE)
+  }
+  m4_fields <- str_split_fixed(m4_record_lines, fixed(","), 11)[, 1:10, drop = FALSE]
+  colnames(m4_fields) <- expected_m4_header
+
+  m4 <- as_tibble(m4_fields) %>%
+    transmute(
+      Patient = str_trim(M4_id),
+      regimen = REGIMEN_NAME,
+      line_of_treatment = as.character(LINE_OF_TREATMENT),
+      treatment_intent = INTENT,
+      maintenance_start = suppressWarnings(lubridate::dmy(START_DATE)),
+      maintenance_end_recorded = suppressWarnings(lubridate::dmy(END_DATE)),
+      maintenance_progression_date = as.Date(NA),
+      maintenance_source = input_m4_chemotherapy_csv,
+      maintenance_source_rule = paste0(
+        "INTENT == Maintenance; first ten validated record fields extracted ",
+        "from malformed multiline CSV; progression capped from relapse table"
+      )
+    ) %>%
+    filter(
+      str_to_lower(treatment_intent) == "maintenance",
+      !is.na(Patient),
+      !is.na(maintenance_start)
+    )
+
+  img_patient_map <- readr::read_csv(
+    input_img_review_summary_csv,
+    show_col_types = FALSE
+  ) %>%
+    transmute(
+      patient_numeric_id = as.character(patient_numeric_id),
+      Patient = as.character(patient_img_id)
+    )
+
+  img_review <- readr::read_csv(
+    input_img_review_treatment_csv,
+    show_col_types = FALSE
+  ) %>%
+    mutate(patient_numeric_id = as.character(patient_numeric_id)) %>%
+    inner_join(img_patient_map, by = "patient_numeric_id") %>%
+    transmute(
+      Patient,
+      regimen = line_regimen,
+      line_of_treatment = as.character(line_of_treatment),
+      treatment_intent,
+      maintenance_start = as.Date(treatment_start_date),
+      maintenance_end_recorded = as.Date(treatment_end_date),
+      maintenance_progression_date = as.Date(progression_date),
+      maintenance_source = input_img_review_treatment_csv,
+      maintenance_source_rule = "treatment_intent == Maintenance; comprehensive IMMAGINE treatment extract"
+    ) %>%
+    filter(
+      str_to_lower(treatment_intent) == "maintenance",
+      !is.na(maintenance_start)
+    )
+
+  img_legacy <- readr::read_csv(
+    input_img_followup_csv,
+    show_col_types = FALSE
+  ) %>%
+    transmute(
+      Patient = as.character(Patient_ID),
+      regimen = NA_character_,
+      line_of_treatment = NA_character_,
+      treatment_intent = "Maintenance",
+      maintenance_start = as.Date(Maintenance_Start_Date),
+      relapse1_date = as.Date(Relapse1_Date),
+      last_followup_date = as.Date(Last_Followup_Date),
+      maintenance_end_recorded = case_when(
+        !is.na(relapse1_date) & relapse1_date >= maintenance_start ~ relapse1_date,
+        !is.na(last_followup_date) & last_followup_date >= maintenance_start ~ last_followup_date,
+        TRUE ~ as.Date(NA)
+      ),
+      maintenance_progression_date = relapse1_date,
+      maintenance_source = input_img_followup_csv,
+      maintenance_source_rule = "explicit Maintenance_Start_Date; end conservatively bounded by relapse or follow-up"
+    ) %>%
+    select(-relapse1_date, -last_followup_date) %>%
+    filter(!is.na(maintenance_start)) %>%
+    anti_join(img_review %>% distinct(Patient), by = "Patient")
+
+  spore_all <- readr::read_csv(
+    input_spore_treatments_csv,
+    show_col_types = FALSE
+  ) %>%
+    transmute(
+      Patient = as.character(patient),
+      line_of_treatment = as.character(line),
+      regimen,
+      treatment_start = as.Date(start_date)
+    ) %>%
+    arrange(Patient, treatment_start) %>%
+    group_by(Patient) %>%
+    mutate(next_treatment_start = lead(treatment_start)) %>%
+    ungroup()
+
+  spore <- spore_all %>%
+    filter(str_detect(regimen, fixed("(M)")), !is.na(treatment_start)) %>%
+    transmute(
+      Patient,
+      regimen,
+      line_of_treatment,
+      treatment_intent = "Maintenance",
+      maintenance_start = treatment_start,
+      maintenance_end_recorded = next_treatment_start - lubridate::days(1),
+      maintenance_progression_date = as.Date(NA),
+      maintenance_source = input_spore_treatments_csv,
+      maintenance_source_rule = "regimen explicitly marked (M); end at next treatment start"
+    )
+
+  intervals_base <- bind_rows(m4, img_review, img_legacy, spore) %>%
+    mutate(maintenance_interval_id = row_number())
+
+  global_progression_caps <- readRDS(input_relapse_dates_rds) %>%
+    transmute(
+      Patient = as.character(Patient),
+      global_progression_date = as.Date(Progression_date)
+    ) %>%
+    filter(!is.na(Patient), !is.na(global_progression_date)) %>%
+    inner_join(
+      intervals_base %>%
+        select(maintenance_interval_id, Patient, maintenance_start),
+      by = "Patient",
+      relationship = "many-to-many"
+    ) %>%
+    filter(global_progression_date >= maintenance_start) %>%
+    group_by(maintenance_interval_id) %>%
+    summarise(
+      global_progression_date = min(global_progression_date),
+      .groups = "drop"
+    )
+
+  intervals_raw <- intervals_base %>%
+    left_join(global_progression_caps, by = "maintenance_interval_id") %>%
+    mutate(
+      maintenance_progression_date = case_when(
+        !is.na(maintenance_progression_date) & !is.na(global_progression_date) ~
+          pmin(maintenance_progression_date, global_progression_date),
+        !is.na(maintenance_progression_date) ~ maintenance_progression_date,
+        TRUE ~ global_progression_date
+      ),
+      maintenance_effective_end = case_when(
+        !is.na(maintenance_end_recorded) & !is.na(maintenance_progression_date) ~
+          pmin(maintenance_end_recorded, maintenance_progression_date),
+        !is.na(maintenance_end_recorded) ~ maintenance_end_recorded,
+        !is.na(maintenance_progression_date) ~ maintenance_progression_date,
+        TRUE ~ as.Date(NA)
+      ),
+      interval_valid = is.na(maintenance_effective_end) |
+        maintenance_effective_end >= maintenance_start,
+      interval_exclusion_reason = if_else(
+        interval_valid,
+        NA_character_,
+        "effective maintenance end precedes maintenance start"
+      )
+    ) %>%
+    select(-maintenance_interval_id, -global_progression_date) %>%
+    distinct() %>%
+    arrange(Patient, maintenance_start)
+
+  list(
+    intervals = intervals_raw %>% filter(interval_valid),
+    exclusions = intervals_raw %>% filter(!interval_valid)
+  )
+}
+
+make_documented_maintenance_anchor <- function(
+    data,
+    assay_col,
+    maintenance_intervals,
+    cohort_filter = NULL,
+    require_no_prior_progression = FALSE,
+    min_month = 12,
+    max_month = 18,
+    target_month = 15,
+    event_free_days = 30L) {
+  required_columns(
+    data,
+    c(
+      assay_col, "Patient", "Cohort", "sample_date", "baseline_date",
+      "censor_date", "relapsed", "endpoint_days_from_sample",
+      "n_prior_progressions_before_sample"
+    ),
+    "documented-maintenance analysis input"
+  )
+
+  candidates <- data %>%
+    filter(
+      !is.na(.data[[assay_col]]),
+      !is.na(sample_date),
+      !is.na(baseline_date),
+      !is.na(censor_date),
+      !is.na(relapsed),
+      days_from_baseline >= 0,
+      endpoint_days_from_sample >= event_free_days
+    )
+
+  if (!is.null(cohort_filter)) {
+    candidates <- candidates %>% filter(Cohort %in% cohort_filter)
+  }
+  if (isTRUE(require_no_prior_progression)) {
+    candidates <- candidates %>%
+      filter(n_prior_progressions_before_sample == 0L)
+  }
+
+  candidates %>%
+    inner_join(maintenance_intervals, by = "Patient", relationship = "many-to-many") %>%
+    filter(
+      sample_date >= maintenance_start,
+      is.na(maintenance_effective_end) | sample_date <= maintenance_effective_end
+    ) %>%
+    mutate(
+      days_into_maintenance = as.numeric(sample_date - maintenance_start),
+      months_into_maintenance = days_into_maintenance / days_per_month,
+      distance_from_target_month = abs(months_into_maintenance - target_month)
+    ) %>%
+    filter(
+      months_into_maintenance >= min_month,
+      months_into_maintenance <= max_month
+    ) %>%
+    arrange(Patient, distance_from_target_month, sample_date, desc(maintenance_start)) %>%
+    group_by(Patient) %>%
+    slice(1) %>%
+    ungroup() %>%
+    mutate(
+      assay_value = as.integer(.data[[assay_col]]),
+      Group = factor(
+        if_else(assay_value == 1L, "Positive", "Negative"),
+        levels = c("Negative", "Positive")
+      ),
+      Time_to_event_months = endpoint_days_from_sample / days_per_month,
+      Cohort = factor(
+        Cohort,
+        levels = c("Frontline", "Non-frontline"),
+        labels = c("Training Cohort", "Test Cohort")
+      ),
+      documented_maintenance_window = paste0(min_month, "-", max_month, " months"),
+      documented_maintenance_event_free_days = as.integer(event_free_days),
+      documented_maintenance_no_prior_progression = require_no_prior_progression
+    ) %>%
+    filter(!is.na(Group), Time_to_event_months >= 0)
 }
 
 fit_adjusted_cox <- function(df, assay_label, anchor_label) {
@@ -713,7 +1022,8 @@ make_assay_patient_eligibility <- function(assay_key, assay_col, assay_label, da
     )
 }
 
-make_km_plot <- function(df, assay_label, anchor_label, output_stub) {
+make_km_plot <- function(df, assay_label, anchor_label, output_stub,
+                         population_label = "All evaluable patients") {
   group_counts <- df %>%
     count(Group, name = "n")
 
@@ -753,7 +1063,7 @@ make_km_plot <- function(df, assay_label, anchor_label, output_stub) {
 
   title_text <- paste0(
     "PFS by ", assay_label,
-    "\nAll evaluable patients - ", anchor_label
+    "\n", population_label, " - ", anchor_label
   )
 
   km <- survminer::ggsurvplot(
@@ -1135,10 +1445,10 @@ anchor_defs <- tibble::tribble(
   "first_nonbaseline", NA_real_, NA_real_, 30L, TRUE,
   "first_maintenance_primary",
   "first evaluable maintenance-phase assessment",
-  "first_maintenance", NA_real_, NA_real_, 0L, TRUE,
+  "first_maintenance", NA_real_, NA_real_, 0L, FALSE,
   "first_maintenance_event_free_30d",
   "first evaluable maintenance-phase assessment, event-free >=30 days",
-  "first_maintenance", NA_real_, NA_real_, 30L, TRUE,
+  "first_maintenance", NA_real_, NA_real_, 30L, FALSE,
   "exact_1yr_maintenance_reference",
   "exact clinically labeled one-year maintenance assessment",
   "exact_one_year_maintenance", NA_real_, NA_real_, 0L, FALSE,
@@ -1364,6 +1674,284 @@ write_csv(
   file.path(output_dir, "all_evaluable_first_nonbaseline_figure_manifest.csv")
 )
 
+# Clinically anchored replacement for the former label-only Figure 3F
+# companion. A row is eligible only when its collection date falls within a
+# documented maintenance-treatment interval and 12-18 months after maintenance
+# initiation. The primary analysis is restricted to the frontline cohort with
+# no prior progression and at least 30 event-free days. This avoids pooling a
+# single later-line test-cohort event into the primary log-rank comparison.
+maintenance_resources <- read_documented_maintenance_intervals()
+documented_maintenance_intervals <- maintenance_resources$intervals
+documented_maintenance_interval_exclusions <- maintenance_resources$exclusions
+
+write_csv(
+  documented_maintenance_intervals,
+  file.path(source_dir, "documented_maintenance_intervals.csv")
+)
+write_csv(
+  documented_maintenance_interval_exclusions,
+  file.path(source_dir, "documented_maintenance_interval_exclusions.csv")
+)
+
+documented_maintenance_primary <- make_documented_maintenance_anchor(
+  data = analysis_df,
+  assay_col = "BM_zscore_only_detection_rate_call",
+  maintenance_intervals = documented_maintenance_intervals,
+  cohort_filter = "Frontline",
+  require_no_prior_progression = TRUE,
+  min_month = 12,
+  max_month = 18,
+  target_month = 15,
+  event_free_days = 30L
+) %>%
+  mutate(
+    assay_key = "BM_cfWGS_cVAF",
+    assay_col = "BM_zscore_only_detection_rate_call",
+    assay_label = "BM-derived cfWGS (cVAF model)",
+    anchor_key = "documented_maintenance_12_18_frontline_primary",
+    anchor_label = "documented maintenance assessment 12-18 months after initiation",
+    analysis_role = "primary_frontline_documented_maintenance"
+  )
+
+documented_maintenance_all_lines <- make_documented_maintenance_anchor(
+  data = analysis_df,
+  assay_col = "BM_zscore_only_detection_rate_call",
+  maintenance_intervals = documented_maintenance_intervals,
+  cohort_filter = cohorts_to_include,
+  require_no_prior_progression = FALSE,
+  min_month = 12,
+  max_month = 18,
+  target_month = 15,
+  event_free_days = 30L
+) %>%
+  mutate(
+    assay_key = "BM_cfWGS_cVAF",
+    assay_col = "BM_zscore_only_detection_rate_call",
+    assay_label = "BM-derived cfWGS (cVAF model)",
+    anchor_key = "documented_maintenance_12_18_all_lines_exploratory",
+    anchor_label = "documented maintenance assessment 12-18 months after initiation, all treatment lines",
+    analysis_role = "exploratory_all_lines_documented_maintenance"
+  )
+
+documented_primary_source_path <- file.path(
+  source_dir,
+  "documented_maintenance_12_18_frontline_BM_cfWGS_cVAF_source_data.csv"
+)
+documented_all_lines_source_path <- file.path(
+  source_dir,
+  "documented_maintenance_12_18_all_lines_BM_cfWGS_cVAF_source_data.csv"
+)
+write_csv(documented_maintenance_primary, documented_primary_source_path)
+write_csv(documented_maintenance_all_lines, documented_all_lines_source_path)
+
+compact_documented_maintenance_source <- function(df) {
+  df %>%
+    transmute(
+      Patient,
+      Cohort,
+      Study,
+      Sample_Code,
+      sample_date,
+      timepoint_info,
+      regimen,
+      line_of_treatment,
+      maintenance_start,
+      maintenance_end_recorded,
+      maintenance_progression_date,
+      maintenance_effective_end,
+      maintenance_source,
+      maintenance_source_rule,
+      days_into_maintenance,
+      months_into_maintenance,
+      BM_cfWGS_cVAF_call = assay_value,
+      MRD_group = Group,
+      endpoint_date,
+      endpoint_type,
+      endpoint_source,
+      event = Relapsed_Binary,
+      followup_from_assessment_months = Time_to_event_months,
+      n_prior_progressions_before_sample,
+      documented_maintenance_no_prior_progression,
+      documented_maintenance_event_free_days,
+      analysis_role
+    ) %>%
+    arrange(MRD_group, Patient)
+}
+
+write_csv(
+  compact_documented_maintenance_source(documented_maintenance_primary),
+  file.path(
+    source_dir,
+    "documented_maintenance_12_18_frontline_BM_cfWGS_cVAF_compact_source_data.csv"
+  )
+)
+write_csv(
+  compact_documented_maintenance_source(documented_maintenance_all_lines),
+  file.path(
+    source_dir,
+    "documented_maintenance_12_18_all_lines_BM_cfWGS_cVAF_compact_source_data.csv"
+  )
+)
+
+safe_logrank_summary <- function(df, analysis_role) {
+  n_negative <- sum(df$Group == "Negative", na.rm = TRUE)
+  n_positive <- sum(df$Group == "Positive", na.rm = TRUE)
+  p_value <- NA_real_
+  status <- "not_fit_insufficient_groups"
+  if (nrow(df) > 1L && n_distinct(df$Group) == 2L) {
+    fit <- survival::survdiff(
+      survival::Surv(Time_to_event_months, Relapsed_Binary) ~ Group,
+      data = df
+    )
+    p_value <- stats::pchisq(
+      fit$chisq,
+      df = length(fit$n) - 1L,
+      lower.tail = FALSE
+    )
+    status <- "fit"
+  }
+  tibble(
+    analysis_role = analysis_role,
+    n_patients = n_distinct(df$Patient),
+    n_negative = n_negative,
+    n_positive = n_positive,
+    n_events = sum(df$Relapsed_Binary == 1L, na.rm = TRUE),
+    n_training_cohort = sum(as.character(df$Cohort) == "Training Cohort"),
+    n_test_cohort = sum(as.character(df$Cohort) == "Test Cohort"),
+    logrank_p_value = p_value,
+    logrank_p_value_label = format_model_p(p_value),
+    status = status
+  )
+}
+
+documented_maintenance_analysis_summary <- bind_rows(
+  safe_logrank_summary(
+    documented_maintenance_primary,
+    "primary_frontline_documented_maintenance_12_18m_event_free_30d"
+  ),
+  safe_logrank_summary(
+    documented_maintenance_all_lines,
+    "exploratory_all_lines_documented_maintenance_12_18m_event_free_30d"
+  )
+)
+write_csv(
+  documented_maintenance_analysis_summary,
+  file.path(output_dir, "documented_maintenance_12_18_analysis_summary.csv")
+)
+
+documented_primary_figure <- make_km_plot(
+  documented_maintenance_primary,
+  assay_label = "BM-derived cfWGS (cVAF model)",
+  anchor_label = "12-18 months into documented maintenance",
+  output_stub = "KM_BM_cfWGS_cVAF_documented_maintenance_12_18_frontline_primary",
+  population_label = "Frontline cohort"
+)
+
+documented_all_lines_figure <- make_km_plot(
+  documented_maintenance_all_lines,
+  assay_label = "BM-derived cfWGS (cVAF model)",
+  anchor_label = "12-18 months into documented maintenance; all treatment lines",
+  output_stub = "KM_BM_cfWGS_cVAF_documented_maintenance_12_18_all_lines_exploratory",
+  population_label = "All evaluable patients"
+)
+
+write_csv(
+  bind_rows(
+    documented_primary_figure %>%
+      mutate(analysis_role = "primary_frontline_documented_maintenance"),
+    documented_all_lines_figure %>%
+      mutate(analysis_role = "exploratory_all_lines_documented_maintenance")
+  ),
+  file.path(output_dir, "documented_maintenance_12_18_figure_manifest.csv")
+)
+
+if (
+  nrow(documented_primary_figure) == 1L &&
+  documented_primary_figure$status[[1]] == "plotted" &&
+  file.exists(documented_primary_figure$figure_path[[1]])
+) {
+  ms_copy_artifact(
+    source_path = documented_primary_figure$figure_path[[1]],
+    artifact_id = "FIG3F",
+    role = "all_evaluable_first_maintenance_figure_panel_png",
+    description = paste0(
+      "Clinically anchored Figure 3F companion: frontline patients with a ",
+      "BM-derived cfWGS assessment collected during documented maintenance, ",
+      "12-18 months after maintenance initiation, no prior progression, and ",
+      ">=30 event-free days. The all-lines analysis is exploratory only."
+    ),
+    script_name = "4_1B_Build_all_evaluable_first_nonbaseline_KM.R"
+  )
+
+  # Preserve the legacy numbered filename referenced during manuscript review,
+  # but replace its former label-only contents with the clinically anchored
+  # primary panel. This alias is regenerated on every run.
+  legacy_review_alias <- file.path(
+    "Scripts_2025", "Final_Scripts", "final_manuscript_objects",
+    "01_main_figures", "Figure_3", "Figure_3F", "F3F_figure_2.png"
+  )
+  alias_ok <- file.copy(
+    documented_primary_figure$figure_path[[1]],
+    legacy_review_alias,
+    overwrite = TRUE
+  )
+  if (!alias_ok) {
+    stop("Failed to refresh legacy Figure 3F review alias: ", legacy_review_alias, call. = FALSE)
+  }
+}
+
+if (file.exists(input_img_revision_metadata_csv)) {
+  spring_review_roster <- readr::read_csv(
+    input_img_revision_metadata_csv,
+    show_col_types = FALSE
+  ) %>%
+    transmute(
+      Patient = as.character(Patient),
+      available_clinical_context = as.character(baseline_bm_context)
+    ) %>%
+    group_by(Patient) %>%
+    summarise(
+      available_clinical_context = paste(
+        sort(unique(na.omit(available_clinical_context))),
+        collapse = "; "
+      ),
+      .groups = "drop"
+    )
+
+  spring_review_maintenance_request <- spring_review_roster %>%
+    left_join(
+      documented_maintenance_intervals %>%
+        group_by(Patient) %>%
+        summarise(
+          has_documented_maintenance = TRUE,
+          documented_maintenance_starts = paste(
+            sort(unique(maintenance_start)),
+            collapse = ";"
+          ),
+          .groups = "drop"
+        ),
+      by = "Patient"
+    ) %>%
+    mutate(
+      has_documented_maintenance = coalesce(has_documented_maintenance, FALSE),
+      information_needed_from_clinical_review = if_else(
+        has_documented_maintenance,
+        NA_character_,
+        paste0(
+          "Confirm whether maintenance therapy occurred. If yes, provide ",
+          "regimen, line of treatment, maintenance start date, stop/hold date, ",
+          "and progression date."
+        )
+      )
+    ) %>%
+    arrange(desc(!has_documented_maintenance), Patient)
+
+  write_csv(
+    spring_review_maintenance_request,
+    file.path(source_dir, "spring_review_maintenance_information_request.csv")
+  )
+}
+
 figure_manifest %>%
   filter(
     status == "plotted",
@@ -1461,26 +2049,45 @@ method_note <- c(
   "",
   "## Recommended interpretation",
   "",
-  "Use the first evaluable maintenance-phase assessment as the biologically aligned expansion of the original one-year maintenance analysis. This preserves the successful maintenance estimand while allowing the test/non-frontline cohort's broader Maintenance label to contribute when sampled before the first PFS event.",
+  "Use the documented-maintenance 12-18-month frontline analysis as the primary clinically anchored companion to the original one-year maintenance panel. Eligibility requires the sample date to fall within a documented maintenance-treatment interval, 12-18 months after maintenance initiation, before any prior progression, and at least 30 days before event/censoring.",
   "",
-  "Use the first prospective non-baseline assessment as a broad descriptive sensitivity analysis, not as the primary replacement for the maintenance result. It maximizes patient inclusion across the training/frontline and test/non-frontline cohorts but mixes early response, post-transplant, maintenance, and irregular follow-up timing.",
+  "The former first-maintenance analysis is retained as a label-audit table only and is not promoted as a manuscript figure. It selected the first assay-evaluable row whose `timepoint_info` contained `maintenance`; it did not verify treatment start/end dates and therefore admitted non-frontline MRD-adjacent and ongoing-response rows that were not documented maintenance assessments.",
   "",
-  "Because sampling intervals differ across cohorts, every KM curve is descriptive and conditional on reaching the assessment. The adjusted Cox table should be shown or cited alongside the KM because it adjusts the MRD association for cohort and months from baseline.",
+  "The all-treatment-line documented-maintenance analysis is exploratory only. In the current data it adds a single later-line test-cohort patient to the frontline analysis, so its pooled log-rank p-value must not be presented as independent test-cohort validation.",
   "",
-  "Maintenance is defined from the clinical `timepoint_info` label (case-insensitive match to `maintenance`), not from a post hoc calendar window. This includes explicit yearly maintenance labels in the frontline cohort and the broader Maintenance label used in the non-frontline cohort. Cohort-specific counts and sampling-time distributions must accompany this analysis because label granularity differs between cohorts.",
+  "Documented maintenance is defined from explicit treatment-course records: M4 chemotherapy intent, the comprehensive IMMAGINE treatment extract, explicit legacy IMMAGINE maintenance-start dates, or SPORE regimens marked `(M)`. Recorded progression dates conservatively cap treatment intervals, and SPORE intervals end at the next treatment start.",
   "",
   "For timing-robust inference, use the model comparison table. The delayed-entry Cox keeps each patient-level anchor but uses baseline as the time scale and enters each patient at the assessment date. The general time-varying Cox uses all eligible serial post-baseline, non-progression-labeled assessments with last-observation-carried-forward MRD status, baseline as the time scale, and patient-clustered robust standard errors. Maintenance-only serial models apply the same method only to clinically labeled maintenance assessments. Parallel event-free-30-day sensitivities exclude assessments collected within 30 days of event/censor to reduce immediate pre-progression sampling concerns.",
   "",
   "The KM x-axis is time since the selected MRD assessment. The delayed-entry and time-varying Cox models use time since baseline as the analysis time scale. For samples collected after an earlier recorded progression, the endpoint is the next known progression after the sample; if no later progression is known, the row is censored at the latest available follow-up/sample date after the sample.",
   "",
-  "Do not present the fixed 6-month or 12-month windows as the primary all-evaluable result unless the manuscript needs a fixed-time landmark. Those windows are cleaner with respect to calendar time but have materially smaller denominators in the current data. The maintenance-phase analysis preserves the successful biological estimand more directly.",
+  "Do not substitute the statistically smaller p-value from the exploratory all-line analysis for the frontline primary result. The frontline documented-maintenance analysis is the prespecified clinically comparable estimand; the all-line result mixes treatment lines and contains only one test-cohort patient.",
   "",
   "## Current denominator interpretation",
   "",
+  paste0(
+    "- Primary documented-maintenance analysis: n=",
+    documented_maintenance_analysis_summary$n_patients[[1]],
+    " (MRD- n=", documented_maintenance_analysis_summary$n_negative[[1]],
+    "; MRD+ n=", documented_maintenance_analysis_summary$n_positive[[1]],
+    "; events n=", documented_maintenance_analysis_summary$n_events[[1]],
+    "; log-rank p=", documented_maintenance_analysis_summary$logrank_p_value_label[[1]],
+    ")."
+  ),
+  paste0(
+    "- Exploratory all-line documented-maintenance analysis: n=",
+    documented_maintenance_analysis_summary$n_patients[[2]],
+    " (MRD- n=", documented_maintenance_analysis_summary$n_negative[[2]],
+    "; MRD+ n=", documented_maintenance_analysis_summary$n_positive[[2]],
+    "; events n=", documented_maintenance_analysis_summary$n_events[[2]],
+    "; test-cohort n=", documented_maintenance_analysis_summary$n_test_cohort[[2]],
+    "; log-rank p=", documented_maintenance_analysis_summary$logrank_p_value_label[[2]],
+    "). This is a sensitivity analysis, not an independent validation cohort."
+  ),
   paste0("- Total patients in the included cohorts with source rows: ", n_distinct(analysis_df$Patient), " (", cohort_counts_text, ")."),
-  paste0("- Test/non-frontline patients with any pre-PFS maintenance-labeled row: ", test_pre_event_maintenance_n, "."),
-  paste0("- Test/non-frontline patients with maintenance-labeled rows only after the recorded first PFS event: ", test_post_pfs_maintenance_n, ". These rows are now evaluated against the next known progression after the sample, or censored if no later progression is known."),
-  paste0("- Test/non-frontline first-maintenance assay denominators: ", test_first_maintenance_denominator_text, "."),
+  paste0("- Label-audit only: test/non-frontline patients with any pre-PFS maintenance-labeled row: ", test_pre_event_maintenance_n, "."),
+  paste0("- Label-audit only: test/non-frontline patients with maintenance-labeled rows only after the recorded first PFS event: ", test_post_pfs_maintenance_n, ". These rows are not considered documented maintenance merely because of the sample label."),
+  paste0("- Label-audit only: test/non-frontline first-maintenance assay denominators: ", test_first_maintenance_denominator_text, "."),
   paste0("- Test/non-frontline broad first-nonbaseline assay denominators: ", test_first_nonbaseline_denominator_text, "."),
   "",
   "The apparent gap between the total cohort size and the KM denominators is therefore expected: the landmark analysis requires a post-baseline sample with the relevant assay call and a non-negative next-event/censor interval after that sample. Baseline-only, relapse-only, baseline-plus-relapse without later follow-up, or assay-missing patients are not evaluable for that specific endpoint.",
@@ -1494,6 +2101,13 @@ method_note <- c(
   "",
   "## Key outputs",
   "",
+  "- `documented_maintenance_12_18_analysis_summary.csv`: primary frontline and exploratory all-line counts, events, and log-rank results.",
+  "- `source_data/documented_maintenance_12_18_frontline_BM_cfWGS_cVAF_source_data.csv`: exact patient-level rows plotted in the primary replacement panel.",
+  "- `source_data/documented_maintenance_12_18_frontline_BM_cfWGS_cVAF_compact_source_data.csv`: reviewer-friendly subset of the exact plotted rows, including maintenance provenance, timing, MRD group, and endpoint.",
+  "- `source_data/documented_maintenance_intervals.csv`: treatment intervals and source provenance used to establish maintenance eligibility.",
+  "- `source_data/spring_review_maintenance_information_request.csv`: review-cohort patients for whom maintenance occurrence or dates remain undocumented in the available clinical files.",
+  "- `KM_BM_cfWGS_cVAF_documented_maintenance_12_18_frontline_primary.png`: clinically anchored primary replacement for the former Figure 3F alternate.",
+  "- `KM_BM_cfWGS_cVAF_documented_maintenance_12_18_all_lines_exploratory.png`: all-treatment-line sensitivity analysis; not a validation figure.",
   "- `all_evaluable_first_nonbaseline_anchor_counts.csv`: patient counts, events, MRD status, and assessment timing by cohort.",
   "- `all_evaluable_first_nonbaseline_cox_models.csv`: MRD-positive hazard ratios adjusted for cohort and months from baseline.",
   "- `all_evaluable_first_nonbaseline_delayed_entry_cox_models.csv`: first-anchor hazard ratios using baseline time with delayed entry at the assessment date.",
@@ -1507,8 +2121,7 @@ method_note <- c(
   "- `source_data/time_varying_*_intervals_source_data.csv`: patient-interval source rows for the serial time-varying models.",
   "- `source_data/all_evaluable_post_pfs_maintenance_samples.csv`: maintenance-labeled rows occurring after the first PFS event; these require next-event/censor handling.",
   "- `source_data/all_evaluable_next_event_endpoint_audit.csv`: rows whose endpoint ignores at least one prior progression and uses a later progression or censoring date.",
-  "- `KM_*_first_maintenance_primary.png`: expanded maintenance-phase KM figures.",
-  "- `KM_*_first_maintenance_event_free_30d.png`: event-free-30-day sensitivity KM figures for the expanded maintenance endpoint.",
+  "- `KM_*_first_maintenance_primary.png` and `KM_*_first_maintenance_event_free_30d.png`: legacy label-only audit figures; no longer promoted to the manuscript-object tree.",
   "- `KM_*_first_nonbaseline_primary.png`: primary all-evaluable KM figures.",
   "- `KM_*_first_nonbaseline_event_free_30d.png`: event-free-30-day sensitivity KM figures."
 )

@@ -15,9 +15,15 @@
 #       <panel>__all_evaluable_figure_panel_png__*.png
 #     additional_all_evaluable_longitudinal_panels/
 #       Figure_2B_all_evaluable_BM_zscore_longitudinal.png
+#       Figure_2B_all_evaluable_BM_zscore_longitudinal_pseudolog.png
+#       Figure_2C_all_evaluable_blood_zscore_longitudinal_pseudolog.png
 #       Figure_2C_all_evaluable_blood_zscore_longitudinal.png
 #       Figure_2C_all_evaluable_blood_zscore_longitudinal_capped300.png
 #       Figure_2D_all_evaluable_fragmentomics_longitudinal.png
+#       Figure_2D_all_evaluable_fragmentomics_longitudinal_pseudolog.png
+#       Extended_Data_Figure_3A_all_evaluable_BM_raw_longitudinal_pseudolog.png
+#       Extended_Data_Figure_3B_all_evaluable_blood_raw_longitudinal_pseudolog.png
+#       Extended_Data_Figure_3C_all_evaluable_fragmentomics_longitudinal_pseudolog.png
 #       *_source_data.csv
 #       all_evaluable_longitudinal_panel_qc.csv
 #
@@ -326,12 +332,59 @@ if (nrow(dat) == 0) {
   stop("No evaluable longitudinal rows remain after all-evaluable filters.", call. = FALSE)
 }
 
-relapse_labels <- c(
-  `FALSE` = "No follow-up relapse <=180d",
-  `TRUE` = "Follow-up relapse <=180d"
+relapse_legend_labels <- c(
+  `FALSE` = "No relapse within 180 days of blood draw",
+  `TRUE` = "Relapse within 180 days of blood draw"
 )
 cohort_linetypes <- c("Frontline" = "solid", "Non-frontline" = "22")
 cohort_display_labels <- c("Frontline" = "Training Cohort", "Non-frontline" = "Test Cohort")
+
+make_relapse_facet_labels <- function(plot_data) {
+  required_cols <- c("Patient", "Date", "patient_relapse180")
+  missing_cols <- setdiff(required_cols, names(plot_data))
+  if (length(missing_cols) > 0) {
+    stop(
+      "Cannot build relapse facet labels; missing column(s): ",
+      paste(missing_cols, collapse = ", "),
+      call. = FALSE
+    )
+  }
+
+  patient_counts <- plot_data %>%
+    filter(!is.na(patient_relapse180)) %>%
+    distinct(Patient, patient_relapse180) %>%
+    count(patient_relapse180, name = "n_patients")
+
+  sample_counts <- plot_data %>%
+    filter(!is.na(patient_relapse180), !is.na(Date)) %>%
+    distinct(Patient, Date, patient_relapse180) %>%
+    count(patient_relapse180, name = "n_samples")
+
+  count_for <- function(status) {
+    value <- patient_counts$n_patients[
+      as.character(patient_counts$patient_relapse180) == as.character(status)
+    ]
+    if (length(value) == 0) 0L else as.integer(value[[1]])
+  }
+
+  sample_count_for <- function(status) {
+    value <- sample_counts$n_samples[
+      as.character(sample_counts$patient_relapse180) == as.character(status)
+    ]
+    if (length(value) == 0) 0L else as.integer(value[[1]])
+  }
+
+  c(
+    `FALSE` = paste0(
+      "No relapse within 180 days of blood draw\n(n = ",
+      count_for(FALSE), " patients; ", sample_count_for(FALSE), " samples)"
+    ),
+    `TRUE` = paste0(
+      "Relapse within 180 days of blood draw\n(n = ",
+      count_for(TRUE), " patients; ", sample_count_for(TRUE), " samples)"
+    )
+  )
+}
 
 add_patient_relapse_flag <- function(plot_df) {
   plot_df %>%
@@ -352,8 +405,14 @@ flag_followup_relapse_points <- function(plot_df) {
     mutate(
       is_effective_baseline_point = row_number() == 1,
       relapse_within_180 = if_else(
-        !is_effective_baseline_point &
+        # Baseline/source observations are normally not treated as prospective
+        # relapse calls. The exception is an observation collected on the
+        # documented progression date: it is an at-event sample (day 0), so it
+        # belongs in the relapse facet even when it is the patient's first and
+        # only assay-evaluable point.
+        (!is_effective_baseline_point | Num_days_to_closest_relapse == 0) &
           Relapsed_Binary == 1L &
+          Num_days_to_closest_relapse >= 0 &
           Num_days_to_closest_relapse <= 180,
         TRUE,
         FALSE,
@@ -381,21 +440,55 @@ make_segment_df <- function(df, y_col = "Value") {
 
 make_metric_panel <- function(df, metric, panel_title, y_label, cap_at = NA_real_,
                               reverse_display = FALSE, show_cap_labels = TRUE,
-                              x_cap_at = NA_real_) {
+                              x_cap_at = NA_real_,
+                              y_transform = c("identity", "pseudo_log"),
+                              y_transform_sigma = 1,
+                              y_transform_breaks = NULL) {
+  y_transform <- match.arg(y_transform)
   metric_df <- df %>% filter(Metric == metric)
   if (nrow(metric_df) == 0) {
     stop("No rows available for metric: ", metric, call. = FALSE)
   }
+  facet_labels <- make_relapse_facet_labels(metric_df)
   has_x_cap <- is.finite(x_cap_at)
 
+  if (is.finite(cap_at) && y_transform != "identity" && isTRUE(reverse_display)) {
+    stop(
+      "A capped transformed y-axis cannot be combined with a reversed display.",
+      call. = FALSE
+    )
+  }
+
   if (is.finite(cap_at)) {
+    cap_label_accuracy <- if (cap_at < 1) 0.01 else 1
+    cap_y_transform <- if (y_transform == "pseudo_log") {
+      scales::pseudo_log_trans(sigma = y_transform_sigma, base = 10)
+    } else {
+      "identity"
+    }
+    cap_y_breaks <- if (y_transform == "pseudo_log") {
+      y_transform_breaks
+    } else {
+      pretty(c(0, cap_at))
+    }
+    cap_y_labels <- function(x) {
+      ifelse(
+        abs(x - cap_at) < 1e-8,
+        paste0(">", scales::number(cap_at, accuracy = cap_label_accuracy)),
+        scales::number(x, accuracy = cap_label_accuracy)
+      )
+    }
     metric_plot_df <- metric_df %>%
       mutate(
         overcap = Value > cap_at,
         Value_plot = pmin(Value, cap_at),
         x_overcap = has_x_cap & Weeks_Since_Baseline > x_cap_at,
         Weeks_Since_Baseline_plot = if (has_x_cap) pmin(Weeks_Since_Baseline, x_cap_at) else Weeks_Since_Baseline,
-        label_val = if_else(overcap, as.character(round(Value)), NA_character_)
+        label_val = if_else(
+          overcap,
+          scales::number(Value, accuracy = cap_label_accuracy),
+          NA_character_
+        )
       )
     seg_df <- metric_df %>%
       arrange(Patient, Weeks_Since_Baseline) %>%
@@ -430,11 +523,11 @@ make_metric_panel <- function(df, metric, panel_title, y_label, cap_at = NA_real
         facet_wrap(
           ~ patient_relapse180,
           nrow = 1,
-          labeller = labeller(patient_relapse180 = relapse_labels)
+          labeller = labeller(patient_relapse180 = facet_labels)
         ) +
         scale_color_manual(
           values = c(`FALSE` = "black", `TRUE` = "red"),
-          labels = relapse_labels,
+          labels = relapse_legend_labels,
           name = NULL
         ) +
         scale_linetype_manual(
@@ -448,10 +541,11 @@ make_metric_panel <- function(df, metric, panel_title, y_label, cap_at = NA_real
           name = NULL
         ) +
         guides(shape = "none") +
-        coord_cartesian(ylim = c(0, cap_at * 1.04), clip = "on") +
         scale_y_continuous(
-          breaks = pretty(c(0, cap_at)),
-          labels = function(x) ifelse(x == cap_at, paste0(">", cap_at), x)
+          trans = cap_y_transform,
+          limits = c(0, cap_at * 1.04),
+          breaks = cap_y_breaks,
+          labels = cap_y_labels
         ) +
         (if (has_x_cap) {
           scale_x_continuous(
@@ -495,11 +589,11 @@ make_metric_panel <- function(df, metric, panel_title, y_label, cap_at = NA_real
     facet_wrap(
       ~ patient_relapse180,
       nrow = 1,
-      labeller = labeller(patient_relapse180 = relapse_labels)
+      labeller = labeller(patient_relapse180 = facet_labels)
     ) +
     scale_color_manual(
       values = c(`FALSE` = "black", `TRUE` = "red"),
-      labels = relapse_labels,
+      labels = relapse_legend_labels,
       name = NULL
     ) +
     scale_linetype_manual(
@@ -518,8 +612,24 @@ make_metric_panel <- function(df, metric, panel_title, y_label, cap_at = NA_real
     theme_classic(base_size = 11) +
     theme(strip.background = element_rect(fill = "grey95", colour = NA))
 
-  if (isTRUE(reverse_display)) {
+  if (isTRUE(reverse_display) && y_transform == "identity") {
     panel <- panel + scale_y_reverse()
+  }
+  if (y_transform == "pseudo_log") {
+    pseudo_log_transform <- scales::pseudo_log_trans(
+      sigma = y_transform_sigma,
+      base = 10
+    )
+    display_transform <- if (isTRUE(reverse_display)) {
+      scales::transform_compose(pseudo_log_transform, scales::reverse_trans())
+    } else {
+      pseudo_log_transform
+    }
+    panel <- panel + scale_y_continuous(
+      trans = display_transform,
+      breaks = y_transform_breaks,
+      labels = scales::label_number(big.mark = ",")
+    )
   }
   panel
 }
@@ -567,24 +677,50 @@ make_mutation_plot_df <- function(dat, assay) {
 make_mutation_panel <- function(plot_df, title, cvaf_cap_at = NA_real_,
                                 sites_cap_at = NA_real_,
                                 show_cap_labels = TRUE,
-                                x_cap_at = NA_real_) {
+                                x_cap_at = NA_real_,
+                                cvaf_y_transform = c("identity", "pseudo_log"),
+                                sites_y_transform = c("identity", "pseudo_log")) {
+  cvaf_y_transform <- match.arg(cvaf_y_transform)
+  sites_y_transform <- match.arg(sites_y_transform)
   p_cvaf <- make_metric_panel(
     plot_df,
     metric = "cVAF_z",
     panel_title = "Cumulative VAF Z-score",
-    y_label = "Cumulative VAF (Z)",
+    y_label = if (cvaf_y_transform == "pseudo_log") {
+      "Cumulative VAF (Z; pseudo-log)"
+    } else {
+      "Cumulative VAF (Z)"
+    },
     cap_at = cvaf_cap_at,
     show_cap_labels = show_cap_labels,
-    x_cap_at = x_cap_at
+    x_cap_at = x_cap_at,
+    y_transform = cvaf_y_transform,
+    y_transform_sigma = 1,
+    y_transform_breaks = if (cvaf_y_transform == "pseudo_log") {
+      c(-10, -1, 0, 1, 10, 100, 1000, 10000)
+    } else {
+      NULL
+    }
   )
   p_sites <- make_metric_panel(
     plot_df,
     metric = "sites_z",
     panel_title = "Proportion of Sites Detected Z-score",
-    y_label = "Prop. Mutant Sites Detected (Z)",
+    y_label = if (sites_y_transform == "pseudo_log") {
+      "Sites detected (Z; pseudo-log)"
+    } else {
+      "Prop. Mutant Sites Detected (Z)"
+    },
     cap_at = sites_cap_at,
     show_cap_labels = show_cap_labels,
-    x_cap_at = x_cap_at
+    x_cap_at = x_cap_at,
+    y_transform = sites_y_transform,
+    y_transform_sigma = 1,
+    y_transform_breaks = if (sites_y_transform == "pseudo_log") {
+      c(-10, -1, 0, 1, 10, 100, 1000, 10000)
+    } else {
+      NULL
+    }
   )
 
   p_cvaf + p_sites +
@@ -617,25 +753,51 @@ make_fragmentomics_plot_df <- function(dat) {
     add_patient_relapse_flag()
 }
 
-make_fragmentomics_panel <- function(plot_df) {
+make_fragmentomics_panel <- function(plot_df, x_cap_at = NA_real_,
+                                     y_transform = c("identity", "pseudo_log")) {
+  y_transform <- match.arg(y_transform)
   p_fs <- make_metric_panel(
     plot_df,
     metric = "FS",
     panel_title = "Fragment-size score",
-    y_label = "Fragment-size score"
+    y_label = if (y_transform == "pseudo_log") {
+      "Fragment-size score (pseudo-log)"
+    } else {
+      "Fragment-size score"
+    },
+    x_cap_at = x_cap_at,
+    y_transform = y_transform,
+    y_transform_sigma = 0.05,
+    y_transform_breaks = if (y_transform == "pseudo_log") {
+      c(-1, -0.5, -0.1, 0, 0.1)
+    } else {
+      NULL
+    }
   )
   p_coverage <- make_metric_panel(
     plot_df,
     metric = "Mean.Coverage",
     panel_title = "cfDNA coverage at MM active regulatory sites",
-    y_label = "Mean cfDNA coverage (MM regs)",
-    reverse_display = TRUE
+    y_label = if (y_transform == "pseudo_log") {
+      "Mean cfDNA coverage (pseudo-log)"
+    } else {
+      "Mean cfDNA coverage (MM regs)"
+    },
+    reverse_display = TRUE,
+    x_cap_at = x_cap_at,
+    y_transform = y_transform,
+    y_transform_sigma = 0.01,
+    y_transform_breaks = if (y_transform == "pseudo_log") {
+      c(0.9, 0.95, 1, 1.05)
+    } else {
+      NULL
+    }
   )
 
   p_fs + p_coverage +
     plot_layout(guides = "collect") +
     plot_annotation(
-      title = "Longitudinal trajectories of fragmentomic features",
+      title = "Fragmentomic tumour-agnostic longitudinal tracking: Relapsed vs Non-relapsed patients",
       theme = theme(plot.title = element_text(size = 16, face = "bold", hjust = 0.5))
     ) &
     theme(legend.position = "bottom")
@@ -683,22 +845,46 @@ make_raw_mutation_plot_df <- function(dat, assay) {
 
 make_raw_mutation_panel <- function(plot_df, title, cvaf_cap_at = NA_real_,
                                     sites_cap_at = NA_real_,
-                                    x_cap_at = NA_real_) {
+                                    x_cap_at = NA_real_,
+                                    y_transform = c("identity", "pseudo_log")) {
+  y_transform <- match.arg(y_transform)
   p_cvaf <- make_metric_panel(
     plot_df,
     metric = "cVAF",
     panel_title = "Cumulative VAF",
-    y_label = "Cumulative VAF",
+    y_label = if (y_transform == "pseudo_log") {
+      "Cumulative VAF (pseudo-log)"
+    } else {
+      "Cumulative VAF"
+    },
     cap_at = cvaf_cap_at,
-    x_cap_at = x_cap_at
+    x_cap_at = x_cap_at,
+    y_transform = y_transform,
+    y_transform_sigma = 0.001,
+    y_transform_breaks = if (y_transform == "pseudo_log") {
+      c(0, 0.001, 0.01, 0.1, 1)
+    } else {
+      NULL
+    }
   )
   p_sites <- make_metric_panel(
     plot_df,
     metric = "sites",
     panel_title = "Proportion of Sites Detected",
-    y_label = "Prop. Mutant Sites Detected",
+    y_label = if (y_transform == "pseudo_log") {
+      "Sites detected (pseudo-log)"
+    } else {
+      "Prop. Mutant Sites Detected"
+    },
     cap_at = sites_cap_at,
-    x_cap_at = x_cap_at
+    x_cap_at = x_cap_at,
+    y_transform = y_transform,
+    y_transform_sigma = 0.01,
+    y_transform_breaks = if (y_transform == "pseudo_log") {
+      c(0, 0.01, 0.1, 1)
+    } else {
+      NULL
+    }
   )
 
   p_cvaf + p_sites +
@@ -732,26 +918,51 @@ make_extended_fragmentomics_plot_df <- function(dat) {
     add_patient_relapse_flag()
 }
 
-make_extended_fragmentomics_panel <- function(plot_df, x_cap_at = NA_real_) {
+make_extended_fragmentomics_panel <- function(plot_df, x_cap_at = NA_real_,
+                                              y_transform = c("identity", "pseudo_log")) {
+  y_transform <- match.arg(y_transform)
   p_short <- make_metric_panel(
     plot_df,
     metric = "Proportion.Short",
     panel_title = "Short-fragment proportion",
-    y_label = "Short-fragment proportion",
-    x_cap_at = x_cap_at
+    y_label = if (y_transform == "pseudo_log") {
+      "Short-fragment proportion (pseudo-log)"
+    } else {
+      "Short-fragment proportion"
+    },
+    x_cap_at = x_cap_at,
+    y_transform = y_transform,
+    y_transform_sigma = 0.01,
+    y_transform_breaks = if (y_transform == "pseudo_log") {
+      c(0.05, 0.1, 0.2, 0.3)
+    } else {
+      NULL
+    }
   )
   p_tf <- make_metric_panel(
     plot_df,
     metric = "TF_ichorCNA",
     panel_title = "cfDNA tumor fraction",
-    y_label = "cfDNA tumor fraction",
-    x_cap_at = x_cap_at
+    y_label = if (y_transform == "pseudo_log") {
+      "cfDNA tumor fraction (pseudo-log; >0.5 capped)"
+    } else {
+      "cfDNA tumor fraction (>0.5 capped)"
+    },
+    cap_at = 0.5,
+    x_cap_at = x_cap_at,
+    y_transform = y_transform,
+    y_transform_sigma = 0.01,
+    y_transform_breaks = if (y_transform == "pseudo_log") {
+      c(0, 0.01, 0.1, 0.5)
+    } else {
+      NULL
+    }
   )
 
   p_short + p_tf +
     plot_layout(guides = "collect") +
     plot_annotation(
-      title = "Longitudinal trajectories of fragmentomic features",
+      title = "Fragmentomic tumour-agnostic longitudinal tracking: Relapsed vs Non-relapsed patients",
       theme = theme(plot.title = element_text(size = 16, face = "bold", hjust = 0.5))
     ) &
     theme(legend.position = "bottom")
@@ -773,36 +984,83 @@ if (nrow(ed3c_plot_df) == 0) stop("No ED3C all-evaluable rows available.", call.
 
 bm_panel <- make_mutation_panel(
   bm_plot_df,
-  title = "Longitudinal trajectories of MRD metrics from baseline BM mutation profiles",
-  cvaf_cap_at = 2500,
+  title = "Baseline BM-informed longitudinal tracking: Relapsed vs Non-relapsed patients",
+  cvaf_cap_at = 1500,
   sites_cap_at = 1000,
+  show_cap_labels = FALSE,
   x_cap_at = 250
+)
+bm_panel_pseudolog <- make_mutation_panel(
+  bm_plot_df,
+  title = "Baseline BM-informed longitudinal tracking: Relapsed vs Non-relapsed patients",
+  cvaf_cap_at = NA_real_,
+  sites_cap_at = NA_real_,
+  show_cap_labels = FALSE,
+  x_cap_at = 250,
+  cvaf_y_transform = "pseudo_log",
+  sites_y_transform = "pseudo_log"
 )
 blood_panel <- make_mutation_panel(
   blood_plot_df,
-  title = "Longitudinal trajectories of MRD metrics from baseline PB cfDNA mutation profiles",
+  title = "Baseline cfDNA-informed longitudinal tracking: Relapsed vs Non-relapsed patients",
   cvaf_cap_at = NA_real_,
-  sites_cap_at = NA_real_
+  sites_cap_at = NA_real_,
+  x_cap_at = 250
+)
+blood_panel_pseudolog <- make_mutation_panel(
+  blood_plot_df,
+  title = "Baseline cfDNA-informed longitudinal tracking: Relapsed vs Non-relapsed patients",
+  cvaf_cap_at = NA_real_,
+  sites_cap_at = NA_real_,
+  x_cap_at = 250,
+  cvaf_y_transform = "pseudo_log",
+  sites_y_transform = "pseudo_log"
 )
 blood_panel_capped300 <- make_mutation_panel(
   blood_plot_df,
-  title = "Longitudinal trajectories of MRD metrics from baseline PB cfDNA mutation profiles",
+  title = "Baseline cfDNA-informed longitudinal tracking: Relapsed vs Non-relapsed patients",
   cvaf_cap_at = 300,
   sites_cap_at = 300,
-  show_cap_labels = FALSE
+  show_cap_labels = FALSE,
+  x_cap_at = 250
 )
-fragmentomics_panel <- make_fragmentomics_panel(fragmentomics_plot_df)
+fragmentomics_panel <- make_fragmentomics_panel(
+  fragmentomics_plot_df,
+  x_cap_at = 250
+)
+fragmentomics_panel_pseudolog <- make_fragmentomics_panel(
+  fragmentomics_plot_df,
+  x_cap_at = 250,
+  y_transform = "pseudo_log"
+)
 ed3a_panel <- make_raw_mutation_panel(
   ed3a_plot_df,
-  title = "Longitudinal trajectories of MRD metrics from baseline BM mutation profiles",
+  title = "Baseline BM-informed longitudinal tracking: Relapsed vs Non-relapsed patients",
   x_cap_at = 250
+)
+ed3a_panel_pseudolog <- make_raw_mutation_panel(
+  ed3a_plot_df,
+  title = "Baseline BM-informed longitudinal tracking: Relapsed vs Non-relapsed patients",
+  x_cap_at = 250,
+  y_transform = "pseudo_log"
 )
 ed3b_panel <- make_raw_mutation_panel(
   ed3b_plot_df,
-  title = "Longitudinal trajectories of MRD metrics from baseline PB cfDNA mutation profiles",
+  title = "Baseline cfDNA-informed longitudinal tracking: Relapsed vs Non-relapsed patients",
   x_cap_at = 250
 )
+ed3b_panel_pseudolog <- make_raw_mutation_panel(
+  ed3b_plot_df,
+  title = "Baseline cfDNA-informed longitudinal tracking: Relapsed vs Non-relapsed patients",
+  x_cap_at = 250,
+  y_transform = "pseudo_log"
+)
 ed3c_panel <- make_extended_fragmentomics_panel(ed3c_plot_df, x_cap_at = 250)
+ed3c_panel_pseudolog <- make_extended_fragmentomics_panel(
+  ed3c_plot_df,
+  x_cap_at = 250,
+  y_transform = "pseudo_log"
+)
 
 ggsave(
   file.path(output_dir, "Figure_2B_all_evaluable_BM_zscore_longitudinal.png"),
@@ -812,10 +1070,24 @@ ggsave(
   dpi = 600
 )
 ggsave(
+  file.path(output_dir, "Figure_2B_all_evaluable_BM_zscore_longitudinal_pseudolog.png"),
+  plot = bm_panel_pseudolog,
+  width = 12,
+  height = 4.5,
+  dpi = 600
+)
+ggsave(
   file.path(output_dir, "Figure_2C_all_evaluable_blood_zscore_longitudinal.png"),
   plot = blood_panel,
   width = 12,
   height = 4,
+  dpi = 600
+)
+ggsave(
+  file.path(output_dir, "Figure_2C_all_evaluable_blood_zscore_longitudinal_pseudolog.png"),
+  plot = blood_panel_pseudolog,
+  width = 12,
+  height = 4.5,
   dpi = 600
 )
 ggsave(
@@ -833,10 +1105,24 @@ ggsave(
   dpi = 600
 )
 ggsave(
+  file.path(output_dir, "Figure_2D_all_evaluable_fragmentomics_longitudinal_pseudolog.png"),
+  plot = fragmentomics_panel_pseudolog,
+  width = 12,
+  height = 4.5,
+  dpi = 600
+)
+ggsave(
   file.path(output_dir, "Extended_Data_Figure_3A_all_evaluable_BM_raw_longitudinal.png"),
   plot = ed3a_panel,
   width = 12,
   height = 4,
+  dpi = 600
+)
+ggsave(
+  file.path(output_dir, "Extended_Data_Figure_3A_all_evaluable_BM_raw_longitudinal_pseudolog.png"),
+  plot = ed3a_panel_pseudolog,
+  width = 12,
+  height = 4.5,
   dpi = 600
 )
 ggsave(
@@ -847,10 +1133,24 @@ ggsave(
   dpi = 600
 )
 ggsave(
+  file.path(output_dir, "Extended_Data_Figure_3B_all_evaluable_blood_raw_longitudinal_pseudolog.png"),
+  plot = ed3b_panel_pseudolog,
+  width = 12,
+  height = 4.5,
+  dpi = 600
+)
+ggsave(
   file.path(output_dir, "Extended_Data_Figure_3C_all_evaluable_fragmentomics_longitudinal.png"),
   plot = ed3c_panel,
   width = 12,
   height = 4,
+  dpi = 600
+)
+ggsave(
+  file.path(output_dir, "Extended_Data_Figure_3C_all_evaluable_fragmentomics_longitudinal_pseudolog.png"),
+  plot = ed3c_panel_pseudolog,
+  width = 12,
+  height = 4.5,
   dpi = 600
 )
 
@@ -862,10 +1162,24 @@ ms_copy_artifact(
   script_name = "2_4B_Build_all_evaluable_longitudinal_panels.R"
 )
 ms_copy_artifact(
+  source_path = file.path(output_dir, "Figure_2B_all_evaluable_BM_zscore_longitudinal_pseudolog.png"),
+  artifact_id = "FIG2B",
+  role = "all_evaluable_pseudolog_figure_panel_png",
+  description = "All-evaluable training/test companion version of Main Figure 2B with a signed pseudo-log cumulative VAF z-score axis that retains zero and negative values.",
+  script_name = "2_4B_Build_all_evaluable_longitudinal_panels.R"
+)
+ms_copy_artifact(
   source_path = file.path(output_dir, "Figure_2C_all_evaluable_blood_zscore_longitudinal.png"),
   artifact_id = "FIG2C",
   role = "all_evaluable_figure_panel_png",
   description = "All-evaluable training/test companion version of Main Figure 2C longitudinal cfDNA mutation z-score panel; red follow-up points use next progression within 180 days after the sample.",
+  script_name = "2_4B_Build_all_evaluable_longitudinal_panels.R"
+)
+ms_copy_artifact(
+  source_path = file.path(output_dir, "Figure_2C_all_evaluable_blood_zscore_longitudinal_pseudolog.png"),
+  artifact_id = "FIG2C",
+  role = "all_evaluable_pseudolog_figure_panel_png",
+  description = "All-evaluable training/test companion version of Main Figure 2C with signed pseudo-log cumulative VAF and site-detection z-score axes.",
   script_name = "2_4B_Build_all_evaluable_longitudinal_panels.R"
 )
 ms_copy_artifact(
@@ -883,10 +1197,24 @@ ms_copy_artifact(
   script_name = "2_4B_Build_all_evaluable_longitudinal_panels.R"
 )
 ms_copy_artifact(
+  source_path = file.path(output_dir, "Figure_2D_all_evaluable_fragmentomics_longitudinal_pseudolog.png"),
+  artifact_id = "FIG2D",
+  role = "all_evaluable_pseudolog_figure_panel_png",
+  description = "All-evaluable training/test companion version of Main Figure 2D with signed pseudo-log fragment-size and reversed pseudo-log coverage axes.",
+  script_name = "2_4B_Build_all_evaluable_longitudinal_panels.R"
+)
+ms_copy_artifact(
   source_path = file.path(output_dir, "Extended_Data_Figure_3A_all_evaluable_BM_raw_longitudinal.png"),
   artifact_id = "EDFIG3A",
   role = "all_evaluable_figure_panel_png",
   description = "All-evaluable training/test companion version of Extended Data Figure 3A raw BM mutation trajectory panel; red follow-up points use next progression within 180 days after the sample.",
+  script_name = "2_4B_Build_all_evaluable_longitudinal_panels.R"
+)
+ms_copy_artifact(
+  source_path = file.path(output_dir, "Extended_Data_Figure_3A_all_evaluable_BM_raw_longitudinal_pseudolog.png"),
+  artifact_id = "EDFIG3A",
+  role = "all_evaluable_pseudolog_figure_panel_png",
+  description = "All-evaluable training/test companion version of Extended Data Figure 3A with pseudo-log raw BM mutation axes.",
   script_name = "2_4B_Build_all_evaluable_longitudinal_panels.R"
 )
 ms_copy_artifact(
@@ -897,10 +1225,24 @@ ms_copy_artifact(
   script_name = "2_4B_Build_all_evaluable_longitudinal_panels.R"
 )
 ms_copy_artifact(
+  source_path = file.path(output_dir, "Extended_Data_Figure_3B_all_evaluable_blood_raw_longitudinal_pseudolog.png"),
+  artifact_id = "EDFIG3B",
+  role = "all_evaluable_pseudolog_figure_panel_png",
+  description = "All-evaluable training/test companion version of Extended Data Figure 3B with pseudo-log raw cfDNA mutation axes.",
+  script_name = "2_4B_Build_all_evaluable_longitudinal_panels.R"
+)
+ms_copy_artifact(
   source_path = file.path(output_dir, "Extended_Data_Figure_3C_all_evaluable_fragmentomics_longitudinal.png"),
   artifact_id = "EDFIG3C",
   role = "all_evaluable_figure_panel_png",
   description = "All-evaluable training/test companion version of Extended Data Figure 3C fragmentomics trajectory panel; red follow-up points use next progression within 180 days after the sample.",
+  script_name = "2_4B_Build_all_evaluable_longitudinal_panels.R"
+)
+ms_copy_artifact(
+  source_path = file.path(output_dir, "Extended_Data_Figure_3C_all_evaluable_fragmentomics_longitudinal_pseudolog.png"),
+  artifact_id = "EDFIG3C",
+  role = "all_evaluable_pseudolog_figure_panel_png",
+  description = "All-evaluable training/test companion version of Extended Data Figure 3C with pseudo-log short-fragment and tumour-fraction axes.",
   script_name = "2_4B_Build_all_evaluable_longitudinal_panels.R"
 )
 
@@ -933,18 +1275,30 @@ all_evaluable_support_manifest <- tribble(
   ~file_name, ~description,
   "Figure_2B_all_evaluable_BM_zscore_longitudinal.png",
   "All-evaluable support version of the BM longitudinal z-score panel.",
+  "Figure_2B_all_evaluable_BM_zscore_longitudinal_pseudolog.png",
+  "All-evaluable support version of the BM longitudinal z-score panel with a signed pseudo-log cumulative VAF axis.",
   "Figure_2C_all_evaluable_blood_zscore_longitudinal.png",
   "All-evaluable support version of the cfDNA longitudinal z-score panel.",
+  "Figure_2C_all_evaluable_blood_zscore_longitudinal_pseudolog.png",
+  "All-evaluable support version of the cfDNA longitudinal z-score panel with signed pseudo-log y-axes.",
   "Figure_2C_all_evaluable_blood_zscore_longitudinal_capped300.png",
   "All-evaluable support version of the cfDNA longitudinal z-score panel with the plotting y-axis capped at 300.",
   "Figure_2D_all_evaluable_fragmentomics_longitudinal.png",
   "All-evaluable support version of the fragmentomics longitudinal z-score panel.",
+  "Figure_2D_all_evaluable_fragmentomics_longitudinal_pseudolog.png",
+  "All-evaluable support version of the fragmentomics panel with pseudo-log y-axes.",
   "Extended_Data_Figure_3A_all_evaluable_BM_raw_longitudinal.png",
   "All-evaluable support version of the raw BM mutation longitudinal panel.",
+  "Extended_Data_Figure_3A_all_evaluable_BM_raw_longitudinal_pseudolog.png",
+  "All-evaluable support version of the raw BM mutation panel with pseudo-log y-axes.",
   "Extended_Data_Figure_3B_all_evaluable_blood_raw_longitudinal.png",
   "All-evaluable support version of the raw cfDNA mutation longitudinal panel.",
+  "Extended_Data_Figure_3B_all_evaluable_blood_raw_longitudinal_pseudolog.png",
+  "All-evaluable support version of the raw cfDNA mutation panel with pseudo-log y-axes.",
   "Extended_Data_Figure_3C_all_evaluable_fragmentomics_longitudinal.png",
-  "All-evaluable support version of the complementary fragmentomics longitudinal panel."
+  "All-evaluable support version of the complementary fragmentomics longitudinal panel.",
+  "Extended_Data_Figure_3C_all_evaluable_fragmentomics_longitudinal_pseudolog.png",
+  "All-evaluable support version of the complementary fragmentomics panel with pseudo-log y-axes."
 ) %>%
   mutate(
     path = file.path(output_dir, file_name),
@@ -1001,6 +1355,30 @@ capped300_audit <- blood_plot_df %>%
 write_csv(
   capped300_audit,
   file.path(output_dir, "Figure_2C_all_evaluable_blood_zscore_longitudinal_capped300_audit.csv")
+)
+pseudolog_audit <- bind_rows(
+  bm_plot_df %>% mutate(panel = "Figure_2B", sigma = 1),
+  blood_plot_df %>% mutate(panel = "Figure_2C", sigma = 1),
+  fragmentomics_plot_df %>% mutate(
+    panel = "Figure_2D",
+    sigma = if_else(Metric == "FS", 0.05, 0.01)
+  )
+) %>%
+  group_by(panel, Metric, sigma) %>%
+  summarise(
+    transform = "scales::pseudo_log_trans",
+    base = 10,
+    n_rows = n(),
+    n_patients = n_distinct(Patient),
+    n_negative_values = sum(Value < 0, na.rm = TRUE),
+    n_zero_values = sum(Value == 0, na.rm = TRUE),
+    min_observed_value = min(Value, na.rm = TRUE),
+    max_observed_value = max(Value, na.rm = TRUE),
+    .groups = "drop"
+  )
+write_csv(
+  pseudolog_audit,
+  file.path(output_dir, "Figure_2BCD_all_evaluable_pseudolog_audit.csv")
 )
 write_csv(
   coverage_fallback_audit,

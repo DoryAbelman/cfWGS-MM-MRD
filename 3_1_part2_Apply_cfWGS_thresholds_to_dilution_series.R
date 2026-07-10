@@ -105,6 +105,10 @@ PATH_DILUTION_PROCESSED_MRDetect <- file.path("MRDetect_output_winter_2025", "Pr
 PATH_DILUTION_CLINICAL <- file.path("Fragmentomics_data", "Dilution_series", "Metadata_dilution_series.csv")
 PATH_TUMOR_FRACTION <- file.path("Fragmentomics_data", "Dilution_series", "tumor_fraction_dilution_series.txt")
 PATH_CURRENT_AGGREGATE <- "Final_aggregate_table_cfWGS_features_with_clinical_and_demographics_updated9.rds"
+PATH_PWGVAL_BASELINE_CFVAF <- file.path(
+  "MRDetect_output_winter_2025", "Processed_R_outputs", "BM_muts_plots_baseline",
+  "cfWGS_MRDetect_BM_data_updated_Feb2026.csv"
+)
 
 OUTPUT_DIR            <- "Dilution_Series_Scoring_2025"
 OUTPUT_DIR_TABLES     <- "Output_tables_2025"
@@ -266,6 +270,55 @@ pwgval_zero_control_map <- tribble(
   "VA-12", "VA-12-05", "patient-specific low-source plasma used as diluent",
   "VA-13", "VA-13-07", "patient-specific low-source plasma used as diluent"
 )
+
+# The PWGVAL/M4CHIP dilution labels are intended cfVAF percentages. The top
+# point is capped at 10% when the measured baseline plasma cfVAF is higher than
+# 10%; otherwise the undiluted measured baseline is the top point. Lower levels
+# remain the workbook targets (1%, 0.1%, ...), rather than being rescaled by the
+# baseline value. Baseline cfVAF is quantified across patient-specific somatic
+# sites discovered in BM and measured in the matched diagnosis plasma.
+pwgval_baseline_source_map <- tribble(
+  ~Patient, ~baseline_sample_id,
+  "VA-09", "VA-09-01-P",
+  "VA-12", "VA-12-01-P",
+  "VA-13", "VA-13-01-P"
+)
+
+if (!file.exists(PATH_PWGVAL_BASELINE_CFVAF)) {
+  stop(
+    "Missing BM-mutation-derived baseline cfVAF table required for PWGVAL dilution x-axis values: ",
+    PATH_PWGVAL_BASELINE_CFVAF,
+    call. = FALSE
+  )
+}
+
+pwgval_baseline_cfvaf <- read_csv(PATH_PWGVAL_BASELINE_CFVAF, show_col_types = FALSE) %>%
+  inner_join(pwgval_baseline_source_map, by = "Patient") %>%
+  filter(
+    .data$Sample_ID_Bam == .data$baseline_sample_id,
+    .data$Mut_source == "BM_cells",
+    .data$Filter_source == "STR_encode",
+    .data$timepoint_info_Bam == "Diagnosis"
+  ) %>%
+  transmute(
+    Patient,
+    baseline_sample_id,
+    baseline_bm_mutation_cfvaf = .data$detection_rate_as_reads_detected_over_reads_checked,
+    baseline_bm_mutation_cfvaf_percent = 100 * .data$baseline_bm_mutation_cfvaf,
+    pwgval_top_cfvaf_percent = pmin(10, .data$baseline_bm_mutation_cfvaf_percent),
+    pwgval_cfvaf_source = PATH_PWGVAL_BASELINE_CFVAF
+  ) %>%
+  distinct()
+
+pwgval_baseline_counts <- pwgval_baseline_cfvaf %>% count(.data$Patient)
+if (nrow(pwgval_baseline_counts) != nrow(pwgval_baseline_source_map) ||
+    any(pwgval_baseline_counts$n != 1L) ||
+    anyNA(pwgval_baseline_cfvaf$baseline_bm_mutation_cfvaf_percent)) {
+  stop(
+    "Expected exactly one non-missing BM-mutation-derived baseline cfVAF per PWGVAL patient.",
+    call. = FALSE
+  )
+}
 
 if (!file.exists(PATH_CURRENT_AGGREGATE)) {
   stop("Missing current aggregate table required for PWGVAL zero controls: ",
@@ -486,26 +539,105 @@ neg_vaf      <- 0.0087   # MRD‐negative library
 orig_full    <- 1.300    # the original “100%” point
 
 dilution_df <- dilution_df %>%
+  left_join(pwgval_baseline_cfvaf, by = "Patient") %>%
   mutate(
     LOD_original = LOD,
     is_pwgval_dilution = coalesce(.data$dilution_series == "PWGVAL_M4CHIP", FALSE),
-    LOD_updated = if_else(
-      # PWGVAL/M4CHIP rows keep the workbook TF_Dilution as their intended LOD.
-      # The older VA-02 dilution series used measured endpoint VAFs and is
-      # recalibrated with the historical baseline/negative formula.
-      .data$is_pwgval_dilution,
-      .data$LOD,
-      (.data$LOD / orig_full) * baseline_vaf + (1 - .data$LOD / orig_full) * neg_vaf
+    LOD_updated = case_when(
+      # Only the nominal 10% PWGVAL top point needs patient-specific capping.
+      # VA-09 and VA-13 remain 10%; VA-12 becomes its measured 5.9806% baseline.
+      .data$is_pwgval_dilution & .data$LOD_original == 10 ~
+        .data$pwgval_top_cfvaf_percent,
+      .data$is_pwgval_dilution ~ .data$LOD_original,
+      # The older VA-02 series used measured endpoint VAFs and retains its
+      # historical baseline/negative recalibration.
+      TRUE ~ (.data$LOD_original / orig_full) * baseline_vaf +
+        (1 - .data$LOD_original / orig_full) * neg_vaf
     ),
-    LOD_update_method = if_else(
-      .data$is_pwgval_dilution,
-      "PWGVAL workbook TF_Dilution retained",
-      "historical VA-02 dilution VAF recalibration"
+    LOD_update_method = case_when(
+      .data$is_pwgval_dilution & .data$LOD_original == 10 &
+        .data$baseline_bm_mutation_cfvaf_percent < 10 ~
+        "PWGVAL top point capped at measured BM-mutation-derived baseline cfVAF",
+      .data$is_pwgval_dilution & .data$LOD_original == 10 ~
+        "PWGVAL top point capped at 10% because measured baseline cfVAF exceeds 10%",
+      .data$is_pwgval_dilution ~
+        "PWGVAL lower cfVAF target retained from dilution workbook",
+      TRUE ~ "historical VA-02 dilution VAF recalibration"
     )
   )
 
 ## For consistency
 dilution_df$LOD <- dilution_df$LOD_updated
+
+# Export and validate the exact x-axis values before any de-identification or
+# zero-control expansion. This is the sample-level audit table for scientific
+# review and must contain the 36 newly released libraries exactly once.
+pwgval_sample_cfvaf_audit <- dilution_df %>%
+  filter(
+    .data$is_pwgval_dilution,
+    !.data$is_preexisting_pwgval_zero_control
+  ) %>%
+  transmute(
+    Patient,
+    ega_sample_alias = paste0(
+      str_match(
+        .data$Bam,
+        "_(VA-[0-9]+-[0-9]+-[0-9]{2})[.]filter[.]deduped[.]recalibrated[.]bam$"
+      )[, 2],
+      "-P"
+    ),
+    analysis_sample_id = .data$Sample_ID,
+    Bam,
+    replicate = str_match(.data$Sample_ID, "-([0-9]{2})-P$")[, 2],
+    workbook_dilution_label_percent = .data$LOD_original,
+    corrected_cfvaf_target_percent = .data$LOD_updated,
+    baseline_sample_id,
+    baseline_bm_mutation_cfvaf_percent,
+    top_point_cap_percent = .data$pwgval_top_cfvaf_percent,
+    cfvaf_measurement = "reads_detected / reads_checked at BM-derived STR-filtered mutation sites",
+    cfvaf_source = .data$pwgval_cfvaf_source,
+    correction_method = .data$LOD_update_method
+  ) %>%
+  arrange(.data$Patient, desc(.data$corrected_cfvaf_target_percent), .data$replicate)
+
+expected_pwgval_cfvaf <- list(
+  "VA-09" = c(10, 1, 0.1, 0.01, 0.001, 0.0001),
+  "VA-12" = c(
+    pwgval_baseline_cfvaf$baseline_bm_mutation_cfvaf_percent[
+      pwgval_baseline_cfvaf$Patient == "VA-12"
+    ],
+    1, 0.1, 0.01, 0.001, 0.0001
+  ),
+  "VA-13" = c(10, 1, 0.1, 0.01, 0.001, 0.0001)
+)
+
+if (nrow(pwgval_sample_cfvaf_audit) != 36L ||
+    anyNA(pwgval_sample_cfvaf_audit$ega_sample_alias) ||
+    anyDuplicated(pwgval_sample_cfvaf_audit$ega_sample_alias) ||
+    anyDuplicated(pwgval_sample_cfvaf_audit$analysis_sample_id) ||
+    anyNA(pwgval_sample_cfvaf_audit$corrected_cfvaf_target_percent)) {
+  stop("PWGVAL sample-level cfVAF audit must contain 36 unique, complete sample rows.", call. = FALSE)
+}
+for (patient_id in names(expected_pwgval_cfvaf)) {
+  observed <- sort(unique(
+    pwgval_sample_cfvaf_audit$corrected_cfvaf_target_percent[
+      pwgval_sample_cfvaf_audit$Patient == patient_id
+    ]
+  ), decreasing = TRUE)
+  expected <- sort(expected_pwgval_cfvaf[[patient_id]], decreasing = TRUE)
+  if (!isTRUE(all.equal(observed, expected, tolerance = 1e-12))) {
+    stop(
+      "Unexpected corrected PWGVAL cfVAF series for ", patient_id,
+      ". Observed: ", paste(signif(observed, 10), collapse = ", "),
+      call. = FALSE
+    )
+  }
+}
+
+write_csv(
+  pwgval_sample_cfvaf_audit,
+  file.path(OUTPUT_DIR_TABLES, "pwgval_m4chip_sample_dilution_cfvaf_audit.csv")
+)
 
 # Preserve both scientifically distinct views. The primary/release-only object
 # contains the 36 new PWGVAL/M4CHIP libraries. The cross-platform object also
@@ -3215,7 +3347,7 @@ blood_patient_zero_final_source <- dilution_df %>%
       .data$is_pwgval_dilution,
       if_else(.data$LOD == 0,
               "Patient-specific low-source plasma used as measured 0% diluent",
-              "PWGVAL workbook TF_Dilution retained; not recalculated"),
+              .data$LOD_update_method),
       "historical VA-02 dilution recalibration with final endpoint TF set to 0"
     ),
     series_label = if_else(
@@ -3302,7 +3434,7 @@ bm_patient_zero_final_source <- dilution_df %>%
       .data$is_pwgval_dilution,
       if_else(.data$LOD == 0,
               "Patient-specific low-source plasma used as measured 0% diluent",
-              "PWGVAL workbook TF_Dilution retained; not recalculated"),
+              .data$LOD_update_method),
       "historical dilution recalibration with final endpoint TF set to 0"
     ),
     series_label = if_else(
@@ -3572,8 +3704,7 @@ build_cross_platform_patient_source <- function(dat,
       LOD_zero_final_update_method = case_when(
         .data$is_preexisting_pwgval_zero_control ~
           "Pre-existing NovaSeq 6000 low-source plasma used as measured 0% diluent",
-        .data$is_pwgval_dilution ~
-          "New PWGVAL/M4CHIP dilution library; workbook TF_Dilution retained",
+        .data$is_pwgval_dilution ~ .data$LOD_update_method,
         TRUE ~ "Historical dilution recalibration with final endpoint TF set to 0"
       ),
       series_label = case_when(
@@ -3766,7 +3897,7 @@ fragmentomics_patient_zero_final_source <- dilution_df %>%
       .data$is_pwgval_dilution,
       if_else(.data$LOD == 0,
               "Patient-specific low-source plasma used as measured 0% diluent",
-              "PWGVAL workbook TF_Dilution retained; not recalculated"),
+              .data$LOD_update_method),
       "historical dilution recalibration with final endpoint TF set to 0"
     ),
     series_label = if_else(

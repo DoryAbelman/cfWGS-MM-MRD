@@ -95,3 +95,4 @@ local_input_check_report.tsv
 # ------------------------------------------------------------------------------
 
 AGENTS.md
+input_overrides/VA15_mrdetect_rerun_2026-07-10.csv

@@ -95,11 +95,11 @@ make_relapse_facet_labels <- function(plot_data) {
   c(
     `FALSE` = paste0(
       "No relapse within 180 days of blood draw\n(n = ",
-      count_for(FALSE), " patients)"
+      count_for(FALSE), ")"
     ),
     `TRUE` = paste0(
       "Relapse within 180 days of blood draw\n(n = ",
-      count_for(TRUE), " patients)"
+      count_for(TRUE), ")"
     )
   )
 }
@@ -866,7 +866,6 @@ patient_relapse_labs_short <- c(
   `FALSE` = "No relapse ≤180d",
   `TRUE`  = "Relapse ≤180d"
 )
-patient_relapse_labs_short <- make_relapse_facet_labels(plot_df_pat)
 
 
 
@@ -933,6 +932,7 @@ plot_df_pat <- plot_df %>%
     patient_relapse180 = factor(patient_relapse180, levels = c(FALSE, TRUE)),
     relapse_within_180 = replace_na(relapse_within_180, FALSE)
   )
+patient_relapse_labs_short <- make_relapse_facet_labels(plot_df_pat)
 
 # 2) Build the two mini‑plots
 
@@ -1116,11 +1116,12 @@ p_cvaf <- ggplot(df_cvaf, aes(Weeks_Since_Baseline, Value, group = Patient)) +
   theme_classic(base_size = 11) +
   theme(strip.background = element_rect(fill = "grey95", colour = NA))
 
-# Cap the display at 1,000 so the bulk of patient trajectories remain visible.
+# Cap the display at 1,500 so the bulk of patient trajectories remain visible
+# without stacking many true-value labels at the upper boundary.
 # Values above the cap are retained in the source data, shown as triangles, and
 # labeled with their true value; only their plotted y-coordinate is truncated.
 ## Flag capped points and keep their true values for labeling
-cvaf_z_display_cap <- 1000
+cvaf_z_display_cap <- 1500
 df_cvaf_plot <- df_cvaf %>%
   mutate(
     overcap    = Value > cvaf_z_display_cap,
@@ -1189,7 +1190,7 @@ p_cvaf_modified <- ggplot(df_cvaf_plot, aes(Weeks_Since_Baseline, Value_plot, gr
   # Give a little headroom so labels above the cap are not clipped.
   coord_cartesian(ylim = c(0, cvaf_z_display_cap * 1.04), clip = "on") +
   scale_y_continuous(
-    breaks = seq(0, cvaf_z_display_cap, by = 200),
+    breaks = seq(0, cvaf_z_display_cap, by = 300),
     labels = function(x) ifelse(
       x == cvaf_z_display_cap,
       paste0(">", cvaf_z_display_cap),
@@ -2379,7 +2380,6 @@ patient_relapse_labs_short <- c(
   `FALSE` = "No relapse ≤180d",
   `TRUE`  = "Relapse ≤180d"
 )
-patient_relapse_labs_short <- make_relapse_facet_labels(plot_df_pat)
 
 
 
@@ -2446,6 +2446,45 @@ plot_df_pat <- plot_df_blood %>%
     patient_relapse180 = factor(patient_relapse180, levels = c(FALSE, TRUE)),
     relapse_within_180 = replace_na(relapse_within_180, FALSE)
   )
+patient_relapse_labs_short <- make_relapse_facet_labels(plot_df_pat)
+
+# Export the exact current Figure 2C plotting rows from the rebuilt aggregate
+# table. Keeping this adjacent to the active blood plotting object prevents the
+# manuscript source-data sidecar from silently retaining values from an older
+# aggregate-table run.
+figure2c_source_data <- plot_df_pat %>%
+  filter(Metric %in% c("cVAF_z", "sites_z")) %>%
+  transmute(
+    Patient,
+    Weeks_Since_Baseline,
+    Num_days_to_closest_relapse,
+    relapse_within_180,
+    patient_relapse180 = as.character(patient_relapse180),
+    Metric,
+    Value,
+    Metric_label = recode(
+      Metric,
+      cVAF_z = "Cumulative VAF Z-score",
+      sites_z = "Proportion of Sites Detected Z-score"
+    )
+  ) %>%
+  arrange(Patient, Metric, Weeks_Since_Baseline)
+
+figure2c_source_path <- file.path(
+  outdir,
+  "Figure_2C_blood_zscore_longitudinal_features_source_data.csv"
+)
+readr::write_csv(figure2c_source_data, figure2c_source_path)
+ms_copy_artifact(
+  source_path = figure2c_source_path,
+  artifact_id = "FIG2C",
+  role = "source_data_csv",
+  description = paste(
+    "Exact standardized cfDNA-informed longitudinal plotting rows used for",
+    "Main Figure 2C, exported from the current aggregate table."
+  ),
+  script_name = "2_4_Longitudinal_features_analysis.R"
+)
 
 # 2) Build the two mini‑plots
 
@@ -2544,7 +2583,7 @@ p_sites <- ggplot(df_sites, aes(Weeks_Since_Baseline, Value, group = Patient)) +
 # 3) Combine them side by side
 p_combined <- p_cvaf + p_sites + 
   plot_annotation(
-    title = "Baseline cfDNA-informed longitudinal tracking: Relapsed vs Non-relapsed patients",
+    title = "Longitudinal trajectories of MRD metrics from baseline PB cfDNA mutation profiles",
     theme = theme(
       plot.title = element_text(size = 18, face = "bold", hjust = 0.5)
     )
@@ -2675,7 +2714,7 @@ p_sites <- ggplot(df_sites, aes(Weeks_Since_Baseline, Value, group = Patient)) +
 # 3) Combine them side by side
 p_combined <- p_cvaf + p_sites + 
   plot_annotation(
-    title = "Longitudinal trajectories of MRD metrics from baseline PB cfDNA mutation profiles",
+    title = "Baseline cfDNA-informed longitudinal tracking: Relapsed vs Non-relapsed patients",
     theme = theme(
       plot.title = element_text(size = 18, face = "bold", hjust = 0.5)
     )
@@ -2865,7 +2904,6 @@ patient_relapse_labs_short <- c(
   `FALSE` = "No relapse ≤180d",
   `TRUE`  = "Relapse ≤180d"
 )
-patient_relapse_labs_short <- make_relapse_facet_labels(plot_df_pat)
 
 
 
@@ -2932,6 +2970,7 @@ plot_df_pat <- plot_df_fragmentomics2 %>%
     patient_relapse180 = factor(patient_relapse180, levels = c(FALSE, TRUE)),
     relapse_within_180 = replace_na(relapse_within_180, FALSE)
   )
+patient_relapse_labs_short <- make_relapse_facet_labels(plot_df_pat)
 
 # 2) Build the two mini‑plots
 
@@ -3031,7 +3070,7 @@ p_sites <- ggplot(df_sites, aes(Weeks_Since_Baseline, -Value, group = Patient)) 
 # 3) Combine them side by side
 p_combined <- p_cvaf + p_sites + 
   plot_annotation(
-    title = "Fragmenomic tumour-agnostic longitudinal tracking: Relapsed vs Non-relapsed patients",
+    title = "Fragmentomic tumour-agnostic longitudinal tracking: Relapsed vs Non-relapsed patients",
     theme = theme(
       plot.title = element_text(size = 18, face = "bold", hjust = 0.5)
     )

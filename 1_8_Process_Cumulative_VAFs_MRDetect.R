@@ -377,8 +377,12 @@ all_files <- all_files %>%
   # drop 'VCF' if it already exists
   select(-any_of("VCF")) %>%
   mutate(
-    # 1) remove leading "./" from filename
-    filename = str_remove(filename, "^\\./"),
+    # 1) remove parser artifacts before using the complete result filename as
+    #    provenance/key. Some historical rows contain an extra empty CSV field,
+    #    which readr preserves as a leading comma in `filename`.
+    filename = filename %>%
+      str_remove("^,+") %>%
+      str_remove("^\\./"),
     # 2) rebuild VCF from whatever follows "_VS_" in the (cleaned) filename
     VCF = sub(".*_VS_", "\\1", filename),
     # 3) strip “.mutect2…” and “.fil…” from the VCF string itself
@@ -527,6 +531,116 @@ if (isTRUE(apply_mrdetect_parser_column_correction)) {
     )
 
   rm(temp_sites, temp_reads, temp_total)
+}
+
+# -----------------------------------------------------------------------------
+# 6b) Apply audited MRDetect rerun replacements
+# -----------------------------------------------------------------------------
+# Reruns are stored as a small, version-controlled table keyed by the complete
+# historical result filename. This avoids editing the large raw batch exports
+# and makes every replacement reviewable. Counts in this table are already in
+# their corrected biological meaning (i.e., after the parser rotation above).
+mrdetect_override_file <- file.path(
+  "Scripts_2025", "Final_Scripts", "input_overrides",
+  "VA15_mrdetect_rerun_2026-07-10.csv"
+)
+
+if (file.exists(mrdetect_override_file)) {
+  mrdetect_overrides <- readr::read_csv(
+    mrdetect_override_file,
+    show_col_types = FALSE
+  )
+
+  override_value_cols <- c(
+    "sites_checked", "reads_checked", "sites_detected", "reads_detected",
+    "total_reads", "detection_rate",
+    "detection_rate_as_reads_detected_over_reads_checked",
+    "detection_rate_as_reads_detected_over_total_reads",
+    "sites_detection_rate"
+  )
+  required_override_cols <- c(
+    "filename", "BAM", "VCF_panel_sample_id", override_value_cols,
+    "eligible_for_main_baseline_analysis", "eligibility_reason",
+    "source_directory"
+  )
+  missing_override_cols <- setdiff(required_override_cols, names(mrdetect_overrides))
+  if (length(missing_override_cols) > 0L) {
+    stop(
+      "MRDetect override table is missing required columns: ",
+      paste(missing_override_cols, collapse = ", "),
+      call. = FALSE
+    )
+  }
+  if (anyDuplicated(mrdetect_overrides$filename)) {
+    stop("MRDetect override filenames must be unique.", call. = FALSE)
+  }
+
+  expected_rates <- mrdetect_overrides %>%
+    transmute(
+      filename,
+      detection_rate_expected = sites_detected / reads_checked,
+      reads_checked_rate_expected = reads_detected / reads_checked,
+      total_reads_rate_expected = reads_detected / total_reads,
+      sites_rate_expected = sites_detected / sites_checked
+    )
+  rate_check <- mrdetect_overrides %>%
+    left_join(expected_rates, by = "filename") %>%
+    filter(
+      abs(detection_rate - detection_rate_expected) > 1e-10 |
+        abs(detection_rate_as_reads_detected_over_reads_checked - reads_checked_rate_expected) > 1e-10 |
+        abs(detection_rate_as_reads_detected_over_total_reads - total_reads_rate_expected) > 1e-10 |
+        abs(sites_detection_rate - sites_rate_expected) > 1e-10
+    )
+  if (nrow(rate_check) > 0L) {
+    stop("MRDetect override rate columns do not agree with their count columns.", call. = FALSE)
+  }
+  if (any(
+    mrdetect_overrides$sites_detected > mrdetect_overrides$sites_checked |
+      mrdetect_overrides$reads_detected > mrdetect_overrides$reads_checked |
+      mrdetect_overrides$reads_checked > mrdetect_overrides$total_reads
+  )) {
+    stop("MRDetect override counts violate denominator constraints.", call. = FALSE)
+  }
+
+  override_match_counts <- all_files %>%
+    count(filename, name = "n_input_matches") %>%
+    right_join(mrdetect_overrides %>% select(filename), by = "filename")
+  if (any(is.na(override_match_counts$n_input_matches)) ||
+      any(override_match_counts$n_input_matches < 1L)) {
+    stop(
+      "Each MRDetect override must match at least one historical input row. ",
+      "Check the complete filename keys. Unmatched: ",
+      paste(
+        override_match_counts$filename[is.na(override_match_counts$n_input_matches)],
+        collapse = "; "
+      ),
+      call. = FALSE
+    )
+  }
+
+  override_values <- mrdetect_overrides %>%
+    select(filename, all_of(override_value_cols)) %>%
+    rename_with(~ paste0(.x, "__override"), all_of(override_value_cols))
+
+  all_files <- all_files %>%
+    left_join(override_values, by = "filename")
+  for (value_col in override_value_cols) {
+    override_col <- paste0(value_col, "__override")
+    all_files[[value_col]] <- dplyr::coalesce(
+      all_files[[override_col]], all_files[[value_col]]
+    )
+  }
+  all_files <- all_files %>%
+    select(-ends_with("__override"))
+
+  override_audit <- mrdetect_overrides %>%
+    left_join(override_match_counts, by = "filename") %>%
+    mutate(override_file = mrdetect_override_file)
+  readr::write_csv(
+    override_audit,
+    file.path(outdir, "mrdetect_rerun_override_audit.csv")
+  )
+  message("Applied ", nrow(mrdetect_overrides), " audited MRDetect rerun replacements.")
 }
 
 

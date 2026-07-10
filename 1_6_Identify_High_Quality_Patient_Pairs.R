@@ -763,11 +763,11 @@ fig1b_flowchart_counts <- bind_rows(
   make_fig1b_count_rows(fig1b_cohort_rows, "Test cohort")
 )
 
-# If downstream revision-aware scoring metadata is present, use it to replace
-# the legacy 7-patient test-cohort branch with the full Spring 2026
-# non-frontline/test cohort. This preserves the original training-cohort counts
-# while keeping the manuscript-facing Figure 1B source table current after the
-# revision test-cohort expansion.
+# Replace the legacy 7-patient test branch with a deduplicated inventory that
+# combines the original intake/QC table and explicit Spring 2026 sequenced
+# sample metadata. Do not infer collection or processing from the mere presence
+# of a scoring-baseline row: that previously overcounted BM by treating a later
+# SPORE_0012 row labelled Baseline as a diagnostic BM collection.
 sample_scoring_manifest_path <- file.path(
   "Output_tables_2025",
   "clinical_support",
@@ -806,7 +806,93 @@ if (file.exists(sample_scoring_manifest_path)) {
   full_test_baseline <- full_test_scoring %>%
     filter(.data$sample_scoring_role == "baseline_or_diagnosis_scoring_baseline")
 
-  if (nrow(full_test_scoring) > 0 && nrow(full_test_baseline) > 0) {
+  revision_metadata <- load_spring2026_revision_metadata(required = TRUE)
+  required_revision_columns <- c("Patient", "Sample_type", "Bam")
+  missing_revision_columns <- setdiff(required_revision_columns, names(revision_metadata))
+  if (length(missing_revision_columns) > 0) {
+    stop(
+      "Cannot export Figure 1B test-cohort counts because Spring 2026 metadata is missing: ",
+      paste(missing_revision_columns, collapse = ", "),
+      call. = FALSE
+    )
+  }
+
+  legacy_test_inventory <- fig1b_cohort_rows %>%
+    filter(.data$Cohort == "Non-frontline") %>%
+    transmute(
+      Patient = as.character(.data$Patient),
+      legacy_study = as.character(.data$Study),
+      legacy_cfdna_wgs = .data$cfDNA_status == "Sequenced_pass",
+      legacy_bm_wgs = .data$BM_status == "Sequenced_pass"
+    ) %>%
+    distinct(.data$Patient, .keep_all = TRUE)
+
+  revision_test_inventory <- revision_metadata %>%
+    filter(!is.na(.data$Patient), nzchar(.data$Patient)) %>%
+    mutate(
+      Patient = as.character(.data$Patient),
+      has_sequence_bam = !is.na(.data$Bam) & nzchar(.data$Bam)
+    ) %>%
+    group_by(.data$Patient) %>%
+    summarise(
+      revision_cfdna_wgs = any(
+        .data$Sample_type == "Blood_plasma_cfDNA" & .data$has_sequence_bam,
+        na.rm = TRUE
+      ),
+      revision_bm_wgs = any(
+        .data$Sample_type == "BM_cells" & .data$has_sequence_bam,
+        na.rm = TRUE
+      ),
+      .groups = "drop"
+    )
+
+  baseline_blood_mrd_patients <- full_test_baseline %>%
+    filter(.data$has_blood_cfWGS_score %in% TRUE) %>%
+    distinct(.data$Patient) %>%
+    pull(.data$Patient)
+
+  full_test_patient_inventory <- full_join(
+    legacy_test_inventory,
+    revision_test_inventory,
+    by = "Patient"
+  ) %>%
+    mutate(
+      in_legacy_test_inventory = !is.na(.data$legacy_study),
+      in_spring2026_revision = !is.na(.data$revision_cfdna_wgs) |
+        !is.na(.data$revision_bm_wgs),
+      study = case_when(
+        str_detect(.data$Patient, "^SPORE_") ~ "SPORE",
+        str_detect(.data$Patient, "^IMG-") ~ "IMMAGINE",
+        TRUE ~ NA_character_
+      ),
+      cfdna_collected_extracted_sequenced = coalesce(.data$legacy_cfdna_wgs, FALSE) |
+        coalesce(.data$revision_cfdna_wgs, FALSE),
+      bm_collected_sorted_extracted_sequenced = coalesce(.data$legacy_bm_wgs, FALSE) |
+        coalesce(.data$revision_bm_wgs, FALSE),
+      cfdna_used_for_mrd_detection = .data$Patient %in% baseline_blood_mrd_patients,
+      bm_used_for_mrd_detection = .data$bm_collected_sorted_extracted_sequenced
+    ) %>%
+    arrange(.data$study, .data$Patient)
+
+  unknown_test_study <- full_test_patient_inventory %>%
+    filter(is.na(.data$study)) %>%
+    pull(.data$Patient)
+  if (length(unknown_test_study) > 0) {
+    stop(
+      "Figure 1B test inventory has patients with unclassified study: ",
+      paste(unknown_test_study, collapse = ", "),
+      call. = FALSE
+    )
+  }
+  if (!all(full_test_patient_inventory$cfdna_used_for_mrd_detection <=
+           full_test_patient_inventory$cfdna_collected_extracted_sequenced)) {
+    stop(
+      "Figure 1B cfDNA MRD-use patients must be a subset of patients with sequenced cfDNA.",
+      call. = FALSE
+    )
+  }
+
+  if (nrow(full_test_patient_inventory) > 0 && nrow(full_test_baseline) > 0) {
     count_patients_where <- function(data, condition) {
       data %>%
         filter({{ condition }}) %>%
@@ -847,41 +933,47 @@ if (file.exists(sample_scoring_manifest_path)) {
         "BM samples used for MRD detection"
       ),
       n = c(
-        dplyr::n_distinct(full_test_scoring$Patient),
+        dplyr::n_distinct(full_test_patient_inventory$Patient),
         0L,
-        count_patients_where(full_test_scoring, grepl("^IMG-", .data$Patient)),
-        count_patients_where(full_test_scoring, grepl("^SPORE_", .data$Patient)),
-        dplyr::n_distinct(full_test_baseline$Patient),
-        dplyr::n_distinct(full_test_baseline$Patient),
-        dplyr::n_distinct(full_test_baseline$Patient),
-        count_patients_where(full_test_baseline, .data$has_blood_cfWGS_score %in% TRUE),
-        count_patients_where(full_test_baseline, .data$has_BM_WGS_evidence_field %in% TRUE),
-        count_patients_where(full_test_baseline, .data$has_BM_WGS_evidence_field %in% TRUE),
-        count_patients_where(full_test_baseline, .data$has_BM_WGS_evidence_field %in% TRUE),
-        count_patients_where(full_test_baseline, .data$has_BM_WGS_evidence_field %in% TRUE),
-        count_patients_where(full_test_baseline, .data$has_BM_WGS_evidence_field %in% TRUE)
+        sum(full_test_patient_inventory$study == "IMMAGINE"),
+        sum(full_test_patient_inventory$study == "SPORE"),
+        sum(full_test_patient_inventory$cfdna_collected_extracted_sequenced),
+        sum(full_test_patient_inventory$cfdna_collected_extracted_sequenced),
+        sum(full_test_patient_inventory$cfdna_collected_extracted_sequenced),
+        sum(full_test_patient_inventory$cfdna_used_for_mrd_detection),
+        sum(full_test_patient_inventory$bm_collected_sorted_extracted_sequenced),
+        sum(full_test_patient_inventory$bm_collected_sorted_extracted_sequenced),
+        sum(full_test_patient_inventory$bm_collected_sorted_extracted_sequenced),
+        sum(full_test_patient_inventory$bm_collected_sorted_extracted_sequenced),
+        sum(full_test_patient_inventory$bm_used_for_mrd_detection)
       ),
-      count_source = "Revision-aware sample_scoring_status_manifest.csv",
+      count_source = "Legacy Figure 1B intake table plus Spring 2026 sequenced-sample metadata",
       definition = c(
-        "Distinct Non-frontline patients in the revision-aware sample-scoring manifest.",
+        "Distinct patients in the union of the legacy test intake and Spring 2026 revision metadata.",
         "M4 patients in the full revision-aware test cohort.",
         "IMMAGINE patients in the full revision-aware test cohort, with overlapping old/revision patients counted once.",
         "SPORE patients in the full revision-aware test cohort.",
-        "Distinct full-test-cohort patients with a baseline/diagnosis scoring-baseline row.",
-        "Same denominator as cfDNA samples collected for the patient-level Figure 1B flowchart.",
-        "Same denominator as cfDNA samples collected for the patient-level Figure 1B flowchart.",
+        "Distinct test-cohort patients with legacy cfDNA sequencing-pass status or a Spring 2026 plasma cfDNA BAM.",
+        "All counted cfDNA specimens have sequencing evidence and therefore passed extraction.",
+        "Distinct test-cohort patients with explicit cfDNA WGS evidence.",
         "Distinct full-test-cohort patients with a baseline/diagnosis blood cfWGS score.",
-        "Distinct full-test-cohort patients with BM WGS evidence in the baseline/diagnosis scoring-baseline row.",
-        "Same denominator as BM samples collected for the patient-level Figure 1B flowchart.",
-        "Same denominator as BM samples collected for the patient-level Figure 1B flowchart.",
-        "Same denominator as BM samples collected for the patient-level Figure 1B flowchart.",
-        "Same denominator as BM samples collected for the patient-level Figure 1B flowchart."
+        "Distinct test-cohort patients with legacy BM sequencing-pass status or a Spring 2026 BM BAM.",
+        "All counted BM specimens have WGS evidence and therefore passed CD138 sorting.",
+        "All counted BM specimens have WGS evidence and therefore passed DNA extraction.",
+        "Distinct test-cohort patients with explicit BM WGS evidence.",
+        "Distinct test-cohort patients with BM WGS evidence available for tumor-informed MRD detection."
       )
     )
 
     fig1b_flowchart_counts <- fig1b_flowchart_counts %>%
       filter(.data$figure_cohort != "Test cohort") %>%
       bind_rows(full_test_counts)
+
+    fig1b_patient_audit_path <- file.path(
+      final_tables_dir,
+      "Figure_1B_test_cohort_patient_count_audit.csv"
+    )
+    readr::write_csv(full_test_patient_inventory, fig1b_patient_audit_path)
   } else {
     warning(
       "Revision-aware sample-scoring manifest was present but had no usable ",
@@ -914,6 +1006,16 @@ ms_copy_artifact(
   description = "Figure 1B source table: patient/sample flowchart counts and cohort/QC annotations.",
   script_name = "1_6_Identify_High_Quality_Patient_Pairs.R"
 )
+
+if (exists("fig1b_patient_audit_path") && file.exists(fig1b_patient_audit_path)) {
+  ms_copy_artifact(
+    source_path = fig1b_patient_audit_path,
+    artifact_id = "FIG1B",
+    role = "figure_source_counts_patient_audit_csv",
+    description = "Figure 1B patient-level audit: provenance and modality flags behind every full test-cohort box count.",
+    script_name = "1_6_Identify_High_Quality_Patient_Pairs.R"
+  )
+}
 
 # MANUSCRIPT OUTPUT: Figure 1B flowchart box counts
 # This companion table is intentionally compact: each row corresponds to a

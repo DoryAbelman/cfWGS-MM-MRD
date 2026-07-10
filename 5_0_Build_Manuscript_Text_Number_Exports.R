@@ -446,6 +446,7 @@ if (!is.null(clinical)) {
 cohort_path <- project_path("cohort_assignment_table_updated.rds")
 cohort_df <- read_rds_if_exists(cohort_path)
 if (!is.null(cohort_df) && all(c("Patient", "Cohort") %in% names(cohort_df))) {
+  cohort_df <- augment_cohort_assignment_with_spring2026_revision(cohort_df)
   add_rows(cohort_df %>%
     filter(!is.na(.data$Cohort), nzchar(.data$Cohort)) %>%
     count(.data$Cohort, name = "patients") %>%
@@ -461,7 +462,8 @@ if (!is.null(cohort_df) && all(c("Patient", "Cohort") %in% names(cohort_df))) {
         units = "patients",
         source_file = cohort_path,
         source_script = "Scripts_2025/Final_Scripts/1_6_Identify_High_Quality_Patient_Pairs.R",
-        related_artifacts = "Figure_1B"
+        related_artifacts = "Figure_1B",
+        caveat = "Raw cohort assignment table augmented with the helper-loaded Spring 2026 revision cohort before counting."
       )
     )) %>%
     pull(.data$row) %>%
@@ -899,7 +901,7 @@ if (!is.null(sample_flow) && all(c("Patient", "total_cfDNA_samples") %in% names(
         source_script = "Scripts_2025/Final_Scripts/1_6_Identify_High_Quality_Patient_Pairs.R",
         related_artifacts = "Figure_1B",
         update_trigger = "rerun sample-flow/cohort scripts or add samples",
-        caveat = "Revision-aware test-branch count from sample_scoring_status_manifest.csv."
+        caveat = "Full-test inventory from legacy intake plus Spring 2026 sample metadata; MRD evaluability from sample_scoring_status_manifest.csv."
       )
     } else {
       tibble()

@@ -1816,9 +1816,11 @@ change_combined <- full_join(
 )
 
 
-### See what is missing 
-setdiff(change_combined$Patient, cohort_df$Patient)
-setdiff(cohort_df$Patient, change_combined$Patient) # Don't have the baseline for these 3 patients
+### Identify review-only differences without printing them into a figure build.
+# `change_combined` contains support rows beyond the manuscript cohort; it must
+# not determine who is present in the final Figure 1A patient order.
+out_of_cohort_change_patients <- setdiff(change_combined$Patient, cohort_df$Patient)
+cohort_patients_missing_change <- setdiff(cohort_df$Patient, change_combined$Patient)
 
 
 ### Use the tumor fraction instead since too many with NAs for the zscore due to poor quality lists
@@ -2531,7 +2533,9 @@ events_combined2 <- events_combined2 %>%
       event %in% c("MRD (MFC)", "MRD (clonoSEQ)", "MRD (clinical)")      ~ "Clinical MRD assay",
       TRUE                                                             ~ NA_character_
     ),
-    is_progression = event == "Progression",
+    # Events at the index baseline describe presentation, not on-study relapse.
+    # Show red progression squares only strictly after baseline.
+    is_progression = event == "Progression" & start_day > 0,
     is_transplant  = event == "Transplant"
     )  
 
@@ -2864,6 +2868,9 @@ assay_cols <- c("MFC", "clonoSEQ", "cfWGS_blood", "cfWGS_BM")
 # --- build ord_df as you already do ---
 ord_df <- dat_1yr %>%
   left_join(cohort_df, by = c("patient" = "Patient")) %>%
+  # Exclude support-only patients (for example SPORE_0008) that have no
+  # manuscript cohort assignment before constructing the Figure 1A order.
+  filter(!is.na(Cohort)) %>%
   mutate(Cohort = forcats::fct_relevel(Cohort, c("Training","Frontline","Test","Non-frontline"))) %>%
   mutate(
     pmax_val = do.call(pmax, c(across(all_of(assay_cols)), na.rm = TRUE)),
@@ -2964,7 +2971,12 @@ patient_order <- c(
   patient_order_mrd,
   setdiff(as.character(patient_order_tbl$patient), patient_order_mrd)
 ) %>%
-  unique()
+  unique() %>%
+  intersect(cohort_df$Patient)
+
+if (!all(patient_order %in% cohort_df$Patient)) {
+  stop("Figure 1A patient order contains a patient outside the manuscript cohort.", call. = FALSE)
+}
 
 # 3) Re‑factor your patient column
 events_combined2 <- events_combined2 %>%
@@ -3200,15 +3212,36 @@ ggsave(file.path(swim_support_dir, "Figure1A_draft_swim_plot_without_annotations
        dpi    = 500)
 
 ### Add back cohort and paired status 
-# 2) Define your new colour mapping
+# The source cohort table uses Frontline/Non-frontline, whereas older ordering
+# tables used Training/Test. Normalize this annotation to the manuscript-facing
+# labels before applying the scale so Frontline rows cannot fall through to the
+# default missing-value grey.
 cohort_cols <- c(
-  "Training" = "#1f77b4",
+  "Train" = "#1f77b4",
   "Test"  = "#e6550d"
 )
 
-## Re-factor to correct order 
+## Re-factor to correct order and derive stable cohort display labels.
 patient_order_combined <- patient_order_combined %>%
-  mutate(patient = factor(patient, levels = patient_order))
+  select(-any_of("cohort")) %>%
+  left_join(cohort_df %>% select(Patient, Cohort), by = c("patient" = "Patient")) %>%
+  mutate(
+    patient = factor(patient, levels = patient_order),
+    cohort = case_when(
+      Cohort %in% c("Training", "Frontline") ~ "Train",
+      Cohort %in% c("Test", "Non-frontline") ~ "Test",
+      TRUE ~ NA_character_
+    ),
+    cohort = factor(cohort, levels = c("Train", "Test"))
+  )
+
+if (anyNA(patient_order_combined$cohort)) {
+  stop(
+    "Figure 1A cohort annotation contains patients without a recognized cohort label: ",
+    paste(patient_order_combined$patient[is.na(patient_order_combined$cohort)], collapse = ", "),
+    call. = FALSE
+  )
+}
 
 ann_cohort <- ggplot(patient_order_combined,
                      aes(x = 1, y = patient, fill = cohort)) +
