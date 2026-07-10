@@ -380,35 +380,39 @@ make_segment_df <- function(df, y_col = "Value") {
 }
 
 make_metric_panel <- function(df, metric, panel_title, y_label, cap_at = NA_real_,
-                              reverse_display = FALSE, show_cap_labels = TRUE) {
+                              reverse_display = FALSE, show_cap_labels = TRUE,
+                              x_cap_at = NA_real_) {
   metric_df <- df %>% filter(Metric == metric)
   if (nrow(metric_df) == 0) {
     stop("No rows available for metric: ", metric, call. = FALSE)
   }
+  has_x_cap <- is.finite(x_cap_at)
 
   if (is.finite(cap_at)) {
     metric_plot_df <- metric_df %>%
       mutate(
         overcap = Value > cap_at,
         Value_plot = pmin(Value, cap_at),
+        x_overcap = has_x_cap & Weeks_Since_Baseline > x_cap_at,
+        Weeks_Since_Baseline_plot = if (has_x_cap) pmin(Weeks_Since_Baseline, x_cap_at) else Weeks_Since_Baseline,
         label_val = if_else(overcap, as.character(round(Value)), NA_character_)
       )
     seg_df <- metric_df %>%
       arrange(Patient, Weeks_Since_Baseline) %>%
       group_by(Patient) %>%
       mutate(
-        x = Weeks_Since_Baseline,
+        x = if (has_x_cap) pmin(Weeks_Since_Baseline, x_cap_at) else Weeks_Since_Baseline,
         y = pmin(pmax(Value, 0), cap_at),
-        xend = lead(Weeks_Since_Baseline),
+        xend = lead(if (has_x_cap) pmin(Weeks_Since_Baseline, x_cap_at) else Weeks_Since_Baseline),
         yend = lead(pmin(pmax(Value, 0), cap_at)),
         seg_relapse = lead(relapse_within_180, default = FALSE),
         seg_cohort = first(Cohort)
       ) %>%
-      filter(!is.na(x), !is.na(xend), !is.na(y), !is.na(yend)) %>%
+      filter(!is.na(x), !is.na(xend), !is.na(y), !is.na(yend), xend >= x) %>%
       ungroup()
 
     return(
-      ggplot(metric_plot_df, aes(Weeks_Since_Baseline, Value_plot, group = Patient)) +
+      ggplot(metric_plot_df, aes(Weeks_Since_Baseline_plot, Value_plot, group = Patient)) +
         geom_segment(
           data = seg_df,
           aes(x = x, y = y, xend = xend, yend = yend,
@@ -449,14 +453,37 @@ make_metric_panel <- function(df, metric, panel_title, y_label, cap_at = NA_real
           breaks = pretty(c(0, cap_at)),
           labels = function(x) ifelse(x == cap_at, paste0(">", cap_at), x)
         ) +
+        (if (has_x_cap) {
+          scale_x_continuous(
+            limits = c(0, x_cap_at),
+            breaks = sort(unique(c(pretty(c(0, x_cap_at)), x_cap_at))),
+            labels = function(x) ifelse(abs(x - x_cap_at) < 1e-8, paste0(">", x_cap_at), x)
+          )
+        }) +
         labs(title = panel_title, x = "Weeks Since Baseline", y = y_label) +
         theme_classic(base_size = 11) +
         theme(strip.background = element_rect(fill = "grey95", colour = NA))
     )
   }
 
-  seg_df <- make_segment_df(metric_df)
-  panel <- ggplot(metric_df, aes(Weeks_Since_Baseline, Value, group = Patient)) +
+  metric_plot_df <- metric_df %>%
+    mutate(
+      Weeks_Since_Baseline_plot = if (has_x_cap) pmin(Weeks_Since_Baseline, x_cap_at) else Weeks_Since_Baseline
+    )
+  seg_df <- metric_df %>%
+    arrange(Patient, Weeks_Since_Baseline) %>%
+    group_by(Patient) %>%
+    mutate(
+      x = if (has_x_cap) pmin(Weeks_Since_Baseline, x_cap_at) else Weeks_Since_Baseline,
+      y = Value,
+      xend = lead(if (has_x_cap) pmin(Weeks_Since_Baseline, x_cap_at) else Weeks_Since_Baseline),
+      yend = lead(Value),
+      seg_relapse = lead(relapse_within_180, default = FALSE),
+      seg_cohort = first(Cohort)
+    ) %>%
+    filter(!is.na(x), !is.na(xend), !is.na(y), !is.na(yend), xend >= x) %>%
+    ungroup()
+  panel <- ggplot(metric_plot_df, aes(Weeks_Since_Baseline_plot, Value, group = Patient)) +
     geom_segment(
       data = seg_df,
       aes(x = x, y = y, xend = xend, yend = yend,
@@ -480,6 +507,13 @@ make_metric_panel <- function(df, metric, panel_title, y_label, cap_at = NA_real
       labels = cohort_display_labels,
       name = "Cohort"
     ) +
+    (if (has_x_cap) {
+      scale_x_continuous(
+        limits = c(0, x_cap_at),
+        breaks = sort(unique(c(pretty(c(0, x_cap_at)), x_cap_at))),
+        labels = function(x) ifelse(abs(x - x_cap_at) < 1e-8, paste0(">", x_cap_at), x)
+      )
+    }) +
     labs(title = panel_title, x = "Weeks Since Baseline", y = y_label) +
     theme_classic(base_size = 11) +
     theme(strip.background = element_rect(fill = "grey95", colour = NA))
@@ -532,14 +566,16 @@ make_mutation_plot_df <- function(dat, assay) {
 
 make_mutation_panel <- function(plot_df, title, cvaf_cap_at = NA_real_,
                                 sites_cap_at = NA_real_,
-                                show_cap_labels = TRUE) {
+                                show_cap_labels = TRUE,
+                                x_cap_at = NA_real_) {
   p_cvaf <- make_metric_panel(
     plot_df,
     metric = "cVAF_z",
     panel_title = "Cumulative VAF Z-score",
     y_label = "Cumulative VAF (Z)",
     cap_at = cvaf_cap_at,
-    show_cap_labels = show_cap_labels
+    show_cap_labels = show_cap_labels,
+    x_cap_at = x_cap_at
   )
   p_sites <- make_metric_panel(
     plot_df,
@@ -547,10 +583,12 @@ make_mutation_panel <- function(plot_df, title, cvaf_cap_at = NA_real_,
     panel_title = "Proportion of Sites Detected Z-score",
     y_label = "Prop. Mutant Sites Detected (Z)",
     cap_at = sites_cap_at,
-    show_cap_labels = show_cap_labels
+    show_cap_labels = show_cap_labels,
+    x_cap_at = x_cap_at
   )
 
   p_cvaf + p_sites +
+    plot_layout(guides = "collect") +
     plot_annotation(
       title = title,
       theme = theme(plot.title = element_text(size = 16, face = "bold", hjust = 0.5))
@@ -595,8 +633,125 @@ make_fragmentomics_panel <- function(plot_df) {
   )
 
   p_fs + p_coverage +
+    plot_layout(guides = "collect") +
     plot_annotation(
-      title = "Longitudinal trajectories of fragmentomic features\nAll evaluable patients",
+      title = "Longitudinal trajectories of fragmentomic features",
+      theme = theme(plot.title = element_text(size = 16, face = "bold", hjust = 0.5))
+    ) &
+    theme(legend.position = "bottom")
+}
+
+make_raw_mutation_plot_df <- function(dat, assay) {
+  if (assay == "BM") {
+    out <- dat %>%
+      select(
+        Patient, Cohort, Date, Baseline_Date, Clinical_Baseline_Date,
+        Weeks_Since_Baseline, Weeks_Since_Clinical_Baseline,
+        Mutation_Source_Baseline_Timepoint,
+        Mutation_Source_Baseline_Sample_Code,
+        Mutation_Source_Baseline_Timepoint_Info,
+        Num_days_to_closest_relapse, Relapsed_Binary,
+        cVAF = detect_rate_BM,
+        sites = sites_rate_BM
+      )
+  } else if (assay == "blood") {
+    out <- dat %>%
+      select(
+        Patient, Cohort, Date, Baseline_Date, Clinical_Baseline_Date,
+        Weeks_Since_Baseline, Weeks_Since_Clinical_Baseline,
+        Mutation_Source_Baseline_Timepoint,
+        Mutation_Source_Baseline_Sample_Code,
+        Mutation_Source_Baseline_Timepoint_Info,
+        Num_days_to_closest_relapse, Relapsed_Binary,
+        cVAF = detect_rate_blood,
+        sites = sites_rate_blood
+      )
+  } else {
+    stop("Unknown assay: ", assay, call. = FALSE)
+  }
+
+  out %>%
+    pivot_longer(
+      cols = c(cVAF, sites),
+      names_to = "Metric",
+      values_to = "Value"
+    ) %>%
+    drop_na(Value) %>%
+    flag_followup_relapse_points() %>%
+    add_patient_relapse_flag()
+}
+
+make_raw_mutation_panel <- function(plot_df, title, cvaf_cap_at = NA_real_,
+                                    sites_cap_at = NA_real_,
+                                    x_cap_at = NA_real_) {
+  p_cvaf <- make_metric_panel(
+    plot_df,
+    metric = "cVAF",
+    panel_title = "Cumulative VAF",
+    y_label = "Cumulative VAF",
+    cap_at = cvaf_cap_at,
+    x_cap_at = x_cap_at
+  )
+  p_sites <- make_metric_panel(
+    plot_df,
+    metric = "sites",
+    panel_title = "Proportion of Sites Detected",
+    y_label = "Prop. Mutant Sites Detected",
+    cap_at = sites_cap_at,
+    x_cap_at = x_cap_at
+  )
+
+  p_cvaf + p_sites +
+    plot_layout(guides = "collect") +
+    plot_annotation(
+      title = title,
+      theme = theme(plot.title = element_text(size = 16, face = "bold", hjust = 0.5))
+    ) &
+    theme(legend.position = "bottom")
+}
+
+make_extended_fragmentomics_plot_df <- function(dat) {
+  dat %>%
+    select(
+      Patient, Cohort, Date, Baseline_Date, Clinical_Baseline_Date,
+      Weeks_Since_Baseline, Weeks_Since_Clinical_Baseline,
+      Mutation_Source_Baseline_Timepoint,
+      Mutation_Source_Baseline_Sample_Code,
+      Mutation_Source_Baseline_Timepoint_Info,
+      Num_days_to_closest_relapse, Relapsed_Binary,
+      Proportion.Short,
+      TF_ichorCNA = WGS_Tumor_Fraction_Blood_plasma_cfDNA
+    ) %>%
+    pivot_longer(
+      cols = c(Proportion.Short, TF_ichorCNA),
+      names_to = "Metric",
+      values_to = "Value"
+    ) %>%
+    drop_na(Value) %>%
+    flag_followup_relapse_points() %>%
+    add_patient_relapse_flag()
+}
+
+make_extended_fragmentomics_panel <- function(plot_df, x_cap_at = NA_real_) {
+  p_short <- make_metric_panel(
+    plot_df,
+    metric = "Proportion.Short",
+    panel_title = "Short-fragment proportion",
+    y_label = "Short-fragment proportion",
+    x_cap_at = x_cap_at
+  )
+  p_tf <- make_metric_panel(
+    plot_df,
+    metric = "TF_ichorCNA",
+    panel_title = "cfDNA tumor fraction",
+    y_label = "cfDNA tumor fraction",
+    x_cap_at = x_cap_at
+  )
+
+  p_short + p_tf +
+    plot_layout(guides = "collect") +
+    plot_annotation(
+      title = "Longitudinal trajectories of fragmentomic features",
       theme = theme(plot.title = element_text(size = 16, face = "bold", hjust = 0.5))
     ) &
     theme(legend.position = "bottom")
@@ -605,30 +760,49 @@ make_fragmentomics_panel <- function(plot_df) {
 bm_plot_df <- make_mutation_plot_df(dat, "BM")
 blood_plot_df <- make_mutation_plot_df(dat, "blood")
 fragmentomics_plot_df <- make_fragmentomics_plot_df(dat)
+ed3a_plot_df <- make_raw_mutation_plot_df(dat, "BM")
+ed3b_plot_df <- make_raw_mutation_plot_df(dat, "blood")
+ed3c_plot_df <- make_extended_fragmentomics_plot_df(dat)
 
 if (nrow(bm_plot_df) == 0) stop("No BM-evaluable rows available.", call. = FALSE)
 if (nrow(blood_plot_df) == 0) stop("No blood-evaluable rows available.", call. = FALSE)
 if (nrow(fragmentomics_plot_df) == 0) stop("No fragmentomics-evaluable rows available.", call. = FALSE)
+if (nrow(ed3a_plot_df) == 0) stop("No ED3A all-evaluable rows available.", call. = FALSE)
+if (nrow(ed3b_plot_df) == 0) stop("No ED3B all-evaluable rows available.", call. = FALSE)
+if (nrow(ed3c_plot_df) == 0) stop("No ED3C all-evaluable rows available.", call. = FALSE)
 
 bm_panel <- make_mutation_panel(
   bm_plot_df,
-  title = "Longitudinal trajectories of MRD metrics from baseline BM mutation profiles\nAll evaluable patients",
-  cvaf_cap_at = 2500
+  title = "Longitudinal trajectories of MRD metrics from baseline BM mutation profiles",
+  cvaf_cap_at = 2500,
+  sites_cap_at = 1000,
+  x_cap_at = 250
 )
 blood_panel <- make_mutation_panel(
   blood_plot_df,
-  title = "Longitudinal trajectories of MRD metrics from baseline PB cfDNA mutation profiles\nAll evaluable patients",
+  title = "Longitudinal trajectories of MRD metrics from baseline PB cfDNA mutation profiles",
   cvaf_cap_at = NA_real_,
   sites_cap_at = NA_real_
 )
 blood_panel_capped300 <- make_mutation_panel(
   blood_plot_df,
-  title = "Longitudinal trajectories of MRD metrics from baseline PB cfDNA mutation profiles\nAll evaluable patients",
+  title = "Longitudinal trajectories of MRD metrics from baseline PB cfDNA mutation profiles",
   cvaf_cap_at = 300,
   sites_cap_at = 300,
   show_cap_labels = FALSE
 )
 fragmentomics_panel <- make_fragmentomics_panel(fragmentomics_plot_df)
+ed3a_panel <- make_raw_mutation_panel(
+  ed3a_plot_df,
+  title = "Longitudinal trajectories of MRD metrics from baseline BM mutation profiles",
+  x_cap_at = 250
+)
+ed3b_panel <- make_raw_mutation_panel(
+  ed3b_plot_df,
+  title = "Longitudinal trajectories of MRD metrics from baseline PB cfDNA mutation profiles",
+  x_cap_at = 250
+)
+ed3c_panel <- make_extended_fragmentomics_panel(ed3c_plot_df, x_cap_at = 250)
 
 ggsave(
   file.path(output_dir, "Figure_2B_all_evaluable_BM_zscore_longitudinal.png"),
@@ -654,6 +828,27 @@ ggsave(
 ggsave(
   file.path(output_dir, "Figure_2D_all_evaluable_fragmentomics_longitudinal.png"),
   plot = fragmentomics_panel,
+  width = 12,
+  height = 4,
+  dpi = 600
+)
+ggsave(
+  file.path(output_dir, "Extended_Data_Figure_3A_all_evaluable_BM_raw_longitudinal.png"),
+  plot = ed3a_panel,
+  width = 12,
+  height = 4,
+  dpi = 600
+)
+ggsave(
+  file.path(output_dir, "Extended_Data_Figure_3B_all_evaluable_blood_raw_longitudinal.png"),
+  plot = ed3b_panel,
+  width = 12,
+  height = 4,
+  dpi = 600
+)
+ggsave(
+  file.path(output_dir, "Extended_Data_Figure_3C_all_evaluable_fragmentomics_longitudinal.png"),
+  plot = ed3c_panel,
   width = 12,
   height = 4,
   dpi = 600
@@ -687,6 +882,27 @@ ms_copy_artifact(
   description = "All-evaluable training/test companion version of Main Figure 2D longitudinal fragmentomics panel; red follow-up points use next progression within 180 days after the sample.",
   script_name = "2_4B_Build_all_evaluable_longitudinal_panels.R"
 )
+ms_copy_artifact(
+  source_path = file.path(output_dir, "Extended_Data_Figure_3A_all_evaluable_BM_raw_longitudinal.png"),
+  artifact_id = "EDFIG3A",
+  role = "all_evaluable_figure_panel_png",
+  description = "All-evaluable training/test companion version of Extended Data Figure 3A raw BM mutation trajectory panel; red follow-up points use next progression within 180 days after the sample.",
+  script_name = "2_4B_Build_all_evaluable_longitudinal_panels.R"
+)
+ms_copy_artifact(
+  source_path = file.path(output_dir, "Extended_Data_Figure_3B_all_evaluable_blood_raw_longitudinal.png"),
+  artifact_id = "EDFIG3B",
+  role = "all_evaluable_figure_panel_png",
+  description = "All-evaluable training/test companion version of Extended Data Figure 3B raw cfDNA mutation trajectory panel; red follow-up points use next progression within 180 days after the sample.",
+  script_name = "2_4B_Build_all_evaluable_longitudinal_panels.R"
+)
+ms_copy_artifact(
+  source_path = file.path(output_dir, "Extended_Data_Figure_3C_all_evaluable_fragmentomics_longitudinal.png"),
+  artifact_id = "EDFIG3C",
+  role = "all_evaluable_figure_panel_png",
+  description = "All-evaluable training/test companion version of Extended Data Figure 3C fragmentomics trajectory panel; red follow-up points use next progression within 180 days after the sample.",
+  script_name = "2_4B_Build_all_evaluable_longitudinal_panels.R"
+)
 
 write_csv(
   bm_plot_df,
@@ -700,6 +916,18 @@ write_csv(
   fragmentomics_plot_df,
   file.path(output_dir, "Figure_2D_all_evaluable_fragmentomics_longitudinal_source_data.csv")
 )
+write_csv(
+  ed3a_plot_df,
+  file.path(output_dir, "Extended_Data_Figure_3A_all_evaluable_BM_raw_longitudinal_source_data.csv")
+)
+write_csv(
+  ed3b_plot_df,
+  file.path(output_dir, "Extended_Data_Figure_3B_all_evaluable_blood_raw_longitudinal_source_data.csv")
+)
+write_csv(
+  ed3c_plot_df,
+  file.path(output_dir, "Extended_Data_Figure_3C_all_evaluable_fragmentomics_longitudinal_source_data.csv")
+)
 
 all_evaluable_support_manifest <- tribble(
   ~file_name, ~description,
@@ -710,7 +938,13 @@ all_evaluable_support_manifest <- tribble(
   "Figure_2C_all_evaluable_blood_zscore_longitudinal_capped300.png",
   "All-evaluable support version of the cfDNA longitudinal z-score panel with the plotting y-axis capped at 300.",
   "Figure_2D_all_evaluable_fragmentomics_longitudinal.png",
-  "All-evaluable support version of the fragmentomics longitudinal z-score panel."
+  "All-evaluable support version of the fragmentomics longitudinal z-score panel.",
+  "Extended_Data_Figure_3A_all_evaluable_BM_raw_longitudinal.png",
+  "All-evaluable support version of the raw BM mutation longitudinal panel.",
+  "Extended_Data_Figure_3B_all_evaluable_blood_raw_longitudinal.png",
+  "All-evaluable support version of the raw cfDNA mutation longitudinal panel.",
+  "Extended_Data_Figure_3C_all_evaluable_fragmentomics_longitudinal.png",
+  "All-evaluable support version of the complementary fragmentomics longitudinal panel."
 ) %>%
   mutate(
     path = file.path(output_dir, file_name),
@@ -730,7 +964,10 @@ write_csv(
 qc_tbl <- bind_rows(
   bm_plot_df %>% mutate(panel = "Figure_2B_all_evaluable_BM"),
   blood_plot_df %>% mutate(panel = "Figure_2C_all_evaluable_blood"),
-  fragmentomics_plot_df %>% mutate(panel = "Figure_2D_all_evaluable_fragmentomics")
+  fragmentomics_plot_df %>% mutate(panel = "Figure_2D_all_evaluable_fragmentomics"),
+  ed3a_plot_df %>% mutate(panel = "Extended_Data_Figure_3A_all_evaluable_BM_raw"),
+  ed3b_plot_df %>% mutate(panel = "Extended_Data_Figure_3B_all_evaluable_blood_raw"),
+  ed3c_plot_df %>% mutate(panel = "Extended_Data_Figure_3C_all_evaluable_fragmentomics")
 ) %>%
   distinct(panel, Metric, Cohort, Patient, Weeks_Since_Baseline, relapse_within_180) %>%
   group_by(panel, Metric, Cohort) %>%

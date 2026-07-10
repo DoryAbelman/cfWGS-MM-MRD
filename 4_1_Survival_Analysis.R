@@ -440,6 +440,8 @@ build_sample_survival_df <- function(sample_tbl) {
       BM_zscore_only_detection_rate_screen_call,
       # cfWGS blood-derived models (multiple variants)
       Blood_zscore_only_sites_call, Blood_zscore_only_sites_prob,
+      Blood_rate_only_call, Blood_rate_only_prob,
+      Blood_zscore_only_detection_rate_call, Blood_zscore_only_detection_rate_prob,
       Blood_base_prob, Blood_base_call,
       Blood_plus_fragment_prob, Blood_plus_fragment_call,
       Blood_plus_fragment_min_prob, Blood_plus_fragment_min_call,
@@ -603,6 +605,8 @@ techs <- c(
   BM_zscore_only_detection_rate_screen_call = "cfWGS of BM-derived mutations (High Sensitivity)", 
   # Blood Plasma-derived WGS mutations
   Blood_zscore_only_sites_call = "cfWGS of cfDNA-Derived Mutations (Sites Model)",
+  Blood_rate_only_call = "cfWGS of cfDNA-Derived Mutations (cVAF Model)",
+  Blood_zscore_only_detection_rate_call = "cfWGS of cfDNA-Derived Mutations (cVAF Z-score Model)",
   Blood_plus_fragment_call = "cfWGS of cfDNA-Derived Mutations (Combined Model)"
   # NOTE: Fragmentomics models could be added here if desired
 )
@@ -687,16 +691,19 @@ cat("  ✓ Configuration complete\n\n")
 # internal timepoint and assay column is deliberate: it is more stable than
 # matching on display text or filenames, which have changed across revisions.
 km_manuscript_artifacts <- tibble::tribble(
-  ~timepoint_info,    ~assay_variable,                            ~artifact_id, ~description,
-  "1yr maintenance",  "BM_zscore_only_detection_rate_call",        "FIG3F",     "Figure 3F: one-year maintenance PFS by BM-derived cfWGS MRD status.",
-  "1yr maintenance",  "Blood_zscore_only_sites_call",              "FIG4E",     "Figure 4E: one-year maintenance PFS by cfDNA-derived cfWGS MRD status.",
-  "1yr maintenance",  "Flow_Binary",                               "EDFIG6C",   "Extended Data Figure 6C: one-year maintenance PFS by MFC MRD status.",
-  "1yr maintenance",  "Adaptive_Binary",                           "EDFIG6D",   "Extended Data Figure 6D: one-year maintenance PFS by clonoSEQ MRD status.",
-  "post_transplant",  "BM_zscore_only_detection_rate_call",        "EDFIG6E",   "Extended Data Figure 6E: post-ASCT PFS by BM-derived cfWGS MRD status.",
-  "post_transplant",  "Flow_Binary",                               "EDFIG6F",   "Extended Data Figure 6F: post-ASCT PFS by MFC MRD status.",
-  "1yr maintenance",  "EasyM_reference_threshold_binary",           "EDFIG6G",   "Extended Data Figure 6G: one-year maintenance PFS by EasyM MRD status.",
-  "post_transplant",  "EasyM_reference_threshold_binary",           "EDFIG6H",   "Extended Data Figure 6H: post-ASCT PFS by EasyM MRD status.",
-  "post_transplant",  "Blood_zscore_only_sites_call",              "EDFIG8C",   "Extended Data Figure 8C: post-ASCT PFS by cfDNA-derived cfWGS MRD status."
+  ~timepoint_info, ~assay_variable, ~artifact_id, ~role, ~description,
+  "1yr maintenance", "BM_zscore_only_detection_rate_call", "FIG3F", "figure_panel_png", "Figure 3F: one-year maintenance PFS by BM-derived cfWGS MRD status.",
+  "1yr maintenance", "Blood_zscore_only_sites_call", "FIG4E", "figure_panel_png", "Figure 4E: one-year maintenance PFS by cfDNA-derived cfWGS MRD status.",
+  "1yr maintenance", "Flow_Binary", "EDFIG6C", "figure_panel_png", "Extended Data Figure 6C: one-year maintenance PFS by MFC MRD status.",
+  "1yr maintenance", "Adaptive_Binary", "EDFIG6D", "figure_panel_png", "Extended Data Figure 6D: one-year maintenance PFS by clonoSEQ MRD status.",
+  "post_transplant", "BM_zscore_only_detection_rate_call", "EDFIG6E", "figure_panel_png", "Extended Data Figure 6E: post-ASCT PFS by BM-derived cfWGS MRD status.",
+  "post_transplant", "Flow_Binary", "EDFIG6F", "figure_panel_png", "Extended Data Figure 6F: post-ASCT PFS by MFC MRD status.",
+  "1yr maintenance", "EasyM_reference_threshold_binary", "EDFIG6G", "figure_panel_png", "Extended Data Figure 6G: one-year maintenance PFS by EasyM MRD status.",
+  "post_transplant", "EasyM_reference_threshold_binary", "EDFIG6H", "figure_panel_png", "Extended Data Figure 6H: post-ASCT PFS by EasyM MRD status.",
+  "post_transplant", "Blood_zscore_only_sites_call", "EDFIG8C", "figure_panel_png", "Extended Data Figure 8C: post-ASCT PFS by the cfDNA sites model.",
+  "post_transplant", "Blood_rate_only_call", "EDFIG8C", "alternate_cvaf_model_figure_panel_png", "Extended Data Figure 8C comparison: post-ASCT PFS by the cfDNA raw-cVAF model.",
+  "post_transplant", "Blood_zscore_only_detection_rate_call", "EDFIG8C", "alternate_cvaf_zscore_model_figure_panel_png", "Extended Data Figure 8C comparison: post-ASCT PFS by the cfDNA cVAF Z-score model.",
+  "post_transplant", "Blood_plus_fragment_call", "EDFIG8C", "alternate_combined_model_figure_panel_png", "Extended Data Figure 8C comparison: post-ASCT PFS by the combined cfDNA/fragmentomics model."
 )
 
 
@@ -898,12 +905,208 @@ for(tp in tps) {
       ms_copy_artifact(
         source_path = fname_manuscript,
         artifact_id = km_artifact$artifact_id,
-        role = "figure_panel_png",
+        role = km_artifact$role,
         description = km_artifact$description,
         script_name = "4_1_Survival_Analysis.R"
       )
     }
   }
+}
+
+## ── 4S. SUSTAINED-MRD SENSITIVITY: POST-ASCT/MAINTENANCE ASSESSMENTS ────────
+#
+# The one-year landmark remains the primary Figure 3F/4E analysis. This
+# additive sensitivity analysis uses post-ASCT as the first call when available;
+# otherwise it uses the first evaluable maintenance call. The second call is
+# the first later evaluable maintenance assessment within two years. Follow-up
+# starts at the second assessment so future information is never used to define
+# a group before time zero.
+sustained_mrd_dir <- file.path(outdir, "sustained_mrd_first_two_maintenance")
+dir.create(sustained_mrd_dir, recursive = TRUE, showWarnings = FALSE)
+
+sustained_mrd_specs <- tibble::tribble(
+  ~assay_variable, ~assay_label, ~artifact_id,
+  "BM_zscore_only_detection_rate_call", "cfWGS using baseline BM-derived mutations", "FIG3F",
+  "Blood_zscore_only_sites_call", "cfWGS using baseline cfDNA-derived mutations", "FIG4E"
+)
+
+build_sustained_mrd_df <- function(data, assay_variable, max_gap_days = 730L) {
+  required <- c(
+    "Patient", "Cohort", "timepoint_info", "sample_date", "Time_to_event",
+    "Relapsed_Binary", assay_variable
+  )
+  missing <- setdiff(required, names(data))
+  if (length(missing)) {
+    stop("Sustained-MRD input is missing: ", paste(missing, collapse = ", "), call. = FALSE)
+  }
+
+  evaluable <- data %>%
+    filter(
+      Cohort == "Frontline",
+      str_to_lower(timepoint_info) == "post_transplant" |
+        str_detect(str_to_lower(timepoint_info), "maint"),
+      !is.na(.data[[assay_variable]]),
+      .data[[assay_variable]] %in% c(0, 1),
+      !is.na(sample_date)
+    ) %>%
+    arrange(Patient, sample_date) %>%
+    distinct(Patient, sample_date, .keep_all = TRUE) %>%
+    group_by(Patient) %>%
+    group_modify(~ {
+      post_asct <- .x %>%
+        filter(str_to_lower(timepoint_info) == "post_transplant") %>%
+        slice_head(n = 1)
+      anchor <- if (nrow(post_asct) == 1) post_asct else slice_head(.x, n = 1)
+      later_maintenance <- .x %>%
+        filter(
+          sample_date > anchor$sample_date[[1]],
+          str_detect(str_to_lower(timepoint_info), "maint")
+        ) %>%
+        slice_head(n = 1)
+      bind_rows(anchor, later_maintenance) %>%
+        distinct(sample_date, .keep_all = TRUE)
+    }) %>%
+    mutate(assessment_number = row_number()) %>%
+    ungroup()
+
+  patient_summary <- evaluable %>%
+    group_by(Patient) %>%
+    summarise(
+      n_evaluable_assessments = n(),
+      first_date = first(sample_date),
+      second_date = nth(sample_date, 2),
+      first_timepoint = first(timepoint_info),
+      second_timepoint = nth(timepoint_info, 2),
+      first_call = first(.data[[assay_variable]]),
+      second_call = nth(.data[[assay_variable]], 2),
+      gap_days = as.integer(second_date - first_date),
+      Time_to_event = nth(Time_to_event, 2),
+      Relapsed_Binary = nth(Relapsed_Binary, 2),
+      .groups = "drop"
+    ) %>%
+    mutate(
+      exclusion_reason = case_when(
+        n_evaluable_assessments < 2 ~ "fewer than two evaluable post-ASCT/maintenance assessments",
+        is.na(gap_days) | gap_days < 0 ~ "invalid assessment-date ordering",
+        gap_days > max_gap_days ~ "second evaluable maintenance assessment occurs after two years",
+        is.na(Time_to_event) | Time_to_event < 0 | is.na(Relapsed_Binary) ~ "outcome unavailable at second assessment",
+        TRUE ~ NA_character_
+      ),
+      trajectory = case_when(
+        first_call == 0 & second_call == 0 ~ "Sustained MRD-negative",
+        first_call == 0 & second_call == 1 ~ "MRD negative-to-positive",
+        first_call == 1 & second_call == 1 ~ "Persistently MRD-positive",
+        first_call == 1 & second_call == 0 ~ "MRD positive-to-negative",
+        TRUE ~ NA_character_
+      )
+    )
+
+  patient_summary
+}
+
+for (i in seq_len(nrow(sustained_mrd_specs))) {
+  spec <- sustained_mrd_specs[i, ]
+  sustained_all <- build_sustained_mrd_df(survival_df, spec$assay_variable)
+  safe_assay <- gsub("[^A-Za-z0-9]+", "_", spec$assay_variable)
+  write_csv(
+    sustained_all,
+    file.path(sustained_mrd_dir, paste0(safe_assay, "_patient_classification_audit.csv"))
+  )
+
+  sustained_plot_df <- sustained_all %>%
+    filter(
+      is.na(exclusion_reason),
+      trajectory %in% c(
+        "Sustained MRD-negative",
+        "MRD negative-to-positive",
+        "Persistently MRD-positive"
+      )
+    ) %>%
+    mutate(
+      trajectory = factor(
+        trajectory,
+        levels = c(
+          "Sustained MRD-negative",
+          "MRD negative-to-positive",
+          "Persistently MRD-positive"
+        )
+      ),
+      Group = trajectory,
+      time_months = Time_to_event / 30.44
+    )
+
+  write_csv(
+    sustained_plot_df,
+    file.path(sustained_mrd_dir, paste0(safe_assay, "_KM_source_data.csv"))
+  )
+
+  group_counts <- sustained_plot_df %>% count(trajectory, name = "n")
+  if (nrow(group_counts) < 2 || any(group_counts$n < 2)) {
+    warning("Skipping sustained-MRD KM for ", spec$assay_variable,
+            ": fewer than two groups or a group has <2 patients.")
+    next
+  }
+
+  sustained_surv <- Surv(sustained_plot_df$time_months, sustained_plot_df$Relapsed_Binary)
+  sustained_fit <- survfit(sustained_surv ~ Group, data = sustained_plot_df)
+  sustained_km <- ggsurvplot(
+    sustained_fit,
+    data = sustained_plot_df,
+    pval = safe_logrank_pval_display(sustained_surv, sustained_plot_df, "Group"),
+    conf.int = FALSE,
+    risk.table = TRUE,
+    break.time.by = 12,
+    palette = c("black", "#E69F00", "#D55E00"),
+    legend.title = "Post-ASCT/maintenance calls",
+    legend.labs = c(
+      "Sustained MRD-negative",
+      "MRD negative-to-positive",
+      "Persistently MRD-positive"
+    ),
+    xlab = "Time since second evaluable assessment (months)",
+    ylab = "Progression-free survival",
+    title = str_wrap(paste0("PFS by sustained MRD status: ", spec$assay_label), 55),
+    ggtheme = theme_classic(base_size = 12) +
+      theme(
+        legend.position = "top",
+        plot.title = element_text(size = 14, face = "bold", hjust = 0.5),
+        plot.background = element_rect(fill = "white", colour = NA),
+        panel.background = element_rect(fill = "white", colour = NA)
+      )
+  )
+  sustained_combined <- ggarrange(
+    sustained_km$plot + theme(axis.title.x = element_blank()),
+    sustained_km$table + theme(axis.title.y = element_blank()),
+    ncol = 1,
+    heights = c(3, 1)
+  )
+  sustained_path <- file.path(
+    sustained_mrd_dir,
+    paste0("KM_", safe_assay, "_sustained_first_two_maintenance.png")
+  )
+  ggsave(
+    sustained_path,
+    sustained_combined,
+    width = 8.5,
+    height = 7,
+    dpi = dpi_target,
+    bg = "white"
+  )
+  ms_copy_artifact(
+    source_path = sustained_path,
+    artifact_id = spec$artifact_id,
+    role = "sustained_first_two_maintenance_sensitivity_png",
+    description = paste0(
+      spec$artifact_id,
+      " sensitivity analysis using post-ASCT when available followed by the first later evaluable maintenance call within two years; follow-up begins at the second assessment."
+    ),
+    script_name = "4_1_Survival_Analysis.R"
+  )
+}
+
+if (identical(Sys.getenv("CFWGS_SUSTAINED_ONLY", unset = "0"), "1")) {
+  message("CFWGS_SUSTAINED_ONLY=1: stopping after sustained-MRD outputs.")
+  quit(save = "no", status = 0)
 }
 
 ## ── 4A. ADDITIVE KM CURVES: Frontline/Training + Non-Frontline/Test ─────────

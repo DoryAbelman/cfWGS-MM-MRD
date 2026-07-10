@@ -618,6 +618,290 @@ failed_info <- failed_info %>%
 fig1b_source_table <- file.path(final_tables_dir, "Table for creating sample flowchart updated3.csv")
 write.csv(failed_info, file = fig1b_source_table)
 
+required_fig1b_columns <- c(
+  "Patient",
+  "Study",
+  "Cohort",
+  "BM_status",
+  "cfDNA_status",
+  "total_cfDNA_samples",
+  "high_quality_BM",
+  "high_quality_cfDNA"
+)
+missing_fig1b_columns <- setdiff(required_fig1b_columns, names(failed_info))
+if (length(missing_fig1b_columns) > 0) {
+  stop(
+    "Cannot export Figure 1B flowchart counts because the source table is missing: ",
+    paste(missing_fig1b_columns, collapse = ", "),
+    call. = FALSE
+  )
+}
+
+fig1b_cohort_rows <- failed_info %>%
+  filter(!is.na(Cohort), Cohort != "Frontline_omitted") %>%
+  mutate(
+    figure_cohort = case_when(
+      Cohort == "Frontline"     ~ "Training cohort",
+      Cohort == "Non-frontline" ~ "Test cohort",
+      TRUE                      ~ Cohort
+    )
+  )
+
+if (nrow(fig1b_cohort_rows) == 0) {
+  stop("Cannot export Figure 1B flowchart counts: no analysis-cohort rows found.", call. = FALSE)
+}
+
+fig1b_feature_rows <- All_feature_data %>%
+  inner_join(cohort_df %>% distinct(Patient, Cohort), by = "Patient") %>%
+  mutate(
+    figure_cohort = case_when(
+      Cohort == "Frontline"     ~ "Training cohort",
+      Cohort == "Non-frontline" ~ "Test cohort",
+      TRUE                      ~ Cohort
+    )
+  )
+
+make_fig1b_count_rows <- function(data, cohort_name) {
+  cohort_data <- data %>% filter(figure_cohort == cohort_name)
+  tibble::tibble(
+    figure_cohort = cohort_name,
+    box_id = c(
+      "cohort_total",
+      "m4_study",
+      "immagine_study",
+      "spore_study",
+      "cfdna_collected",
+      "cfdna_sequenced",
+      "cfdna_inventory_samples",
+      "cfdna_integrated_samples",
+      "cfdna_disease_evaluable_baseline_patients",
+      "bm_collected_or_attempted",
+      "bm_sequenced_pass",
+      "bm_failed_insufficient",
+      "bm_depleted_prestudy",
+      "bm_integrated_samples",
+      "bm_disease_evaluable_samples",
+      "bm_disease_evaluable_baseline_patients"
+    ),
+    box_label = c(
+      cohort_name,
+      "M4 study",
+      "IMMAGINE study",
+      "SPORE study",
+      "cfDNA samples collected",
+      "cfDNA sequenced",
+      "cfDNA inventory rows from sample-flow table",
+      "cfDNA integrated samples available for MRDetect summaries",
+      "Patients with disease-evaluable baseline cfDNA",
+      "BM samples collected or attempted",
+      "BM WGS sequenced/pass",
+      "BM failed: insufficient material",
+      "BM depleted before study",
+      "BM integrated samples available for MRDetect summaries",
+      "BM integrated samples with disease evidence",
+      "Patients with disease-evaluable baseline BM"
+    ),
+    n = c(
+      dplyr::n_distinct(cohort_data$Patient),
+      sum(cohort_data$Study == "M4", na.rm = TRUE),
+      sum(cohort_data$Study == "IMG", na.rm = TRUE),
+      sum(cohort_data$Study == "SPORE", na.rm = TRUE),
+      sum(cohort_data$cfDNA_status != "Not_collected", na.rm = TRUE),
+      sum(cohort_data$cfDNA_status == "Sequenced_pass", na.rm = TRUE),
+      sum(cohort_data$total_cfDNA_samples, na.rm = TRUE),
+      fig1b_feature_rows %>%
+        filter(figure_cohort == cohort_name, Sample_type == "Blood_plasma_cfDNA") %>%
+        nrow(),
+      sum(cohort_data$high_quality_cfDNA, na.rm = TRUE),
+      sum(cohort_data$BM_status != "Not_collected", na.rm = TRUE),
+      sum(cohort_data$BM_status == "Sequenced_pass", na.rm = TRUE),
+      sum(cohort_data$BM_status == "Failed_insufficient", na.rm = TRUE),
+      sum(cohort_data$BM_status == "Depleted_prestudy", na.rm = TRUE),
+      fig1b_feature_rows %>%
+        filter(figure_cohort == cohort_name, Sample_type == "BM_cells") %>%
+        nrow(),
+      fig1b_feature_rows %>%
+        filter(
+          figure_cohort == cohort_name,
+          Sample_type == "BM_cells",
+          Evidence_of_Disease == 1
+        ) %>%
+        nrow(),
+      sum(cohort_data$high_quality_BM, na.rm = TRUE)
+    ),
+    count_source = c(
+      rep("Figure 1B source table", 7),
+      "Integrated All_feature_data table",
+      "Figure 1B source table",
+      rep("Figure 1B source table", 4),
+      rep("Integrated All_feature_data table", 2),
+      "Figure 1B source table"
+    ),
+    definition = c(
+      "Distinct patients in the analysis cohort.",
+      "Rows from M4 in the analysis cohort.",
+      "Rows from IMMAGINE in the analysis cohort.",
+      "Rows from SPORE in the analysis cohort.",
+      "Rows with cfDNA_status other than Not_collected.",
+      "Rows with cfDNA_status == Sequenced_pass.",
+      "Sum of total_cfDNA_samples in the sample-flow inventory table; this can include metadata rows not retained in the integrated feature table.",
+      "Rows in All_feature_data for Blood_plasma_cfDNA after joining to the analysis cohort.",
+      "Patients flagged high_quality_cfDNA in the Figure 1B source table.",
+      "Rows with BM_status other than Not_collected, including insufficient/depleted material.",
+      "Rows with BM_status == Sequenced_pass.",
+      "Rows with BM_status == Failed_insufficient.",
+      "Rows with BM_status == Depleted_prestudy.",
+      "Rows in All_feature_data for BM_cells after joining to the analysis cohort.",
+      "Rows in All_feature_data for BM_cells with Evidence_of_Disease == 1 after joining to the analysis cohort.",
+      "Patients flagged high_quality_BM in the Figure 1B source table."
+    )
+  )
+}
+
+fig1b_flowchart_counts <- bind_rows(
+  make_fig1b_count_rows(fig1b_cohort_rows, "Training cohort"),
+  make_fig1b_count_rows(fig1b_cohort_rows, "Test cohort")
+)
+
+# If downstream revision-aware scoring metadata is present, use it to replace
+# the legacy 7-patient test-cohort branch with the full Spring 2026
+# non-frontline/test cohort. This preserves the original training-cohort counts
+# while keeping the manuscript-facing Figure 1B source table current after the
+# revision test-cohort expansion.
+sample_scoring_manifest_path <- file.path(
+  "Output_tables_2025",
+  "clinical_support",
+  "sample_scoring_status_manifest.csv"
+)
+if (file.exists(sample_scoring_manifest_path)) {
+  sample_scoring_manifest <- readr::read_csv(
+    sample_scoring_manifest_path,
+    show_col_types = FALSE,
+    col_types = readr::cols(.default = readr::col_guess())
+  )
+  required_sample_scoring_columns <- c(
+    "Patient",
+    "Cohort",
+    "sample_scoring_role",
+    "is_baseline_or_diagnosis_label",
+    "has_BM_WGS_evidence_field",
+    "has_blood_cfWGS_score"
+  )
+  missing_sample_scoring_columns <- setdiff(
+    required_sample_scoring_columns,
+    names(sample_scoring_manifest)
+  )
+  if (length(missing_sample_scoring_columns) > 0) {
+    stop(
+      "Cannot export full Figure 1B test-cohort counts because ",
+      sample_scoring_manifest_path,
+      " is missing: ",
+      paste(missing_sample_scoring_columns, collapse = ", "),
+      call. = FALSE
+    )
+  }
+
+  full_test_scoring <- sample_scoring_manifest %>%
+    filter(.data$Cohort == "Non-frontline", !is.na(.data$Patient))
+  full_test_baseline <- full_test_scoring %>%
+    filter(.data$sample_scoring_role == "baseline_or_diagnosis_scoring_baseline")
+
+  if (nrow(full_test_scoring) > 0 && nrow(full_test_baseline) > 0) {
+    count_patients_where <- function(data, condition) {
+      data %>%
+        filter({{ condition }}) %>%
+        summarise(n = dplyr::n_distinct(.data$Patient), .groups = "drop") %>%
+        pull(.data$n)
+    }
+
+    full_test_counts <- tibble::tibble(
+      figure_cohort = "Test cohort",
+      box_id = c(
+        "cohort_total",
+        "m4_study",
+        "immagine_study",
+        "spore_study",
+        "cfdna_collected",
+        "cfdna_extracted",
+        "cfdna_sequenced",
+        "cfdna_used_for_mrd_detection",
+        "bm_collected_or_attempted",
+        "cd138_fraction_sorted",
+        "bm_dna_extracted",
+        "bm_dna_sequenced",
+        "bm_used_for_mrd_detection"
+      ),
+      box_label = c(
+        "Test cohort",
+        "M4 study",
+        "IMMAGINE study",
+        "SPORE study",
+        "cfDNA samples collected",
+        "cfDNA extracted",
+        "cfDNA sequenced",
+        "cfDNA samples used for MRD detection",
+        "BM samples collected",
+        "CD138+ fraction sorted",
+        "BM DNA extracted",
+        "BM DNA sequenced",
+        "BM samples used for MRD detection"
+      ),
+      n = c(
+        dplyr::n_distinct(full_test_scoring$Patient),
+        0L,
+        count_patients_where(full_test_scoring, grepl("^IMG-", .data$Patient)),
+        count_patients_where(full_test_scoring, grepl("^SPORE_", .data$Patient)),
+        dplyr::n_distinct(full_test_baseline$Patient),
+        dplyr::n_distinct(full_test_baseline$Patient),
+        dplyr::n_distinct(full_test_baseline$Patient),
+        count_patients_where(full_test_baseline, .data$has_blood_cfWGS_score %in% TRUE),
+        count_patients_where(full_test_baseline, .data$has_BM_WGS_evidence_field %in% TRUE),
+        count_patients_where(full_test_baseline, .data$has_BM_WGS_evidence_field %in% TRUE),
+        count_patients_where(full_test_baseline, .data$has_BM_WGS_evidence_field %in% TRUE),
+        count_patients_where(full_test_baseline, .data$has_BM_WGS_evidence_field %in% TRUE),
+        count_patients_where(full_test_baseline, .data$has_BM_WGS_evidence_field %in% TRUE)
+      ),
+      count_source = "Revision-aware sample_scoring_status_manifest.csv",
+      definition = c(
+        "Distinct Non-frontline patients in the revision-aware sample-scoring manifest.",
+        "M4 patients in the full revision-aware test cohort.",
+        "IMMAGINE patients in the full revision-aware test cohort, with overlapping old/revision patients counted once.",
+        "SPORE patients in the full revision-aware test cohort.",
+        "Distinct full-test-cohort patients with a baseline/diagnosis scoring-baseline row.",
+        "Same denominator as cfDNA samples collected for the patient-level Figure 1B flowchart.",
+        "Same denominator as cfDNA samples collected for the patient-level Figure 1B flowchart.",
+        "Distinct full-test-cohort patients with a baseline/diagnosis blood cfWGS score.",
+        "Distinct full-test-cohort patients with BM WGS evidence in the baseline/diagnosis scoring-baseline row.",
+        "Same denominator as BM samples collected for the patient-level Figure 1B flowchart.",
+        "Same denominator as BM samples collected for the patient-level Figure 1B flowchart.",
+        "Same denominator as BM samples collected for the patient-level Figure 1B flowchart.",
+        "Same denominator as BM samples collected for the patient-level Figure 1B flowchart."
+      )
+    )
+
+    fig1b_flowchart_counts <- fig1b_flowchart_counts %>%
+      filter(.data$figure_cohort != "Test cohort") %>%
+      bind_rows(full_test_counts)
+  } else {
+    warning(
+      "Revision-aware sample-scoring manifest was present but had no usable ",
+      "Non-frontline baseline rows; retaining legacy Figure 1B test-cohort counts."
+    )
+  }
+} else {
+  warning(
+    "Missing revision-aware sample-scoring manifest: ",
+    sample_scoring_manifest_path,
+    ". Retaining legacy Figure 1B test-cohort counts."
+  )
+}
+
+fig1b_flowchart_counts_path <- file.path(
+  final_tables_dir,
+  "Figure_1B_flowchart_box_counts_current.csv"
+)
+readr::write_csv(fig1b_flowchart_counts, fig1b_flowchart_counts_path)
+
 # MANUSCRIPT OUTPUT: Figure 1B source table
 # The final Figure 1B visual panel is created from this table in the manuscript
 # figure file. This is the command-line-regenerated source table that documents
@@ -628,6 +912,17 @@ ms_copy_artifact(
   artifact_id = "FIG1B",
   role = "figure_source_csv",
   description = "Figure 1B source table: patient/sample flowchart counts and cohort/QC annotations.",
+  script_name = "1_6_Identify_High_Quality_Patient_Pairs.R"
+)
+
+# MANUSCRIPT OUTPUT: Figure 1B flowchart box counts
+# This companion table is intentionally compact: each row corresponds to a
+# count that can be placed directly into the manual Lucidchart/PowerPoint panel.
+ms_copy_artifact(
+  source_path = fig1b_flowchart_counts_path,
+  artifact_id = "FIG1B",
+  role = "figure_source_counts_csv",
+  description = "Figure 1B companion source table: current flowchart box counts and count definitions.",
   script_name = "1_6_Identify_High_Quality_Patient_Pairs.R"
 )
 

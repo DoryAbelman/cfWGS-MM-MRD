@@ -2051,6 +2051,148 @@ ms_copy_artifact(
   script_name = "2_3_Feature_Concordance_And_Mutation_Counts.R"
 )
 
+# -------------------------------------------------------------------------
+# Alternate ED2C-style panel: all evaluable diagnosis/baseline patients
+#
+# The mapped manuscript ED2C panel above intentionally preserves the original
+# training-cohort-only analysis. This alternate version pools all patients that
+# reached the baseline concordance table after the same diagnosis/baseline,
+# duplicate-resolution, and cohort-assignment filters used upstream.
+# -------------------------------------------------------------------------
+event_tf_conc_all_evaluable <- concordance_tbl %>%
+  filter(is.na(cohort), tf_group %in% c("high_tf", "low_tf")) %>%
+  transmute(
+    event = event,
+    TF_group = factor(
+      tf_group,
+      levels = c("high_tf", "low_tf"),
+      labels = c("High TF", "Low TF")
+    ),
+    sample = if_else(wgs_source == "BM_cells", "BM", "cfDNA"),
+    conc = concord * 100,
+    n = n,
+    tp = tp,
+    tn = tn,
+    fp = fp,
+    fn = fn
+  )
+
+bm_high_all_evaluable <- event_tf_conc_all_evaluable %>%
+  filter(TF_group == "High TF", sample == "BM") %>%
+  arrange(conc) %>%
+  pull(event)
+
+event_tf_conc_all_evaluable <- event_tf_conc_all_evaluable %>%
+  mutate(event = factor(event, levels = bm_high_all_evaluable))
+
+sens_overall_all_evaluable <- long %>%
+  group_by(event, wgs_source) %>%
+  summarise_concord() %>%
+  ungroup() %>%
+  transmute(
+    event = factor(event, levels = bm_high_all_evaluable),
+    sample = if_else(wgs_source == "BM_cells", "BM", "cfDNA"),
+    Measure = factor(
+      "Overall sensitivity",
+      levels = c("High TF", "Low TF", "Overall sensitivity")
+    ),
+    value = sens * 100,
+    n = n,
+    tp = tp,
+    tn = tn,
+    fp = fp,
+    fn = fn
+  )
+
+tf_plot_df_all_evaluable <- bind_rows(
+  event_tf_conc_all_evaluable %>%
+    transmute(event, sample, Measure = TF_group, value = conc, n, tp, tn, fp, fn),
+  sens_overall_all_evaluable
+) %>%
+  mutate(
+    Measure = factor(
+      Measure,
+      levels = c("High TF", "Low TF", "Overall sensitivity")
+    )
+  )
+
+readr::write_csv(
+  tf_plot_df_all_evaluable,
+  file.path(
+    outdir,
+    "Extended_Data_Figure_2C_all_evaluable_baseline_FISH_concordance_source_data.csv"
+  )
+)
+
+p_tf_sens2_all_evaluable <- ggplot(
+  tf_plot_df_all_evaluable,
+  aes(x = value, y = event, group = event)
+) +
+  geom_point(aes(colour = Measure, shape = Measure), size = 3, stroke = 1) +
+  facet_wrap(~ sample, nrow = 1) +
+  scale_y_discrete(labels = pretty_events) +
+  scale_colour_manual(
+    name = "Concordance",
+    values = c(
+      "High TF" = viridis(2, end = 0.8)[1],
+      "Low TF" = viridis(2, end = 0.8)[2],
+      "Overall sensitivity" = "black"
+    )
+  ) +
+  scale_shape_manual(
+    name = "Concordance",
+    values = c(
+      "High TF" = 16,
+      "Low TF" = 16,
+      "Overall sensitivity" = 8
+    )
+  ) +
+  scale_x_continuous(
+    limits = c(0, 100),
+    breaks = seq(0, 100, 25),
+    labels = paste0(seq(0, 100, 25), "%"),
+    expand = expansion(mult = c(0.04, 0.04))
+  ) +
+  labs(
+    title = "Structural and copy-number variant concordance with FISH",
+    x = "Percent",
+    y = NULL
+  ) +
+  theme_classic(base_size = 11) +
+  theme(
+    plot.title = element_text(face = "bold", size = 12, hjust = 0.5),
+    strip.text = element_text(face = "bold"),
+    axis.text.y = element_text(size = 9),
+    axis.text.x = element_text(size = 8),
+    legend.position = "top",
+    legend.box = "horizontal",
+    panel.spacing.x = unit(1.2, "lines")
+  )
+
+all_evaluable_ed2c_path <- file.path(
+  outdir,
+  "Fig2B_event_concordance_with_sensitivity_all_evaluable_baseline.png"
+)
+ggsave(all_evaluable_ed2c_path, p_tf_sens2_all_evaluable, width = 5.5, height = 4, dpi = 600)
+
+ms_copy_artifact(
+  source_path = all_evaluable_ed2c_path,
+  artifact_id = "EDFIG2B_D_C",
+  role = "all_evaluable_figure_panel_png",
+  description = "Alternate all-evaluable baseline/diagnosis FISH concordance panel for Extended Data Figure 2C.",
+  script_name = "2_3_Feature_Concordance_And_Mutation_Counts.R"
+)
+ms_copy_artifact(
+  source_path = file.path(
+    outdir,
+    "Extended_Data_Figure_2C_all_evaluable_baseline_FISH_concordance_source_data.csv"
+  ),
+  artifact_id = "EDFIG2B_D_C",
+  role = "all_evaluable_source_data_csv",
+  description = "Source data for the alternate all-evaluable baseline/diagnosis FISH concordance panel.",
+  script_name = "2_3_Feature_Concordance_And_Mutation_Counts.R"
+)
+
 
 # Calculate sensitivity for CNAs and translocations separately, by WGS source
 # Add type_group column and filter for events we care about
@@ -2540,6 +2682,219 @@ ms_copy_artifact(
   artifact_id = "EDFIG2B_D_B",
   role = "figure_panel_png",
   description = "BM-vs-cfDNA concordance, sensitivity, and specificity panel used as Extended Data Figure 2B.",
+  script_name = "2_3_Feature_Concordance_And_Mutation_Counts.R"
+)
+
+# -------------------------------------------------------------------------
+# Alternate ED2B-style panel: all evaluable diagnosis/baseline patients
+#
+# The mapped manuscript ED2B panel above is training-cohort-only. This alternate
+# panel recomputes BM-vs-cfDNA concordance, sensitivity, and specificity after
+# pooling all evaluable baseline/diagnosis rows that survived the same upstream
+# baseline selection and cohort-assignment gates.
+# -------------------------------------------------------------------------
+summarise_bm_cfdna_event_performance <- function(data, event_regex) {
+  data %>%
+    filter(timepoint_info_blood == "Baseline") %>%
+    mutate(
+      tf_group = case_when(
+        is.na(Tumor_Fraction_blood) ~ NA_character_,
+        Tumor_Fraction_blood >= tf_cutoff ~ "High TF",
+        TRUE ~ "Low TF"
+      )
+    ) %>%
+    pivot_longer(
+      cols = matches(event_regex),
+      names_to = c("event", "source"),
+      names_pattern = "(.*)_(BM|blood)$",
+      values_to = "call"
+    ) %>%
+    mutate(
+      call = call == "Yes",
+      source = if_else(source == "BM", "BM", "cfDNA")
+    ) %>%
+    pivot_wider(
+      id_cols = c(Patient, event, tf_group),
+      names_from = source,
+      values_from = call
+    ) %>%
+    group_by(event, tf_group) %>%
+    filter(!is.na(cfDNA), !is.na(BM)) %>%
+    summarise(
+      n = dplyr::n(),
+      tp = sum(cfDNA & BM, na.rm = TRUE),
+      tn = sum(!cfDNA & !BM, na.rm = TRUE),
+      fp = sum(cfDNA & !BM, na.rm = TRUE),
+      fn = sum(!cfDNA & BM, na.rm = TRUE),
+      sensitivity = tp / (tp + fn),
+      specificity = tn / (tn + fp),
+      concordance = (tp + tn) / n,
+      .groups = "drop"
+    )
+}
+
+add_all_tf_summary <- function(perf_by_tf) {
+  bind_rows(
+    perf_by_tf,
+    perf_by_tf %>%
+      filter(!is.na(tf_group)) %>%
+      group_by(event) %>%
+      summarise(
+        n = sum(n),
+        tp = sum(tp),
+        tn = sum(tn),
+        fp = sum(fp),
+        fn = sum(fn),
+        sensitivity = tp / (tp + fn),
+        specificity = tn / (tn + fp),
+        concordance = (tp + tn) / n,
+        .groups = "drop"
+      ) %>%
+      mutate(tf_group = "All")
+  ) %>%
+    mutate(tf_group = factor(tf_group, levels = c("Low TF", "High TF", "All")))
+}
+
+perf_tf_complete_all_evaluable <- bind_rows(
+  add_all_tf_summary(
+    summarise_bm_cfdna_event_performance(
+      merged_CNA,
+      "^(del1p|amp1q|del13q|del17p|hyperdiploid)_(BM|blood)$"
+    )
+  ),
+  add_all_tf_summary(
+    summarise_bm_cfdna_event_performance(
+      merged_trans,
+      "^(IGH_MAF|IGH_MYC|IGH_CCND1|IGH_FGFR3)_(BM|blood)$"
+    )
+  )
+)
+
+mutation_perf_by_tf_all_evaluable <- concordance_row %>%
+  mutate(
+    tf_group = case_when(
+      replace_na(tf_group, "tf_unknown") == "high_tf" ~ "High TF",
+      replace_na(tf_group, "tf_unknown") == "low_tf" ~ "Low TF",
+      TRUE ~ NA_character_
+    )
+  ) %>%
+  group_by(event = "Mutations", tf_group) %>%
+  summarise(
+    n = dplyr::n(),
+    tp = sum(tp),
+    tn = sum(tn),
+    fp = sum(fp),
+    fn = sum(fn),
+    sensitivity = tp / (tp + fn),
+    specificity = tn / (tn + fp),
+    concordance = (tp + tn) / (tp + tn + fp + fn),
+    .groups = "drop"
+  )
+
+perf_tf_complete_all_evaluable <- bind_rows(
+  perf_tf_complete_all_evaluable,
+  add_all_tf_summary(mutation_perf_by_tf_all_evaluable)
+)
+
+perf_long_all_evaluable <- perf_tf_complete_all_evaluable %>%
+  filter(tf_group %in% c("High TF", "Low TF")) %>%
+  pivot_longer(
+    cols = c(concordance, sensitivity, specificity),
+    names_to = "Metric",
+    values_to = "Value"
+  ) %>%
+  mutate(
+    Percent = Value * 100,
+    TF_group = factor(tf_group, levels = c("High TF", "Low TF"))
+  )
+
+event_order_all_evaluable <- perf_long_all_evaluable %>%
+  filter(Metric == "concordance", TF_group == "High TF") %>%
+  arrange(Percent) %>%
+  pull(event)
+
+perf_long_all_evaluable <- perf_long_all_evaluable %>%
+  mutate(event = factor(event, levels = event_order_all_evaluable))
+
+readr::write_csv(
+  perf_long_all_evaluable,
+  file.path(
+    outdir,
+    "Extended_Data_Figure_2B_all_evaluable_baseline_BM_cfDNA_performance_source_data.csv"
+  )
+)
+
+p_3panel_all_evaluable <- ggplot(
+  perf_long_all_evaluable,
+  aes(x = Percent, y = event, group = event)
+) +
+  geom_point(aes(colour = TF_group, shape = TF_group), size = 3, stroke = 0.8) +
+  facet_wrap(
+    ~ Metric,
+    nrow = 1,
+    labeller = labeller(
+      Metric = c(
+        concordance = "Concordance",
+        sensitivity = "Sensitivity",
+        specificity = "Specificity"
+      )
+    )
+  ) +
+  scale_y_discrete(labels = pretty_events) +
+  scale_x_continuous(
+    limits = c(0, 100),
+    breaks = seq(0, 100, 25),
+    labels = function(x) paste0(x, "%"),
+    expand = expansion(mult = c(0.05, 0.05))
+  ) +
+  scale_colour_manual(
+    values = c(
+      "High TF" = viridis(2, end = 0.8)[1],
+      "Low TF" = viridis(2, end = 0.8)[2]
+    ),
+    name = "Tumour fraction"
+  ) +
+  scale_shape_manual(
+    values = c("High TF" = 16, "Low TF" = 16),
+    name = "Tumour fraction"
+  ) +
+  labs(
+    title = "BM vs cfDNA performance by ctDNA fraction",
+    x = "Percent",
+    y = NULL
+  ) +
+  theme_classic(base_size = 11) +
+  theme(
+    plot.title = element_text(face = "bold", hjust = 0.5),
+    strip.text = element_text(face = "bold"),
+    axis.text.y = element_text(size = 9),
+    axis.text.x = element_text(size = 8),
+    legend.position = "top",
+    legend.box = "horizontal",
+    panel.spacing.x = unit(1.2, "lines")
+  )
+
+all_evaluable_ed2b_path <- file.path(
+  outdir,
+  "Fig2C_BM_cfDNA_conc_sens_spec_byTF_all_evaluable_baseline.png"
+)
+ggsave(all_evaluable_ed2b_path, p_3panel_all_evaluable, width = 5.5, height = 4, dpi = 600)
+
+ms_copy_artifact(
+  source_path = all_evaluable_ed2b_path,
+  artifact_id = "EDFIG2B_D_B",
+  role = "all_evaluable_figure_panel_png",
+  description = "Alternate all-evaluable baseline/diagnosis BM-vs-cfDNA concordance, sensitivity, and specificity panel for Extended Data Figure 2B.",
+  script_name = "2_3_Feature_Concordance_And_Mutation_Counts.R"
+)
+ms_copy_artifact(
+  source_path = file.path(
+    outdir,
+    "Extended_Data_Figure_2B_all_evaluable_baseline_BM_cfDNA_performance_source_data.csv"
+  ),
+  artifact_id = "EDFIG2B_D_B",
+  role = "all_evaluable_source_data_csv",
+  description = "Source data for the alternate all-evaluable baseline/diagnosis BM-vs-cfDNA performance panel.",
   script_name = "2_3_Feature_Concordance_And_Mutation_Counts.R"
 )
 

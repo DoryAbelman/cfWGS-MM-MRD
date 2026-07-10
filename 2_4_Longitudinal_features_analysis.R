@@ -66,6 +66,44 @@ suppressPackageStartupMessages({
   library(viridis)
 })
 
+# Build manuscript-facing facet headers from the patients actually represented
+# in a panel. Counting distinct patients here (rather than rows/timepoints)
+# prevents longitudinally sampled patients from inflating the displayed n.
+make_relapse_facet_labels <- function(plot_data) {
+  required_cols <- c("Patient", "patient_relapse180")
+  missing_cols <- setdiff(required_cols, names(plot_data))
+  if (length(missing_cols) > 0) {
+    stop(
+      "Cannot build relapse facet labels; missing column(s): ",
+      paste(missing_cols, collapse = ", "),
+      call. = FALSE
+    )
+  }
+
+  patient_counts <- plot_data %>%
+    filter(!is.na(patient_relapse180)) %>%
+    distinct(Patient, patient_relapse180) %>%
+    count(patient_relapse180, name = "n_patients")
+
+  count_for <- function(status) {
+    value <- patient_counts$n_patients[
+      as.character(patient_counts$patient_relapse180) == as.character(status)
+    ]
+    if (length(value) == 0) 0L else as.integer(value[[1]])
+  }
+
+  c(
+    `FALSE` = paste0(
+      "No relapse within 180 days of blood draw\n(n = ",
+      count_for(FALSE), " patients)"
+    ),
+    `TRUE` = paste0(
+      "Relapse within 180 days of blood draw\n(n = ",
+      count_for(TRUE), " patients)"
+    )
+  )
+}
+
 # Shared helper for final manuscript-organized outputs.
 # This script retains its historical Output_tables_2025 filenames, while the
 # helper copies the manuscript-facing components into
@@ -828,6 +866,7 @@ patient_relapse_labs_short <- c(
   `FALSE` = "No relapse ≤180d",
   `TRUE`  = "Relapse ≤180d"
 )
+patient_relapse_labs_short <- make_relapse_facet_labels(plot_df_pat)
 
 
 
@@ -1077,12 +1116,15 @@ p_cvaf <- ggplot(df_cvaf, aes(Weeks_Since_Baseline, Value, group = Patient)) +
   theme_classic(base_size = 11) +
   theme(strip.background = element_rect(fill = "grey95", colour = NA))
 
-# cap y values at 2500 for plotting only
+# Cap the display at 1,000 so the bulk of patient trajectories remain visible.
+# Values above the cap are retained in the source data, shown as triangles, and
+# labeled with their true value; only their plotted y-coordinate is truncated.
 ## Flag capped points and keep their true values for labeling
+cvaf_z_display_cap <- 1000
 df_cvaf_plot <- df_cvaf %>%
   mutate(
-    overcap    = Value > 2500,                # TRUE if > 2500
-    Value_plot = pmin(Value, 2500),           # cap for plotting
+    overcap    = Value > cvaf_z_display_cap,
+    Value_plot = pmin(Value, cvaf_z_display_cap),
     label_val  = ifelse(overcap, round(Value), NA_real_)  # show true value
   ) %>%
   filter(!is.na(Weeks_Since_Baseline), !is.na(Value_plot))
@@ -1100,8 +1142,8 @@ df_cvaf_seg_plot <- df_cvaf %>%
   ) %>%
   ungroup() %>%
   mutate(
-    y_plot    = pmin(pmax(y,    0), 2500),
-    yend_plot = pmin(pmax(yend, 0), 2500)
+    y_plot    = pmin(pmax(y,    0), cvaf_z_display_cap),
+    yend_plot = pmin(pmax(yend, 0), cvaf_z_display_cap)
   ) %>%
   filter(!is.na(x), !is.na(xend), !is.na(y_plot), !is.na(yend_plot))
 
@@ -1111,7 +1153,7 @@ p_cvaf_modified <- ggplot(df_cvaf_plot, aes(Weeks_Since_Baseline, Value_plot, gr
     aes(x = x, y = y_plot, xend = xend, yend = yend_plot, colour = seg_relapse),
     size = 0.4, alpha = 0.6
   ) +
-  # points: circle for ≤2500, triangle for >2500
+  # points: circle at/below the display cap, triangle above the cap
   geom_point(aes(color = relapse_within_180, shape = overcap),
              size = 1.8, alpha = 0.8) +
   # labels for capped points: print the true value
@@ -1130,7 +1172,10 @@ p_cvaf_modified <- ggplot(df_cvaf_plot, aes(Weeks_Since_Baseline, Value_plot, gr
   # shape 16 = filled circle; 17 = filled triangle
   scale_shape_manual(
     values = c(`FALSE` = 16, `TRUE` = 17),
-    labels = c(`FALSE` = "≤2500", `TRUE` = ">2500 (capped)"),
+    labels = c(
+      `FALSE` = paste0("≤", cvaf_z_display_cap),
+      `TRUE` = paste0(">", cvaf_z_display_cap, " (capped)")
+    ),
     name   = NULL
   ) +
   labs(
@@ -1141,11 +1186,15 @@ p_cvaf_modified <- ggplot(df_cvaf_plot, aes(Weeks_Since_Baseline, Value_plot, gr
   theme_classic(base_size = 11) +
   theme(strip.background = element_rect(fill = "grey95", colour = NA),
         plot.margin = margin(5.5, 5.5, 12, 5.5)) +
-  # give a little headroom so labels above 2500 aren't clipped
-  coord_cartesian(ylim = c(0, 2600), clip = "on") +
+  # Give a little headroom so labels above the cap are not clipped.
+  coord_cartesian(ylim = c(0, cvaf_z_display_cap * 1.04), clip = "on") +
   scale_y_continuous(
-    breaks = c(0, 500, 1000, 1500, 2000, 2500),
-    labels = function(x) ifelse(x == 2500, ">2500", x)
+    breaks = seq(0, cvaf_z_display_cap, by = 200),
+    labels = function(x) ifelse(
+      x == cvaf_z_display_cap,
+      paste0(">", cvaf_z_display_cap),
+      x
+    )
   )
 
 ## B) Proportion of Sites Detected
@@ -1196,7 +1245,7 @@ p_sites <- ggplot(df_sites, aes(Weeks_Since_Baseline, Value, group = Patient)) +
 # 3) Combine them side by side
 p_combined <- p_cvaf_modified + p_sites + 
      plot_annotation(
-      title = "Longitudinal trajectories of MRD metrics from baseline BM mutation profiles",
+      title = "Baseline BM-informed longitudinal tracking: Relapsed vs Non-relapsed patients",
       theme = theme(
         plot.title = element_text(size = 18, face = "bold", hjust = 0.5)
       )
@@ -2040,7 +2089,7 @@ make_cVAF_hc_plot <- function(pid,
   
   # Choose colour & title suffix
   pat_col <- if (isTRUE(pat_is_prog)) progressor_color else nonprogressor_color
-  title_suffix <- if (isTRUE(pat_is_prog)) "Progressor" else "Non‑progressor"
+  title_suffix <- if (isTRUE(pat_is_prog)) "Relapsed" else "Non-relapsed"
   
   # x-axis ordering
   if (is.null(tp_order)) {
@@ -2133,7 +2182,10 @@ make_cVAF_hc_plot <- function(pid,
     ) +
     labs(
       x     = NULL,
-      title = paste0("Tumour‑informed longitudinal tracking: ", new_pid, " (", title_suffix, ")")
+      title = paste0(
+        "Exemplar BM-informed longitudinal tracking: ",
+        new_pid, " (", title_suffix, ")"
+      )
     ) +
     theme_classic(base_size = 9) +
     theme(
@@ -2193,21 +2245,19 @@ for(pid in all_pids){
 #   example patients.
 #
 # Why it is here:
-#   The final assembled Figure 2A uses the retained deanonymized CA-08 and CA-02
-#   PNG components. The source map records that exact redraw still depends on
-#   cached longitudinal mutation-tracking/de-identification state, so these
-#   copied files remain explicit manuscript components until that upstream
-#   reconstruction is fully reconciled.
+#   These components are copied from the plots regenerated immediately above,
+#   keeping their manuscript headings synchronized with the canonical plotting
+#   function and the current de-identification map.
 # -------------------------------------------------------------------------
 ms_copy_artifact(
-  source_path = "Final Tables and Figures/Longitudinal tracking deanonymized/CA-08_cVAF_vsHealthy_updated.png",
+  source_path = file.path(outdir, "CA-08_cVAF_vsHealthy_updated.png"),
   artifact_id = "FIG2A",
   role = "figure_panel_png_CA_08",
   description = "Patient-level longitudinal cVAF example component for Main Figure 2A.",
   script_name = "2_4_Longitudinal_features_analysis.R"
 )
 ms_copy_artifact(
-  source_path = "Final Tables and Figures/Longitudinal tracking deanonymized/CA-02_cVAF_vsHealthy_updated.png",
+  source_path = file.path(outdir, "CA-02_cVAF_vsHealthy_updated.png"),
   artifact_id = "FIG2A",
   role = "figure_panel_png_CA_02",
   description = "Patient-level longitudinal cVAF example component for Main Figure 2A.",
@@ -2329,6 +2379,7 @@ patient_relapse_labs_short <- c(
   `FALSE` = "No relapse ≤180d",
   `TRUE`  = "Relapse ≤180d"
 )
+patient_relapse_labs_short <- make_relapse_facet_labels(plot_df_pat)
 
 
 
@@ -2493,7 +2544,7 @@ p_sites <- ggplot(df_sites, aes(Weeks_Since_Baseline, Value, group = Patient)) +
 # 3) Combine them side by side
 p_combined <- p_cvaf + p_sites + 
   plot_annotation(
-    title = "Longitudinal trajectories of MRD metrics from baseline PB cfDNA mutation profiles",
+    title = "Baseline cfDNA-informed longitudinal tracking: Relapsed vs Non-relapsed patients",
     theme = theme(
       plot.title = element_text(size = 18, face = "bold", hjust = 0.5)
     )
@@ -2814,6 +2865,7 @@ patient_relapse_labs_short <- c(
   `FALSE` = "No relapse ≤180d",
   `TRUE`  = "Relapse ≤180d"
 )
+patient_relapse_labs_short <- make_relapse_facet_labels(plot_df_pat)
 
 
 
@@ -2979,7 +3031,7 @@ p_sites <- ggplot(df_sites, aes(Weeks_Since_Baseline, -Value, group = Patient)) 
 # 3) Combine them side by side
 p_combined <- p_cvaf + p_sites + 
   plot_annotation(
-    title = "Longitudinal trajectories of fragmentomic features",
+    title = "Fragmenomic tumour-agnostic longitudinal tracking: Relapsed vs Non-relapsed patients",
     theme = theme(
       plot.title = element_text(size = 18, face = "bold", hjust = 0.5)
     )

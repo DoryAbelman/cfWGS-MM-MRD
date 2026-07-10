@@ -2772,6 +2772,20 @@ if (anyDuplicated(deidentified_id_map$Patient) || anyDuplicated(deidentified_id_
   stop("The de-identified patient ID map must be one-to-one.", call. = FALSE)
 }
 
+# Patient-specific mutation-list sizes are shown in the dilution-figure legend.
+# These counts describe the personalized baseline mutation list used for
+# tracking; they are not inferred from dilution-series positivity calls.
+mutation_count_path <- "baseline_high_quality_patients_updated.csv"
+if (!file.exists(mutation_count_path)) {
+  stop("Missing mutation-count table: ", mutation_count_path, call. = FALSE)
+}
+mutation_count_lookup <- readr::read_csv(mutation_count_path, show_col_types = FALSE) %>%
+  dplyr::select("Patient", "BM_Mutation_Count", "Blood_Mutation_Count") %>%
+  distinct()
+if (anyDuplicated(mutation_count_lookup$Patient)) {
+  stop("Mutation-count table contains duplicate patient rows.", call. = FALSE)
+}
+
 # Replace Patient with its stable de-identified ID while preserving all other
 # columns. Requiring complete map coverage makes newly introduced patients
 # visible during regeneration instead of passing through with clinical IDs.
@@ -2934,8 +2948,12 @@ make_blood_patient_line_plot <- function(plot_dat,
     stop("No rows available for patient-line dilution plot.")
   }
   annotation_df <- summarise_spearman_for_panels(plot_dat, x_col = x_col)
-  color_var <- if (patient_specific) "replicate_id" else "patient_series"
-  color_label <- if (patient_specific) "Replicate" else "Patient | series"
+  color_var <- if ("patient_legend_label" %in% names(plot_dat)) {
+    "patient_legend_label"
+  } else {
+    "Patient"
+  }
+  color_label <- "Patient (mutations tracked)"
 
   feature_df <- plot_dat %>% filter(.data$panel_type == "Feature")
   probability_df <- plot_dat %>% filter(.data$panel_type == "Probability")
@@ -2976,13 +2994,16 @@ make_blood_patient_line_plot <- function(plot_dat,
     ) +
     guides(
       color = guide_legend(order = 1),
-      linetype = guide_legend(order = 2)
+      linetype = "none"
     ) +
     theme_classic(base_size = 10) +
     theme(
       strip.text = element_text(face = "bold"),
       panel.border = element_rect(color = "black", fill = NA),
       axis.ticks = element_line(color = "black"),
+      axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1, size = 6),
+      axis.title.x = element_text(margin = margin(t = 8)),
+      plot.margin = margin(5.5, 5.5, 18, 5.5),
       legend.position = if (show_legend) "right" else "none"
     )
 
@@ -3008,8 +3029,8 @@ make_blood_patient_line_plot <- function(plot_dat,
     } +
     geom_line(aes(color = .data[[color_var]], linetype = .data$replicate_id),
               linewidth = 0.45, alpha = 0.75) +
-    geom_point(aes(fill = .data$call), shape = 21, color = "black",
-               size = 1.9, alpha = 0.95, stroke = 0.25) +
+    geom_point(aes(color = .data[[color_var]]), shape = 16,
+               size = 1.9, alpha = 0.95) +
     facet_wrap(
       ~ feature,
       scales = "free_y",
@@ -3026,15 +3047,6 @@ make_blood_patient_line_plot <- function(plot_dat,
       name = "Replicate",
       values = c(rep01 = "solid", rep02 = "dashed", single = "dotdash")
     ) +
-    scale_fill_manual(
-      name = "Call",
-      values = c(
-        Negative = "gray60",
-        Confirmatory = "steelblue",
-        Positive = "forestgreen"
-      ),
-      na.value = "white"
-    ) +
     labs(
       x = "Log tumour fraction (%)",
       y = "Model probability",
@@ -3043,13 +3055,16 @@ make_blood_patient_line_plot <- function(plot_dat,
     guides(
       color = "none",
       linetype = "none",
-      fill = guide_legend(order = 3)
+      fill = "none"
     ) +
     theme_classic(base_size = 10) +
     theme(
       strip.text = element_text(face = "bold"),
       panel.border = element_rect(color = "black", fill = NA),
       axis.ticks = element_line(color = "black"),
+      axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1, size = 6),
+      axis.title.x = element_text(margin = margin(t = 8)),
+      plot.margin = margin(5.5, 5.5, 18, 5.5),
       legend.position = if (show_legend) "right" else "none"
     )
 
@@ -3058,13 +3073,15 @@ make_blood_patient_line_plot <- function(plot_dat,
     plot_annotation(
       title = plot_title,
       theme = theme(
-        plot.title = element_text(hjust = 0.5, face = "bold", size = 13),
-        plot.margin = margin(5, 5, 5, 5),
+        plot.title = element_text(hjust = 0.5, face = "bold", size = 14),
+        plot.margin = margin(5, 5, 14, 5),
         plot.background = element_rect(fill = "white", colour = NA)
       )
     ) &
     theme(
       panel.border = element_rect(colour = "black", fill = NA),
+      panel.background = element_rect(fill = "white", colour = NA),
+      plot.background = element_rect(fill = "white", colour = NA),
       strip.text = element_text(face = "bold")
     )
 }
@@ -3177,6 +3194,11 @@ zero_final_minor_breaks <- minor_ext[
 # workbook-defined TFs. The preserved 0.380 boundary is shown as a distinct
 # confirmatory category for the sites-only blood model.
 blood_patient_zero_final_source <- dilution_df %>%
+  left_join(
+    mutation_count_lookup %>%
+      transmute(Patient, mutations_tracked = Blood_Mutation_Count),
+    by = "Patient"
+  ) %>%
   mutate(
     LOD_current_recalibrated = .data$LOD,
     LOD_zero_final = if_else(
@@ -3207,11 +3229,14 @@ blood_patient_zero_final_source <- dilution_df %>%
   ) %>%
   deidentify_dilution_patients() %>%
   mutate(
+    patient_legend_label = paste0(.data$Patient, " (n=", .data$mutations_tracked, ")"),
     patient_series = paste(.data$Patient, .data$series_label, sep = " | "),
     line_group = paste(.data$Patient, .data$series_label, .data$replicate_id, sep = "__")
   ) %>%
   dplyr::select(
     Patient,
+    mutations_tracked,
+    patient_legend_label,
     Sample_ID,
     Sample,
     Bam,
@@ -3256,6 +3281,11 @@ write_csv(
 # Build the analogous BM-informed source table. It uses the same samples and
 # x-axis sensitivity definition but BM features/models and binary calls only.
 bm_patient_zero_final_source <- dilution_df %>%
+  left_join(
+    mutation_count_lookup %>%
+      transmute(Patient, mutations_tracked = BM_Mutation_Count),
+    by = "Patient"
+  ) %>%
   mutate(
     LOD_current_recalibrated = .data$LOD,
     LOD_zero_final = if_else(
@@ -3286,11 +3316,14 @@ bm_patient_zero_final_source <- dilution_df %>%
   ) %>%
   deidentify_dilution_patients() %>%
   mutate(
+    patient_legend_label = paste0(.data$Patient, " (n=", .data$mutations_tracked, ")"),
     patient_series = paste(.data$Patient, .data$series_label, sep = " | "),
     line_group = paste(.data$Patient, .data$series_label, .data$replicate_id, sep = "__")
   ) %>%
   dplyr::select(
     Patient,
+    mutations_tracked,
+    patient_legend_label,
     Sample_ID,
     Sample,
     Bam,
@@ -3443,7 +3476,7 @@ message("Saved: Fig5G_LOD_combined_zero_final_tf_points.png")
 
 zero_final_line_plot <- make_blood_patient_line_plot(
   plot_dat = blood_patient_zero_final_source,
-  plot_title = "cfDNA Dilution-Series Patient Lines: New Release Only",
+  plot_title = "Correlation of cfDNA Feature Values with Tumor Fraction in a Controlled Dilution Series",
   patient_specific = FALSE,
   x_col = "LOD_plot_zero_final",
   x_breaks = zero_final_breaks,
@@ -3456,16 +3489,17 @@ ggsave(
   plot = zero_final_line_plot,
   width = 12.8,
   height = 4.8,
-  dpi = 600
+  dpi = 600,
+  bg = "white"
 )
 message("Saved: Fig5G_LOD_combined_patient_series_lines_zero_final_tf.png")
 
 ms_copy_artifact(
   source_path = file.path(OUTPUT_DIR_FIGURES, "Fig5G_LOD_combined_patient_series_lines_zero_final_tf.png"),
   artifact_id = "EDFIG7D",
-  role = "alternate_patient_lines_zero_final_tf_png",
+  role = "figure_panel_png",
   description = paste(
-    "De-identified blood/cfDNA dilution-series patient-line alternative;",
+    "De-identified blood/cfDNA dilution-series patient-line panel with one color per patient and mutation-list sizes in the legend;",
     "PWGVAL series contain only the new dilution release and end at 0.0001% TF."
   ),
   script_name = "3_1_part2_Apply_cfWGS_thresholds_to_dilution_series.R"
@@ -3476,7 +3510,7 @@ ms_copy_artifact(
 # the BM panel.
 zero_final_bm_line_plot <- make_blood_patient_line_plot(
   plot_dat = bm_patient_zero_final_source,
-  plot_title = "BM-Informed Dilution-Series Patient Lines: New Release Only",
+  plot_title = "Correlation of cfDNA Feature Values with Tumor Fraction in a Controlled Dilution Series",
   patient_specific = FALSE,
   x_col = "LOD_plot_zero_final",
   x_breaks = zero_final_breaks,
@@ -3493,16 +3527,17 @@ ggsave(
   plot = zero_final_bm_line_plot,
   width = 12.8,
   height = 4.8,
-  dpi = 600
+  dpi = 600,
+  bg = "white"
 )
 message("Saved: Fig4G_LOD_combined_patient_series_lines_zero_final_tf.png")
 
 ms_copy_artifact(
   source_path = file.path(OUTPUT_DIR_FIGURES, "Fig4G_LOD_combined_patient_series_lines_zero_final_tf.png"),
   artifact_id = "EDFIG5D",
-  role = "alternate_patient_lines_zero_final_tf_png",
+  role = "figure_panel_png",
   description = paste(
-    "De-identified BM-informed dilution-series patient-line alternative;",
+    "De-identified BM-informed dilution-series patient-line panel with one color per patient and mutation-list sizes in the legend;",
     "PWGVAL series contain only the new dilution release and end at 0.0001% TF."
   ),
   script_name = "3_1_part2_Apply_cfWGS_thresholds_to_dilution_series.R"

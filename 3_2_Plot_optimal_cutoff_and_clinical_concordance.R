@@ -861,12 +861,8 @@ front_tbl <- dat %>%
     !is.na(Blood_zscore_only_sites_call),
     !is.na(Flow_Binary) | !is.na(Adaptive_Binary)
   ) %>%
-  # Add the blood screening-threshold call used in Figure 4C.
-  mutate(
-    Blood_zscore_screen_call  = as.integer(Blood_zscore_only_sites_prob >= 0.380)
-  ) %>%
   pivot_longer(
-    cols      = c(Flow_Binary, Adaptive_Binary, Blood_zscore_only_sites_call, Blood_zscore_screen_call, 
+    cols      = c(Flow_Binary, Adaptive_Binary, Blood_zscore_only_sites_call,
                   EasyM_reference_threshold_binary),
     names_to  = "Technology",
     values_to = "Result"
@@ -884,16 +880,10 @@ front_tbl <- dat %>%
       Technology,
       Flow_Binary         = "MFC",
       Adaptive_Binary     = "clonoSEQ",
-      Blood_zscore_only_sites_call = "cfWGS (confirm)",
-      Blood_zscore_screen_call = "cfWGS (screen)",
+      Blood_zscore_only_sites_call = "cfWGS",
       EasyM_reference_threshold_binary = "EasyM"
     )
   )
-#      Blood_zscore_only_sites_call = "cfWGS (confirm)",
-#      Blood_zscore_screen_call = "cfWGS (screen)"
-#    )
-#  )
-
 # Analyst note: quantify patients negative at both landmark timepoints by
 # clinical assays and by blood/cfDNA-informed cfWGS. These values support
 # manuscript text but are not separately staged as a figure/table artifact.
@@ -971,12 +961,8 @@ non_tbl <- dat %>%
     !is.na(Blood_zscore_only_detection_rate_call),
     !is.na(MRD_truth) # restrict to only ones with MRD for fair comparison
   ) %>%
-  # Add the blood screening-threshold call used in Figure 4C.
-  mutate(
-    Blood_zscore_screen_call  = as.integer(Blood_zscore_only_sites_prob >= 0.380)
-  ) %>%
   pivot_longer(
-    cols      = c(Flow_Binary, Adaptive_Binary, Blood_zscore_only_sites_call, Blood_zscore_screen_call, 
+    cols      = c(Flow_Binary, Adaptive_Binary, Blood_zscore_only_sites_call,
                   EasyM_reference_threshold_binary),
     names_to  = "Technology",
     values_to = "Result"
@@ -994,8 +980,7 @@ non_tbl <- dat %>%
       Technology,
       Flow_Binary         = "MFC",
       Adaptive_Binary     = "clonoSEQ",
-      Blood_zscore_only_sites_call = "cfWGS (confirm)",
-      Blood_zscore_screen_call = "cfWGS (screen)",
+      Blood_zscore_only_sites_call = "cfWGS",
       EasyM_reference_threshold_binary = "EasyM"
     )
   )
@@ -1037,8 +1022,7 @@ combo_tbl <- combo_tbl %>%
                                     "All timepoints")),
     Technology  = factor(Technology,
                          levels = c(
-                           "cfWGS (screen)",
-                           "cfWGS (confirm)",
+                           "cfWGS",
                            "clonoSEQ",
                            "MFC",
                            "EasyM"
@@ -1049,7 +1033,7 @@ combo_tbl <- combo_tbl %>%
 # Analyst note: build prose snippets for checking the Figure 4C percentages
 # against the plotted denominators.
 fig_ref   <- "Figure 4C"
-cohort_in <- "Training"                           # change if you want Test
+cohort_in <- "Training Cohort"                    # must match combo_tbl labels
 
 # Helper: fetch row for a (timepoint, technology, cohort) and format "XX% (a/b)"
 pull_fmt <- function(df, tp, tech, cohort = cohort_in, digits = 0) {
@@ -1065,14 +1049,13 @@ pull_fmt <- function(df, tp, tech, cohort = cohort_in, digits = 0) {
 
 # Helper: build one sentence for a given timepoint
 build_sentence <- function(df, tp, fig = fig_ref) {
-  scr  <- pull_fmt(df, tp, "cfWGS (screen)")
-  conf <- pull_fmt(df, tp, "cfWGS (confirm)")
+  cfwgs <- pull_fmt(df, tp, "cfWGS")
   seqv <- pull_fmt(df, tp, "clonoSEQ")
   mfc  <- pull_fmt(df, tp, "MFC")
   
   sprintf(
-    "At %s, the cfWGS screening threshold identified %s as MRD-positive, whereas the confirmatory threshold was positive in %s, with clinical assays showing %s by clonoSEQ and %s by MFC (%s).",
-    tp, scr, conf, seqv, mfc, fig
+    "At %s, cfWGS identified %s as MRD-positive, with clinical assays showing %s by clonoSEQ and %s by MFC (%s).",
+    tp, cfwgs, seqv, mfc, fig
   )
 }
 
@@ -3858,10 +3841,23 @@ ms_copy_artifact(
   script_name = "3_2_Plot_optimal_cutoff_and_clinical_concordance.R"
 )
 
-# Export source data
+# Export source data and stage it beside the manuscript figure panel.  Keeping
+# this copy operation in the generator prevents stale sidecar CSVs from
+# disagreeing with regenerated rho/p annotations.
+fig3e_source_data_path <- file.path(
+  outdir_source_data,
+  "Fig4K_cfWGS_vs_clinical_assays_EasyM_BM_source_data.csv"
+)
 readr::write_csv(
   plot_df_with_easym %>% mutate(Figure = "Fig4K_cfWGS_vs_clinical_assays_EasyM_BM"),
-  file.path(outdir_source_data, "Fig4K_cfWGS_vs_clinical_assays_EasyM_BM_source_data.csv")
+  fig3e_source_data_path
+)
+ms_copy_artifact(
+  source_path = fig3e_source_data_path,
+  artifact_id = "FIG3E",
+  role = "source_data_csv",
+  description = "Row-level source data for Main Figure 3E BM-informed cfWGS probability correlations.",
+  script_name = "3_2_Plot_optimal_cutoff_and_clinical_concordance.R"
 )
 
 # Additive all-timepoint version requested for the training cohort, test cohort,
@@ -4466,10 +4462,22 @@ ms_copy_artifact(
   script_name = "3_2_Plot_optimal_cutoff_and_clinical_concordance.R"
 )
 
-# Export source data
+# Export source data and stage it beside the manuscript figure panel.  This
+# keeps row-level source data synchronized with the regenerated rho/p labels.
+fig4d_source_data_path <- file.path(
+  outdir_source_data,
+  "Fig5K_cfWGS_vs_clinical_assays_EasyM_blood_source_data.csv"
+)
 readr::write_csv(
   plot_df_blood_with_easym %>% mutate(Figure = "Fig5K_cfWGS_vs_clinical_assays_EasyM_blood"),
-  file.path(outdir_source_data, "Fig5K_cfWGS_vs_clinical_assays_EasyM_blood_source_data.csv")
+  fig4d_source_data_path
+)
+ms_copy_artifact(
+  source_path = fig4d_source_data_path,
+  artifact_id = "FIG4D",
+  role = "source_data_csv",
+  description = "Row-level source data for Main Figure 4D blood/cfDNA-informed cfWGS probability correlations.",
+  script_name = "3_2_Plot_optimal_cutoff_and_clinical_concordance.R"
 )
 
 # Additive all-timepoint version requested for the training cohort, test cohort,

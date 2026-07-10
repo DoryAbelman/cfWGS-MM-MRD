@@ -189,6 +189,70 @@ ms_slug <- function(x) {
   ifelse(nzchar(x), x, "unspecified")
 }
 
+ms_compact_artifact_label <- function(label) {
+  label <- as.character(label)
+  label <- sub("^Figure_", "F", label)
+  label <- sub("^Extended_Data_Figure_", "ED", label)
+  label <- gsub("_unlabeled_bottom_", "_", label)
+  label <- gsub("_", "", label)
+  label
+}
+
+ms_compact_source_hint <- function(source_path) {
+  source_stem <- tools::file_path_sans_ext(basename(source_path))
+  source_stem <- tolower(gsub("[^A-Za-z0-9]+", "_", source_stem))
+
+  if (grepl("swimplot|swim_plot", source_stem)) return("swimplot")
+  if (grepl("roc", source_stem)) return("ROC")
+  if (grepl("performance", source_stem) && grepl("fragment", source_stem)) return("frag_perf")
+  if (grepl("performance", source_stem) && grepl("blood", source_stem)) return("blood_perf")
+  if (grepl("performance", source_stem) && grepl("\\bbm\\b|_bm_", source_stem)) return("BM_perf")
+  if (grepl("lod|dilution", source_stem) && grepl("fragment|tf", source_stem)) return("dilution_TF")
+  if (grepl("lod|dilution", source_stem)) return("dilution")
+  if (grepl("flowchart|sample_flow", source_stem)) return("flowchart")
+  if (grepl("confusion|confmat", source_stem)) return("confmat")
+  if (grepl("km|kaplan", source_stem)) return("KM")
+  if (grepl("longitudinal", source_stem)) return("longitudinal")
+  if (grepl("source", source_stem)) return("source")
+
+  ""
+}
+
+ms_compact_role_label <- function(role, source_path = "") {
+  role_slug <- ms_slug(role)
+  role_map <- c(
+    figure_panel_png = "panel",
+    figure_component_png = "component",
+    all_samples_figure_panel_png = "all_samples",
+    all_evaluable_figure_panel_png = "all_eval",
+    all_evaluable_capped300_figure_panel_png = "all_eval_cap300",
+    all_evaluable_first_nonbaseline_figure_panel_png = "first_nonbase_PFS",
+    all_evaluable_first_maintenance_figure_panel_png = "first_maint_PFS",
+    all_evaluable_first_nonbaseline_event_free_30d_figure_panel_png = "first_nonbase_EFS",
+    all_evaluable_first_maintenance_event_free_30d_figure_panel_png = "first_maint_EFS",
+    sustained_first_two_maintenance_sensitivity_png = "sustained_maint2",
+    alternate_cvaf_model_figure_panel_png = "alt_cvaf",
+    alternate_cvaf_zscore_model_figure_panel_png = "alt_cvaf_z",
+    alternate_combined_model_figure_panel_png = "alt_combined",
+    alternate_patient_lines_zero_final_tf_png = "alt_zero_TF",
+    alternate_cross_platform_patient_lines_with_novaseq6000_zero_controls_png = "alt_novaseq_zero",
+    supporting_dilution_patient_lines_zero_final_tf_png = "dilution_zero_TF",
+    manual_final_figure_pdf = "manual_final",
+    external_final_figure_pdf = "external_final"
+  )
+
+  label <- if (role_slug %in% names(role_map)) unname(role_map[[role_slug]]) else role_slug
+  source_hint <- ms_compact_source_hint(source_path)
+
+  if (nzchar(source_hint) && label %in% c("panel", "component", "all_eval")) {
+    label <- source_hint
+  }
+
+  label <- gsub("[^A-Za-z0-9]+", "_", label)
+  label <- gsub("^_+|_+$", "", label)
+  ifelse(nzchar(label), label, "panel")
+}
+
 ms_artifact_label <- function(meta) {
   artifact <- meta$artifact[[1]]
   panel <- meta$panel_or_sheet[[1]]
@@ -234,9 +298,9 @@ ms_destination_path <- function(source_path, artifact_id, role, project_root = m
   ext <- tools::file_ext(source_path)
   ext <- if (nzchar(ext)) paste0(".", ext) else ""
   artifact_role_stem <- paste0(
-    ms_slug(ms_artifact_label(meta)),
-    "__",
-    ms_slug(role)
+    ms_compact_artifact_label(ms_artifact_label(meta)),
+    "_",
+    ms_compact_role_label(role, source_path)
   )
   filename <- paste0(
     artifact_role_stem,
@@ -284,8 +348,12 @@ ms_reproducible_style_generated_path <- function(source_path,
   generated_root <- file.path(ms_output_root(project_root), "generated")
   ext <- tools::file_ext(source_path)
   ext <- if (nzchar(ext)) paste0(".", ext) else ""
-  source_stem <- tools::file_path_sans_ext(basename(source_path))
-  filename <- paste0(artifact_id, "__", ms_slug(role), "__", ms_slug(source_stem), ext)
+  filename <- paste0(
+    ms_compact_artifact_label(ms_artifact_label(meta)),
+    "_",
+    ms_compact_role_label(role, source_path),
+    ext
+  )
 
   if (meta$artifact_category[[1]] %in% c("main_figure", "extended_data_figure", "supplementary_figure")) {
     return(file.path(
@@ -362,15 +430,10 @@ ms_manual_assembly_reference_path <- function(source_path,
   meta <- ms_artifact_metadata(artifact_id, project_root)
   ext <- tools::file_ext(source_path)
   ext <- if (nzchar(ext)) paste0(".", ext) else ""
-  source_stem <- tools::file_path_sans_ext(basename(source_path))
   filename <- paste0(
-    artifact_id,
-    "__",
-    ms_slug(ms_artifact_label(meta)),
-    "__",
-    ms_slug(role),
-    "__",
-    ms_slug(source_stem),
+    ms_compact_artifact_label(ms_artifact_label(meta)),
+    "_",
+    ms_compact_role_label(role, source_path),
     ext
   )
   file.path(

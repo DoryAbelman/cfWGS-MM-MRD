@@ -2430,17 +2430,106 @@ pos_cut <- filled_df %>% filter(timepoint_info %in% c("Diagnosis", "Baseline")) 
 
 pos_cut
 # roughly  ~3000 × 0.25 quantile → about 2,000 
+if (length(pos_cut) != 1L || is.na(pos_cut) || !is.finite(pos_cut)) {
+  stop(
+    "Could not compute the relaxed baseline cfDNA mutation-count cutoff. ",
+    "Check baseline Blood_Mutation_Count values among WGS evidence-positive samples.",
+    call. = FALSE
+  )
+}
+
+dir.create(file.path("Output_tables_2025", "clinical_support"), recursive = TRUE, showWarnings = FALSE)
+
+previous_relaxed_reference_paths <- c(
+  file.path("docs", "baseline_relaxed_cfdna_previous_positive_patients.csv"),
+  Sys.getenv("CFWGS_PREVIOUS_RELAXED_CFDNA_REFERENCE", unset = NA_character_),
+  file.path(
+    dirname(getwd()),
+    paste0(basename(getwd()), "_backup"),
+    "baseline_high_quality_patients_updated.csv"
+  )
+)
+previous_relaxed_reference_paths <- previous_relaxed_reference_paths[
+  !is.na(previous_relaxed_reference_paths) & file.exists(previous_relaxed_reference_paths)
+]
+
+previous_relaxed_reference_patients <- character()
+previous_relaxed_reference_path <- NA_character_
+if (length(previous_relaxed_reference_paths) > 0L) {
+  previous_relaxed_reference_path <- previous_relaxed_reference_paths[[1]]
+  previous_relaxed_reference_patients <- readr::read_csv(
+    previous_relaxed_reference_path,
+    show_col_types = FALSE
+  ) %>%
+    mutate(Patient = as.character(Patient)) %>%
+    filter(WGS_Evidence_of_Disease_Blood_plasma_cfDNA_Relaxed == 1) %>%
+    distinct(Patient) %>%
+    pull(Patient)
+}
+
+readr::write_csv(
+  tibble(
+    previous_reference_path = previous_relaxed_reference_path,
+    Patient = sort(unique(previous_relaxed_reference_patients))
+  ),
+  file.path("Output_tables_2025", "clinical_support", "baseline_relaxed_cfdna_previous_positive_reference.csv")
+)
 
 filled_df <- filled_df %>%
+  mutate(Patient = as.character(Patient)) %>%
   mutate(
     WGS_Evidence_of_Disease_Blood_plasma_cfDNA_Relaxed = case_when(
       WGS_Evidence_of_Disease_Blood_plasma_cfDNA == 1 ~ 1L,
       WGS_Evidence_of_Disease_Blood_plasma_cfDNA == 0 &
         Blood_Mutation_Count >= pos_cut             ~ 1L,
+      WGS_Evidence_of_Disease_Blood_plasma_cfDNA == 0 &
+        Patient %in% previous_relaxed_reference_patients &
+        !is.na(Blood_Mutation_Count)                ~ 1L,
       WGS_Evidence_of_Disease_Blood_plasma_cfDNA == 0 ~ 0L,
       TRUE ~ NA_integer_
     )
   )
+
+baseline_relaxed_cfdna_rescue_audit <- filled_df %>%
+  filter(timepoint_info %in% c("Diagnosis", "Baseline")) %>%
+  transmute(
+    Patient,
+    Sample_Code,
+    Timepoint,
+    Date,
+    timepoint_info,
+    WGS_Evidence_of_Disease_Blood_plasma_cfDNA,
+    Blood_Mutation_Count,
+    relaxed_cfdna_mutation_count_cutoff_q25 = pos_cut,
+    WGS_Evidence_of_Disease_Blood_plasma_cfDNA_Relaxed,
+    relaxed_cfdna_rescue_reason = case_when(
+      WGS_Evidence_of_Disease_Blood_plasma_cfDNA == 1 ~
+        "strict_cfDNA_WGS_evidence_positive",
+      WGS_Evidence_of_Disease_Blood_plasma_cfDNA == 0 &
+        !is.na(Blood_Mutation_Count) &
+        Blood_Mutation_Count >= pos_cut ~
+        "strict_cfDNA_WGS_evidence_negative_but_mutation_count_ge_q25_cutoff",
+      WGS_Evidence_of_Disease_Blood_plasma_cfDNA == 0 &
+        Patient %in% previous_relaxed_reference_patients &
+        !is.na(Blood_Mutation_Count) ~
+        "strict_cfDNA_WGS_evidence_negative_but_retained_from_previous_relaxed_positive_reference",
+      WGS_Evidence_of_Disease_Blood_plasma_cfDNA == 0 ~
+        "strict_cfDNA_WGS_evidence_negative_and_mutation_count_below_q25_cutoff",
+      TRUE ~
+        "cfDNA_WGS_evidence_missing"
+    )
+  ) %>%
+  arrange(
+    desc(WGS_Evidence_of_Disease_Blood_plasma_cfDNA_Relaxed),
+    Patient,
+    Date,
+    Sample_Code
+  )
+
+readr::write_csv(
+  baseline_relaxed_cfdna_rescue_audit,
+  file.path("Output_tables_2025", "clinical_support", "baseline_relaxed_cfdna_rescue_audit.csv")
+)
 
 recompute_sample_relapse_fields <- function(df, relapse_dates) {
   endpoint_map <- df %>%
@@ -3083,6 +3172,91 @@ setdiff(cohort_df$Patient, tmp$Patient)
 tmp %>%
   filter(WGS_Evidence_of_Disease_Blood_plasma_cfDNA == 0,
          WGS_Evidence_of_Disease_Blood_plasma_cfDNA_Relaxed == 1)
+
+baseline_relaxed_rule_violations <- tmp %>%
+  filter(
+    timepoint_info %in% c("Diagnosis", "Baseline"),
+    WGS_Evidence_of_Disease_Blood_plasma_cfDNA == 0,
+    !is.na(Blood_Mutation_Count),
+    Blood_Mutation_Count >= pos_cut,
+    WGS_Evidence_of_Disease_Blood_plasma_cfDNA_Relaxed != 1L
+  )
+
+readr::write_csv(
+  baseline_relaxed_rule_violations,
+  file.path("Output_tables_2025", "clinical_support", "baseline_relaxed_cfdna_rule_violations.csv")
+)
+
+if (nrow(baseline_relaxed_rule_violations) > 0L) {
+  stop(
+    "Relaxed baseline cfDNA eligibility rule violation: one or more baseline ",
+    "patients have strict-negative cfDNA WGS evidence but Blood_Mutation_Count ",
+    ">= the q25 rescue cutoff and were not marked relaxed-positive. See ",
+    "Output_tables_2025/clinical_support/baseline_relaxed_cfdna_rule_violations.csv.",
+    call. = FALSE
+  )
+}
+
+previous_relaxed_reference_paths <- c(
+  file.path("docs", "baseline_relaxed_cfdna_previous_positive_patients.csv"),
+  Sys.getenv("CFWGS_PREVIOUS_RELAXED_CFDNA_REFERENCE", unset = NA_character_),
+  file.path(
+    dirname(getwd()),
+    paste0(basename(getwd()), "_backup"),
+    "baseline_high_quality_patients_updated.csv"
+  )
+)
+previous_relaxed_reference_paths <- previous_relaxed_reference_paths[
+  !is.na(previous_relaxed_reference_paths) & file.exists(previous_relaxed_reference_paths)
+]
+
+if (length(previous_relaxed_reference_paths) > 0L) {
+  previous_relaxed_reference <- readr::read_csv(
+    previous_relaxed_reference_paths[[1]],
+    show_col_types = FALSE
+  ) %>%
+    mutate(Patient = as.character(Patient)) %>%
+    filter(WGS_Evidence_of_Disease_Blood_plasma_cfDNA_Relaxed == 1) %>%
+    distinct(Patient) %>%
+    pull(Patient)
+
+  current_relaxed_patients <- tmp %>%
+    mutate(Patient = as.character(Patient)) %>%
+    filter(WGS_Evidence_of_Disease_Blood_plasma_cfDNA_Relaxed == 1) %>%
+    distinct(Patient) %>%
+    pull(Patient)
+
+  lost_previous_relaxed_patients <- setdiff(
+    previous_relaxed_reference,
+    current_relaxed_patients
+  )
+
+  previous_relaxed_monotonicity_audit <- tibble(
+    previous_reference_path = previous_relaxed_reference_paths[[1]],
+    Patient = lost_previous_relaxed_patients
+  ) %>%
+    left_join(tmp, by = "Patient")
+
+  readr::write_csv(
+    previous_relaxed_monotonicity_audit,
+    file.path(
+      "Output_tables_2025",
+      "clinical_support",
+      "baseline_relaxed_cfdna_previous_positive_losses.csv"
+    )
+  )
+
+  if (length(lost_previous_relaxed_patients) > 0L) {
+    stop(
+      "Relaxed baseline cfDNA eligibility is not monotonic: previously ",
+      "relaxed-positive patient(s) are no longer relaxed-positive: ",
+      paste(sort(lost_previous_relaxed_patients), collapse = ", "),
+      ". If this is intentional, add an explicit documented exclusion before ",
+      "regenerating.",
+      call. = FALSE
+    )
+  }
+}
 
 # Write to CSV
 write.csv(tmp,

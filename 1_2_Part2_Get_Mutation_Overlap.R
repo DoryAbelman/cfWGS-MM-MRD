@@ -203,6 +203,7 @@ combined_maf <- combined_maf %>% filter(timepoint_info %in% c("Diagnosis", "Base
 
 ## Add cohort df 
 cohort_df <- readRDS("cohort_assignment_table_updated.rds")
+cohort_df <- augment_cohort_assignment_with_spring2026_revision(cohort_df)
 
 # Find cohort-assigned patients with no baseline/diagnosis mutation rows after
 # the metadata join and timepoint filter. This is diagnostic only; it does not
@@ -628,6 +629,146 @@ ms_copy_artifact(
   artifact_id = "EDFIG2G",
   role = "summary_csv",
   description = "Extended Data Figure 2G summary statistics for baseline BM/cfDNA mutation overlap.",
+  script_name = "1_2_Part2_Get_Mutation_Overlap.R"
+)
+
+# Alternate ED2G-style panel: all cohort-assigned evaluable diagnosis/baseline
+# BM-cfDNA pairs.
+# The manuscript-mapped ED2G panel above intentionally preserves the original
+# training-cohort-only view. This companion version keeps every matched
+# baseline/diagnosis patient pair with defined mutation overlap, including the
+# test cohort, after the same upstream metadata joins and pair filters.
+plot_df_all_evaluable <- overlap_with_cohort %>%
+  filter(!is.na(Cohort), !is.na(Percent_Overlap)) %>%
+  left_join(id_map, by = "Patient") %>%
+  mutate(
+    Patient = coalesce(New_ID, Patient),
+    Cohort = case_when(
+      Cohort == "Frontline" ~ "Training Cohort",
+      Cohort == "Non-frontline" ~ "Test Cohort",
+      TRUE ~ Cohort
+    )
+  ) %>%
+  select(-New_ID) %>%
+  arrange(Percent_Overlap) %>%
+  mutate(
+    Patient = factor(Patient, levels = Patient),
+    pos = row_number()
+  )
+
+all_eval_med <- median(plot_df_all_evaluable$Percent_Overlap, na.rm = TRUE)
+all_eval_iqr_l <- quantile(plot_df_all_evaluable$Percent_Overlap, 0.25, na.rm = TRUE)
+all_eval_iqr_u <- quantile(plot_df_all_evaluable$Percent_Overlap, 0.75, na.rm = TRUE)
+
+p_overlap_all_evaluable <- ggplot(
+  plot_df_all_evaluable,
+  aes(x = Percent_Overlap, y = Patient)
+) +
+  geom_vline(xintercept = all_eval_med, linetype = "dashed", colour = "grey40") +
+  geom_segment(
+    aes(x = 0, xend = Percent_Overlap, yend = Patient),
+    colour = "grey65",
+    linewidth = 0.35
+  ) +
+  geom_point(aes(colour = Percent_Overlap), size = 2) +
+  scale_colour_viridis_c(
+    option = "D",
+    end = 0.9,
+    name = "% overlap",
+    guide = guide_colourbar(barwidth = 0.4, barheight = 3)
+  ) +
+  scale_x_continuous(expand = expansion(mult = c(0, 0.02))) +
+  labs(
+    x = "Mutation overlap: BM ∩ cfDNA (%)",
+    y = NULL,
+    title = "Patient-level overlap of baseline mutations (BM vs. cfDNA)",
+    subtitle = glue::glue(
+      "All cohort-assigned evaluable baseline/diagnosis pairs; median = {round(all_eval_med, 1)}% | IQR = {round(all_eval_iqr_l, 1)}-{round(all_eval_iqr_u, 1)}%"
+    )
+  ) +
+  theme_minimal(base_size = 8) +
+  theme(
+    plot.title = element_text(face = "bold", size = 9),
+    plot.subtitle = element_text(size = 7, margin = margin(b = 6)),
+    axis.text.y = element_text(size = 6),
+    panel.grid.major.y = element_blank(),
+    legend.position = c(0.97, 0.05),
+    legend.justification = c(1, 0),
+    legend.background = element_rect(
+      fill = scales::alpha("white", 0.7),
+      colour = NA
+    ),
+    legend.key.width = unit(0.3, "cm"),
+    legend.key.height = unit(1.1, "cm"),
+    legend.title = element_text(size = 6),
+    legend.text = element_text(size = 6)
+  )
+
+edfig2g_all_evaluable_path <- file.path(
+  outdir,
+  "Fig3C_mutation_overlap_lollipop_all_evaluable_baseline.png"
+)
+ggsave(
+  filename = edfig2g_all_evaluable_path,
+  plot = p_overlap_all_evaluable,
+  width = 4,
+  height = 5,
+  dpi = 600
+)
+
+edfig2g_all_evaluable_source_data_path <- file.path(
+  outdir,
+  "Extended_Data_Figure_2G_all_evaluable_baseline_mutation_overlap_source_data.csv"
+)
+edfig2g_all_evaluable_summary_path <- file.path(
+  outdir,
+  "Extended_Data_Figure_2G_all_evaluable_baseline_mutation_overlap_summary.csv"
+)
+
+edfig2g_all_evaluable_summary <- plot_df_all_evaluable %>%
+  summarise(
+    n = n(),
+    n_training_cohort = sum(Cohort == "Training Cohort", na.rm = TRUE),
+    n_test_cohort = sum(Cohort == "Test Cohort", na.rm = TRUE),
+    mean_overlap = mean(Percent_Overlap, na.rm = TRUE),
+    median_overlap = median(Percent_Overlap, na.rm = TRUE),
+    IQR_overlap = IQR(Percent_Overlap, na.rm = TRUE),
+    IQR_lower = quantile(Percent_Overlap, 0.25, na.rm = TRUE),
+    IQR_upper = quantile(Percent_Overlap, 0.75, na.rm = TRUE),
+    min_overlap = min(Percent_Overlap, na.rm = TRUE),
+    max_overlap = max(Percent_Overlap, na.rm = TRUE)
+  )
+
+write.csv(
+  plot_df_all_evaluable,
+  edfig2g_all_evaluable_source_data_path,
+  row.names = FALSE
+)
+write.csv(
+  edfig2g_all_evaluable_summary,
+  edfig2g_all_evaluable_summary_path,
+  row.names = FALSE
+)
+
+ms_copy_artifact(
+  source_path = edfig2g_all_evaluable_path,
+  artifact_id = "EDFIG2G",
+  role = "all_evaluable_figure_panel_png",
+  description = "Alternate all-evaluable baseline/diagnosis BM/cfDNA mutation-overlap lollipop plot for Extended Data Figure 2G.",
+  script_name = "1_2_Part2_Get_Mutation_Overlap.R"
+)
+ms_copy_artifact(
+  source_path = edfig2g_all_evaluable_source_data_path,
+  artifact_id = "EDFIG2G",
+  role = "all_evaluable_source_data_csv",
+  description = "Source data for the alternate all-evaluable baseline/diagnosis BM/cfDNA mutation-overlap lollipop plot.",
+  script_name = "1_2_Part2_Get_Mutation_Overlap.R"
+)
+ms_copy_artifact(
+  source_path = edfig2g_all_evaluable_summary_path,
+  artifact_id = "EDFIG2G",
+  role = "all_evaluable_summary_csv",
+  description = "Summary statistics for the alternate all-evaluable baseline/diagnosis BM/cfDNA mutation-overlap lollipop plot.",
   script_name = "1_2_Part2_Get_Mutation_Overlap.R"
 )
 

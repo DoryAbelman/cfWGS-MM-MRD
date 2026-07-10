@@ -680,8 +680,8 @@ if (USE_PRESERVED_MODELS_ONLY) {
       scale_x_discrete(position = "top") +
       scale_y_discrete(limits = c("pos", "neg")) +
       labs(
-        x = "Predicted MRD status",
-        y = "Observed MRD status",
+        x = "cfWGS-MRD",
+        y = "BM-MRD",
         title = plot_title
       ) +
       theme_minimal(base_size = 10) +
@@ -5823,8 +5823,8 @@ p_tables <- ggplot(cm_df, aes(x = Pred, y = Obs, fill = Count)) +
   scale_x_discrete(position = "top") +
   scale_y_discrete(limits = c("pos", "neg")) +
   labs(
-    x = "Predicted MRD status",
-    y = "Observed MRD status",
+    x = "cfWGS-MRD",
+    y = "BM-MRD",
     title = "Confusion Matrix at Youden Index in Training Cohort"
   ) +
   theme_minimal(base_size = 10) +
@@ -5923,8 +5923,8 @@ p_tables <- ggplot(cm_df, aes(x = Pred, y = Obs, fill = Count)) +
   # ) +
   scale_x_discrete(position = "top") +
   labs(
-    x = "Predicted MRD status",
-    y = "Observed MRD status",
+    x = "cfWGS-MRD",
+    y = "BM-MRD",
     title = "Confusion Matrix at Youden Index in Test Cohort"
   ) +
   scale_y_discrete(limits = c("pos", "neg")) +
@@ -6190,8 +6190,8 @@ p_tables <- ggplot(cm_df, aes(x = Pred, y = Obs, fill = Count)) +
   # ) +  
   scale_x_discrete(position = "top") +
   labs(
-    x = "Predicted MRD status",
-    y = "Observed MRD status",
+    x = "cfWGS-MRD",
+    y = "BM-MRD",
     title = "Confusion Matrix at Youden Index in Training Cohort"
   ) +
   theme_minimal(base_size = 10) +
@@ -6290,8 +6290,8 @@ p_tables <- ggplot(cm_df, aes(x = Pred, y = Obs, fill = Count)) +
   # ) +
   scale_x_discrete(position = "top") +
   labs(
-    x = "Predicted MRD status",
-    y = "Observed MRD status",
+    x = "cfWGS-MRD",
+    y = "BM-MRD",
     title = "Confusion Matrix at Youden Index in Test Cohort"
   ) +
   theme_minimal(base_size = 10) +

@@ -766,44 +766,178 @@ if (!is.null(artifact_map) && nrow(artifact_map)) {
 sample_flow_path <- project_path("Final Tables and Figures", "Table for creating sample flowchart updated3.csv")
 sample_flow <- read_csv_if_exists(sample_flow_path)
 if (!is.null(sample_flow) && all(c("Patient", "total_cfDNA_samples") %in% names(sample_flow))) {
+  sample_flow_analysis <- sample_flow
+  if ("Cohort" %in% names(sample_flow_analysis)) {
+    sample_flow_analysis <- sample_flow_analysis %>%
+      filter(!is.na(Cohort), Cohort != "Frontline_omitted")
+  }
+  if (nrow(sample_flow_analysis) == 0) {
+    stop(
+      "Figure 1B sample-flow table was loaded, but no analysis-cohort rows were available after filtering.",
+      call. = FALSE
+    )
+  }
+
+  sample_flow_counts_path <- project_path("Final Tables and Figures", "Figure_1B_flowchart_box_counts_current.csv")
+  sample_flow_counts <- read_csv_if_exists(sample_flow_counts_path)
+  flowchart_value <- function(box_id) {
+    if (is.null(sample_flow_counts) || !all(c("box_id", "n") %in% names(sample_flow_counts))) {
+      return(NA_real_)
+    }
+    out <- sample_flow_counts %>%
+      filter(.data$box_id == .env$box_id) %>%
+      summarise(value = sum(.data$n, na.rm = TRUE), .groups = "drop") %>%
+      pull(.data$value)
+    if (!length(out)) NA_real_ else out[[1]]
+  }
+  flowchart_value_by_cohort <- function(cohort, box_id) {
+    if (is.null(sample_flow_counts) || !all(c("figure_cohort", "box_id", "n") %in% names(sample_flow_counts))) {
+      return(NA_real_)
+    }
+    out <- sample_flow_counts %>%
+      filter(.data$figure_cohort == .env$cohort, .data$box_id == .env$box_id) %>%
+      summarise(value = sum(.data$n, na.rm = TRUE), .groups = "drop") %>%
+      pull(.data$value)
+    if (!length(out)) NA_real_ else out[[1]]
+  }
+
+  flowchart_total_patients <- flowchart_value("cohort_total")
+  flowchart_training_patients <- flowchart_value_by_cohort("Training cohort", "cohort_total")
+  flowchart_test_patients <- flowchart_value_by_cohort("Test cohort", "cohort_total")
+  flowchart_cfdna_collected <- flowchart_value("cfdna_collected")
+  flowchart_bm_collected <- flowchart_value("bm_collected_or_attempted")
+  flowchart_cfdna_used <- flowchart_value("cfdna_used_for_mrd_detection")
+  flowchart_bm_used <- flowchart_value("bm_used_for_mrd_detection")
+  flowchart_training_cfdna_evaluable <- flowchart_value_by_cohort("Training cohort", "cfdna_disease_evaluable_baseline_patients")
+  flowchart_training_bm_evaluable <- flowchart_value_by_cohort("Training cohort", "bm_disease_evaluable_baseline_patients")
+
+  if (!is.null(sample_flow_counts) && all(c("box_id", "n") %in% names(sample_flow_counts))) {
+    integrated_cfdna_count <- sample_flow_counts %>%
+      filter(box_id == "cfdna_integrated_samples") %>%
+      summarise(value = sum(n, na.rm = TRUE), .groups = "drop") %>%
+      pull(value)
+  }
+
   add_rows(bind_rows(
     new_row(
       "Abstract",
       "Cohort summary claims",
       "current_sample_flow_unique_patients",
-      "Unique patients in Figure 1B sample-flow source table",
-      safe_n_distinct(sample_flow$Patient),
-      fmt_int(safe_n_distinct(sample_flow$Patient)),
+      "Unique patients in the current Figure 1B full cohort flowchart",
+      ifelse(is.na(flowchart_total_patients), safe_n_distinct(sample_flow_analysis$Patient), flowchart_total_patients),
+      fmt_int(ifelse(is.na(flowchart_total_patients), safe_n_distinct(sample_flow_analysis$Patient), flowchart_total_patients)),
       units = "patients",
-      source_file = sample_flow_path,
+      source_file = ifelse(is.na(flowchart_total_patients), sample_flow_path, sample_flow_counts_path),
       source_script = "Scripts_2025/Final_Scripts/1_6_Identify_High_Quality_Patient_Pairs.R",
       related_artifacts = "Figure_1B",
       update_trigger = "rerun sample-flow/cohort scripts or add samples",
-      suggested_text = paste0("Current Figure 1B sample-flow source table includes ", fmt_int(safe_n_distinct(sample_flow$Patient)), " patients.")
+      suggested_text = paste0(
+        "Current Figure 1B flowchart includes ",
+        fmt_int(ifelse(is.na(flowchart_total_patients), safe_n_distinct(sample_flow_analysis$Patient), flowchart_total_patients)),
+        " patients."
+      )
     ),
+    if (!is.na(flowchart_training_patients)) {
+      new_row(
+        "Abstract",
+        "Cohort summary claims",
+        "current_sample_flow_training_patients",
+        "Training cohort patients in current Figure 1B flowchart",
+        flowchart_training_patients,
+        fmt_int(flowchart_training_patients),
+        units = "patients",
+        source_file = sample_flow_counts_path,
+        source_script = "Scripts_2025/Final_Scripts/1_6_Identify_High_Quality_Patient_Pairs.R",
+        related_artifacts = "Figure_1B",
+        update_trigger = "rerun sample-flow/cohort scripts or add samples"
+      )
+    } else {
+      tibble()
+    },
+    if (!is.na(flowchart_test_patients)) {
+      new_row(
+        "Abstract",
+        "Cohort summary claims",
+        "current_sample_flow_test_patients",
+        "Full test cohort patients in current Figure 1B flowchart",
+        flowchart_test_patients,
+        fmt_int(flowchart_test_patients),
+        units = "patients",
+        source_file = sample_flow_counts_path,
+        source_script = "Scripts_2025/Final_Scripts/1_6_Identify_High_Quality_Patient_Pairs.R",
+        related_artifacts = "Figure_1B",
+        update_trigger = "rerun sample-flow/cohort scripts or add samples",
+        caveat = "Revision-aware full test cohort; includes legacy non-frontline patients plus Spring 2026 IMMAGINE test-cohort additions."
+      )
+    } else {
+      tibble()
+    },
     new_row(
       "Abstract",
       "Cohort summary claims",
       "current_sample_flow_total_cfdna_samples",
-      "Total cfDNA samples in Figure 1B sample-flow source table",
-      sum(sample_flow$total_cfDNA_samples, na.rm = TRUE),
-      fmt_int(sum(sample_flow$total_cfDNA_samples, na.rm = TRUE)),
-      units = "cfDNA samples",
-      source_file = sample_flow_path,
+      "cfDNA collected/sequenced patient-level boxes in current Figure 1B flowchart",
+      ifelse(is.na(flowchart_cfdna_collected), sum(sample_flow_analysis$total_cfDNA_samples, na.rm = TRUE), flowchart_cfdna_collected),
+      fmt_int(ifelse(is.na(flowchart_cfdna_collected), sum(sample_flow_analysis$total_cfDNA_samples, na.rm = TRUE), flowchart_cfdna_collected)),
+      units = "patients/samples",
+      source_file = ifelse(is.na(flowchart_cfdna_collected), sample_flow_path, sample_flow_counts_path),
       source_script = "Scripts_2025/Final_Scripts/1_6_Identify_High_Quality_Patient_Pairs.R",
       related_artifacts = "Figure_1B",
       update_trigger = "rerun sample-flow/cohort scripts or add samples",
-      caveat = "This is the current source-table value and may not match older prose if sample inclusion has changed."
+      caveat = "Patient-level flowchart count, not total longitudinal plasma rows."
     ),
+    if (!is.na(flowchart_cfdna_used)) {
+      new_row(
+        "Abstract",
+        "Cohort summary claims",
+        "current_sample_flow_test_cfdna_mrd_patients",
+        "Full test cohort cfDNA samples used for MRD detection in Figure 1B flowchart",
+        flowchart_cfdna_used,
+        fmt_int(flowchart_cfdna_used),
+        units = "patients/samples",
+        source_file = sample_flow_counts_path,
+        source_script = "Scripts_2025/Final_Scripts/1_6_Identify_High_Quality_Patient_Pairs.R",
+        related_artifacts = "Figure_1B",
+        update_trigger = "rerun sample-flow/cohort scripts or add samples",
+        caveat = "Revision-aware test-branch count from sample_scoring_status_manifest.csv."
+      )
+    } else {
+      tibble()
+    },
+    if (!is.na(flowchart_bm_collected)) {
+      new_row(
+        "Abstract",
+        "Cohort summary claims",
+        "current_sample_flow_bm_collected",
+        "BM collected/sequenced patient-level boxes in current Figure 1B flowchart",
+        flowchart_bm_collected,
+        fmt_int(flowchart_bm_collected),
+        units = "patients/samples",
+        source_file = sample_flow_counts_path,
+        source_script = "Scripts_2025/Final_Scripts/1_6_Identify_High_Quality_Patient_Pairs.R",
+        related_artifacts = "Figure_1B",
+        update_trigger = "rerun sample-flow/cohort scripts or add samples"
+      )
+    } else {
+      tibble()
+    },
     new_row(
       "Abstract",
       "Cohort summary claims",
       "current_sample_flow_high_quality_bm_patients",
-      "Patients with high-quality BM in Figure 1B sample-flow source table",
-      sum(sample_flow$high_quality_BM, na.rm = TRUE),
-      fmt_int(sum(sample_flow$high_quality_BM, na.rm = TRUE)),
+      "BM patients/samples used for Figure 1B MRD-detection branch",
+      ifelse(
+        is.na(flowchart_bm_used) || is.na(flowchart_training_bm_evaluable),
+        sum(sample_flow_analysis$high_quality_BM, na.rm = TRUE),
+        flowchart_training_bm_evaluable + flowchart_bm_used
+      ),
+      fmt_int(ifelse(
+        is.na(flowchart_bm_used) || is.na(flowchart_training_bm_evaluable),
+        sum(sample_flow_analysis$high_quality_BM, na.rm = TRUE),
+        flowchart_training_bm_evaluable + flowchart_bm_used
+      )),
       units = "patients",
-      source_file = sample_flow_path,
+      source_file = ifelse(is.na(flowchart_bm_used), sample_flow_path, sample_flow_counts_path),
       source_script = "Scripts_2025/Final_Scripts/1_6_Identify_High_Quality_Patient_Pairs.R",
       related_artifacts = "Figure_1B",
       update_trigger = "rerun sample-flow/cohort scripts or add samples"
@@ -812,11 +946,19 @@ if (!is.null(sample_flow) && all(c("Patient", "total_cfDNA_samples") %in% names(
       "Abstract",
       "Cohort summary claims",
       "current_sample_flow_high_quality_cfdna_patients",
-      "Patients with high-quality cfDNA in Figure 1B sample-flow source table",
-      sum(sample_flow$high_quality_cfDNA, na.rm = TRUE),
-      fmt_int(sum(sample_flow$high_quality_cfDNA, na.rm = TRUE)),
+      "cfDNA patients/samples used for Figure 1B MRD-detection branch",
+      ifelse(
+        is.na(flowchart_cfdna_used) || is.na(flowchart_training_cfdna_evaluable),
+        sum(sample_flow_analysis$high_quality_cfDNA, na.rm = TRUE),
+        flowchart_training_cfdna_evaluable + flowchart_cfdna_used
+      ),
+      fmt_int(ifelse(
+        is.na(flowchart_cfdna_used) || is.na(flowchart_training_cfdna_evaluable),
+        sum(sample_flow_analysis$high_quality_cfDNA, na.rm = TRUE),
+        flowchart_training_cfdna_evaluable + flowchart_cfdna_used
+      )),
       units = "patients",
-      source_file = sample_flow_path,
+      source_file = ifelse(is.na(flowchart_cfdna_used), sample_flow_path, sample_flow_counts_path),
       source_script = "Scripts_2025/Final_Scripts/1_6_Identify_High_Quality_Patient_Pairs.R",
       related_artifacts = "Figure_1B",
       update_trigger = "rerun sample-flow/cohort scripts or add samples"
@@ -859,6 +1001,183 @@ if (!is.null(bm_maf) && "Patient" %in% names(bm_maf)) {
     )
   ))
 }
+
+baseline_overlap_rows <- function(summary_path, source_data_path, metric_prefix, label_prefix, cohort_scope, caveat = "") {
+  summary <- read_csv_if_exists(summary_path)
+  if (is.null(summary)) return(tibble())
+
+  required_cols <- c(
+    "n", "mean_overlap", "median_overlap", "IQR_lower", "IQR_upper",
+    "min_overlap", "max_overlap"
+  )
+  missing_cols <- setdiff(required_cols, names(summary))
+  if (length(missing_cols)) {
+    stop(
+      "Baseline mutation-overlap summary is missing required column(s): ",
+      paste(missing_cols, collapse = ", "),
+      "\nFile: ", summary_path
+    )
+  }
+  if (nrow(summary) != 1) {
+    stop(
+      "Baseline mutation-overlap summary must contain exactly one row; found ",
+      nrow(summary), ".\nFile: ", summary_path
+    )
+  }
+
+  summary <- summary %>% slice(1)
+  iqr_text <- paste0(
+    fmt_num(summary$IQR_lower, 1), "-", fmt_num(summary$IQR_upper, 1), "%"
+  )
+  source_script <- "Scripts_2025/Final_Scripts/1_2_Part2_Get_Mutation_Overlap.R"
+  related_artifact_values <- "Extended_Data_Figure_2G"
+  if (str_detect(metric_prefix, "all_evaluable")) {
+    related_artifact_values <- c(
+      related_artifact_values,
+      "Fig3C_mutation_overlap_lollipop_all_evaluable_baseline"
+    )
+  }
+  related_artifacts <- paste(related_artifact_values, collapse = "; ")
+
+  base_rows <- bind_rows(
+    new_row(
+      "Results",
+      "Baseline BM-cfDNA mutation overlap",
+      paste0(metric_prefix, "_patients"),
+      paste0(label_prefix, " patients with evaluable paired baseline BM and cfDNA mutation overlap"),
+      summary$n,
+      fmt_int(summary$n),
+      denominator = summary$n,
+      units = "patients",
+      suggested_text = paste0(
+        "Baseline BM-cfDNA mutation overlap was evaluable in ",
+        fmt_int(summary$n), " patients (", cohort_scope, ")."
+      ),
+      source_file = source_data_path,
+      source_script = source_script,
+      related_artifacts = related_artifacts,
+      update_trigger = "rerun baseline BM/cfDNA mutation-overlap script or update baseline evaluability",
+      caveat = caveat
+    ),
+    new_row(
+      "Results",
+      "Baseline BM-cfDNA mutation overlap",
+      paste0(metric_prefix, "_median_percent_overlap"),
+      paste0(label_prefix, " median percent overlap between baseline BM and cfDNA mutation calls"),
+      summary$median_overlap,
+      paste0(fmt_num(summary$median_overlap, 1), "%"),
+      numerator = summary$median_overlap,
+      denominator = summary$n,
+      units = "percent overlap",
+      suggested_text = paste0(
+        "Median BM-cfDNA baseline mutation overlap was ",
+        fmt_num(summary$median_overlap, 1), "% (IQR ", iqr_text, ")."
+      ),
+      source_file = summary_path,
+      source_script = source_script,
+      related_artifacts = related_artifacts,
+      update_trigger = "rerun baseline BM/cfDNA mutation-overlap script or update baseline evaluability",
+      caveat = caveat
+    ),
+    new_row(
+      "Results",
+      "Baseline BM-cfDNA mutation overlap",
+      paste0(metric_prefix, "_iqr_percent_overlap"),
+      paste0(label_prefix, " IQR for percent overlap between baseline BM and cfDNA mutation calls"),
+      paste0(summary$IQR_lower, "-", summary$IQR_upper),
+      iqr_text,
+      numerator = summary$IQR_lower,
+      denominator = summary$IQR_upper,
+      units = "percent overlap IQR lower-upper",
+      source_file = summary_path,
+      source_script = source_script,
+      related_artifacts = related_artifacts,
+      update_trigger = "rerun baseline BM/cfDNA mutation-overlap script or update baseline evaluability",
+      caveat = caveat
+    ),
+    new_row(
+      "Results",
+      "Baseline BM-cfDNA mutation overlap",
+      paste0(metric_prefix, "_range_percent_overlap"),
+      paste0(label_prefix, " range for percent overlap between baseline BM and cfDNA mutation calls"),
+      paste0(summary$min_overlap, "-", summary$max_overlap),
+      paste0(fmt_num(summary$min_overlap, 1), "-", fmt_num(summary$max_overlap, 1), "%"),
+      numerator = summary$min_overlap,
+      denominator = summary$max_overlap,
+      units = "percent overlap range min-max",
+      source_file = summary_path,
+      source_script = source_script,
+      related_artifacts = related_artifacts,
+      update_trigger = "rerun baseline BM/cfDNA mutation-overlap script or update baseline evaluability",
+      caveat = caveat
+    )
+  )
+
+  if (all(c("n_training_cohort", "n_test_cohort") %in% names(summary))) {
+    base_rows <- bind_rows(
+      base_rows,
+      new_row(
+        "Results",
+        "Baseline BM-cfDNA mutation overlap",
+        paste0(metric_prefix, "_training_test_counts"),
+        paste0(label_prefix, " training/test cohort counts"),
+        paste0(summary$n_training_cohort, " training; ", summary$n_test_cohort, " test"),
+        paste0(fmt_int(summary$n_training_cohort), " training; ", fmt_int(summary$n_test_cohort), " test"),
+        numerator = summary$n_test_cohort,
+        denominator = summary$n,
+        units = "patients",
+        suggested_text = paste0(
+          "The all-evaluable baseline set included ",
+          fmt_int(summary$n_training_cohort), " training-cohort and ",
+          fmt_int(summary$n_test_cohort), " test-cohort patients."
+        ),
+        source_file = summary_path,
+        source_script = source_script,
+        related_artifacts = related_artifacts,
+        update_trigger = "rerun baseline BM/cfDNA mutation-overlap script or update baseline evaluability",
+        caveat = caveat
+      )
+    )
+  }
+
+  base_rows
+}
+
+baseline_overlap_regular_summary_path <- project_path(
+  "Final Tables and Figures",
+  "Extended_Data_Figure_2G_mutation_overlap_summary.csv"
+)
+baseline_overlap_regular_source_path <- project_path(
+  "Final Tables and Figures",
+  "Extended_Data_Figure_2G_mutation_overlap_source_data.csv"
+)
+baseline_overlap_all_evaluable_summary_path <- project_path(
+  "Final Tables and Figures",
+  "Extended_Data_Figure_2G_all_evaluable_baseline_mutation_overlap_summary.csv"
+)
+baseline_overlap_all_evaluable_source_path <- project_path(
+  "Final Tables and Figures",
+  "Extended_Data_Figure_2G_all_evaluable_baseline_mutation_overlap_source_data.csv"
+)
+
+add_rows(bind_rows(
+  baseline_overlap_rows(
+    baseline_overlap_regular_summary_path,
+    baseline_overlap_regular_source_path,
+    "baseline_bm_cfdna_mutation_overlap_regular",
+    "Regular Extended Data Figure 2G",
+    "regular plotted baseline cohort",
+    caveat = "Regular Extended Data Figure 2G summary; use the all-evaluable companion rows when manuscript text refers to all evaluable baseline samples."
+  ),
+  baseline_overlap_rows(
+    baseline_overlap_all_evaluable_summary_path,
+    baseline_overlap_all_evaluable_source_path,
+    "baseline_bm_cfdna_mutation_overlap_all_evaluable",
+    "All-evaluable baseline",
+    "training plus test patients with evaluable paired baseline BM/cfDNA mutation overlap",
+    caveat = "All-evaluable baseline companion summary; use these rows for manuscript text that explicitly broadens beyond the regular plotted cohort."
+  )
+))
 
 bm_nested_path <- project_path("Figures_Exported", "Tables_exported", "Renamed", "Supplementary_Table_4_All_Model_performance_nested_CV.csv")
 bm_nested <- read_csv_if_exists(bm_nested_path)
