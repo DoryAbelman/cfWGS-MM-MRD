@@ -71,7 +71,7 @@ figure2_dir <- file.path(
 
 required_files <- c(
   "Final_aggregate_table_cfWGS_features_with_clinical_and_demographics_updated9.rds",
-  "cohort_assignment_table_updated.rds",
+  final_cohort_assignment_path("rds"),
   "baseline_high_quality_patients_updated.csv",
   "Exported_data_tables_clinical/Censor_dates_per_patient_for_PFS_updated.rds",
   "Exported_data_tables_clinical/Relapse_dates_full_updated.rds"
@@ -96,8 +96,7 @@ required_columns <- function(data, cols, data_name) {
   }
 }
 
-cohort_df <- readRDS("cohort_assignment_table_updated.rds") %>%
-  augment_cohort_assignment_with_spring2026_revision()
+cohort_df <- load_final_cohort_assignment()
 feature_df <- readRDS(
   "Final_aggregate_table_cfWGS_features_with_clinical_and_demographics_updated9.rds"
 )

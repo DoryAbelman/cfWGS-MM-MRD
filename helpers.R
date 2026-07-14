@@ -545,6 +545,71 @@ augment_cohort_assignment_with_spring2026_revision <- function(cohort_df) {
     dplyr::distinct(.data$Patient, .keep_all = TRUE)
 }
 
+final_cohort_assignment_path <- function(extension = c("rds", "csv")) {
+  # ## Durable revision-aware cohort assignment
+  # This is the manuscript-era cohort table: the reviewed historical assignment
+  # plus eligible Spring 2026 revision patients. The historical
+  # cohort_assignment_table_updated.rds remains the auditable base input.
+  extension <- match.arg(extension)
+  Sys.getenv(
+    paste0("CFWGS_FINAL_COHORT_ASSIGNMENT_", toupper(extension)),
+    unset = paste0("cohort_assignment_table_final_spring2026.", extension)
+  )
+}
+
+load_final_cohort_assignment <- function(required = TRUE, validate_current = TRUE) {
+  # Read the single durable cohort artifact used by downstream final scripts.
+  # When validation is enabled, fail if it no longer agrees with the historical
+  # base table plus the current revision metadata and exclusion rules.
+  path <- final_cohort_assignment_path("rds")
+  if (!file.exists(path)) {
+    if (isTRUE(required)) {
+      stop(
+        "Missing final revision-aware cohort assignment: ", path,
+        ". Rerun Scripts_2025/Final_Scripts/1_6_Identify_High_Quality_Patient_Pairs.R.",
+        call. = FALSE
+      )
+    }
+    return(NULL)
+  }
+
+  cohort_df <- readRDS(path)
+  require_columns(cohort_df, c("Patient", "Cohort"), "Final cohort assignment")
+  cohort_df <- cohort_df %>%
+    dplyr::mutate(
+      Patient = trimws(as.character(.data$Patient)),
+      Cohort = trimws(as.character(.data$Cohort))
+    )
+
+  if (anyNA(cohort_df$Patient) || any(!nzchar(cohort_df$Patient)) ||
+      anyDuplicated(cohort_df$Patient)) {
+    stop("Final cohort assignment must contain one non-missing row per Patient.", call. = FALSE)
+  }
+  invalid_cohorts <- setdiff(unique(cohort_df$Cohort), c("Frontline", "Non-frontline"))
+  if (length(invalid_cohorts)) {
+    stop("Unexpected final cohort label(s): ", paste(invalid_cohorts, collapse = ", "), call. = FALSE)
+  }
+
+  if (isTRUE(validate_current)) {
+    base_path <- "cohort_assignment_table_updated.rds"
+    if (!file.exists(base_path)) stop("Missing historical cohort base: ", base_path, call. = FALSE)
+    expected <- augment_cohort_assignment_with_spring2026_revision(readRDS(base_path)) %>%
+      dplyr::select("Patient", "Cohort") %>%
+      dplyr::arrange(.data$Patient)
+    observed <- cohort_df %>%
+      dplyr::select("Patient", "Cohort") %>%
+      dplyr::arrange(.data$Patient)
+    if (!identical(expected, observed)) {
+      stop(
+        "Final cohort assignment is stale relative to the base cohort and Spring 2026 metadata. ",
+        "Rerun Scripts_2025/Final_Scripts/1_6_Identify_High_Quality_Patient_Pairs.R.",
+        call. = FALSE
+      )
+    }
+  }
+  cohort_df
+}
+
 coerce_revision_column_like_current <- function(current_col, revision_col, column_name) {
   # ## Type harmonization before bind_rows()
   # The revision CSV is read from disk and can arrive as character columns even

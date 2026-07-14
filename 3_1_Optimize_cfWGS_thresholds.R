@@ -175,8 +175,7 @@ if (!dir.exists(outdir)) dir.create(outdir, recursive = TRUE)
 
 ### Load data 
 file <- readRDS("Final_aggregate_table_cfWGS_features_with_clinical_and_demographics_updated9.rds")
-cohort_df <- readRDS("cohort_assignment_table_updated.rds") %>%
-  augment_cohort_assignment_with_spring2026_revision()
+cohort_df <- load_final_cohort_assignment()
 
 dat <- file 
 

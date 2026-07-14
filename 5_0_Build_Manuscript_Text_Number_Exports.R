@@ -443,10 +443,9 @@ if (!is.null(clinical)) {
   }
 }
 
-cohort_path <- project_path("cohort_assignment_table_updated.rds")
-cohort_df <- read_rds_if_exists(cohort_path)
+cohort_path <- project_path(final_cohort_assignment_path("rds"))
+cohort_df <- load_final_cohort_assignment(required = FALSE)
 if (!is.null(cohort_df) && all(c("Patient", "Cohort") %in% names(cohort_df))) {
-  cohort_df <- augment_cohort_assignment_with_spring2026_revision(cohort_df)
   add_rows(cohort_df %>%
     filter(!is.na(.data$Cohort), nzchar(.data$Cohort)) %>%
     count(.data$Cohort, name = "patients") %>%
@@ -463,7 +462,7 @@ if (!is.null(cohort_df) && all(c("Patient", "Cohort") %in% names(cohort_df))) {
         source_file = cohort_path,
         source_script = "Scripts_2025/Final_Scripts/1_6_Identify_High_Quality_Patient_Pairs.R",
         related_artifacts = "Figure_1B",
-        caveat = "Raw cohort assignment table augmented with the helper-loaded Spring 2026 revision cohort before counting."
+        caveat = "Validated final cohort assignment including eligible Spring 2026 revision patients."
       )
     )) %>%
     pull(.data$row) %>%

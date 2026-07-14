@@ -202,8 +202,7 @@ combined_maf <- left_join(combined_maf %>% select(-Bam), metada_df_mutation_comp
 combined_maf <- combined_maf %>% filter(timepoint_info %in% c("Diagnosis", "Baseline"))
 
 ## Add cohort df 
-cohort_df <- readRDS("cohort_assignment_table_updated.rds")
-cohort_df <- augment_cohort_assignment_with_spring2026_revision(cohort_df)
+cohort_df <- load_final_cohort_assignment()
 
 # Find cohort-assigned patients with no baseline/diagnosis mutation rows after
 # the metadata join and timepoint filter. This is diagnostic only; it does not

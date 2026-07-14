@@ -264,8 +264,7 @@ metada_df_mutation_comparison <- read_combined_clinical_metadata_with_revision(
 # Load cohort assignments. Use the shared helper so Spring 2026 revision
 # additions and strict cfDNA MRD exclusions are applied consistently with the
 # final cohort/scoring tables.
-cohort_df <- readRDS("cohort_assignment_table_updated.rds") %>%
-  augment_cohort_assignment_with_spring2026_revision()
+cohort_df <- load_final_cohort_assignment()
 
 if (length(spring2026_revision_sample_ids_for_heatmap)) {
   missing_revision_cohort <- setdiff(

@@ -562,18 +562,39 @@ write_csv(patient_cohort, file.path(export_dir, "patient_cohort_assignment.csv")
 saveRDS(patient_cohort,   file.path(export_dir, "patient_cohort_assignment.rds"))
 message("Saved patient cohort assignment -> ", file.path(export_dir, "patient_cohort_assignment.{csv,rds}"))
 
-
-
-# Analyst note:
-#   `cohort_assignment_table_updated.rds` is the reviewed cohort assignment used
-#   by the submitted analysis. The earlier `patient_cohort_assignment.rds` export
-#   above is retained as a reproducible pipeline intermediate, while this curated
-#   assignment is used to annotate the manuscript Figure 1B source table.
-cohort_df <- readRDS("cohort_assignment_table_updated.rds") %>%
+# Materialize one clearly named final cohort assignment for all downstream
+# manuscript scripts. The reviewed 51-patient RDS remains the historical base;
+# this final artifact adds eligible Spring 2026 revision patients using the
+# shared helper and therefore retains the frozen Frontline labels unchanged.
+historical_cohort_df <- readRDS("cohort_assignment_table_updated.rds") %>%
   filter(!Patient %in% reviewed_recovered_test_cohort$Patient) %>%
   bind_rows(reviewed_recovered_test_cohort) %>%
   filter(!Patient %in% strict_cfdna_mrd_excluded_patients) %>%
   arrange(Cohort, Patient)
+
+cohort_df <- augment_cohort_assignment_with_spring2026_revision(historical_cohort_df) %>%
+  distinct(Patient, .keep_all = TRUE) %>%
+  arrange(Patient)
+
+stopifnot(
+  !anyNA(cohort_df$Patient),
+  !anyDuplicated(cohort_df$Patient),
+  all(cohort_df$Cohort %in% c("Frontline", "Non-frontline"))
+)
+
+final_cohort_rds <- final_cohort_assignment_path("rds")
+final_cohort_csv <- final_cohort_assignment_path("csv")
+saveRDS(cohort_df, final_cohort_rds)
+write_csv(cohort_df, final_cohort_csv)
+message(
+  "Saved final revision-aware cohort assignment (", nrow(cohort_df),
+  " patients) -> ", final_cohort_csv, " and ", final_cohort_rds
+)
+
+# Preserve the submitted workflow's historical cohort denominator for the
+# remaining calculations in this script. Revision-aware Figure 1B counts are
+# added later from the dedicated scoring manifest, as before.
+cohort_df <- historical_cohort_df
 
 failed_info <- failed_info %>% 
   left_join(cohort_df)

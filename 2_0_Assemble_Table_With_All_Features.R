@@ -2888,8 +2888,7 @@ if (file.exists(legacy_submitted_identity_path)) {
 # baseline mutation source or an early baseline/diagnosis timepoint; those rows
 # are retained in the aggregate table for provenance but are not treated as
 # baseline samples for scoring eligibility.
-cohort_df <- readRDS("cohort_assignment_table_updated.rds") %>%
-  augment_cohort_assignment_with_spring2026_revision()
+cohort_df <- load_final_cohort_assignment()
 
 baseline_source_inventory_path <- file.path(
   "Output_tables_2025",

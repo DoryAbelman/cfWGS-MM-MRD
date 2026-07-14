@@ -258,8 +258,7 @@ if (nrow(dups)) {
 
 ### Filter to the ones interested in 
 ## Pull from previous export 
-cohort_df <- readRDS("cohort_assignment_table_updated.rds")
-cohort_df <- augment_cohort_assignment_with_spring2026_revision(cohort_df)
+cohort_df <- load_final_cohort_assignment()
 keep_patients <- cohort_df$Patient
 
 ## Keep only interested patients 

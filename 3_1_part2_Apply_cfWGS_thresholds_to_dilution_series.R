@@ -3075,7 +3075,16 @@ make_blood_patient_line_plot <- function(plot_dat,
                                          facet_label_map = facet_labels_blood_hc,
                                          probability_thresholds = blood_thresholds,
                                          confirmatory_feature = "Blood_zscore_only_sites_prob",
-                                         confirmatory_threshold = 0.380) {
+                                         confirmatory_threshold = 0.380,
+                                         feature_y_transform = c("identity", "pseudo_log"),
+                                         feature_pseudo_log_sigma = 0.00001) {
+  feature_y_transform <- match.arg(feature_y_transform)
+  if (!is.numeric(feature_pseudo_log_sigma) ||
+      length(feature_pseudo_log_sigma) != 1L ||
+      !is.finite(feature_pseudo_log_sigma) ||
+      feature_pseudo_log_sigma <= 0) {
+    stop("feature_pseudo_log_sigma must be one finite positive number.")
+  }
   if (nrow(plot_dat) == 0) {
     stop("No rows available for patient-line dilution plot.")
   }
@@ -3108,6 +3117,24 @@ make_blood_patient_line_plot <- function(plot_dat,
       aes(x = 0.025, y = Inf, label = .data$label),
       hjust = 0, vjust = 1.2, size = 3, inherit.aes = FALSE
     ) +
+    {
+      if (feature_y_transform == "pseudo_log") {
+        scale_y_continuous(
+          trans = scales::pseudo_log_trans(
+            sigma = feature_pseudo_log_sigma,
+            base = 10
+          ),
+          breaks = function(limits) {
+            max_abs <- max(abs(limits), na.rm = TRUE)
+            if (!is.finite(max_abs) || max_abs == 0) return(0)
+            max_exponent <- floor(log10(max_abs))
+            magnitudes <- 10 ^ seq(max_exponent - 3, max_exponent)
+            candidates <- c(-rev(magnitudes), 0, magnitudes)
+            candidates[candidates >= limits[[1]] & candidates <= limits[[2]]]
+          }
+        )
+      }
+    } +
     scale_x_continuous(
       trans = compose_trans("log10", "reverse"),
       breaks = x_breaks,
@@ -3121,7 +3148,11 @@ make_blood_patient_line_plot <- function(plot_dat,
     ) +
     labs(
       x = "Log tumour fraction (%)",
-      y = "Feature value",
+      y = if (feature_y_transform == "pseudo_log") {
+        "Feature value (signed pseudo-log scale)"
+      } else {
+        "Feature value"
+      },
       color = color_label
     ) +
     guides(
@@ -3626,6 +3657,50 @@ ggsave(
 )
 message("Saved: Fig5G_LOD_combined_patient_series_lines_zero_final_tf.png")
 
+# Companion view requested for values that span several orders of magnitude.
+# scales::pseudo_log_trans() is linear close to zero and logarithmic in both
+# directions away from zero, so negative Z-scores remain finite and visible.
+# Only the three raw/z-score feature panels are transformed; model
+# probabilities retain their original linear 0--1 interpretation.
+zero_final_line_plot_pseudolog <- make_blood_patient_line_plot(
+  plot_dat = blood_patient_zero_final_source,
+  plot_title = "cfDNA Dilution-Series Patient Lines: Signed Pseudo-Log Feature Scale",
+  patient_specific = FALSE,
+  x_col = "LOD_plot_zero_final",
+  x_breaks = zero_final_breaks,
+  x_minor_breaks = zero_final_minor_breaks,
+  x_labels = zero_final_break_labels,
+  feature_y_transform = "pseudo_log",
+  feature_pseudo_log_sigma = 0.00001
+)
+
+ggsave(
+  filename = file.path(
+    OUTPUT_DIR_FIGURES,
+    "Fig5G_LOD_combined_patient_series_lines_zero_final_tf_pseudolog.png"
+  ),
+  plot = zero_final_line_plot_pseudolog,
+  width = 12.8,
+  height = 4.8,
+  dpi = 600,
+  bg = "white"
+)
+message("Saved: Fig5G_LOD_combined_patient_series_lines_zero_final_tf_pseudolog.png")
+
+ms_copy_artifact(
+  source_path = file.path(
+    OUTPUT_DIR_FIGURES,
+    "Fig5G_LOD_combined_patient_series_lines_zero_final_tf_pseudolog.png"
+  ),
+  artifact_id = "EDFIG7D",
+  role = "alternate_signed_pseudolog_patient_lines_png",
+  description = paste(
+    "Alternate de-identified blood/cfDNA dilution-series patient-line panel with signed pseudo-log axes",
+    "for cumulative VAF, cVAF Z-score, and proportion-sites-detected Z-score; model probabilities remain linear."
+  ),
+  script_name = "3_1_part2_Apply_cfWGS_thresholds_to_dilution_series.R"
+)
+
 ms_copy_artifact(
   source_path = file.path(OUTPUT_DIR_FIGURES, "Fig5G_LOD_combined_patient_series_lines_zero_final_tf.png"),
   artifact_id = "EDFIG7D",
@@ -3663,6 +3738,52 @@ ggsave(
   bg = "white"
 )
 message("Saved: Fig4G_LOD_combined_patient_series_lines_zero_final_tf.png")
+
+# Matched signed pseudo-log alternate for Extended Data Figure 5D. The same
+# transform parameters are used for the BM-informed and blood/cfDNA views so
+# their visual treatment is directly comparable.
+zero_final_bm_line_plot_pseudolog <- make_blood_patient_line_plot(
+  plot_dat = bm_patient_zero_final_source,
+  plot_title = "BM-Informed Dilution-Series Patient Lines: Signed Pseudo-Log Feature Scale",
+  patient_specific = FALSE,
+  x_col = "LOD_plot_zero_final",
+  x_breaks = zero_final_breaks,
+  x_minor_breaks = zero_final_minor_breaks,
+  x_labels = zero_final_break_labels,
+  facet_label_map = facet_labels_bm_hc,
+  probability_thresholds = bm_thresholds,
+  confirmatory_feature = NULL,
+  confirmatory_threshold = NULL,
+  feature_y_transform = "pseudo_log",
+  feature_pseudo_log_sigma = 0.00001
+)
+
+ggsave(
+  filename = file.path(
+    OUTPUT_DIR_FIGURES,
+    "Fig4G_LOD_combined_patient_series_lines_zero_final_tf_pseudolog.png"
+  ),
+  plot = zero_final_bm_line_plot_pseudolog,
+  width = 12.8,
+  height = 4.8,
+  dpi = 600,
+  bg = "white"
+)
+message("Saved: Fig4G_LOD_combined_patient_series_lines_zero_final_tf_pseudolog.png")
+
+ms_copy_artifact(
+  source_path = file.path(
+    OUTPUT_DIR_FIGURES,
+    "Fig4G_LOD_combined_patient_series_lines_zero_final_tf_pseudolog.png"
+  ),
+  artifact_id = "EDFIG5D",
+  role = "alternate_signed_pseudolog_patient_lines_png",
+  description = paste(
+    "Alternate de-identified BM-informed dilution-series patient-line panel with signed pseudo-log axes",
+    "for cumulative VAF, cVAF Z-score, and proportion-sites-detected Z-score; model probabilities remain linear."
+  ),
+  script_name = "3_1_part2_Apply_cfWGS_thresholds_to_dilution_series.R"
+)
 
 ms_copy_artifact(
   source_path = file.path(OUTPUT_DIR_FIGURES, "Fig4G_LOD_combined_patient_series_lines_zero_final_tf.png"),
