@@ -204,9 +204,9 @@ ms_compact_source_hint <- function(source_path) {
 
   if (grepl("swimplot|swim_plot", source_stem)) return("swimplot")
   if (grepl("roc", source_stem)) return("ROC")
-  if (grepl("performance", source_stem) && grepl("fragment", source_stem)) return("frag_perf")
-  if (grepl("performance", source_stem) && grepl("blood", source_stem)) return("blood_perf")
-  if (grepl("performance", source_stem) && grepl("\\bbm\\b|_bm_", source_stem)) return("BM_perf")
+  if (grepl("frag_perf", source_stem) || (grepl("performance", source_stem) && grepl("fragment", source_stem))) return("frag_perf")
+  if (grepl("blood_perf", source_stem) || (grepl("performance", source_stem) && grepl("blood", source_stem))) return("blood_perf")
+  if (grepl("bm_perf", source_stem) || (grepl("performance", source_stem) && grepl("\\bbm\\b|_bm_", source_stem))) return("BM_perf")
   if (grepl("lod|dilution", source_stem) && grepl("fragment|tf", source_stem)) return("dilution_TF")
   if (grepl("lod|dilution", source_stem)) return("dilution")
   if (grepl("flowchart|sample_flow", source_stem)) return("flowchart")
@@ -222,8 +222,11 @@ ms_compact_role_label <- function(role, source_path = "") {
   role_slug <- ms_slug(role)
   role_map <- c(
     figure_panel_png = "panel",
+    figure_panel_png_training = "panel_training",
+    figure_panel_png_test = "panel_test",
     figure_component_png = "component",
     all_samples_figure_panel_png = "all_samples",
+    all_samples_mfc_only_figure_panel_png = "all_samples_MFC",
     all_evaluable_figure_panel_png = "all_eval",
     all_evaluable_capped300_figure_panel_png = "all_eval_cap300",
     all_evaluable_first_nonbaseline_figure_panel_png = "first_nonbase_PFS",
@@ -329,9 +332,63 @@ ms_remove_legacy_primary_artifact_versions <- function(destination_path) {
     pattern = legacy_pattern,
     full.names = TRUE
   )
+
+  compact_parts <- strsplit(destination_stem, "_", fixed = TRUE)[[1]]
+  compact_artifact <- compact_parts[[1]]
+  compact_role <- paste(compact_parts[-1], collapse = "_")
+  expanded_artifact <- if (grepl("^ED[0-9]+[A-Za-z]?$", compact_artifact)) {
+    sub("^ED", "Extended_Data_Figure_", compact_artifact)
+  } else if (grepl("^F[0-9]+[A-Za-z]?$", compact_artifact)) {
+    sub("^F", "Figure_", compact_artifact)
+  } else {
+    ""
+  }
+  if (nzchar(expanded_artifact) && nzchar(compact_role)) {
+    expanded_pattern <- paste0(
+      "^",
+      gsub("([][{}()+*^$|\\?.])", "\\\\\1", expanded_artifact),
+      "__",
+      gsub("([][{}()+*^$|\\?.])", "\\\\\1", compact_role),
+      "(__.+)?",
+      ext_pattern,
+      "$"
+    )
+    legacy_paths <- c(
+      legacy_paths,
+      list.files(destination_dir, pattern = expanded_pattern, full.names = TRUE)
+    )
+  }
+  legacy_paths <- unique(legacy_paths)
   legacy_paths <- setdiff(normalizePath(legacy_paths, mustWork = FALSE), destination_path)
   if (length(legacy_paths)) unlink(legacy_paths)
   invisible(legacy_paths)
+}
+
+# Remove redundant historical siblings only when their file contents are
+# exactly identical to the newly written canonical artifact. This deliberately
+# preserves scientifically distinct alternates that share an artifact folder.
+ms_remove_identical_sibling_artifacts <- function(destination_path) {
+  if (!file.exists(destination_path)) return(invisible(character()))
+
+  destination_path <- normalizePath(destination_path, mustWork = TRUE)
+  destination_dir <- dirname(destination_path)
+  extension <- tolower(tools::file_ext(destination_path))
+  if (!nzchar(extension)) return(invisible(character()))
+
+  siblings <- list.files(destination_dir, full.names = TRUE)
+  siblings <- siblings[
+    file.info(siblings)$isdir %in% FALSE &
+      tolower(tools::file_ext(siblings)) == extension
+  ]
+  siblings <- setdiff(normalizePath(siblings, mustWork = FALSE), destination_path)
+  if (!length(siblings)) return(invisible(character()))
+
+  destination_md5 <- unname(tools::md5sum(destination_path))
+  sibling_md5 <- unname(tools::md5sum(siblings))
+  identical_paths <- siblings[!is.na(sibling_md5) & sibling_md5 == destination_md5]
+  if (length(identical_paths)) unlink(identical_paths)
+
+  invisible(identical_paths)
 }
 
 ms_panel_dirname <- function(panel_or_sheet) {
@@ -589,7 +646,10 @@ ms_copy_generated_mirror <- function(copied_artifact_path,
       copied_paths,
       ms_copy_file_quietly(copied_artifact_path, manual_reference_path, overwrite = overwrite)
     )
+    ms_remove_identical_sibling_artifacts(manual_reference_path)
   }
+
+  ms_remove_identical_sibling_artifacts(generated_path)
 
   paste(copied_paths, collapse = "; ")
 }
@@ -1430,6 +1490,7 @@ ms_copy_artifact <- function(source_path,
     project_root = project_root
   )
   ms_write_output_index(project_root)
+  ms_remove_identical_sibling_artifacts(destination)
 
   message("Manuscript output recorded: ", artifact_id, " -> ", destination)
   invisible(destination)
@@ -1462,7 +1523,6 @@ ms_save_plot <- function(plot,
     units = units,
     ...
   )
-
   meta <- ms_artifact_metadata(artifact_id, project_root)
   generated_destination <- ms_copy_generated_mirror(
     copied_artifact_path = destination,
@@ -1501,6 +1561,7 @@ ms_save_plot <- function(plot,
     project_root = project_root
   )
   ms_write_output_index(project_root)
+  ms_remove_identical_sibling_artifacts(destination)
 
   message("Manuscript plot saved: ", artifact_id, " -> ", destination)
   invisible(destination)

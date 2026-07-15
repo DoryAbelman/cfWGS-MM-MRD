@@ -388,13 +388,215 @@ cfWGS_Clinical_MRD <- cfWGS_Clinical_MRD %>%
 tmp2 <- tmp2 %>%
   mutate(Date_of_sample_collection = as.Date(Date_of_sample_collection))
 
-# Join cfWGS_Clinical_MRD with tmp2 by Patient, matching dates within one month
+## Add the current central IMMAGINE/LIBERATE clinical marrow-MRD export.
+##
+## The historical IMMAGINE workbook above is intentionally retained because it
+## contains curated assay calls used by the original analysis.  The December
+## 2025 and February 2026 central exports contain additional marrow assessments
+## that were not present on that legacy sheet.  We map these records by patient
+## and collection date using the project-wide <=42-day clinical MRD pairing
+## window. Existing integrated flow results always
+## take precedence, so this block only fills genuinely missing MFC values.
+central_img_mrd_2025_path <- file.path(
+  "Clinical data", "IMMAGINE",
+  "IMMAGINE  LIBERATE_MRD_withoutMRN_or_DOB_18Dec2025.xlsx"
+)
+central_img_mrd_2026_path <- file.path(
+  "Clinical data", "Additional sample sheets from Esther",
+  "MRD_LIBERATE_ID_19Feb2026.xlsx"
+)
+
+central_img_mrd_matched <- tibble()
+if (file.exists(central_img_mrd_2025_path)) {
+  central_img_patient_map <- read_excel(
+    central_img_mrd_2025_path,
+    sheet = "IMMAGINE & LIBERATE SAMPLES"
+  ) %>%
+    transmute(
+      PATIENT_ID = as.character(PATIENT_ID),
+      central_mrd_test_date = as.Date(COLLECTION_DATE),
+      PROCEDURE_TYPE_TEXT = as.character(PROCEDURE_TYPE_TEXT),
+      Patient = if_else(
+        str_detect(as.character(STUDY_NAME), "^IMMAGINE\\s+[0-9]+$"),
+        sprintf(
+          "IMG-%03d",
+          suppressWarnings(as.integer(str_extract(as.character(STUDY_NAME), "[0-9]+$")))
+        ),
+        NA_character_
+      )
+    ) %>%
+    filter(
+      !is.na(PATIENT_ID),
+      !is.na(Patient),
+      PROCEDURE_TYPE_TEXT == "Bone marrow sample"
+    ) %>%
+    select(-PROCEDURE_TYPE_TEXT) %>%
+    distinct(PATIENT_ID, central_mrd_test_date, .keep_all = TRUE)
+
+  central_img_mrd_2025 <- read_excel(
+    central_img_mrd_2025_path,
+    sheet = "MRD"
+  ) %>%
+    transmute(
+      Patient = if_else(
+        str_detect(as.character(STUDY_NAME), "^IMMAGINE\\s+[0-9]+$"),
+        sprintf(
+          "IMG-%03d",
+          suppressWarnings(as.integer(str_extract(as.character(STUDY_NAME), "[0-9]+$")))
+        ),
+        NA_character_
+      ),
+      central_mrd_test_date = as.Date(BM_COLLCTN_DATE),
+      central_mrd_status = case_when(
+        MALIGNANT_PC == "Absent" ~ "Negative",
+        MALIGNANT_PC == "Present" ~ "Positive",
+        TRUE ~ NA_character_
+      ),
+      central_flow_pct_cells = case_when(
+        MALIGNANT_PC == "Absent" ~ 0,
+        MALIGNANT_PC == "Present" ~ suppressWarnings(as.numeric(`RESIDUAL_PC%`)),
+        TRUE ~ NA_real_
+      ),
+      central_mrd_source = "Central IMMAGINE/LIBERATE clinical MRD export (2025-12-18)",
+      central_mrd_source_priority = 1L
+    )
+
+  central_img_mrd_2026 <- tibble()
+  if (file.exists(central_img_mrd_2026_path)) {
+    central_img_mrd_2026 <- read_excel(central_img_mrd_2026_path) %>%
+      mutate(
+        PATIENT_ID = as.character(PATIENT_ID),
+        central_mrd_test_date = as.Date(BONE_MARRW_COLLCTN_DATE)
+      ) %>%
+      left_join(
+        central_img_patient_map,
+        by = c("PATIENT_ID", "central_mrd_test_date"),
+        relationship = "many-to-one"
+      ) %>%
+      transmute(
+        Patient,
+        central_mrd_test_date,
+        central_mrd_status = case_when(
+          MALIGNANT_PLASMA_CELLS == "Absent" ~ "Negative",
+          MALIGNANT_PLASMA_CELLS == "Present" ~ "Positive",
+          TRUE ~ NA_character_
+        ),
+        central_flow_pct_cells = case_when(
+          MALIGNANT_PLASMA_CELLS == "Absent" ~ 0,
+          MALIGNANT_PLASMA_CELLS == "Present" ~
+            suppressWarnings(as.numeric(RESID_MYELOMA_CELL_PERCENT)),
+          TRUE ~ NA_real_
+        ),
+        central_mrd_source = "Central IMMAGINE/LIBERATE clinical MRD export (2026-02-19)",
+        central_mrd_source_priority = 2L
+      )
+  }
+
+  central_img_mrd_raw <- bind_rows(central_img_mrd_2025, central_img_mrd_2026) %>%
+    filter(
+      !is.na(Patient),
+      !is.na(central_mrd_test_date),
+      !is.na(central_mrd_status)
+    )
+
+  central_img_internal_conflicts <- central_img_mrd_raw %>%
+    group_by(Patient, central_mrd_test_date) %>%
+    summarise(n_distinct_results = n_distinct(central_mrd_status), .groups = "drop") %>%
+    filter(n_distinct_results > 1L)
+  if (nrow(central_img_internal_conflicts) > 0L) {
+    stop(
+      "Central IMMAGINE/LIBERATE MRD exports contain conflicting results for ",
+      nrow(central_img_internal_conflicts),
+      " patient-date combinations; review before integration.",
+      call. = FALSE
+    )
+  }
+
+  # When both releases report the same patient/date/status, retain the newer
+  # quantitative value while preserving both release labels in provenance.
+  central_img_mrd <- central_img_mrd_raw %>%
+    arrange(Patient, central_mrd_test_date, desc(central_mrd_source_priority)) %>%
+    group_by(Patient, central_mrd_test_date, central_mrd_status) %>%
+    summarise(
+      central_flow_pct_cells = {
+        observed_values <- central_flow_pct_cells[!is.na(central_flow_pct_cells)]
+        if (length(observed_values) > 0L) observed_values[[1L]] else NA_real_
+      },
+      central_mrd_source = paste(unique(central_mrd_source), collapse = "; "),
+      .groups = "drop"
+    )
+
+  central_img_mrd_candidates <- tmp2 %>%
+    select(
+      Patient,
+      Date_of_sample_collection,
+      Timepoint,
+      Sample_Code,
+      timepoint_info
+    ) %>%
+    distinct() %>%
+    inner_join(central_img_mrd, by = "Patient") %>%
+    mutate(
+      central_mrd_days_from_sample = as.integer(abs(
+        central_mrd_test_date - Date_of_sample_collection
+      ))
+    ) %>%
+    filter(central_mrd_days_from_sample <= 42L)
+
+  central_img_match_conflicts <- central_img_mrd_candidates %>%
+    group_by(Sample_Code) %>%
+    summarise(
+      n_statuses = n_distinct(central_mrd_status),
+      n_test_dates = n_distinct(central_mrd_test_date),
+      .groups = "drop"
+    ) %>%
+    filter(n_statuses > 1L)
+
+  if (nrow(central_img_match_conflicts) > 0L) {
+    dir.create("Output_tables_2025", showWarnings = FALSE, recursive = TRUE)
+    central_img_mrd_candidates %>%
+      semi_join(central_img_match_conflicts, by = "Sample_Code") %>%
+      arrange(Sample_Code, central_mrd_test_date) %>%
+      write_csv(file.path(
+        "Output_tables_2025",
+        "central_imagine_liberate_mrd_42d_conflicts_for_review.csv"
+      ))
+  }
+
+  central_img_mrd_matched <- central_img_mrd_candidates %>%
+    anti_join(central_img_match_conflicts, by = "Sample_Code") %>%
+    group_by(Sample_Code) %>%
+    arrange(central_mrd_days_from_sample, desc(central_mrd_test_date)) %>%
+    slice(1L) %>%
+    ungroup() %>%
+    transmute(
+      Sample_Code,
+      Patient.central = Patient,
+      Date.central = Date_of_sample_collection,
+      Timepoint.central = as.character(Timepoint),
+      timepoint_info.central = timepoint_info,
+      Flow_pct_cells.central = central_flow_pct_cells,
+      MRD_Results_FLOW.central = central_mrd_status,
+      revision_mrd_test_date.central = central_mrd_test_date,
+      revision_mrd_blood_date.central = Date_of_sample_collection,
+      revision_mrd_days_from_blood.central = central_mrd_days_from_sample,
+      revision_mrd_source.central = central_mrd_source,
+      revision_mrd_decision_rationale.central = paste0(
+        "Nearest non-conflicting central clinical MRD match within 42-day window (",
+        central_mrd_days_from_sample,
+        " days from cfWGS sample)."
+      ),
+      revision_mrd_sample_id.central = Sample_Code
+    )
+}
+
+# Join cfWGS_Clinical_MRD with tmp2 by Patient using the project-wide 42-day window
 cfWGS_Clinical_MRD_filled <- cfWGS_Clinical_MRD %>% filter(is.na(Timepoint)) %>%
   left_join(tmp2, by = "Patient") %>%
   # Calculate the absolute difference in days
   mutate(date_diff = abs(difftime(Date, Date_of_sample_collection, units = "days"))) %>%
-  # Filter to keep matches within 2 weeks
-  filter(is.na(Timepoint.x) & date_diff <= 14 | !is.na(Timepoint.x)) %>%
+  # Filter to keep matches within the prespecified 42-day clinical MRD window
+  filter(is.na(Timepoint.x) & date_diff <= 42 | !is.na(Timepoint.x)) %>%
   # For each row where Timepoint.x or Sample_Code.x is NA, keep the closest date match
   group_by(Patient, Date) %>%
   mutate(min_diff = min(date_diff, na.rm = TRUE)) %>%
@@ -469,6 +671,145 @@ cfWGS_Clinical_MRD_filled <- cfWGS_Clinical_MRD_filled %>%
       timepoint_info  # Keep the existing value otherwise
     )
   )
+
+## Fill missing flow-MRD values from the central export without overwriting any
+## result already integrated from M4, SPORE, legacy IMMAGINE, or the selected
+## Spring 2026 OICR pairings.
+if (nrow(central_img_mrd_matched) > 0L) {
+  cross_source_flow_candidates <- bind_rows(
+    cfWGS_Clinical_MRD_filled %>%
+      filter(!is.na(Sample_Code), !is.na(MRD_Results_FLOW)) %>%
+      transmute(
+        Sample_Code,
+        flow_status = MRD_Results_FLOW,
+        test_date = as.Date(Date),
+        flow_source = coalesce(
+          revision_mrd_source,
+          "Historical integrated clinical MRD workbook"
+        )
+      ),
+    central_img_mrd_candidates %>%
+      transmute(
+        Sample_Code,
+        flow_status = central_mrd_status,
+        test_date = central_mrd_test_date,
+        flow_source = central_mrd_source
+      )
+  ) %>%
+    distinct()
+
+  cross_source_flow_conflicts <- cross_source_flow_candidates %>%
+    group_by(Sample_Code) %>%
+    summarise(n_statuses = n_distinct(flow_status), .groups = "drop") %>%
+    filter(n_statuses > 1L)
+
+  if (nrow(cross_source_flow_conflicts) > 0L) {
+    cross_source_flow_candidates %>%
+      semi_join(cross_source_flow_conflicts, by = "Sample_Code") %>%
+      arrange(Sample_Code, test_date, flow_status) %>%
+      write_csv(file.path(
+        "Output_tables_2025",
+        "clinical_mrd_42d_cross_source_conflicts_for_review.csv"
+      ))
+  }
+
+  existing_flow_keys <- cfWGS_Clinical_MRD_filled %>%
+    filter(!is.na(MRD_Results_FLOW) | !is.na(Flow_pct_cells)) %>%
+    distinct(Sample_Code) %>%
+    mutate(existing_flow_result = TRUE)
+
+  central_img_mrd_integration_audit <- central_img_mrd_matched %>%
+    left_join(existing_flow_keys, by = "Sample_Code") %>%
+    mutate(
+      integration_status = if_else(
+        coalesce(existing_flow_result, FALSE),
+        "not_used_existing_integrated_flow_result",
+        "used_to_fill_missing_flow_result"
+      )
+    ) %>%
+    select(-existing_flow_result)
+
+  dir.create("Output_tables_2025", showWarnings = FALSE, recursive = TRUE)
+  write_csv(
+    central_img_mrd_integration_audit,
+    file.path(
+      "Output_tables_2025",
+      "central_imagine_liberate_mrd_42d_integration_audit.csv"
+    )
+  )
+
+  cfWGS_Clinical_MRD_filled <- cfWGS_Clinical_MRD_filled %>%
+    full_join(central_img_mrd_matched, by = "Sample_Code") %>%
+    mutate(
+      central_flow_used = is.na(MRD_Results_FLOW) &
+        !is.na(MRD_Results_FLOW.central),
+      Patient = coalesce(Patient, Patient.central),
+      Date = coalesce(as.Date(Date), Date.central),
+      Timepoint = coalesce(as.character(Timepoint), Timepoint.central),
+      timepoint_info = coalesce(timepoint_info, timepoint_info.central),
+      Flow_pct_cells = coalesce(Flow_pct_cells, Flow_pct_cells.central),
+      MRD_Results_FLOW = coalesce(
+        MRD_Results_FLOW,
+        MRD_Results_FLOW.central
+      ),
+      revision_mrd_test_date = if_else(
+        central_flow_used,
+        revision_mrd_test_date.central,
+        revision_mrd_test_date
+      ),
+      revision_mrd_blood_date = if_else(
+        central_flow_used,
+        revision_mrd_blood_date.central,
+        revision_mrd_blood_date
+      ),
+      revision_mrd_days_from_blood = if_else(
+        central_flow_used,
+        revision_mrd_days_from_blood.central,
+        revision_mrd_days_from_blood
+      ),
+      revision_mrd_source = if_else(
+        central_flow_used,
+        revision_mrd_source.central,
+        revision_mrd_source
+      ),
+      revision_mrd_decision_rationale = if_else(
+        central_flow_used,
+        revision_mrd_decision_rationale.central,
+        revision_mrd_decision_rationale
+      ),
+      revision_mrd_sample_id = if_else(
+        central_flow_used,
+        revision_mrd_sample_id.central,
+        revision_mrd_sample_id
+      ),
+      unresolved_42d_flow_conflict = Sample_Code %in%
+        cross_source_flow_conflicts$Sample_Code &
+        !str_detect(
+          coalesce(revision_mrd_source, ""),
+          fixed("Spring 2026 OICR per-sample MRD request table")
+        ),
+      Flow_pct_cells = if_else(
+        unresolved_42d_flow_conflict,
+        NA_real_,
+        Flow_pct_cells
+      ),
+      MRD_Results_FLOW = if_else(
+        unresolved_42d_flow_conflict,
+        NA_character_,
+        MRD_Results_FLOW
+      ),
+      revision_mrd_decision_rationale = if_else(
+        unresolved_42d_flow_conflict,
+        "Not integrated: discordant clinical MFC results fall within the 42-day pairing window.",
+        revision_mrd_decision_rationale
+      )
+    ) %>%
+    select(
+      -central_flow_used,
+      -unresolved_42d_flow_conflict,
+      -ends_with(".central")
+    )
+}
 
 
 ### Add updated Rapid Novor proteomic MRD values

@@ -3644,7 +3644,11 @@ zero_final_line_plot <- make_blood_patient_line_plot(
   x_col = "LOD_plot_zero_final",
   x_breaks = zero_final_breaks,
   x_minor_breaks = zero_final_minor_breaks,
-  x_labels = zero_final_break_labels
+  x_labels = zero_final_break_labels,
+  # ED7D reports the locked model thresholds only. The lower 0.380 blood-sites
+  # screening boundary is an operational triage rule, not a final model cutoff.
+  confirmatory_feature = NULL,
+  confirmatory_threshold = NULL
 )
 
 ggsave(

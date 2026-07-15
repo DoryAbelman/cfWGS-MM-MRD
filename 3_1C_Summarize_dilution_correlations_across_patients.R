@@ -512,11 +512,335 @@ ggsave(
   bg = "white"
 )
 
+# Replacement Figure 3C: all four dilution-series patients ----------------
+# The combined dataset contains three Spring 2026 PWGVAL/M4CHIP patients with
+# two technical replicates each and one historical patient with one dilution
+# series. Correlations are first averaged within patient when replicates are
+# available; the displayed overall summary then gives all four patients equal
+# weight. This avoids giving the three replicated patients twice the weight of
+# the historical patient.
+all_four_patients <- sort(unique(combined_points$Patient))
+if (length(all_four_patients) != 4L) {
+  stop(
+    "Expected exactly four dilution-series patients in the combined source; found ",
+    length(all_four_patients), ": ", paste(all_four_patients, collapse = ", "),
+    call. = FALSE
+  )
+}
+
+all_four_series_qc <- combined_points %>%
+  group_by(
+    .data$feature,
+    .data$Patient,
+    .data$series_label,
+    .data$replicate_id
+  ) %>%
+  summarise(
+    n_complete = sum(complete.cases(.data$LOD_zero_final, .data$value)),
+    n_lod = n_distinct(.data$LOD_zero_final[complete.cases(
+      .data$LOD_zero_final,
+      .data$value
+    )]),
+    n_value = n_distinct(.data$value[complete.cases(
+      .data$LOD_zero_final,
+      .data$value
+    )]),
+    .groups = "drop"
+  )
+
+if (any(
+  all_four_series_qc$n_complete < 3L |
+    all_four_series_qc$n_lod < 3L |
+    all_four_series_qc$n_value < 2L
+)) {
+  bad <- all_four_series_qc %>%
+    filter(
+      .data$n_complete < 3L |
+        .data$n_lod < 3L |
+        .data$n_value < 2L
+    )
+  stop(
+    "Insufficient data for an all-patient Spearman correlation. First failing ",
+    "series: ", paste(unlist(bad[1, ]), collapse = " / "),
+    call. = FALSE
+  )
+}
+
+all_four_replicate_rho <- combined_points %>%
+  group_by(
+    .data$feature,
+    .data$Patient,
+    .data$series_label,
+    .data$replicate_id
+  ) %>%
+  summarise(
+    rho = suppressWarnings(cor(
+      .data$value,
+      .data$LOD_zero_final,
+      method = "spearman",
+      use = "complete.obs"
+    )),
+    n_complete = sum(complete.cases(.data$LOD_zero_final, .data$value)),
+    n_lod = n_distinct(.data$LOD_zero_final[complete.cases(
+      .data$LOD_zero_final,
+      .data$value
+    )]),
+    .groups = "drop"
+  )
+
+if (anyNA(all_four_replicate_rho$rho) || any(abs(all_four_replicate_rho$rho) > 1)) {
+  stop("Invalid all-patient Spearman correlation(s) were produced.", call. = FALSE)
+}
+
+all_four_patient_rho <- all_four_replicate_rho %>%
+  group_by(.data$feature, .data$Patient) %>%
+  summarise(
+    rho = mean(.data$rho),
+    n_series = n(),
+    series_label = paste(sort(unique(.data$series_label)), collapse = "; "),
+    .groups = "drop"
+  )
+
+patient_series_counts <- all_four_patient_rho %>%
+  distinct(.data$Patient, .data$n_series, .data$series_label)
+if (
+  sum(patient_series_counts$n_series == 2L) != 3L ||
+    sum(patient_series_counts$n_series == 1L) != 1L
+) {
+  stop(
+    "Expected three patients with two technical-replicate series and one ",
+    "historical patient with one series.",
+    call. = FALSE
+  )
+}
+
+historical_patient <- patient_series_counts %>%
+  filter(.data$n_series == 1L) %>%
+  pull(.data$Patient)
+if (length(historical_patient) != 1L) {
+  stop("Could not uniquely identify the historical dilution patient.", call. = FALSE)
+}
+
+all_four_overall_rho <- all_four_patient_rho %>%
+  group_by(.data$feature) %>%
+  summarise(
+    rho = mean(.data$rho),
+    n_patients = n(),
+    .groups = "drop"
+  )
+if (any(all_four_overall_rho$n_patients != 4L)) {
+  stop("Each feature must contribute exactly four patient-level rho values.", call. = FALSE)
+}
+
+all_four_source <- bind_rows(
+  all_four_replicate_rho %>%
+    transmute(
+      feature,
+      plot_label = unname(simple_labels[.data$feature]),
+      summary_level = "patient_series",
+      Patient,
+      series_label,
+      replicate_id,
+      rho,
+      n_complete,
+      n_lod,
+      n_series = NA_integer_,
+      n_patients = NA_integer_
+    ),
+  all_four_patient_rho %>%
+    transmute(
+      feature,
+      plot_label = unname(simple_labels[.data$feature]),
+      summary_level = "patient_mean",
+      Patient,
+      series_label,
+      replicate_id = NA_character_,
+      rho,
+      n_complete = NA_integer_,
+      n_lod = NA_integer_,
+      n_series,
+      n_patients = NA_integer_
+    ),
+  all_four_overall_rho %>%
+    transmute(
+      feature,
+      plot_label = unname(simple_labels[.data$feature]),
+      summary_level = "equal_four_patient_mean",
+      Patient = NA_character_,
+      series_label = "All four patients",
+      replicate_id = NA_character_,
+      rho,
+      n_complete = NA_integer_,
+      n_lod = NA_integer_,
+      n_series = NA_integer_,
+      n_patients
+    )
+) %>%
+  arrange(
+    .data$feature,
+    factor(
+      .data$summary_level,
+      levels = c("patient_series", "patient_mean", "equal_four_patient_mean")
+    ),
+    .data$Patient,
+    .data$replicate_id
+  )
+
+all_four_source_path <- file.path(
+  input_dir,
+  "SourceData_Figure3C_dilution_feature_rho_all_four_patients.csv"
+)
+write_csv(all_four_source, all_four_source_path, na = "")
+
+all_four_feature_order <- all_four_overall_rho %>%
+  arrange(.data$rho) %>%
+  pull(.data$feature)
+
+all_four_patient_plot <- all_four_patient_rho %>%
+  mutate(
+    feature = factor(.data$feature, levels = all_four_feature_order),
+    display_patient = .data$Patient
+  )
+all_four_overall_plot <- all_four_overall_rho %>%
+  mutate(feature = factor(.data$feature, levels = all_four_feature_order))
+
+all_four_display_patients <- all_four_patients
+all_four_colors <- setNames(
+  c("#7A7A7A", "#0072B2", "#D55E00", "#009E73"),
+  all_four_display_patients
+)
+
+p_all_four <- ggplot() +
+  geom_vline(xintercept = 0, colour = "grey78", linetype = "dashed") +
+  geom_segment(
+    data = all_four_overall_plot,
+    aes(x = 0, xend = .data$rho, y = .data$feature, yend = .data$feature),
+    colour = "grey78",
+    linewidth = 0.45
+  ) +
+  geom_point(
+    data = all_four_patient_plot,
+    aes(x = .data$rho, y = .data$feature, colour = .data$display_patient),
+    size = 2.3,
+    alpha = 0.9,
+    position = position_dodge(width = 0.42)
+  ) +
+  geom_point(
+    data = all_four_overall_plot,
+    aes(x = .data$rho, y = .data$feature),
+    shape = 23,
+    size = 3.35,
+    stroke = 0.7,
+    fill = "black",
+    colour = "white"
+  ) +
+  scale_colour_manual(values = all_four_colors, name = "Patient") +
+  scale_x_continuous(
+    limits = c(-1.02, 1.02),
+    breaks = seq(-1, 1, by = 0.5),
+    expand = expansion(mult = c(0.01, 0.01))
+  ) +
+  scale_y_discrete(labels = simple_labels) +
+  labs(
+    title = "Feature Correlation Across All Dilution-Series Patients",
+    subtitle = "Dots: patient-level rho; black diamond: equal mean of 4 patients",
+    x = expression(rho ~ "(Spearman)"),
+    y = NULL
+  ) +
+  theme_minimal(base_size = 8.5) +
+  theme(
+    plot.title.position = "plot",
+    plot.title = element_text(face = "bold", size = 10.5),
+    plot.subtitle = element_text(size = 7.5, colour = "grey30"),
+    axis.text.y = element_text(size = 7.4, colour = "black"),
+    axis.text.x = element_text(size = 7.5, colour = "black"),
+    axis.title.x = element_text(size = 8, margin = margin(t = 4)),
+    panel.grid.major.y = element_blank(),
+    panel.grid.minor = element_blank(),
+    legend.position = "bottom",
+    legend.title = element_text(size = 7.2, face = "bold"),
+    legend.text = element_text(size = 7.2),
+    plot.margin = margin(6, 7, 5, 6)
+  )
+
+all_four_png_path <- file.path(
+  figure_dir,
+  "Fig3C_dilution_feature_rho_all_four_patients.png"
+)
+all_four_pdf_path <- file.path(
+  figure_dir,
+  "Fig3C_dilution_feature_rho_all_four_patients.pdf"
+)
+ggsave(
+  all_four_png_path,
+  p_all_four,
+  width = 6.1,
+  height = 4.9,
+  dpi = 600,
+  bg = "white"
+)
+ggsave(
+  all_four_pdf_path,
+  p_all_four,
+  width = 6.1,
+  height = 4.9,
+  device = cairo_pdf,
+  bg = "white"
+)
+
+# This all-four-patient panel replaces the previous Figure 3C manuscript
+# object. The shared helper also refreshes the generated component mirror and
+# records the copy in the direct-output manifest.
+final_panel_path <- ms_copy_artifact(
+  source_path = all_four_png_path,
+  artifact_id = "FIG3C",
+  role = "figure_panel_png",
+  description = paste(
+    "Replacement Figure 3C dilution-series feature correlations across all four patients;",
+    "three Spring 2026 patients contribute means of two technical replicates and the historical patient contributes one series."
+  ),
+  script_name = "3_1C_Summarize_dilution_correlations_across_patients.R"
+)
+ms_copy_artifact(
+  source_path = all_four_pdf_path,
+  artifact_id = "FIG3C",
+  role = "figure_panel_pdf",
+  description = "Vector PDF companion to the replacement all-four-patient Figure 3C panel.",
+  script_name = "3_1C_Summarize_dilution_correlations_across_patients.R"
+)
+ms_copy_artifact(
+  source_path = all_four_source_path,
+  artifact_id = "FIG3C",
+  role = "source_data_csv_all_four_patients",
+  description = paste(
+    "Patient-series, patient-mean, and equal-four-patient Spearman rho values",
+    "for the replacement Figure 3C panel."
+  ),
+  script_name = "3_1C_Summarize_dilution_correlations_across_patients.R"
+)
+
+legacy_figure_paths <- file.path(
+  dirname(final_panel_path),
+  c("F3C_figure.png", "F3C_panel.png")
+)
+legacy_figure_paths <- legacy_figure_paths[
+  file.exists(legacy_figure_paths) &
+    normalizePath(legacy_figure_paths, mustWork = FALSE) !=
+      normalizePath(final_panel_path, mustWork = TRUE)
+]
+if (length(legacy_figure_paths) > 0L) {
+  unlink(legacy_figure_paths)
+}
+
 message("Saved figure: ", png_path)
 message("Saved figure: ", pdf_path)
 message("Saved simplified figure: ", simple_png_path)
 message("Saved simplified figure: ", simple_pdf_path)
 message("Saved source data: ", source_path)
+message("Saved replacement all-four-patient figure: ", all_four_png_path)
+message("Saved replacement all-four-patient figure: ", all_four_pdf_path)
+message("Saved replacement all-four-patient source data: ", all_four_source_path)
+message("Final manuscript-object panel: ", final_panel_path)
 message(
   "QC: ", length(patients), " patients; ", length(replicates),
   " replicates per patient; ", length(feature_labels), " features."
