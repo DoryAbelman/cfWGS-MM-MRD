@@ -105,10 +105,15 @@ spring2026_combined_mrdetect_files <- spring2026_revision_files(
   "MRDetect_outputs",
   "^MRDetect_all_RESULTS_combined_with_source[.]csv$"
 )
+xplus_zero_mrdetect_files <- spring2026_revision_files(
+  file.path("Additional Dilution Series Data", "MRDetect"),
+  "[.]csv$"
+)
 csv_files <- unique(c(
   csv_files,
   spring2026_dilution_mrdetect_files,
-  spring2026_combined_mrdetect_files
+  spring2026_combined_mrdetect_files,
+  xplus_zero_mrdetect_files
 ))
 if (!length(csv_files)) {
   stop("No dilution-series MRDetect CSV files found in historical or Spring 2026 revision inputs.", call. = FALSE)
@@ -193,6 +198,7 @@ read_and_label <- function(file) {
 all_files <- bind_rows(lapply(csv_files, read_and_label))
 
 pwgval_dilution_metadata_for_mrdetect <- load_spring2026_pwgval_dilution_metadata(required = FALSE)
+xplus_zero_metadata_for_mrdetect <- load_spring2026_xplus_zero_dilution_metadata(required = FALSE)
 pwgval_dilution_bams <- if (is.null(pwgval_dilution_metadata_for_mrdetect)) {
   character()
 } else {
@@ -201,6 +207,10 @@ pwgval_dilution_bams <- if (is.null(pwgval_dilution_metadata_for_mrdetect)) {
   # scoring.
   unique(pwgval_dilution_metadata_for_mrdetect$BAM)
 }
+pwgval_dilution_bams <- unique(c(
+  pwgval_dilution_bams,
+  if (is.null(xplus_zero_metadata_for_mrdetect)) character() else xplus_zero_metadata_for_mrdetect$BAM
+))
 
 if (length(spring2026_combined_mrdetect_files) > 0 && length(pwgval_dilution_bams) > 0) {
   spring2026_combined_basenames <- basename(spring2026_combined_mrdetect_files)
@@ -280,7 +290,19 @@ if (length(pwgval_dilution_bams) > 0) {
   # A dilution queried BAM is interpretable only when it is run against a
   # same-patient baseline/diagnosis mutation list. Cross-patient or progression
   # mutation lists are written to audit tables and excluded before scoring.
-  pwgval_bam_patient_lookup <- pwgval_dilution_metadata_for_mrdetect %>%
+  pwgval_metadata_for_lookup <- bind_rows(
+    pwgval_dilution_metadata_for_mrdetect %>%
+      dplyr::select(BAM, Patient, Sample_ID, LOD),
+    if (is.null(xplus_zero_metadata_for_mrdetect)) {
+      tibble(BAM = character(), Patient = character(), Sample_ID = character(), LOD = numeric())
+    } else {
+      xplus_zero_metadata_for_mrdetect %>%
+        dplyr::select(BAM, Patient, Sample_ID, LOD)
+    }
+  ) %>%
+    distinct(.data$BAM, .keep_all = TRUE)
+
+  pwgval_bam_patient_lookup <- pwgval_metadata_for_lookup %>%
     transmute(
       BAM,
       PWGVAL_dilution_patient = .data$Patient,
@@ -589,6 +611,20 @@ if ("VCF_panel_sample_type" %in% names(Merged_MRDetect_dilution)) {
 # 9) Add BAM‐level sample info (Sample_ID, Patient, Sample_type, timepoint_info)
 # ──────────────────────────────────────────────────────────────────────────────
 bam_info <- read_dilution_metadata_with_spring2026("Metadata_dilution_series.csv")
+if (!is.null(xplus_zero_metadata_for_mrdetect)) {
+  # Plot-only metadata: append only inside the dilution-specific MRDetect
+  # processor. This does not modify the clinical metadata or patient MRD path.
+  shared_cols <- union(names(bam_info), names(xplus_zero_metadata_for_mrdetect))
+  for (col in setdiff(shared_cols, names(bam_info))) bam_info[[col]] <- NA
+  for (col in setdiff(shared_cols, names(xplus_zero_metadata_for_mrdetect))) {
+    xplus_zero_metadata_for_mrdetect[[col]] <- NA
+  }
+  bam_info <- bind_rows(
+    bam_info[, shared_cols, drop = FALSE],
+    xplus_zero_metadata_for_mrdetect[, shared_cols, drop = FALSE]
+  ) %>%
+    distinct(.data$BAM, .keep_all = TRUE)
+}
 
 # 3. Join back into the main Merged_MRDetect_dilution table
 Merged_MRDetect_dilution <- Merged_MRDetect_dilution %>%

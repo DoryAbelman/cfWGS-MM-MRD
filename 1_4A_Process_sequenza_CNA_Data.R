@@ -282,16 +282,55 @@ pp_table <- pp_table |>
   ) |>
   arrange(Sample)
 
-spring2026_ploidy_file <- spring2026_revision_files(
+spring2026_ploidy_files <- spring2026_revision_files(
   # Optional Sequenza purity/ploidy summary from the Spring 2026 DNA pipeline.
   # These rows extend pp_table for new revision samples so segment calls can be
   # interpreted relative to sample-specific ploidy instead of a generic diploid
   # baseline.
   "DNA_pipeline_suite_Sequenza_outputs",
   "Sequenza_ploidy_purity[.]tsv$"
-)[1]
-if (!is.na(spring2026_ploidy_file) && file.exists(spring2026_ploidy_file)) {
-  spring2026_pp <- readr::read_tsv(spring2026_ploidy_file, show_col_types = FALSE) %>%
+)
+if (length(spring2026_ploidy_files) > 0L) {
+  spring2026_pp <- purrr::map_dfr(
+    spring2026_ploidy_files,
+    function(path) {
+      readr::read_tsv(path, show_col_types = FALSE) %>%
+        dplyr::mutate(.sequenza_source_file = basename(path))
+    }
+  )
+
+  required_spring_pp_cols <- c("Sample", "cellularity", "ploidy")
+  missing_spring_pp_cols <- setdiff(required_spring_pp_cols, names(spring2026_pp))
+  if (length(missing_spring_pp_cols)) {
+    stop(
+      "Spring 2026 Sequenza purity/ploidy tables are missing columns: ",
+      paste(missing_spring_pp_cols, collapse = ", "),
+      call. = FALSE
+    )
+  }
+
+  duplicate_spring_pp_samples <- spring2026_pp %>%
+    dplyr::filter(!is.na(.data$Sample), nzchar(as.character(.data$Sample))) %>%
+    dplyr::group_by(.data$Sample) %>%
+    dplyr::summarise(
+      n_source_files = dplyr::n_distinct(.data$.sequenza_source_file),
+      source_files = paste(sort(unique(.data$.sequenza_source_file)), collapse = "; "),
+      .groups = "drop"
+    ) %>%
+    dplyr::filter(.data$n_source_files > 1L)
+  if (nrow(duplicate_spring_pp_samples) > 0L) {
+    stop(
+      "Spring 2026 Sequenza purity/ploidy samples occur in multiple input files; ",
+      "resolve the ambiguous source before integration: ",
+      paste(
+        paste0(duplicate_spring_pp_samples$Sample, " [", duplicate_spring_pp_samples$source_files, "]"),
+        collapse = ", "
+      ),
+      call. = FALSE
+    )
+  }
+
+  spring2026_pp <- spring2026_pp %>%
     transmute(
       Sample = as.character(Sample),
       Purity = round(suppressWarnings(as.numeric(cellularity)), 4),
@@ -395,15 +434,21 @@ for (i in seq_along(seg_files)) {
   seg_data_list[[i]] <- seg_df
 }
 
-spring2026_segment_file <- spring2026_revision_files(
+spring2026_segment_files <- spring2026_revision_files(
   # Optional combined Spring 2026 Sequenza segment table. It is parsed in addition
   # to per-sample historical segment files and only contributes samples not
   # already present in seg_data_list.
   "DNA_pipeline_suite_Sequenza_outputs",
   "Sequenza_segments[.]tsv$"
-)[1]
-if (!is.na(spring2026_segment_file) && file.exists(spring2026_segment_file)) {
-  spring2026_segments <- readr::read_tsv(spring2026_segment_file, show_col_types = FALSE)
+)
+if (length(spring2026_segment_files) > 0L) {
+  spring2026_segments <- purrr::map_dfr(
+    spring2026_segment_files,
+    function(path) {
+      readr::read_tsv(path, show_col_types = FALSE) %>%
+        dplyr::mutate(.sequenza_source_file = basename(path))
+    }
+  )
   required_spring_cols <- c("Sample", "chromosome", "start.pos", "end.pos", "CNt", "A", "B")
   missing_spring_cols <- setdiff(required_spring_cols, names(spring2026_segments))
   if (length(missing_spring_cols)) {
@@ -414,8 +459,42 @@ if (!is.na(spring2026_segment_file) && file.exists(spring2026_segment_file)) {
     )
   }
 
+  duplicate_spring_segment_samples <- spring2026_segments %>%
+    dplyr::filter(!is.na(.data$Sample), nzchar(as.character(.data$Sample))) %>%
+    dplyr::group_by(.data$Sample) %>%
+    dplyr::summarise(
+      n_source_files = dplyr::n_distinct(.data$.sequenza_source_file),
+      source_files = paste(sort(unique(.data$.sequenza_source_file)), collapse = "; "),
+      .groups = "drop"
+    ) %>%
+    dplyr::filter(.data$n_source_files > 1L)
+  if (nrow(duplicate_spring_segment_samples) > 0L) {
+    stop(
+      "Spring 2026 Sequenza segment samples occur in multiple input files; ",
+      "resolve the ambiguous source before integration: ",
+      paste(
+        paste0(
+          duplicate_spring_segment_samples$Sample,
+          " [", duplicate_spring_segment_samples$source_files, "]"
+        ),
+        collapse = ", "
+      ),
+      call. = FALSE
+    )
+  }
+
   spring_samples <- sort(unique(spring2026_segments$Sample))
-  existing_samples <- names(seg_data_list)
+  existing_samples <- vapply(
+    seg_data_list,
+    function(x) {
+      sample_columns <- setdiff(names(x), c("chr", "start", "end"))
+      if (length(sample_columns) != 1L) {
+        stop("Each historical Sequenza segment table must contain exactly one sample column.")
+      }
+      sample_columns
+    },
+    character(1)
+  )
   for (sample_name in setdiff(spring_samples, existing_samples)) {
     # Process each revision sample with the same CNt/A/B -> categorical-call
     # logic used for historical Sequenza segments, so downstream CNA summaries do
@@ -1208,6 +1287,30 @@ if (nrow(unmapped_spring2026_sequenza) > 0L) {
 # Check results
 message("Merged Sequenza CNA data with metadata: added Bam_clean_tmp column.")
 
+# Reuse the validated two-key Sequenza mapping (historical BAM-derived barcode
+# first, revision Sample_ID second) for every downstream Sequenza export. This
+# prevents revision samples from mapping in the CNA table but remaining blank in
+# the FISH-probe and purity/ploidy helpers.
+sequenza_sample_to_bam <- cna_data_merged %>%
+  dplyr::select(Sample, Bam_clean_tmp) %>%
+  dplyr::distinct()
+
+sequenza_bam_metadata <- metada_df_mutation_comparison %>%
+  dplyr::select(Bam_clean_tmp, Patient, Timepoint) %>%
+  dplyr::filter(!is.na(Bam_clean_tmp), Bam_clean_tmp != "") %>%
+  dplyr::distinct()
+
+ambiguous_sequenza_bam_metadata <- sequenza_bam_metadata %>%
+  dplyr::count(Bam_clean_tmp, name = "n_metadata_rows") %>%
+  dplyr::filter(n_metadata_rows > 1L)
+if (nrow(ambiguous_sequenza_bam_metadata) > 0L) {
+  stop(
+    "Sequenza BAM keys map to multiple patient/timepoint rows: ",
+    paste(ambiguous_sequenza_bam_metadata$Bam_clean_tmp, collapse = ", "),
+    call. = FALSE
+  )
+}
+
 
 ## ---- Export Sequenza CNA results ----
 ## The number in filenames corresponds to the gamma parameter used by Sequenza (gamma = 400).
@@ -1244,12 +1347,12 @@ FISH_data_cleaned <- FISH_data_cleaned %>%
   ))
 
 
-# Join to metadata by Sample ↔ Tumor_Sample_Barcode
+# Join through the validated Sequenza sample-to-BAM map.
 FISH_data_cleaned <- FISH_data_cleaned %>%
+  left_join(sequenza_sample_to_bam, by = "Sample") %>%
   left_join(
-    metada_df_mutation_comparison %>%
-      select(Tumor_Sample_Barcode, Bam_clean_tmp, Patient),
-    by = c("Sample" = "Tumor_Sample_Barcode")
+    sequenza_bam_metadata %>% dplyr::select(Bam_clean_tmp, Patient),
+    by = "Bam_clean_tmp"
   )
 
 
@@ -1274,12 +1377,12 @@ FISH_data_cleaned <- FISH_data_cleaned %>%
   ))
 
 
-# Join to metadata by Sample ↔ Tumor_Sample_Barcode
+# Join through the validated Sequenza sample-to-BAM map.
 FISH_data_cleaned <- FISH_data_cleaned %>%
+  left_join(sequenza_sample_to_bam, by = "Sample") %>%
   left_join(
-    metada_df_mutation_comparison %>%
-      select(Tumor_Sample_Barcode, Bam_clean_tmp, Patient),
-    by = c("Sample" = "Tumor_Sample_Barcode")
+    sequenza_bam_metadata %>% dplyr::select(Bam_clean_tmp, Patient),
+    by = "Bam_clean_tmp"
   )
 
 
@@ -1303,13 +1406,10 @@ sample_ploidy <- sample_ploidy %>%
   ))
 
 
-# Join to metadata by Sample ↔ Tumor_Sample_Barcode
+# Join through the validated Sequenza sample-to-BAM map.
 sample_ploidy <- sample_ploidy %>%
-  left_join(
-    metada_df_mutation_comparison %>%
-      select(Tumor_Sample_Barcode, Bam_clean_tmp, Patient, Timepoint),
-    by = c("Sample" = "Tumor_Sample_Barcode")
-  )
+  left_join(sequenza_sample_to_bam, by = "Sample") %>%
+  left_join(sequenza_bam_metadata, by = "Bam_clean_tmp")
 
 
 ## Export 

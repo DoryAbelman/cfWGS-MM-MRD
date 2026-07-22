@@ -32,6 +32,17 @@
 #   - Extended Data Figure 10A-B: emergent CNA/subclonal evolution support
 #     tables and frozen final ichorCNA figure components when available.
 #
+# Companion analysis:
+#   - 4_2F_Compare_baseline_vs_relapse_WGS_mutation_lists.R compares
+#     longitudinal cfDNA detection from baseline-derived versus relapse-derived
+#     WGS mutation lists for both this primary cohort and the expanded test
+#     cohort. It is intentionally separate from the binary CNA-change analysis.
+#   - 4_2G_Baseline_relapse_WGS_mutation_evolution.R compares protein-altering
+#     baseline and relapse MAF calls and prioritises candidate relapse-only
+#     observations in myeloma-relevant genes for union-site validation.
+#   - 4_2H_Supplementary_WGS_subclonal_evolution_figure.R combines the 4_2F and
+#     4_2G outputs into the compact supplementary WGS subclonal-evolution figure.
+#
 # Pipeline role:
 #   The current final figure panels use genome-wide ichorCNA visualizations
 #   assembled outside this R script. This script regenerates the in-repository
@@ -124,6 +135,7 @@ pts_keep <- cfDNA_df %>%
   pull(Patient)
 
 cfDNA_df <- cfDNA_df %>% filter(Patient %in% pts_keep)
+cfDNA_df <- cfDNA_df %>% mutate(enrollment_source = "Original cohort")
 
 ## ---- 5. Simple FGA proxy + numeric CNA flags --------------------------------
 cfDNA_df <- cfDNA_df %>%
@@ -201,13 +213,10 @@ losses_tbl <- cfDNA_df %>%
 edfig10_loss_events_csv <- file.path(outdir, "Emergent_CNA_loss_events.csv")
 write_csv(losses_tbl, edfig10_loss_events_csv)
 
-## ---- 6B. Revision test-cohort CNA sensitivity analysis ----------------------
-# The Spring 2026 OICR revision samples are a test-cohort expansion. They should
-# be evaluated for completeness, but not silently folded into the original
-# Extended Data Figure 10 denominator. This block therefore writes separate,
-# clearly labeled sensitivity outputs using the same binary CNA-change
-# definition as the primary analysis: baseline value subtracted from each
-# relapse/progression value for del1p, amp1q, del13q, and del17p.
+## ---- 6B. Newly eligible test-cohort provenance and CNA analysis -------------
+# The Spring 2026 OICR revision samples expand the main subclonal-evolution
+# cohort below. The revision-only files retained in this block are provenance
+# and QC views; they are no longer a separate sensitivity denominator.
 empty_revision_event_tbl <- tibble(
   Patient = character(),
   Sample_ID = character(),
@@ -219,6 +228,8 @@ empty_revision_event_tbl <- tibble(
   Date_of_sample_collection = as.Date(character()),
   Num_days_to_closest_relapse = numeric()
 )
+
+revision_cfDNA_evaluable <- cfDNA_df[0, ]
 
 make_revision_cna_change_table <- function(revision_cfDNA_df, event_cols) {
   if (nrow(revision_cfDNA_df) == 0) return(empty_revision_event_tbl)
@@ -343,6 +354,7 @@ if (!is.null(revision_metadata)) {
 
   revision_cfDNA_evaluable <- revision_cfDNA_all %>%
     filter(Patient %in% revision_pts_keep) %>%
+    mutate(enrollment_source = "Newly eligible test-cohort case") %>%
     mutate(across(all_of(event_cols), ~ as.numeric(.x))) %>%
     rowwise() %>%
     mutate(FGA_proxy = sum(c_across(all_of(event_cols)), na.rm = TRUE) /
@@ -516,6 +528,66 @@ if (!is.null(revision_metadata)) {
   )
 }
 
+## ---- 6C. Expand the main analysis cohort -----------------------------------
+# Explicitly combine the original eligible cases with every newly eligible
+# Spring 2026 test-cohort case. Enrollment source is retained for provenance,
+# but all downstream plots, counts, and event tables use this unified cohort.
+cfDNA_df <- bind_rows(cfDNA_df, revision_cfDNA_evaluable) %>%
+  arrange(Patient, Sample_Date, Sample_ID) %>%
+  distinct(Patient, Sample_ID, .keep_all = TRUE)
+
+pts_keep <- sort(unique(cfDNA_df$Patient))
+
+expanded_cohort_membership <- cfDNA_df %>%
+  distinct(Patient, enrollment_source) %>%
+  arrange(Patient)
+write_csv(
+  expanded_cohort_membership,
+  file.path(outdir, "Subclonal_evolution_expanded_cohort_membership.csv")
+)
+
+# Recompute the main event tables after expansion. The baseline row is selected
+# explicitly rather than assuming the first chronologically sorted row is a
+# valid baseline specimen.
+make_main_event_table <- function(dat, delta_to_keep) {
+  dat %>%
+    arrange(Patient, Sample_Date) %>%
+    group_by(Patient) %>%
+    mutate(
+      across(
+        all_of(event_cols),
+        ~ .x - .x[which(is_baseline)[1]],
+        .names = "delta_{col}"
+      )
+    ) %>%
+    filter(is_relapse) %>%
+    pivot_longer(
+      starts_with("delta_"), names_to = "Event", values_to = "Delta"
+    ) %>%
+    mutate(Event = str_remove(Event, "^delta_")) %>%
+    filter(Delta == delta_to_keep) %>%
+    ungroup() %>%
+    select(Patient, Sample, Event) %>%
+    arrange(Patient, Event)
+}
+
+emergent_tbl <- make_main_event_table(cfDNA_df, 1)
+gains_tbl <- emergent_tbl
+losses_tbl <- make_main_event_table(cfDNA_df, -1)
+
+write_csv(emergent_tbl, edfig10_total_events_csv)
+write_csv(gains_tbl, edfig10_gain_events_csv)
+write_csv(losses_tbl, edfig10_loss_events_csv)
+
+message(
+  "Expanded main subclonal-evolution cohort: ",
+  n_distinct(cfDNA_df$Patient), " patients (",
+  sum(expanded_cohort_membership$enrollment_source == "Original cohort"),
+  " original + ",
+  sum(expanded_cohort_membership$enrollment_source == "Newly eligible test-cohort case"),
+  " newly eligible)."
+)
+
 # MANUSCRIPT OUTPUT: Extended Data Figure 10A/B support data
 # The current final figure panels are externally assembled from ichorCNA
 # genome-wide CNA plots. The CSVs generated here are the in-repo provenance
@@ -610,7 +682,7 @@ plot_list <- plot_input %>%
                    shape = 23, fill = "white") +
         scale_y_continuous(
           name     = "Tumour fraction (ichorCNA)",
-          sec.axis = sec_axis(~., name = "FGA proxy (0–1)")
+          sec.axis = sec_axis(~., name = "FGA proxy (0-1)")
         ) +
         scale_shape_manual(values = c(21, 24)) +
         scale_fill_manual(values = c("grey80", "firebrick")) +
@@ -769,10 +841,25 @@ tf_summary <- cfDNA_df %>%
     tf_baseline = Tumor_Fraction[which(is_baseline & !is_relapse)][1],
     # relapse TF (first relapse sample)
     tf_relapse  = Tumor_Fraction[which(is_relapse)][1],
-    # nadir TF (lowest non‐relapse TF)
-    tf_nadir    = min(Tumor_Fraction[!is_relapse], na.rm = TRUE),
-    # days before progression when the nadir occurred
-    days_nadir  = Num_days_to_closest_relapse[which.min(ifelse(is_relapse, Inf, Tumor_Fraction))],
+    # Nadir is restricted to valid samples collected on/before progression.
+    tf_nadir = {
+      idx <- which(
+        !is_relapse & Num_days_to_closest_relapse >= 0 &
+          is.finite(Tumor_Fraction)
+      )
+      if (length(idx)) min(Tumor_Fraction[idx]) else NA_real_
+    },
+    days_nadir = {
+      idx <- which(
+        !is_relapse & Num_days_to_closest_relapse >= 0 &
+          is.finite(Tumor_Fraction)
+      )
+      if (length(idx)) {
+        Num_days_to_closest_relapse[idx[which.min(Tumor_Fraction[idx])]]
+      } else {
+        NA_real_
+      }
+    },
     # magnitude of rise
     tf_rise     = tf_relapse - tf_nadir,
     .groups     = "drop"
@@ -828,10 +915,25 @@ tf_summary <- cfDNA_df %>%
     tf_baseline = Tumor_Fraction[which(is_baseline & !is_relapse)][1],
     # relapse TF (first relapse sample)
     tf_relapse  = Tumor_Fraction[which(is_relapse)][1],
-    # nadir TF (lowest non‐relapse TF)
-    tf_nadir    = min(Tumor_Fraction[!is_relapse], na.rm = TRUE),
-    # days before progression when the nadir occurred
-    days_nadir  = Num_days_to_closest_relapse[which.min(ifelse(is_relapse, Inf, Tumor_Fraction))],
+    # Nadir is restricted to valid samples collected on/before progression.
+    tf_nadir = {
+      idx <- which(
+        !is_relapse & Num_days_to_closest_relapse >= 0 &
+          is.finite(Tumor_Fraction)
+      )
+      if (length(idx)) min(Tumor_Fraction[idx]) else NA_real_
+    },
+    days_nadir = {
+      idx <- which(
+        !is_relapse & Num_days_to_closest_relapse >= 0 &
+          is.finite(Tumor_Fraction)
+      )
+      if (length(idx)) {
+        Num_days_to_closest_relapse[idx[which.min(Tumor_Fraction[idx])]]
+      } else {
+        NA_real_
+      }
+    },
     # magnitude of rise
     tf_rise     = tf_relapse - tf_nadir,
     .groups     = "drop"
@@ -894,10 +996,25 @@ tf_summary <- cfDNA_df %>%
     tf_baseline = Tumor_Fraction[which(is_baseline & !is_relapse)][1],
     # relapse TF (first relapse sample)
     tf_relapse  = Tumor_Fraction[which(is_relapse)][1],
-    # nadir TF (lowest non‐relapse TF)
-    tf_nadir    = min(Tumor_Fraction[!is_relapse], na.rm = TRUE),
-    # days before progression when the nadir occurred
-    days_nadir  = Num_days_to_closest_relapse[which.min(ifelse(is_relapse, Inf, Tumor_Fraction))],
+    # Nadir is restricted to valid samples collected on/before progression.
+    tf_nadir = {
+      idx <- which(
+        !is_relapse & Num_days_to_closest_relapse >= 0 &
+          is.finite(Tumor_Fraction)
+      )
+      if (length(idx)) min(Tumor_Fraction[idx]) else NA_real_
+    },
+    days_nadir = {
+      idx <- which(
+        !is_relapse & Num_days_to_closest_relapse >= 0 &
+          is.finite(Tumor_Fraction)
+      )
+      if (length(idx)) {
+        Num_days_to_closest_relapse[idx[which.min(Tumor_Fraction[idx])]]
+      } else {
+        NA_real_
+      }
+    },
     # magnitude of rise
     tf_rise     = tf_relapse - tf_nadir,
     .groups     = "drop"

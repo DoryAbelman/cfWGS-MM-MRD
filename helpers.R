@@ -1523,6 +1523,65 @@ spring2026_pwgval_dilution_tumor_fraction_path <- function() {
   )
 }
 
+spring2026_xplus_zero_dilution_data_dir <- function() {
+  # Plot-only source for the X Plus sequencing of the three patient-specific
+  # physical diluents. These samples are experimental 0% endpoints and must not
+  # be appended to the clinical/patient MRD metadata or aggregate tables.
+  file.path(
+    spring2026_revision_data_dir(),
+    "Additional Dilution Series Data"
+  )
+}
+
+load_spring2026_xplus_zero_dilution_metadata <- function(required = FALSE) {
+  # Exactly three X Plus 0% controls are expected: one physical diluent for each
+  # newly generated PWGVAL/M4CHIP series. Keeping this metadata in a dedicated
+  # helper makes the plot-only scope explicit and gives both 1_8A and 3_1_part2
+  # the same audited sample keys.
+  root <- spring2026_xplus_zero_dilution_data_dir()
+  metadata <- tibble::tribble(
+    ~Patient, ~Sample_Code, ~TFRIM4_ID,
+    "VA-09", "VA-09-05", "TFRIM4_0183",
+    "VA-12", "VA-12-05", "TFRIM4_0186",
+    "VA-13", "VA-13-07", "TFRIM4_0187"
+  ) %>%
+    dplyr::mutate(
+      Sample = paste0(.data$Sample_Code, "-P-DNA-", .data$TFRIM4_ID),
+      Merge = .data$Sample,
+      Sample_ID = paste0(.data$Patient, "_PWGVAL_XPLUS_LOD_0"),
+      BAM = paste0(
+        .data$TFRIM4_ID, "_Cf_P_PG_", .data$Sample_Code,
+        "-P-DNA.filter.deduped.recalibrated.bam"
+      ),
+      Bam = .data$BAM,
+      LOD = 0,
+      Sample_type = "Blood_plasma_cfDNA",
+      Sample_type_Bam = "Blood_plasma_cfDNA",
+      Patient_Bam = .data$Patient,
+      Timepoint = 1,
+      timepoint_info = "Patient-specific X Plus 0% physical diluent",
+      dilution_series = "PWGVAL_M4CHIP",
+      sequencing_platform_context = "NovaSeq X Plus 0% physical diluent",
+      zero_control_role = "patient-specific physical diluent sequenced on X Plus",
+      metadata_source = root
+    )
+
+  required_paths <- c(
+    file.path(root, "MRDetect"),
+    file.path(root, "Fragmentomics_pipeline_suite_outputs"),
+    file.path(root, "iChorCNA")
+  )
+  if (isTRUE(required) && any(!file.exists(required_paths))) {
+    stop(
+      "Missing required X Plus zero-dilution input path(s): ",
+      paste(required_paths[!file.exists(required_paths)], collapse = ", "),
+      call. = FALSE
+    )
+  }
+  if (!dir.exists(root)) return(NULL)
+  metadata
+}
+
 spring2026_pwgval_dilution_workbook_path <- function() {
   # The workbook is a fallback metadata source for dilution rows when the derived
   # CSV has not been materialized yet. Environment override supports cluster

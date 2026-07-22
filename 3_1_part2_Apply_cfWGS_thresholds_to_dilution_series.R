@@ -104,7 +104,6 @@ PATH_DILUTION_FRAGMENTOMICS <- file.path("Results_Fragmentomics", "Dilution_seri
 PATH_DILUTION_PROCESSED_MRDetect <- file.path("MRDetect_output_winter_2025", "Processed_R_outputs", "cfWGS_Winter2025Dilution_series_May2025_with_zscore.rds")
 PATH_DILUTION_CLINICAL <- file.path("Fragmentomics_data", "Dilution_series", "Metadata_dilution_series.csv")
 PATH_TUMOR_FRACTION <- file.path("Fragmentomics_data", "Dilution_series", "tumor_fraction_dilution_series.txt")
-PATH_CURRENT_AGGREGATE <- "Final_aggregate_table_cfWGS_features_with_clinical_and_demographics_updated9.rds"
 PATH_PWGVAL_BASELINE_CFVAF <- file.path(
   "MRDetect_output_winter_2025", "Processed_R_outputs", "BM_muts_plots_baseline",
   "cfWGS_MRDetect_BM_data_updated_Feb2026.csv"
@@ -133,6 +132,122 @@ tumor_fraction_dilution <- read_dilution_tumor_fraction_with_spring2026(PATH_TUM
 # clinical_df and tumor_fraction_dilution are revision-aware here. The helpers
 # append PWGVAL/M4CHIP rows to the historical dilution tables while preserving
 # the old schema expected by the model-application code below.
+
+# Add the three newly sequenced X Plus 0% physical diluents only on this
+# dilution-analysis surface. They are intentionally not exposed through the
+# general clinical metadata helpers used by the main MRD pipeline.
+xplus_zero_metadata <- load_spring2026_xplus_zero_dilution_metadata(required = TRUE)
+xplus_zero_root <- spring2026_xplus_zero_dilution_data_dir()
+xplus_zero_fragmentomics_dir <- file.path(xplus_zero_root, "Fragmentomics_pipeline_suite_outputs")
+
+find_one_xplus_zero_file <- function(pattern, label) {
+  paths <- sort(list.files(
+    xplus_zero_fragmentomics_dir,
+    pattern = pattern,
+    full.names = TRUE
+  ))
+  if (length(paths) != 1L) {
+    stop("Expected exactly one X Plus zero-dilution ", label,
+         " file; found ", length(paths), ".", call. = FALSE)
+  }
+  paths[[1]]
+}
+
+xplus_zero_fs_path <- find_one_xplus_zero_file("_fragment_scores[.]tsv$", "fragment-score")
+xplus_zero_insert_path <- find_one_xplus_zero_file("_insert_size_summary[.]tsv$", "insert-size")
+xplus_zero_griffin_path <- find_one_xplus_zero_file(
+  "_nucleosome_accessibility_distances[.]tsv$", "GRIFFIN accessibility"
+)
+
+xplus_zero_fs <- read_tsv(xplus_zero_fs_path, show_col_types = FALSE)
+xplus_zero_insert <- read_tsv(xplus_zero_insert_path, show_col_types = FALSE)
+xplus_zero_griffin <- read_tsv(xplus_zero_griffin_path, show_col_types = FALSE) %>%
+  filter(.data$site_name == "MM_DARs_chromatin_activation") %>%
+  group_by(.data$Sample) %>%
+  summarise(
+    Mean.Coverage = mean(.data$Coverage, na.rm = TRUE),
+    Midpoint.Coverage = mean(
+      .data$Coverage[.data$Position %in% c(-30, -15, 0, 15, 30)],
+      na.rm = TRUE
+    ),
+    .groups = "drop"
+  ) %>%
+  mutate(Midpoint.normalized = (.data$Midpoint.Coverage - .data$Mean.Coverage) + 1)
+
+xplus_zero_fragmentomics <- xplus_zero_metadata %>%
+  dplyr::select(Sample, Patient, Sample_ID, Bam, LOD) %>%
+  left_join(xplus_zero_fs, by = "Sample") %>%
+  left_join(xplus_zero_insert %>% dplyr::select(Sample, Proportion.Short), by = "Sample") %>%
+  left_join(xplus_zero_griffin, by = "Sample") %>%
+  mutate(
+    Amplitude = NA_real_,
+    Zscore.Coverage = NA_real_,
+    Zscore.Midpoint = NA_real_,
+    Zscore.Amplitude = NA_real_,
+    Threshold.Coverage = NA,
+    Threshold.Midpoint = NA,
+    Threshold.Amplitude = NA
+  )
+
+required_xplus_zero_fragmentomics <- c("FS", "Proportion.Short", "Mean.Coverage")
+if (nrow(xplus_zero_fragmentomics) != 3L ||
+    anyNA(xplus_zero_fragmentomics[required_xplus_zero_fragmentomics]) ||
+    anyDuplicated(xplus_zero_fragmentomics$Patient)) {
+  stop(
+    "X Plus zero-dilution fragmentomics integration requires exactly three unique, complete rows.",
+    call. = FALSE
+  )
+}
+
+# Bind by the historical fragmentomics schema. Extra diagnostic columns from
+# the insert-size file are intentionally not propagated into model inputs.
+for (col in setdiff(names(frag_df), names(xplus_zero_fragmentomics))) {
+  xplus_zero_fragmentomics[[col]] <- NA
+}
+frag_df <- bind_rows(
+  frag_df,
+  xplus_zero_fragmentomics[, names(frag_df), drop = FALSE]
+)
+
+# Append the same three rows to the local dilution metadata object only.
+shared_clinical_cols <- union(names(clinical_df), names(xplus_zero_metadata))
+for (col in setdiff(shared_clinical_cols, names(clinical_df))) clinical_df[[col]] <- NA
+for (col in setdiff(shared_clinical_cols, names(xplus_zero_metadata))) xplus_zero_metadata[[col]] <- NA
+clinical_df <- bind_rows(
+  clinical_df[, shared_clinical_cols, drop = FALSE],
+  xplus_zero_metadata[, shared_clinical_cols, drop = FALSE]
+) %>%
+  distinct(.data$BAM, .keep_all = TRUE)
+
+read_xplus_zero_ichor <- function(patient, bam) {
+  path <- file.path(xplus_zero_root, "iChorCNA", sub("[.]bam$", ".params.txt", bam))
+  if (!file.exists(path)) stop("Missing X Plus zero-dilution ichorCNA params: ", path, call. = FALSE)
+  lines <- readLines(path, warn = FALSE)
+  tf_line <- grep("^Tumor Fraction:[[:space:]]", lines, value = TRUE)
+  if (length(tf_line) != 1L) stop("Could not parse one tumor fraction from: ", path, call. = FALSE)
+  tibble(
+    Patient = patient,
+    Bam = sub("[.]bam$", "", bam),
+    Tumor_fraction = as.numeric(sub("^Tumor Fraction:[[:space:]]*", "", tf_line)),
+    tumor_fraction_source = path
+  )
+}
+xplus_zero_tumor_fraction <- bind_rows(Map(
+  read_xplus_zero_ichor,
+  xplus_zero_metadata$Patient,
+  xplus_zero_metadata$Bam
+))
+if (nrow(xplus_zero_tumor_fraction) != 3L || anyNA(xplus_zero_tumor_fraction$Tumor_fraction)) {
+  stop("Expected three finite X Plus zero-dilution ichorCNA estimates.", call. = FALSE)
+}
+shared_tf_cols <- union(names(tumor_fraction_dilution), names(xplus_zero_tumor_fraction))
+for (col in setdiff(shared_tf_cols, names(tumor_fraction_dilution))) tumor_fraction_dilution[[col]] <- NA
+for (col in setdiff(shared_tf_cols, names(xplus_zero_tumor_fraction))) xplus_zero_tumor_fraction[[col]] <- NA
+tumor_fraction_dilution <- bind_rows(
+  tumor_fraction_dilution[, shared_tf_cols, drop = FALSE],
+  xplus_zero_tumor_fraction[, shared_tf_cols, drop = FALSE]
+) %>%
+  distinct(.data$Bam, .keep_all = TRUE)
 
 # A) Combine features into one table 
 
@@ -256,21 +371,6 @@ dilution_df <- dilution_df %>% left_join(tumor_fraction_dilution %>% dplyr::sele
 dilution_df <- dilution_df %>%
   rename(WGS_Tumor_Fraction_Blood_plasma_cfDNA = Tumor_fraction) # for consistency
 
-# The PWGVAL release workbook contains only the newly prepared nonzero mixture
-# libraries. The patient-specific low-source plasma libraries used as the
-# physical diluent were sequenced previously and therefore live in the current
-# aggregate table rather than the 36-row M4CHIP release metadata. They are the
-# experimentally correct 0% endpoints and must be appended explicitly.
-# This explicit map is deliberately small and reviewable: each new dilution
-# series is linked to the previously sequenced low-source plasma library that
-# was physically used as its zero-tumour-fraction diluent.
-pwgval_zero_control_map <- tribble(
-  ~Patient, ~Sample_Code, ~zero_control_role,
-  "VA-09", "VA-09-05", "patient-specific low-source plasma used as diluent",
-  "VA-12", "VA-12-05", "patient-specific low-source plasma used as diluent",
-  "VA-13", "VA-13-07", "patient-specific low-source plasma used as diluent"
-)
-
 # The PWGVAL/M4CHIP dilution labels are intended cfVAF percentages. The top
 # point is capped at 10% when the measured baseline plasma cfVAF is higher than
 # 10%; otherwise the undiluted measured baseline is the top point. Lower levels
@@ -320,116 +420,51 @@ if (nrow(pwgval_baseline_counts) != nrow(pwgval_baseline_source_map) ||
   )
 }
 
-if (!file.exists(PATH_CURRENT_AGGREGATE)) {
-  stop("Missing current aggregate table required for PWGVAL zero controls: ",
-       PATH_CURRENT_AGGREGATE, call. = FALSE)
-}
-
-# Pull already processed features from the current aggregate table rather than
-# recomputing these older libraries with a potentially different pipeline.
-current_aggregate <- readRDS(PATH_CURRENT_AGGREGATE) %>% as_tibble()
-required_zero_control_columns <- c(
-  "Patient", "Sample_Code",
-  "detect_rate_BM", "zscore_BM", "z_score_detection_rate_BM",
-  "detect_rate_blood", "zscore_blood", "z_score_detection_rate_blood",
-  "FS", "Proportion.Short", "Mean.Coverage"
-)
-missing_zero_control_columns <- setdiff(required_zero_control_columns, names(current_aggregate))
-if (length(missing_zero_control_columns)) {
-  stop(
-    "Current aggregate table is missing PWGVAL zero-control feature columns: ",
-    paste(missing_zero_control_columns, collapse = ", "),
-    call. = FALSE
-  )
-}
-
-# Use an inner join so only the three prespecified controls can enter the
-# dilution dataset; the cardinality check below requires exactly one row each.
-pwgval_zero_controls <- current_aggregate %>%
-  inner_join(pwgval_zero_control_map, by = c("Patient", "Sample_Code"))
-
-zero_control_counts <- pwgval_zero_controls %>% count(.data$Patient, .data$Sample_Code)
-if (nrow(zero_control_counts) != nrow(pwgval_zero_control_map) ||
-    any(zero_control_counts$n != 1L)) {
-  stop(
-    "Expected exactly one current aggregate row for each PWGVAL zero control; found: ",
-    paste0(zero_control_counts$Patient, "/", zero_control_counts$Sample_Code,
-           " n=", zero_control_counts$n, collapse = "; "),
-    call. = FALSE
-  )
-}
-
-# Complete features are required because a nominal 0% point with missing model
-# inputs would not anchor the patient trajectories and could be misinterpreted.
-missing_zero_control_features <- pwgval_zero_controls %>%
-  dplyr::select(all_of(required_zero_control_columns)) %>%
-  pivot_longer(
-    cols = -all_of(c("Patient", "Sample_Code")),
-    names_to = "feature",
-    values_to = "value"
-  ) %>%
-  filter(is.na(.data$value))
-if (nrow(missing_zero_control_features)) {
-  stop(
-    "PWGVAL zero controls have missing required features: ",
-    paste0(missing_zero_control_features$Patient, "/",
-           missing_zero_control_features$Sample_Code, ":",
-           missing_zero_control_features$feature, collapse = "; "),
-    call. = FALSE
-  )
-}
-
-# Harmonize the controls to the dilution-table schema. LOD and CNA tumour
-# fraction are set to zero by experimental role; feature values remain the
-# measured values from the aggregate table. BAM basenames are recorded
-# explicitly to make the source libraries auditable.
-pwgval_zero_controls <- pwgval_zero_controls %>%
-  mutate(
-    Sample_ID = paste0(.data$Sample_Code, "-P"),
-    Sample = .data$Sample_ID,
-    Bam = case_when(
-      .data$Patient == "VA-09" ~ "TFRIM4_0183_Cf_P_PG_VA-09-05-P-DNA.filter.deduped.recalibrated.bam",
-      .data$Patient == "VA-12" ~ "TFRIM4_0186_Cf_P_PG_VA-12-05-P-DNA.filter.deduped.recalibrated.bam",
-      .data$Patient == "VA-13" ~ "TFRIM4_0187_Cf_P_PG_VA-13-07-P-DNA.filter.deduped.recalibrated.bam",
-      TRUE ~ NA_character_
-    ),
-    LOD = 0,
-    dilution_series = "PWGVAL_M4CHIP",
-    timepoint_info = "Patient-specific low-source plasma used as 0% diluent",
-    Sample_type = "Blood_plasma_cfDNA",
-    mrdetect_status = "available",
-    mrdetect_missing_reason = NA_character_,
-    WGS_Tumor_Fraction_Blood_plasma_cfDNA = 0,
-    is_preexisting_pwgval_zero_control = TRUE,
-    sequencing_platform_context = "Pre-existing NovaSeq 6000 low-source plasma"
-  )
-
-# Tag provenance before row-binding. The tag is retained downstream so plots
-# and exports can choose release-only or cross-platform views explicitly.
+# Tag provenance after all plot-only joins. The three zero rows are now X Plus
+# measurements from the same platform context as their nonzero series.
 dilution_df <- dilution_df %>%
   mutate(
     is_preexisting_pwgval_zero_control = FALSE,
-    sequencing_platform_context = if_else(
-      coalesce(.data$dilution_series == "PWGVAL_M4CHIP", FALSE),
-      "New PWGVAL/M4CHIP dilution library",
-      "Historical dilution series"
+    sequencing_platform_context = case_when(
+      .data$Sample_ID %in% xplus_zero_metadata$Sample_ID ~
+        "NovaSeq X Plus 0% physical diluent",
+      coalesce(.data$dilution_series == "PWGVAL_M4CHIP", FALSE) ~
+        "NovaSeq X Plus PWGVAL/M4CHIP dilution library",
+      TRUE ~ "Historical dilution series"
     )
-  ) %>%
-  bind_rows(pwgval_zero_controls)
+  )
+
+xplus_zero_scored_input_audit <- dilution_df %>%
+  filter(.data$Sample_ID %in% xplus_zero_metadata$Sample_ID) %>%
+  transmute(
+    Patient,
+    Sample_ID,
+    Bam,
+    LOD,
+    WGS_Tumor_Fraction_Blood_plasma_cfDNA,
+    FS,
+    Mean.Coverage,
+    Proportion.Short,
+    detect_rate_BM,
+    detect_rate_blood,
+    zscore_BM,
+    zscore_blood,
+    sequencing_platform_context,
+    integration_scope = "dilution plots, dilution scoring, and dilution correlations only"
+  )
+if (nrow(xplus_zero_scored_input_audit) != 3L ||
+    anyDuplicated(xplus_zero_scored_input_audit$Patient) ||
+    anyNA(xplus_zero_scored_input_audit %>%
+            dplyr::select(FS, Mean.Coverage, Proportion.Short,
+                          detect_rate_BM, detect_rate_blood,
+                          zscore_BM, zscore_blood))) {
+  stop("X Plus zero-dilution integration did not produce three complete plot-scoring rows.", call. = FALSE)
+}
 
 # Export a compact integration ledger linking every appended control to its
-# source object and role; this is the primary audit trail for the manual map.
+# plot-only source and role.
 write_csv(
-  pwgval_zero_controls %>%
-    transmute(
-      Patient,
-      Sample_ID,
-      Bam,
-      LOD,
-      zero_control_role,
-      source_table = PATH_CURRENT_AGGREGATE,
-      integration_status = "appended_as_measured_zero_control"
-    ),
+  xplus_zero_scored_input_audit,
   file.path(OUTPUT_DIR_TABLES, "pwgval_dilution_zero_control_integration_audit.csv")
 )
 
@@ -575,7 +610,7 @@ dilution_df$LOD <- dilution_df$LOD_updated
 pwgval_sample_cfvaf_audit <- dilution_df %>%
   filter(
     .data$is_pwgval_dilution,
-    !.data$is_preexisting_pwgval_zero_control
+    !.data$Sample_ID %in% xplus_zero_metadata$Sample_ID
   ) %>%
   transmute(
     Patient,
@@ -639,15 +674,14 @@ write_csv(
   file.path(OUTPUT_DIR_TABLES, "pwgval_m4chip_sample_dilution_cfvaf_audit.csv")
 )
 
-# Preserve both scientifically distinct views. The primary/release-only object
-# contains the 36 new PWGVAL/M4CHIP libraries. The cross-platform object also
-# contains the three pre-existing NovaSeq 6000 low-source plasma controls used
-# as physical diluent. Keeping both avoids silently mixing platform contexts.
-# Snapshot the combined object before removing pre-existing controls from the
-# manuscript's primary 36-library release table.
-dilution_df_with_preexisting_zero_controls <- dilution_df
+# Preserve the complete same-platform series for ED5D/ED7D and their dedicated
+# correlation source data. The general dilution outputs remain release-only so
+# the new zero-point calls do not propagate to Figure 3C, Supplementary Table 7,
+# ED9D, or any non-requested analysis surface.
+dilution_df_with_xplus_zero_controls <- dilution_df
+dilution_df_with_preexisting_zero_controls <- dilution_df_with_xplus_zero_controls
 dilution_df <- dilution_df %>%
-  filter(!.data$is_preexisting_pwgval_zero_control)
+  filter(!.data$Sample_ID %in% xplus_zero_metadata$Sample_ID)
 
 # Quantify feature and probability availability after all joins. Missingness is
 # reported rather than imputed because preserved models must only score rows
@@ -2217,6 +2251,13 @@ write_csv(dilution_df, file.path(OUTPUT_DIR_TABLES, "Supp_Table_7_dilution_serie
 
 message("\n═══ Building dilution figures WITH healthy-control overlay ═══\n")
 
+# From this point through the ED5D/ED7D patient-line outputs, use the complete
+# 13-point-per-patient X Plus series (12 nonzero technical libraries plus one
+# shared physical 0% diluent). Preserve the general release-only object for the
+# later fragmentomics-only panel.
+dilution_df_release_only <- dilution_df
+dilution_df <- dilution_df_with_xplus_zero_controls
+
 # ── A. Load healthy-control MRDetect reference ──────────────────────────────
 PATH_HEALTHY_REF <- file.path(
   dirname(PATH_DILUTION_PROCESSED_MRDetect),
@@ -3314,8 +3355,8 @@ message("Saved: Fig5G_LOD_individual_patient_plots.png")
 # where neg_vaf is the MRDetect-estimated tumor fraction at the longitudinal
 # low/negative endpoint. For comparison with the newer PWGVAL/M4CHIP dilution
 # cases, this sensitivity view keeps the baseline scaling but forces the VA-02
-# final endpoint contribution to 0. The release-only PWGVAL/M4CHIP rows stop at
-# 0.0001%; a separate cross-platform view below adds their pre-existing 0% controls.
+# final endpoint contribution to 0. The current PWGVAL/M4CHIP rows include the
+# matched X Plus 0% physical diluents directly.
 # -------------------------------------------------------------------------
 
 # A true zero cannot be drawn on a log axis. Place it at 35% of the smallest
@@ -3711,7 +3752,7 @@ ms_copy_artifact(
   role = "figure_panel_png",
   description = paste(
     "De-identified blood/cfDNA dilution-series patient-line panel with one color per patient and mutation-list sizes in the legend;",
-    "PWGVAL series contain only the new dilution release and end at 0.0001% TF."
+    "PWGVAL series include the matched NovaSeq X Plus 0% physical diluent endpoint."
   ),
   script_name = "3_1_part2_Apply_cfWGS_thresholds_to_dilution_series.R"
 )
@@ -3795,16 +3836,18 @@ ms_copy_artifact(
   role = "figure_panel_png",
   description = paste(
     "De-identified BM-informed dilution-series patient-line panel with one color per patient and mutation-list sizes in the legend;",
-    "PWGVAL series contain only the new dilution release and end at 0.0001% TF."
+    "PWGVAL series include the matched NovaSeq X Plus 0% physical diluent endpoint."
   ),
   script_name = "3_1_part2_Apply_cfWGS_thresholds_to_dilution_series.R"
 )
 
 # -------------------------------------------------------------------------
-# Cross-platform alternatives with the pre-existing NovaSeq 6000 diluent
-# controls appended at 0% TF. These remain separate from the release-only
-# figures above because the zero controls were not sequenced in the new batch.
+# Legacy cross-platform alternatives with the pre-existing NovaSeq 6000
+# diluent controls. Disabled after same-platform X Plus sequencing became
+# available for all three physical diluents; retained only as documentation of
+# the superseded sensitivity analysis.
 # -------------------------------------------------------------------------
+if (FALSE) {
 build_cross_platform_patient_source <- function(dat,
                                                 feature_names,
                                                 probability_names,
@@ -3964,6 +4007,7 @@ ms_copy_artifact(
   ),
   script_name = "3_1_part2_Apply_cfWGS_thresholds_to_dilution_series.R"
 )
+}
 
 # -------------------------------------------------------------------------
 # Fragmentomics main-model dilution-series patient lines
@@ -4005,7 +4049,7 @@ if (length(missing_fragmentomics_plot_columns)) {
   )
 }
 
-fragmentomics_patient_zero_final_source <- dilution_df %>%
+fragmentomics_patient_zero_final_source <- dilution_df_release_only %>%
   mutate(
     LOD_current_recalibrated = .data$LOD,
     LOD_zero_final = if_else(
@@ -4109,7 +4153,7 @@ ms_copy_artifact(
   role = "supporting_dilution_patient_lines_zero_final_tf_png",
   description = paste(
     "De-identified dilution-series patient lines for the three preserved main fragmentomics models;",
-    "PWGVAL series contain only the new dilution release and end at 0.0001% TF."
+    "PWGVAL series include the matched NovaSeq X Plus 0% physical diluent endpoint."
   ),
   script_name = "3_1_part2_Apply_cfWGS_thresholds_to_dilution_series.R"
 )

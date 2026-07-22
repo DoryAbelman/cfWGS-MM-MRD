@@ -402,14 +402,16 @@ flag_followup_relapse_points <- function(plot_df) {
     arrange(Patient, Metric, Weeks_Since_Baseline, Date) %>%
     group_by(Patient, Metric) %>%
     mutate(
-      is_effective_baseline_point = row_number() == 1,
+      # Baseline is defined by the mutation-source time anchor (week 0), not
+      # by being the first assay-evaluable observation for a patient. Thus, a
+      # patient's only available observation can still be a relapse-associated
+      # follow-up point when it occurs after week 0.
+      is_effective_baseline_point = near(Weeks_Since_Baseline, 0),
       relapse_within_180 = if_else(
-        # Baseline/source observations are normally not treated as prospective
-        # relapse calls. The exception is an observation collected on the
-        # documented progression date: it is an at-event sample (day 0), so it
-        # belongs in the relapse facet even when it is the patient's first and
-        # only assay-evaluable point.
-        (!is_effective_baseline_point | Num_days_to_closest_relapse == 0) &
+        # True week-0 baseline observations are always shown in black. A point
+        # is red only when it is after week 0 and was collected 0--180 days
+        # before the patient's next documented relapse/progression.
+        !is_effective_baseline_point &
           Relapsed_Binary == 1L &
           Num_days_to_closest_relapse >= 0 &
           Num_days_to_closest_relapse <= 180,
