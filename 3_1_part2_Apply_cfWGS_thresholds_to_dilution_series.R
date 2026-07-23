@@ -2258,6 +2258,114 @@ message("\n═══ Building dilution figures WITH healthy-control overlay ═�
 dilution_df_release_only <- dilution_df
 dilution_df <- dilution_df_with_xplus_zero_controls
 
+# Full all-patient correlation lollipop corresponding to the ED5D/ED7D series.
+# This is intentionally separate from Figure 3C and Supplementary Table 7: it
+# includes the three same-platform X Plus 0% endpoints requested for these
+# dilution plots without changing any general/main-analysis output.
+all_patient_corr_features <- c(
+  "detect_rate_BM",
+  "zscore_BM",
+  "z_score_detection_rate_BM",
+  "detect_rate_blood",
+  "zscore_blood",
+  "z_score_detection_rate_blood",
+  "Blood_plus_fragment_prob",
+  "Blood_zscore_only_sites_prob",
+  "Mean.Coverage",
+  "Proportion.Short",
+  "FS",
+  "WGS_Tumor_Fraction_Blood_plasma_cfDNA",
+  "BM_zscore_only_detection_rate_prob"
+)
+all_patient_corr_labels <- c(
+  detect_rate_BM = "BM-derived cumulative\nVAF (cVAF)",
+  z_score_detection_rate_BM = "BM-derived cVAF z-score",
+  zscore_BM = "BM-derived prop. mutant\nsites detected z-score",
+  BM_zscore_only_detection_rate_prob = "BM-derived cVAF\nmodel probability",
+  detect_rate_blood = "Blood-derived cumulative\nVAF (cVAF)",
+  z_score_detection_rate_blood = "Blood-derived cVAF\nz-score",
+  zscore_blood = "Blood-derived prop. mutant\nsites detected z-score",
+  Blood_plus_fragment_prob = "Blood-derived combined\nmodel probability",
+  Blood_zscore_only_sites_prob = "Blood-derived prop.\nsites model probability",
+  Mean.Coverage = "MM regulatory\ncoverage",
+  Proportion.Short = "Short-fragment\nproportion",
+  FS = "Fragment-size score",
+  WGS_Tumor_Fraction_Blood_plasma_cfDNA = "CNA tumour fraction\n(ichorCNA)"
+)
+all_patient_corr_long <- dilution_df %>%
+  dplyr::select(LOD, all_of(intersect(all_patient_corr_features, names(dilution_df)))) %>%
+  pivot_longer(-LOD, names_to = "feature", values_to = "value") %>%
+  filter(!is.na(.data$value))
+
+all_patient_corr_tbl <- all_patient_corr_long %>%
+  group_by(.data$feature) %>%
+  summarise(
+    n = dplyr::n(),
+    rho = suppressWarnings(cor(.data$value, .data$LOD, method = "spearman")),
+    p = suppressWarnings(cor.test(.data$value, .data$LOD, method = "spearman", exact = FALSE)$p.value),
+    .groups = "drop"
+  ) %>%
+  filter(.data$feature %in% names(all_patient_corr_labels)) %>%
+  arrange(desc(.data$rho))
+
+write_csv(
+  all_patient_corr_tbl,
+  file.path(
+    OUTPUT_DIR_TABLES,
+    "Source_Data_Extended_Data",
+    "SourceData_Dilution_feature_correlations_all_patients_with_XPlus_zero.csv"
+  )
+)
+
+all_patient_corr_plot_df <- all_patient_corr_tbl %>%
+  mutate(feature = factor(.data$feature, levels = rev(.data$feature)))
+
+all_patient_corr_plot <- ggplot(all_patient_corr_plot_df, aes(x = .data$rho, y = .data$feature)) +
+  geom_vline(xintercept = 0, colour = "grey80", linetype = "dashed") +
+  geom_segment(
+    aes(x = 0, xend = .data$rho, yend = .data$feature),
+    colour = "grey70",
+    linewidth = 0.4
+  ) +
+  geom_point(aes(colour = .data$rho), size = 3) +
+  scale_colour_viridis_c(
+    option = "D", end = 0.9,
+    name = expression(rho~"(Spearman)"),
+    limits = c(-1, 1)
+  ) +
+  scale_x_continuous(limits = c(-1, 1), breaks = seq(-1, 1, by = 0.5)) +
+  scale_y_discrete(labels = all_patient_corr_labels) +
+  labs(
+    title = "Feature Correlation with Dilution Series",
+    x = expression(rho~"(Spearman)"),
+    y = NULL
+  ) +
+  theme_minimal(base_size = 8) +
+  theme(
+    plot.title.position = "plot",
+    plot.title = element_text(face = "bold", size = 12, hjust = 0.5),
+    axis.text.y = element_text(size = 8),
+    axis.text.x = element_text(size = 8),
+    axis.title.x = element_text(size = 8, margin = margin(t = 4)),
+    panel.grid.major.y = element_blank(),
+    panel.grid.minor = element_blank(),
+    legend.position = "none"
+  )
+
+all_patient_corr_plot_path <- file.path(
+  OUTPUT_DIR_FIGURES,
+  "Fig_feature_corr_lollipop_dilution_series_all_patients_XPlus_zero.png"
+)
+ggsave(
+  filename = all_patient_corr_plot_path,
+  plot = all_patient_corr_plot,
+  width = 4,
+  height = 5,
+  dpi = 600,
+  bg = "white"
+)
+message("Saved: ", all_patient_corr_plot_path)
+
 # ── A. Load healthy-control MRDetect reference ──────────────────────────────
 PATH_HEALTHY_REF <- file.path(
   dirname(PATH_DILUTION_PROCESSED_MRDetect),

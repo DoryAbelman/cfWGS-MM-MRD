@@ -444,7 +444,10 @@ make_metric_panel <- function(df, metric, panel_title, y_label, cap_at = NA_real
                               x_cap_at = NA_real_,
                               y_transform = c("identity", "pseudo_log"),
                               y_transform_sigma = 1,
-                              y_transform_breaks = NULL) {
+                              y_transform_breaks = NULL,
+                              display_as_percent = FALSE,
+                              overcap_shape = 17,
+                              prefix_cap_axis_label = TRUE) {
   y_transform <- match.arg(y_transform)
   metric_df <- df %>% filter(Metric == metric)
   if (nrow(metric_df) == 0) {
@@ -452,6 +455,10 @@ make_metric_panel <- function(df, metric, panel_title, y_label, cap_at = NA_real
   }
   facet_labels <- make_relapse_facet_labels(metric_df)
   has_x_cap <- is.finite(x_cap_at)
+  percent_axis_labels <- scales::label_percent(accuracy = 1)
+  percent_value_labels <- function(x) {
+    sub("\\.0%$", "%", scales::percent(x, accuracy = 0.1))
+  }
 
   if (is.finite(cap_at) && y_transform != "identity" && isTRUE(reverse_display)) {
     stop(
@@ -473,10 +480,15 @@ make_metric_panel <- function(df, metric, panel_title, y_label, cap_at = NA_real
       pretty(c(0, cap_at))
     }
     cap_y_labels <- function(x) {
+      formatted_x <- if (isTRUE(display_as_percent)) {
+        percent_axis_labels(x)
+      } else {
+        scales::number(x, accuracy = cap_label_accuracy)
+      }
       ifelse(
         abs(x - cap_at) < 1e-8,
-        paste0(">", scales::number(cap_at, accuracy = cap_label_accuracy)),
-        scales::number(x, accuracy = cap_label_accuracy)
+        paste0(if (isTRUE(prefix_cap_axis_label)) ">" else "", formatted_x),
+        formatted_x
       )
     }
     metric_plot_df <- metric_df %>%
@@ -487,7 +499,11 @@ make_metric_panel <- function(df, metric, panel_title, y_label, cap_at = NA_real
         Weeks_Since_Baseline_plot = if (has_x_cap) pmin(Weeks_Since_Baseline, x_cap_at) else Weeks_Since_Baseline,
         label_val = if_else(
           overcap,
-          scales::number(Value, accuracy = cap_label_accuracy),
+          if (isTRUE(display_as_percent)) {
+            percent_value_labels(Value)
+          } else {
+            scales::number(Value, accuracy = cap_label_accuracy)
+          },
           NA_character_
         )
       )
@@ -537,8 +553,18 @@ make_metric_panel <- function(df, metric, panel_title, y_label, cap_at = NA_real
           name = "Cohort"
         ) +
         scale_shape_manual(
-          values = c(`FALSE` = 16, `TRUE` = 17),
-          labels = c(`FALSE` = paste0("<=", cap_at), `TRUE` = paste0(">", cap_at, " (capped)")),
+          values = c(`FALSE` = 16, `TRUE` = overcap_shape),
+          labels = c(
+            `FALSE` = paste0(
+              "<=",
+              if (isTRUE(display_as_percent)) percent_axis_labels(cap_at) else cap_at
+            ),
+            `TRUE` = paste0(
+              ">",
+              if (isTRUE(display_as_percent)) percent_axis_labels(cap_at) else cap_at,
+              " (capped)"
+            )
+          ),
           name = NULL
         ) +
         guides(shape = "none") +
@@ -613,8 +639,14 @@ make_metric_panel <- function(df, metric, panel_title, y_label, cap_at = NA_real
     theme_classic(base_size = 11) +
     theme(strip.background = element_rect(fill = "grey95", colour = NA))
 
-  if (isTRUE(reverse_display) && y_transform == "identity") {
-    panel <- panel + scale_y_reverse()
+  if (y_transform == "identity") {
+    if (isTRUE(reverse_display)) {
+      panel <- panel + scale_y_reverse(
+        labels = if (isTRUE(display_as_percent)) percent_axis_labels else waiver()
+      )
+    } else if (isTRUE(display_as_percent)) {
+      panel <- panel + scale_y_continuous(labels = percent_axis_labels)
+    }
   }
   if (y_transform == "pseudo_log") {
     pseudo_log_transform <- scales::pseudo_log_trans(
@@ -629,7 +661,11 @@ make_metric_panel <- function(df, metric, panel_title, y_label, cap_at = NA_real
     panel <- panel + scale_y_continuous(
       trans = display_transform,
       breaks = y_transform_breaks,
-      labels = scales::label_number(big.mark = ",")
+      labels = if (isTRUE(display_as_percent)) {
+        percent_axis_labels
+      } else {
+        scales::label_number(big.mark = ",")
+      }
     )
   }
   panel
@@ -853,11 +889,7 @@ make_raw_mutation_panel <- function(plot_df, title, cvaf_cap_at = NA_real_,
     plot_df,
     metric = "cVAF",
     panel_title = "Cumulative VAF",
-    y_label = if (y_transform == "pseudo_log") {
-      "Cumulative VAF (pseudo-log)"
-    } else {
-      "Cumulative VAF"
-    },
+    y_label = "Cumulative VAF (%)",
     cap_at = cvaf_cap_at,
     x_cap_at = x_cap_at,
     y_transform = y_transform,
@@ -866,17 +898,16 @@ make_raw_mutation_panel <- function(plot_df, title, cvaf_cap_at = NA_real_,
       c(0, 0.001, 0.01, 0.1, 1)
     } else {
       NULL
-    }
+    },
+    display_as_percent = TRUE,
+    overcap_shape = 18,
+    prefix_cap_axis_label = FALSE
   )
   p_sites <- make_metric_panel(
     plot_df,
     metric = "sites",
     panel_title = "Proportion of Sites Detected",
-    y_label = if (y_transform == "pseudo_log") {
-      "Sites detected (pseudo-log)"
-    } else {
-      "Prop. Mutant Sites Detected"
-    },
+    y_label = "Proportion of Mutant Sites Detected (%)",
     cap_at = sites_cap_at,
     x_cap_at = x_cap_at,
     y_transform = y_transform,
@@ -885,7 +916,10 @@ make_raw_mutation_panel <- function(plot_df, title, cvaf_cap_at = NA_real_,
       c(0, 0.01, 0.1, 1)
     } else {
       NULL
-    }
+    },
+    display_as_percent = TRUE,
+    overcap_shape = 18,
+    prefix_cap_axis_label = FALSE
   )
 
   p_cvaf + p_sites +
@@ -926,11 +960,7 @@ make_extended_fragmentomics_panel <- function(plot_df, x_cap_at = NA_real_,
     plot_df,
     metric = "Proportion.Short",
     panel_title = "Short-fragment proportion",
-    y_label = if (y_transform == "pseudo_log") {
-      "Short-fragment proportion (pseudo-log)"
-    } else {
-      "Short-fragment proportion"
-    },
+    y_label = "Short cfDNA Fragments (%)",
     x_cap_at = x_cap_at,
     y_transform = y_transform,
     y_transform_sigma = 0.01,
@@ -938,17 +968,16 @@ make_extended_fragmentomics_panel <- function(plot_df, x_cap_at = NA_real_,
       c(0.05, 0.1, 0.2, 0.3)
     } else {
       NULL
-    }
+    },
+    display_as_percent = TRUE,
+    overcap_shape = 18,
+    prefix_cap_axis_label = FALSE
   )
   p_tf <- make_metric_panel(
     plot_df,
     metric = "TF_ichorCNA",
     panel_title = "cfDNA tumor fraction",
-    y_label = if (y_transform == "pseudo_log") {
-      "cfDNA tumor fraction (pseudo-log; >0.5 capped)"
-    } else {
-      "cfDNA tumor fraction (>0.5 capped)"
-    },
+    y_label = "cfDNA Tumor Fraction (%)",
     cap_at = 0.5,
     x_cap_at = x_cap_at,
     y_transform = y_transform,
@@ -957,7 +986,10 @@ make_extended_fragmentomics_panel <- function(plot_df, x_cap_at = NA_real_,
       c(0, 0.01, 0.1, 0.5)
     } else {
       NULL
-    }
+    },
+    display_as_percent = TRUE,
+    overcap_shape = 18,
+    prefix_cap_axis_label = FALSE
   )
 
   p_short + p_tf +
@@ -1037,6 +1069,7 @@ fragmentomics_panel_pseudolog <- make_fragmentomics_panel(
 ed3a_panel <- make_raw_mutation_panel(
   ed3a_plot_df,
   title = "Baseline BM-informed longitudinal tracking: Relapsed vs Non-relapsed patients",
+  cvaf_cap_at = 0.25,
   x_cap_at = 250
 )
 ed3a_panel_pseudolog <- make_raw_mutation_panel(
@@ -1048,6 +1081,7 @@ ed3a_panel_pseudolog <- make_raw_mutation_panel(
 ed3b_panel <- make_raw_mutation_panel(
   ed3b_plot_df,
   title = "Baseline cfDNA-informed longitudinal tracking: Relapsed vs Non-relapsed patients",
+  cvaf_cap_at = 0.25,
   x_cap_at = 250
 )
 ed3b_panel_pseudolog <- make_raw_mutation_panel(

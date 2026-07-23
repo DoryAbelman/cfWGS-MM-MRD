@@ -26,6 +26,8 @@
 #     Fig3C_alt_dilution_feature_rho_by_patient_replicate.pdf
 #     Fig3C_alt_dilution_feature_rho_patient_means_simple.png
 #     Fig3C_alt_dilution_feature_rho_patient_means_simple.pdf
+#     Fig3C_dilution_feature_rho_all_patients_with_series_points.png
+#     Fig3C_dilution_feature_rho_all_patients_with_series_points.pdf
 #   Output_tables_2025/Source_Data_Extended_Data/
 #     SourceData_Fig3C_alt_dilution_feature_rho_by_patient_replicate.csv
 
@@ -788,6 +790,117 @@ ggsave(
   bg = "white"
 )
 
+# Original-style lollipop with patient/replicate points -------------------
+# Preserve the visual hierarchy of the original Figure 3C lollipop: the
+# equal-patient summary is the large, rho-coloured endpoint and the stem runs
+# from zero to that estimate. The smaller grey points expose all seven
+# underlying series-level correlations (three patients x two technical
+# replicates plus the historical patient's single series). A small vertical
+# jitter prevents coincident series estimates from being completely hidden;
+# the fixed seed above makes that placement reproducible.
+all_four_series_plot <- all_four_replicate_rho %>%
+  mutate(feature = factor(.data$feature, levels = all_four_feature_order))
+
+lollipop_labels <- c(
+  detect_rate_BM = "BM-derived cumulative\nVAF (cVAF)",
+  z_score_detection_rate_BM = "BM-derived cVAF\nz-score",
+  zscore_BM = "BM-derived prop. mutant\nsites detected z-score",
+  detect_rate_blood = "Blood-derived cumulative\nVAF (cVAF)",
+  z_score_detection_rate_blood = "Blood-derived cVAF\nz-score",
+  zscore_blood = "Blood-derived prop. mutant\nsites detected z-score",
+  Mean.Coverage = "MM regulatory\ncoverage",
+  Proportion.Short = "Short-fragment\nproportion",
+  FS = "Fragment-size score",
+  WGS_Tumor_Fraction_Blood_plasma_cfDNA = "CNA tumour fraction\n(ichorCNA)",
+  BM_zscore_only_detection_rate_prob = "BM-derived cVAF\nmodel probability",
+  Blood_plus_fragment_prob = "Blood-derived combined\nmodel probability",
+  Blood_zscore_only_sites_prob = "Blood-derived prop. sites\nmodel probability"
+)
+
+p_all_four_with_series <- ggplot() +
+  geom_vline(
+    xintercept = 0,
+    colour = "grey80",
+    linetype = "dashed",
+    linewidth = 0.4
+  ) +
+  geom_segment(
+    data = all_four_overall_plot,
+    aes(x = 0, xend = .data$rho, y = .data$feature, yend = .data$feature),
+    colour = "grey68",
+    linewidth = 0.55
+  ) +
+  geom_point(
+    data = all_four_series_plot,
+    aes(x = .data$rho, y = .data$feature),
+    colour = "grey45",
+    fill = "grey88",
+    shape = 21,
+    size = 1.55,
+    stroke = 0.45,
+    alpha = 0.82,
+    position = position_jitter(width = 0, height = 0.13, seed = 20260722)
+  ) +
+  geom_point(
+    data = all_four_overall_plot,
+    aes(x = .data$rho, y = .data$feature, colour = .data$rho),
+    size = 4.15
+  ) +
+  scale_colour_viridis_c(
+    option = "D",
+    begin = 0.15,
+    end = 0.90,
+    limits = c(-1, 1),
+    guide = "none"
+  ) +
+  scale_x_continuous(
+    limits = c(-1.02, 1.02),
+    breaks = seq(-1, 1, by = 0.5),
+    expand = expansion(mult = c(0.01, 0.01))
+  ) +
+  scale_y_discrete(labels = lollipop_labels) +
+  labs(
+    title = "Feature Correlation with Dilution Series",
+    x = expression(rho ~ "(Spearman)"),
+    y = NULL
+  ) +
+  theme_minimal(base_size = 10) +
+  theme(
+    plot.title.position = "plot",
+    plot.title = element_text(face = "bold", size = 14, hjust = 0.5),
+    axis.text.y = element_text(size = 8.6, colour = "grey25"),
+    axis.text.x = element_text(size = 8.5, colour = "grey30"),
+    axis.title.x = element_text(size = 9.5, margin = margin(t = 5)),
+    panel.grid.major.y = element_blank(),
+    panel.grid.minor = element_blank(),
+    plot.margin = margin(8, 9, 7, 8)
+  )
+
+all_four_series_png_path <- file.path(
+  figure_dir,
+  "Fig3C_dilution_feature_rho_all_patients_with_series_points.png"
+)
+all_four_series_pdf_path <- file.path(
+  figure_dir,
+  "Fig3C_dilution_feature_rho_all_patients_with_series_points.pdf"
+)
+ggsave(
+  all_four_series_png_path,
+  p_all_four_with_series,
+  width = 6.1,
+  height = 5.3,
+  dpi = 600,
+  bg = "white"
+)
+ggsave(
+  all_four_series_pdf_path,
+  p_all_four_with_series,
+  width = 6.1,
+  height = 5.3,
+  device = cairo_pdf,
+  bg = "white"
+)
+
 # This all-four-patient panel replaces the previous Figure 3C manuscript
 # object. The shared helper also refreshes the generated component mirror and
 # records the copy in the direct-output manifest.
@@ -818,6 +931,26 @@ ms_copy_artifact(
   ),
   script_name = "3_1C_Summarize_dilution_correlations_across_patients.R"
 )
+ms_copy_artifact(
+  source_path = all_four_series_png_path,
+  artifact_id = "FIG3C",
+  role = "series_points",
+  description = paste(
+    "Alternate original-style Figure 3C lollipop with the equal-patient",
+    "summary highlighted and all patient/experimental-series correlations shown."
+  ),
+  script_name = "3_1C_Summarize_dilution_correlations_across_patients.R"
+)
+ms_copy_artifact(
+  source_path = all_four_series_pdf_path,
+  artifact_id = "FIG3C",
+  role = "series_points",
+  description = paste(
+    "Vector PDF companion to the alternate Figure 3C lollipop with",
+    "individual patient/experimental-series correlations."
+  ),
+  script_name = "3_1C_Summarize_dilution_correlations_across_patients.R"
+)
 
 legacy_figure_paths <- file.path(
   dirname(final_panel_path),
@@ -839,6 +972,8 @@ message("Saved simplified figure: ", simple_pdf_path)
 message("Saved source data: ", source_path)
 message("Saved replacement all-four-patient figure: ", all_four_png_path)
 message("Saved replacement all-four-patient figure: ", all_four_pdf_path)
+message("Saved original-style figure with series points: ", all_four_series_png_path)
+message("Saved original-style figure with series points: ", all_four_series_pdf_path)
 message("Saved replacement all-four-patient source data: ", all_four_source_path)
 message("Final manuscript-object panel: ", final_panel_path)
 message(
