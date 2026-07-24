@@ -11,9 +11,11 @@
 #   1. Dry-runs or executes the numbered source-pipeline scripts.
 #   2. Refreshes the stage-ordered script-to-artifact map.
 #   3. Validates the direct manuscript-output tree in final_manuscript_objects/.
-#   4. Builds the manuscript-writing number workbook from current outputs and
+#   4. Rebuilds the deterministic repeated-measures sensitivity analysis and
+#      revision-inclusive Supplementary Table 6 submission workbook.
+#   5. Builds the manuscript-writing number workbook from current outputs and
 #      the working manuscript DOCX drafts.
-#   5. Optionally runs the separate reproducible_workflow generation/validation
+#   6. Optionally runs the separate reproducible_workflow generation/validation
 #      harness when --run-reference-workflow is supplied.
 #
 # Guardrails:
@@ -160,6 +162,25 @@ main <- function() {
     )
   } else {
     message_log("Skipping numbered source pipeline because --skip-source was supplied.", log_file = log_file)
+  }
+
+  if (isTRUE(args$execute)) {
+    run_rscript(
+      project_root = project_root,
+      script_path = file.path(
+        "Scripts_2025",
+        "Final_Scripts",
+        "3_1C_Expanded_test_clustered_sensitivity.R"
+      ),
+      label = "expanded-test repeated-measures sensitivity analysis",
+      log_file = log_file
+    )
+  } else {
+    message_log(
+      "Dry-run: repeated-measures sensitivity and Supplementary Table 6 were not rebuilt. ",
+      "Add --execute (with --skip-source if current upstream outputs should be reused).",
+      log_file = log_file
+    )
   }
 
   run_rscript(

@@ -1396,7 +1396,7 @@ spring2026_revision_mutation_counts <- function(
   counts
 }
 
-build_baseline_mutation_count_plot_data <- function(dat_base) {
+build_baseline_mutation_count_plot_data <- function(dat_base, baseline_candidates = dat_base) {
   # ## Combine historical and revision baseline mutation burdens for plotting
   #
   # Some revision patients have valid baseline MAFs but no row in the broad
@@ -1408,6 +1408,58 @@ build_baseline_mutation_count_plot_data <- function(dat_base) {
     c("Patient", "cohort", "BM_Mutation_Count", "Blood_Mutation_Count"),
     "Baseline mutation-count plotting table"
   )
+  require_columns(
+    baseline_candidates,
+    c("Patient", "BM_Mutation_Count", "Blood_Mutation_Count"),
+    "Baseline mutation-count candidate table"
+  )
+
+  # A patient can legitimately have different modality-specific baseline rows.
+  # For example, SPORE_0012 has an eligible diagnosis cfDNA row and a later
+  # manually designated BM baseline row. The paired concordance analysis should
+  # not treat those as a matched pair, but the marginal ED2E mutation-count
+  # panel should retain each scientifically eligible modality. Recover one
+  # unique count per patient and modality before reducing to the plotting table.
+  candidate_count_conflicts <- baseline_candidates %>%
+    dplyr::select(
+      "Patient", "BM_Mutation_Count", "Blood_Mutation_Count"
+    ) %>%
+    tidyr::pivot_longer(
+      cols = c("BM_Mutation_Count", "Blood_Mutation_Count"),
+      names_to = "modality_count",
+      values_to = "Mutation_Count"
+    ) %>%
+    dplyr::filter(!is.na(.data$Mutation_Count)) %>%
+    dplyr::distinct(.data$Patient, .data$modality_count, .data$Mutation_Count) %>%
+    dplyr::count(.data$Patient, .data$modality_count, name = "n_distinct_counts") %>%
+    dplyr::filter(.data$n_distinct_counts > 1L)
+  if (nrow(candidate_count_conflicts)) {
+    stop(
+      "Baseline mutation-count candidates contain conflicting counts for: ",
+      paste(
+        paste0(
+          candidate_count_conflicts$Patient, "/",
+          candidate_count_conflicts$modality_count
+        ),
+        collapse = ", "
+      ),
+      call. = FALSE
+    )
+  }
+
+  candidate_modality_counts <- baseline_candidates %>%
+    dplyr::group_by(.data$Patient) %>%
+    dplyr::summarise(
+      BM_Mutation_Count_candidate = dplyr::first(
+        unique(.data$BM_Mutation_Count[!is.na(.data$BM_Mutation_Count)]),
+        default = NA_real_
+      ),
+      Blood_Mutation_Count_candidate = dplyr::first(
+        unique(.data$Blood_Mutation_Count[!is.na(.data$Blood_Mutation_Count)]),
+        default = NA_real_
+      ),
+      .groups = "drop"
+    )
 
   revision_counts <- spring2026_revision_mutation_counts(required = TRUE) %>%
     dplyr::filter(tolower(.data$timepoint_info) %in% c("baseline", "diagnosis"))
@@ -1418,10 +1470,27 @@ build_baseline_mutation_count_plot_data <- function(dat_base) {
       "Patient", "cohort",
       "BM_Mutation_Count", "Blood_Mutation_Count"
     ) %>%
+    dplyr::left_join(candidate_modality_counts, by = "Patient") %>%
+    dplyr::mutate(
+      BM_Mutation_Count = dplyr::coalesce(
+        .data$BM_Mutation_Count,
+        .data$BM_Mutation_Count_candidate
+      ),
+      Blood_Mutation_Count = dplyr::coalesce(
+        .data$Blood_Mutation_Count,
+        .data$Blood_Mutation_Count_candidate
+      )
+    ) %>%
     dplyr::rename(
       cohort_selected_baseline = "cohort",
       BM_Mutation_Count_selected_baseline = "BM_Mutation_Count",
       Blood_Mutation_Count_selected_baseline = "Blood_Mutation_Count"
+    ) %>%
+    dplyr::select(
+      "Patient",
+      "cohort_selected_baseline",
+      "BM_Mutation_Count_selected_baseline",
+      "Blood_Mutation_Count_selected_baseline"
     )
 
   revision_wide <- revision_counts %>%
@@ -1469,10 +1538,13 @@ build_baseline_mutation_count_plot_data <- function(dat_base) {
     )
   }
 
-  historical_wide <- dat_base %>%
+  historical_wide <- selected_baseline_counts %>%
     dplyr::filter(!.data$Patient %in% revision_patients) %>%
-    dplyr::select(
-      "Patient", "cohort", "BM_Mutation_Count", "Blood_Mutation_Count"
+    dplyr::transmute(
+      Patient = .data$Patient,
+      cohort = .data$cohort_selected_baseline,
+      BM_Mutation_Count = .data$BM_Mutation_Count_selected_baseline,
+      Blood_Mutation_Count = .data$Blood_Mutation_Count_selected_baseline
     ) %>%
     dplyr::mutate(Timepoint = NA_character_)
 

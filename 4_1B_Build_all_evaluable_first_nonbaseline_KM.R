@@ -1026,6 +1026,9 @@ make_km_plot <- function(df, assay_label, anchor_label, output_stub,
                          population_label = "All evaluable patients") {
   group_counts <- df %>%
     count(Group, name = "n")
+  cohort_counts <- df %>%
+    count(Cohort, name = "n") %>%
+    arrange(match(as.character(Cohort), c("Training Cohort", "Test Cohort")))
 
   can_plot <- nrow(df) >= 2 * min_group_n_for_km &&
     n_distinct(df$Group) == 2 &&
@@ -1063,7 +1066,16 @@ make_km_plot <- function(df, assay_label, anchor_label, output_stub,
 
   title_text <- paste0(
     "PFS by ", assay_label,
-    "\n", population_label, " - ", anchor_label
+    "\n", population_label,
+    "\n", anchor_label,
+    if (nrow(cohort_counts) > 1L) {
+      paste0(
+        "\n",
+        paste0(cohort_counts$Cohort, " n=", cohort_counts$n, collapse = "; ")
+      )
+    } else {
+      ""
+    }
   )
 
   km <- survminer::ggsurvplot(
@@ -1080,7 +1092,7 @@ make_km_plot <- function(df, assay_label, anchor_label, output_stub,
     legend.labs = c("MRD-", "MRD+"),
     xlab = "Time since MRD assessment (months)",
     ylab = "Progression-free survival",
-    title = stringr::str_wrap(title_text, width = 58),
+    title = title_text,
     risk.table.height = 0.25,
     ggtheme = theme_classic(base_size = 12) +
       theme(
@@ -1118,6 +1130,143 @@ make_km_plot <- function(df, assay_label, anchor_label, output_stub,
     figure_path = figure_path,
     status = "plotted"
   )
+}
+
+fit_cohort_consistency <- function(df, scope_label) {
+  scoped_df <- df %>%
+    filter(
+      !is.na(Group),
+      !is.na(Time_to_event_months),
+      !is.na(Relapsed_Binary),
+      Time_to_event_months >= 0
+    ) %>%
+    mutate(Group = factor(Group, levels = c("Negative", "Positive")))
+
+  n_events <- sum(scoped_df$Relapsed_Binary == 1L)
+  n_groups <- n_distinct(scoped_df$Group)
+  logrank_p <- NA_real_
+  hazard_ratio <- conf_low <- conf_high <- cox_p <- NA_real_
+  status <- "not_fit_insufficient_groups_or_events"
+
+  if (nrow(scoped_df) >= 2L && n_groups == 2L && n_events >= 3L) {
+    logrank_fit <- survival::survdiff(
+      survival::Surv(Time_to_event_months, Relapsed_Binary) ~ Group,
+      data = scoped_df
+    )
+    logrank_p <- stats::pchisq(
+      logrank_fit$chisq,
+      df = length(logrank_fit$n) - 1L,
+      lower.tail = FALSE
+    )
+
+    cox_fit <- survival::coxph(
+      survival::Surv(Time_to_event_months, Relapsed_Binary) ~ Group,
+      data = scoped_df,
+      ties = "breslow"
+    )
+    cox_summary <- summary(cox_fit)$coefficients
+    cox_conf <- suppressMessages(confint(cox_fit))
+    hazard_ratio <- unname(exp(cox_summary["GroupPositive", "coef"]))
+    conf_low <- unname(exp(cox_conf["GroupPositive", 1]))
+    conf_high <- unname(exp(cox_conf["GroupPositive", 2]))
+    cox_p <- unname(cox_summary["GroupPositive", "Pr(>|z|)"])
+    status <- "fit"
+  }
+
+  tibble(
+    scope = scope_label,
+    n_patients = n_distinct(scoped_df$Patient),
+    n_negative = sum(scoped_df$Group == "Negative"),
+    n_positive = sum(scoped_df$Group == "Positive"),
+    n_events = n_events,
+    n_events_negative = sum(
+      scoped_df$Relapsed_Binary == 1L & scoped_df$Group == "Negative"
+    ),
+    n_events_positive = sum(
+      scoped_df$Relapsed_Binary == 1L & scoped_df$Group == "Positive"
+    ),
+    median_months_from_baseline = median(
+      scoped_df$months_from_baseline,
+      na.rm = TRUE
+    ),
+    logrank_p_value = logrank_p,
+    hazard_ratio_positive_vs_negative = hazard_ratio,
+    conf_low = conf_low,
+    conf_high = conf_high,
+    cox_p_value = cox_p,
+    status = status
+  )
+}
+
+build_broader_validation_consistency <- function(df, anchor_key, anchor_label) {
+  cohort_levels <- c("Training Cohort", "Test Cohort")
+  scope_summary <- bind_rows(
+    fit_cohort_consistency(df, "Pooled"),
+    purrr::map_dfr(
+      cohort_levels,
+      ~ fit_cohort_consistency(
+        filter(df, as.character(Cohort) == .x),
+        .x
+      )
+    )
+  )
+
+  interaction_p <- NA_real_
+  interaction_status <- "not_fit_insufficient_groups_or_events"
+  interaction_df <- df %>%
+    mutate(
+      Group = factor(Group, levels = c("Negative", "Positive")),
+      Cohort = factor(
+        Cohort,
+        levels = c("Training Cohort", "Test Cohort")
+      )
+    ) %>%
+    filter(
+      !is.na(Group),
+      !is.na(Cohort),
+      !is.na(Time_to_event_months),
+      !is.na(Relapsed_Binary),
+      !is.na(months_from_baseline),
+      Time_to_event_months >= 0
+    )
+
+  if (
+    n_distinct(interaction_df$Group) == 2L &&
+      n_distinct(interaction_df$Cohort) == 2L &&
+      sum(interaction_df$Relapsed_Binary == 1L) >= min_events_for_cox
+  ) {
+    additive_fit <- survival::coxph(
+      survival::Surv(Time_to_event_months, Relapsed_Binary) ~
+        Group + Cohort + months_from_baseline,
+      data = interaction_df,
+      ties = "breslow"
+    )
+    interaction_fit <- survival::coxph(
+      survival::Surv(Time_to_event_months, Relapsed_Binary) ~
+        Group * Cohort + months_from_baseline,
+      data = interaction_df,
+      ties = "breslow"
+    )
+    interaction_test <- anova(additive_fit, interaction_fit, test = "LRT")
+    interaction_p <- interaction_test[["Pr(>|Chi|)"]][[2]]
+    interaction_status <- "fit"
+  }
+
+  scope_summary %>%
+    mutate(
+      anchor_key = anchor_key,
+      anchor = anchor_label,
+      cohort_interaction_p_value = if_else(
+        scope == "Pooled",
+        interaction_p,
+        NA_real_
+      ),
+      cohort_interaction_status = if_else(
+        scope == "Pooled",
+        interaction_status,
+        NA_character_
+      )
+    )
 }
 
 if (!file.exists(input_calls_rds)) {
@@ -1642,7 +1791,35 @@ model_comparison_summary <- bind_rows(
       status = status,
       assay_key = assay_key,
       anchor_key = anchor_key
+  )
+)
+
+broader_validation_anchor_defs <- anchor_defs %>%
+  filter(
+    anchor_key %in% c(
+      "first_nonbaseline_primary",
+      "first_nonbaseline_event_free_30d"
     )
+  )
+
+broader_validation_consistency <- purrr::pmap_dfr(
+  broader_validation_anchor_defs,
+  function(anchor_key, anchor_label, anchor_type, target_month,
+           window_months, event_free_days, plot_primary) {
+    broader_df <- make_anchor_df(
+      data = analysis_df,
+      assay_col = "BM_zscore_only_detection_rate_call",
+      anchor_type = anchor_type,
+      target_month = target_month,
+      window_months = window_months,
+      event_free_days = event_free_days
+    )
+    build_broader_validation_consistency(
+      broader_df,
+      anchor_key = anchor_key,
+      anchor_label = anchor_label
+    )
+  }
 )
 
 figure_manifest <- analysis_outputs %>%
@@ -1668,6 +1845,10 @@ write_csv(
 write_csv(
   model_comparison_summary,
   file.path(output_dir, "all_evaluable_model_comparison_summary.csv")
+)
+write_csv(
+  broader_validation_consistency,
+  file.path(output_dir, "broader_validation_BM_cohort_consistency.csv")
 )
 write_csv(
   figure_manifest,
@@ -2042,12 +2223,75 @@ test_first_nonbaseline_denominator_text <- endpoint_denominator_audit %>%
   pull(label) %>%
   paste(collapse = "; ")
 
+bm_broader_primary_consistency <- broader_validation_consistency %>%
+  filter(anchor_key == "first_nonbaseline_primary")
+bm_broader_pooled <- bm_broader_primary_consistency %>%
+  filter(scope == "Pooled")
+bm_broader_training <- bm_broader_primary_consistency %>%
+  filter(scope == "Training Cohort")
+bm_broader_test <- bm_broader_primary_consistency %>%
+  filter(scope == "Test Cohort")
+bm_broader_adjusted <- model_comparison_summary %>%
+  filter(
+    assay_key == "BM_cfWGS_cVAF",
+    anchor_key == "first_nonbaseline_primary",
+    analysis_type == "sample_time_anchor_cox"
+  )
+bm_broader_delayed_entry <- model_comparison_summary %>%
+  filter(
+    assay_key == "BM_cfWGS_cVAF",
+    anchor_key == "first_nonbaseline_primary",
+    analysis_type == "delayed_entry_anchor_cox"
+  )
+
 method_note <- c(
   "# All-evaluable longitudinal and maintenance KM companion analysis",
   "",
   paste0("Generated: ", Sys.Date()),
   "",
   "## Recommended interpretation",
+  "",
+  paste0(
+    "For the broadest patient-level validation of the BM-derived cfWGS effect, ",
+    "use the first prospective non-baseline assessment curve (n=",
+    bm_broader_pooled$n_patients[[1]],
+    "; training n=", bm_broader_training$n_patients[[1]],
+    "; test n=", bm_broader_test$n_patients[[1]],
+    "). It uses one assessment per patient, excludes baseline/diagnosis and ",
+    "relapse/progression-labeled samples, and should be described as a broader ",
+    "post-baseline validation rather than a maintenance-specific analysis."
+  ),
+  "",
+  paste0(
+    "The direction is consistent across cohorts: training HR=",
+    sprintf("%.2f", bm_broader_training$hazard_ratio_positive_vs_negative[[1]]),
+    " and test HR=",
+    sprintf("%.2f", bm_broader_test$hazard_ratio_positive_vs_negative[[1]]),
+    " for MRD-positive versus MRD-negative patients. The cohort-interaction ",
+    "p-value is ",
+    format_model_p(bm_broader_pooled$cohort_interaction_p_value[[1]]),
+    ", but the test-cohort confidence interval is wide because only ",
+    bm_broader_test$n_patients[[1]], " patients are evaluable."
+  ),
+  "",
+  paste0(
+    "The pooled log-rank result is ",
+    format_model_p(bm_broader_pooled$logrank_p_value[[1]]),
+    "; the cohort- and assessment-time-adjusted Cox HR is ",
+    sprintf("%.2f", bm_broader_adjusted$hazard_ratio[[1]]),
+    " (95% CI ",
+    sprintf("%.2f", bm_broader_adjusted$conf_low[[1]]), "-",
+    sprintf("%.2f", bm_broader_adjusted$conf_high[[1]]),
+    "; p=", bm_broader_adjusted$p_value_label[[1]],
+    "), and the delayed-entry HR is ",
+    sprintf("%.2f", bm_broader_delayed_entry$hazard_ratio[[1]]),
+    " (95% CI ",
+    sprintf("%.2f", bm_broader_delayed_entry$conf_low[[1]]), "-",
+    sprintf("%.2f", bm_broader_delayed_entry$conf_high[[1]]),
+    "; p=", bm_broader_delayed_entry$p_value_label[[1]],
+    "). This supports a consistent but imprecise broader signal; it is not ",
+    "a statistically definitive independent validation."
+  ),
   "",
   "Use the documented-maintenance 12-18-month frontline analysis as the primary clinically anchored companion to the original one-year maintenance panel. Eligibility requires the sample date to fall within a documented maintenance-treatment interval, 12-18 months after maintenance initiation, before any prior progression, and at least 30 days before event/censoring.",
   "",
@@ -2113,6 +2357,7 @@ method_note <- c(
   "- `all_evaluable_first_nonbaseline_delayed_entry_cox_models.csv`: first-anchor hazard ratios using baseline time with delayed entry at the assessment date.",
   "- `all_evaluable_time_varying_cox_models.csv`: serial-assessment LOCF time-varying Cox models, including the event-free-30-day sensitivity.",
   "- `all_evaluable_model_comparison_summary.csv`: combined anchor, delayed-entry, and time-varying model summary.",
+  "- `broader_validation_BM_cohort_consistency.csv`: pooled, training, and test-cohort BM-derived cfWGS effect estimates plus the cohort-interaction test.",
   "- `all_evaluable_endpoint_denominator_audit.csv`: assay-by-cohort endpoint eligibility counts, including first-maintenance and broad first-nonbaseline denominators.",
   "- `all_evaluable_patient_sampling_patterns.csv`: patient-level source-row and timepoint-pattern inventory.",
   "- `all_evaluable_patient_sampling_pattern_summary.csv`: compressed cohort-level inventory explaining why total patients do not equal endpoint-evaluable patients.",

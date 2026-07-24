@@ -27,8 +27,10 @@
 #
 # Outputs
 # -------
-# Stable CSVs and an audit text file are written to:
+# Stable CSVs, an audit text file, and the final Supplementary Table 6 workbook
+# are written to:
 #   Output_tables_2025/expanded_test_clustered_sensitivity/
+# The workbook is also copied to the final manuscript-object tree as STABLE6.
 #
 # Reproducibility
 # ---------------
@@ -42,6 +44,7 @@ suppressPackageStartupMessages({
   library(readr)
   library(tidyr)
   library(tibble)
+  library(openxlsx)
 })
 
 script_arg <- grep("^--file=", commandArgs(trailingOnly = FALSE), value = TRUE)
@@ -52,6 +55,12 @@ if (length(script_arg) != 1L) {
 script_path <- normalizePath(sub("^--file=", "", script_arg), mustWork = TRUE)
 script_dir <- dirname(script_path)
 project_root <- normalizePath(file.path(script_dir, "..", ".."), mustWork = TRUE)
+
+helper_path <- file.path(script_dir, "manuscript_output_helpers.R")
+if (!file.exists(helper_path)) {
+  stop("Missing manuscript output helper: ", helper_path, call. = FALSE)
+}
+source(helper_path)
 
 input_scored <- file.path(
   project_root,
@@ -484,3 +493,297 @@ write_lines(
 )
 
 message("Wrote repeated-measures sensitivity outputs to: ", output_dir)
+
+# -------------------------------------------------------------------------
+# Build final revision-inclusive Supplementary Table 6.
+#
+# The original classifier-performance rows remain owned by
+# 3_1_Optimize_cfWGS_thresholds.R. This block combines that preserved-model
+# export with the repeated-measures results generated above. It does not
+# retrain models or reselect thresholds.
+# -------------------------------------------------------------------------
+
+performance_csv <- file.path(
+  project_root,
+  "Final Tables and Figures",
+  "Supplementary_Table_5_All_Model_performance_testing_cohort_v3_Feb2026_with_restricted_fragmentomics.csv"
+)
+if (!file.exists(performance_csv)) {
+  stop("Missing expanded-test classifier-performance source: ", performance_csv, call. = FALSE)
+}
+
+performance <- read_csv(performance_csv, show_col_types = FALSE)
+expected_performance_columns <- c(
+  "combo", "auc_mean", "sens_mean", "spec_mean", "sens95_mean",
+  "spec95_mean", "balacc_mean", "ppv_mean", "npv_mean", "f1_mean",
+  "brier_mean", "pAUC90_mean", "acc_mean", "sample_group", "eval_cohort"
+)
+missing_performance_columns <- setdiff(expected_performance_columns, names(performance))
+if (length(missing_performance_columns) > 0L) {
+  stop(
+    "Classifier-performance input is missing column(s): ",
+    paste(missing_performance_columns, collapse = ", "),
+    call. = FALSE
+  )
+}
+if (nrow(performance) != 32L) {
+  stop(
+    "Expected 32 revision-inclusive classifier-performance rows; observed ",
+    nrow(performance), ".",
+    call. = FALSE
+  )
+}
+
+expected_primary <- tribble(
+  ~model_key, ~sensitivity, ~specificity, ~accuracy,
+  "BM_zscore_only_detection_rate", 0.6667, 0.6842, 0.6786,
+  "BM_base_zscore", 0.6667, 0.3684, 0.4643,
+  "Blood_zscore_only_sites", 0.2857, 0.7647, 0.6250,
+  "Blood_plus_fragment", 0.4286, 0.8824, 0.7500
+)
+metric_tolerance <- 0.0011
+walk(seq_len(nrow(expected_primary)), function(i) {
+  expected_row <- expected_primary[i, ]
+  observed_row <- performance %>% filter(.data$combo == expected_row$model_key)
+  if (nrow(observed_row) != 1L) {
+    stop(
+      "Expected exactly one classifier-performance row for ",
+      expected_row$model_key, ".",
+      call. = FALSE
+    )
+  }
+  observed <- c(
+    sensitivity = observed_row$sens_mean[[1]],
+    specificity = observed_row$spec_mean[[1]],
+    accuracy = observed_row$acc_mean[[1]]
+  )
+  expected <- c(
+    sensitivity = expected_row$sensitivity[[1]],
+    specificity = expected_row$specificity[[1]],
+    accuracy = expected_row$accuracy[[1]]
+  )
+  if (any(abs(observed - expected) > metric_tolerance)) {
+    stop(
+      "Primary expanded-test metrics drifted for ", expected_row$model_key,
+      ". Observed: ", paste(names(observed), round(observed, 4), collapse = "; "),
+      ". Expected: ", paste(names(expected), round(expected, 4), collapse = "; "),
+      ".",
+      call. = FALSE
+    )
+  }
+})
+
+if (nrow(bootstrap_output) != 28L) {
+  stop("Expected 28 clustered-bootstrap rows; observed ", nrow(bootstrap_output), ".", call. = FALSE)
+}
+if (!all(bootstrap_output$total_replicates == n_bootstrap)) {
+  stop("All clustered-bootstrap rows must report 10,000 total replicates.", call. = FALSE)
+}
+if (nrow(one_sample_output) != 8L) {
+  stop("Expected 8 one-sample-per-patient rows; observed ", nrow(one_sample_output), ".", call. = FALSE)
+}
+
+expected_family_counts <- tribble(
+  ~analysis_family, ~all_samples, ~patient_samples,
+  "BM-informed", 28L, 19L,
+  "Baseline-plasma-informed", 24L, 15L
+)
+walk(seq_len(nrow(expected_family_counts)), function(i) {
+  family_row <- expected_family_counts[i, ]
+  family_results <- one_sample_output %>%
+    filter(.data$analysis_family == family_row$analysis_family)
+  all_rows <- family_results %>% filter(.data$selection == "All evaluable samples")
+  patient_rows <- family_results %>%
+    filter(.data$selection == "Earliest evaluable sample per patient")
+  if (
+    nrow(all_rows) != 2L ||
+      nrow(patient_rows) != 2L ||
+      any(all_rows$n_samples != family_row$all_samples) ||
+      any(patient_rows$n_samples != family_row$patient_samples)
+  ) {
+    stop(
+      "Revision-inclusive denominator check failed for ",
+      family_row$analysis_family, ".",
+      call. = FALSE
+    )
+  }
+})
+
+workbook <- createWorkbook(creator = "Abelman et al.")
+sheet_names <- c(
+  "README",
+  "Classifier performance",
+  "Clustered bootstrap",
+  "One sample per patient",
+  "Sample manifest"
+)
+walk(sheet_names, ~ addWorksheet(workbook, .x, gridLines = FALSE))
+
+header_style <- createStyle(
+  fontName = "Arial", fontSize = 9, fontColour = "#FFFFFF",
+  fgFill = "#335C67", textDecoration = "bold",
+  halign = "center", valign = "center", wrapText = TRUE
+)
+body_style <- createStyle(
+  fontName = "Arial", fontSize = 9, fontColour = "#222222", valign = "center"
+)
+label_style <- createStyle(
+  fontName = "Arial", fontSize = 9, fontColour = "#22333B",
+  fgFill = "#EAF0F2", textDecoration = "bold", valign = "top"
+)
+title_style <- createStyle(
+  fontName = "Arial", fontSize = 15, fontColour = "#FFFFFF",
+  fgFill = "#335C67", textDecoration = "bold", valign = "center"
+)
+rate_style <- createStyle(numFmt = "0.0000")
+count_style <- createStyle(numFmt = "0")
+
+readme <- tibble(
+  Section = c(
+    "Scope", "Classifier performance", "Clustered bootstrap",
+    "One sample per patient", "Sample manifest", "BM-informed denominator",
+    "Baseline-plasma denominator", "Fixed random seeds", "Canonical analysis scripts"
+  ),
+  Description = c(
+    "Revision-inclusive expanded independent test cohort; frozen training model thresholds.",
+    "All model performance metrics in the current expanded test cohort.",
+    paste0(
+      "Patient-clustered nonparametric bootstrap; 10,000 replicates; all evaluable ",
+      "samples from each resampled patient retained; percentile 95% confidence intervals."
+    ),
+    paste0(
+      "Deterministic sensitivity analysis using the earliest evaluable post-baseline ",
+      "sample per patient, selected without reference to truth or prediction."
+    ),
+    "Exact evaluable sample/patient rows used by the repeated-measures sensitivity analyses.",
+    "28 samples from 19 patients.",
+    "24 samples from 15 patients.",
+    "BM-informed: 202607231; baseline-plasma-informed: 202607232.",
+    paste(
+      "Scripts_2025/Final_Scripts/3_1_Optimize_cfWGS_thresholds.R",
+      "Scripts_2025/Final_Scripts/3_1C_Expanded_test_clustered_sensitivity.R",
+      sep = "\n"
+    )
+  )
+)
+
+mergeCells(workbook, "README", cols = 1:2, rows = 1)
+writeData(
+  workbook, "README",
+  "Supplementary Table 6 — Expanded-test classifier performance",
+  startCol = 1, startRow = 1
+)
+addStyle(workbook, "README", title_style, rows = 1, cols = 1:2, gridExpand = TRUE)
+writeData(workbook, "README", readme, startRow = 3, headerStyle = header_style)
+addStyle(workbook, "README", label_style, rows = 4:(nrow(readme) + 3), cols = 1, gridExpand = TRUE)
+addStyle(workbook, "README", body_style, rows = 4:(nrow(readme) + 3), cols = 2, gridExpand = TRUE)
+setColWidths(workbook, "README", cols = 1, widths = 28)
+setColWidths(workbook, "README", cols = 2, widths = 58)
+setRowHeights(workbook, "README", rows = 1, heights = 28)
+setRowHeights(workbook, "README", rows = 4:(nrow(readme) + 3), heights = 38)
+freezePane(workbook, "README", firstActiveRow = 4)
+pageSetup(
+  workbook, "README", orientation = "landscape",
+  paperSize = 9, fitToWidth = 1, fitToHeight = 1
+)
+
+data_sheets <- list(
+  "Classifier performance" = performance,
+  "Clustered bootstrap" = bootstrap_output,
+  "One sample per patient" = one_sample_output,
+  "Sample manifest" = sample_manifest
+)
+rate_columns <- c(
+  "auc_mean", "sens_mean", "spec_mean", "sens95_mean", "spec95_mean",
+  "balacc_mean", "ppv_mean", "npv_mean", "f1_mean", "brier_mean",
+  "pAUC90_mean", "acc_mean", "threshold", "estimate", "ci_level",
+  "ci_lower", "ci_upper", "sensitivity", "specificity", "accuracy",
+  "balanced_accuracy", "ppv", "npv", "auc"
+)
+count_columns <- c(
+  "n_samples", "n_positive", "n_negative", "tp", "fn", "tn", "fp",
+  "valid_replicates", "total_replicates", "samples_for_patient"
+)
+
+walk(names(data_sheets), function(sheet) {
+  data <- data_sheets[[sheet]]
+  writeData(workbook, sheet, data, startRow = 1, headerStyle = header_style)
+  addFilter(workbook, sheet, rows = 1, cols = seq_len(ncol(data)))
+  addStyle(
+    workbook, sheet, body_style, rows = 2:(nrow(data) + 1),
+    cols = seq_len(ncol(data)), gridExpand = TRUE, stack = TRUE
+  )
+  rate_idx <- which(names(data) %in% rate_columns)
+  if (length(rate_idx)) {
+    addStyle(
+      workbook, sheet, rate_style, rows = 2:(nrow(data) + 1),
+      cols = rate_idx, gridExpand = TRUE, stack = TRUE
+    )
+  }
+  count_idx <- which(names(data) %in% count_columns)
+  if (length(count_idx)) {
+    addStyle(
+      workbook, sheet, count_style, rows = 2:(nrow(data) + 1),
+      cols = count_idx, gridExpand = TRUE, stack = TRUE
+    )
+  }
+  setColWidths(workbook, sheet, cols = seq_len(ncol(data)), widths = "auto")
+  wide_text <- which(vapply(
+    data,
+    function(x) {
+      widths <- nchar(as.character(x))
+      widths <- widths[!is.na(widths)]
+      length(widths) > 0L && max(widths) > 28L
+    },
+    logical(1)
+  ))
+  if (length(wide_text)) {
+    setColWidths(workbook, sheet, cols = wide_text, widths = 30)
+  }
+  freezePane(workbook, sheet, firstActiveRow = 2)
+  pageSetup(
+    workbook, sheet, orientation = "landscape",
+    paperSize = 9, fitToWidth = 1, fitToHeight = 0
+  )
+})
+
+workbook_path <- file.path(output_dir, "Supplementary_Table_6_FINAL.xlsx")
+saveWorkbook(workbook, workbook_path, overwrite = TRUE)
+if (!file.exists(workbook_path) || file.info(workbook_path)$size <= 0L) {
+  stop("Supplementary Table 6 workbook was not written successfully.", call. = FALSE)
+}
+
+destination <- ms_copy_artifact(
+  source_path = workbook_path,
+  artifact_id = "STABLE6",
+  role = "submission_workbook_xlsx",
+  description = paste0(
+    "Revision-inclusive expanded-test classifier performance with patient-clustered ",
+    "bootstrap confidence intervals, one-sample-per-patient sensitivity analysis, ",
+    "and exact sample manifest."
+  ),
+  script_name = basename(script_path),
+  project_root = project_root,
+  overwrite = TRUE
+)
+
+selection_readme <- file.path(
+  dirname(destination),
+  "SUPPLEMENTARY_TABLE_6_SUBMISSION_SELECTION.txt"
+)
+writeLines(
+  c(
+    "SUBMISSION FILE",
+    basename(destination),
+    "",
+    "This XLSX is the authoritative revision-inclusive Supplementary Table 6.",
+    "Older CSV files in this provenance folder are retained only to preserve analysis history.",
+    "Do not submit an older CSV in place of this workbook.",
+    "",
+    "Rebuild:",
+    "Rscript Scripts_2025/Final_Scripts/3_1C_Expanded_test_clustered_sensitivity.R"
+  ),
+  selection_readme
+)
+
+message("Supplementary Table 6 workbook complete: ", destination)

@@ -2615,15 +2615,15 @@ p_hr <- ggplot(hr_plot_df_blood,
   scale_x_continuous(
     "Hazard ratio (log scale)",
     trans        = "log10",
-    limits       = c(0.05, 50),
-    breaks       = c(0.1, 0.5, 1, 2, 5, 10, 20, 50),
+    limits       = c(0.04, 100),
+    breaks       = c(0.1, 0.5, 1, 2, 5, 10, 100),
     minor_breaks = c(
       0.05, 0.06, 0.08,           # between 0.05 & 0.1
       0.15, 0.2, 0.3, 0.4,        # between 0.1 & 0.5
       0.6, 0.8,                   # between 0.5 & 1
       1.5, 3,                      # between 1 & 5
       6, 8,                        # between 5 & 10
-      15, 30                       # between 10 & 50
+      15, 20, 30, 50, 60, 80       # between 10 & 100
     ),
     labels = label_number(accuracy = .1)
   )+
@@ -4295,7 +4295,11 @@ plot_train_test_time_to_relapse <- function(plot_df,
     theme_classic(base_size = 11) +
     theme(
       panel.grid = element_blank(),
-      plot.title = element_text(face = "bold", hjust = 0.5, size = 12),
+      plot.title = element_text(
+        face = "bold",
+        hjust = 0.5,
+        size = if (isTRUE(footer_statistics)) 13 else 12
+      ),
       legend.title = element_text(size = 10),
       legend.text = element_text(size = 9)
     )
@@ -4355,15 +4359,13 @@ plot_train_test_time_to_relapse <- function(plot_df,
     mini_box <- function(label_text) {
       ggplot() +
         annotate(
-          "label",
+          "text",
           x = 0,
           y = 1,
           label = label_text,
           hjust = 0,
           vjust = 1,
-          size = 3.5,
-          linewidth = 0.3,
-          fill = scales::alpha("white", 0.75)
+          size = 3.5
         ) +
         xlim(0, 1) +
         ylim(0, 1) +
@@ -5084,9 +5086,9 @@ print(event_counts_BM)
 # 1) Prepare the data
 # ────────────────────────────────────────────────────────────────────────────
 sens_BM_df <- results_BM %>%
-  # if you want to drop the blood‑only assay, uncomment:
-  # filter(Assay != "cfWGS_Blood") %>%
-  
+  # ED6I is restricted to the BM-derived cfWGS model and its MFC comparator.
+  filter(Assay %in% c("cfWGS_BM", "Flow")) %>%
+
   # turn Window_days into a nice factor
   mutate(
     Timepoint = factor(
@@ -5099,10 +5101,9 @@ sens_BM_df <- results_BM %>%
       Assay,
       Flow        = "MFC",
       cfWGS_BM    = "cfWGS",
-    )
+    ),
+    Assay = factor(Assay, levels = c("cfWGS", "MFC"))
   )
-
-sens_BM_df <- sens_BM_df %>% filter(Assay != "cfWGS_Blood")
 # ────────────────────────────────────────────────────────────────────────────
 # 2) Colours & theme (match your existing style)
 # ────────────────────────────────────────────────────────────────────────────
@@ -5190,12 +5191,24 @@ sens_blood_df <- results_blood %>%
     Sens_pct = Sensitivity * 100,
     Assay = recode(
       Assay,
-      Flow        = "MFC",
-      cfWGS_Blood    = "cfWGS",
+      Flow                   = "MFC",
+      cfWGS_Blood            = "cfWGS (Sites Model)",
+      cfWGS_Blood_Combined   = "cfWGS (Combined Model)",
     )
   )
 
-sens_blood_df <- sens_blood_df %>% filter(Assay != "cfWGS_BM")
+sens_blood_df <- sens_blood_df %>%
+  filter(Assay != "cfWGS_BM") %>%
+  mutate(
+    Assay = factor(
+      Assay,
+      levels = c(
+        "cfWGS (Sites Model)",
+        "cfWGS (Combined Model)",
+        "MFC"
+      )
+    )
+  )
 
 p_sens_blood <- ggplot(sens_blood_df,
                        aes(x = Assay, y = Sens_pct, fill = Timepoint)) +

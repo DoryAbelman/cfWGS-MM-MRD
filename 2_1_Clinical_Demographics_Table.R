@@ -730,11 +730,16 @@ dat_base <- dat_base %>%
 # denominators that feed the gtsummary Table 1 object below. Keeping them in the
 # original Table 1 script makes the final_manuscript_objects source-data folder
 # reproducible without relying on the separate reproducible_workflow generator.
-format_table1_count_percent <- function(n, denominator) {
+format_table1_count_percent <- function(n, denominator, missing_level = FALSE) {
+  if (isTRUE(missing_level)) {
+    return(as.character(ifelse(is.na(n), 0L, n)))
+  }
   if (is.na(n) || is.na(denominator) || denominator == 0) {
     return("0 (0%)")
   }
-  paste0(n, " (", round(100 * n / denominator), "%)")
+  pct <- 100 * n / denominator
+  digits <- ifelse(pct > 0 && pct < 10, 1L, 0L)
+  paste0(n, " (", formatC(pct, format = "f", digits = digits), "%)")
 }
 
 table1_labels <- c(
@@ -763,12 +768,17 @@ for (variable in vars_cat) {
     for (cohort_level in table1_cohort_levels) {
       in_cohort <- dat_base$cohort == cohort_level
       n_level <- sum(in_cohort & display_values == level, na.rm = TRUE)
-      denominator <- sum(in_cohort, na.rm = TRUE)
-      source_row[[cohort_level]] <- format_table1_count_percent(n_level, denominator)
+      denominator <- sum(in_cohort & !is.na(values), na.rm = TRUE)
+      source_row[[cohort_level]] <- format_table1_count_percent(
+        n_level,
+        denominator,
+        missing_level = identical(level, "(Missing)")
+      )
     }
     source_row[["Total"]] <- format_table1_count_percent(
       sum(display_values == level, na.rm = TRUE),
-      nrow(dat_base)
+      sum(!is.na(values)),
+      missing_level = identical(level, "(Missing)")
     )
     table1_source_rows[[length(table1_source_rows) + 1]] <- source_row
   }

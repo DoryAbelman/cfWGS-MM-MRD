@@ -137,7 +137,8 @@ script runs, the final manuscript-facing files are copied or saved into
 | `2_2_Baseline_demographics_by_WGS_heatmap_updated.R` | Extended Data Figure 1; Supplementary Table 1A |
 | `2_3_Feature_Concordance_And_Mutation_Counts.R` | Extended Data Figure 2A-F; Supplementary Tables 2-3 |
 | `2_4_Longitudinal_features_analysis.R` | Figure 2A-D; Extended Data Figure 3A-C; Extended Data Figure 4 |
-| `3_1_Optimize_cfWGS_thresholds.R` | Figure 3A-B; Figure 4A-B; Extended Data Figure 5A-C; Extended Data Figure 7A-C and 7E; Extended Data Figure 9A-F; Supplementary Tables 4-6 |
+| `3_1_Optimize_cfWGS_thresholds.R` | Figure 3A-B; Figure 4A-B; Extended Data Figure 5A-C; Extended Data Figure 7A-C and 7E; Extended Data Figure 9A-F; Supplementary Tables 4-6 base performance exports |
+| `3_1C_Expanded_test_clustered_sensitivity.R` | Patient-clustered bootstrap and deterministic one-sample-per-patient sensitivity outputs for the revision-inclusive Figure 3B/Figure 4B test analyses; final Supplementary Table 6 workbook combining those results with the preserved expanded-test classifier metrics and exact sample manifest |
 | `3_1_part2_Apply_cfWGS_thresholds_to_dilution_series.R` | Figure 3C; Extended Data Figure 5D; Extended Data Figure 7D; Supplementary Table 7 |
 | `3_2_Plot_optimal_cutoff_and_clinical_concordance.R` | Figure 3D-E; Figure 4C-D; Extended Data Figure 5E-G; Extended Data Figure 7F-H; Supplementary Tables 8 and 10 |
 | `4_1_Survival_Analysis.R` | Figure 3F; Figure 4E; Extended Data Figure 6A-K; Extended Data Figure 8A-D plus bottom panels; Supplementary Table 9. The manuscript-facing time-window outputs for Extended Data Figure 6I, Extended Data Figure 8D, and Supplementary Table 9 are regenerated from the current prospective `detection_progression_updated6` source CSVs, requiring progression on/after the sample date and adequate follow-up for non-event calls. |
@@ -155,6 +156,11 @@ Rscript Scripts_2025/Final_Scripts/run_manuscript_workflow.R
 Rscript Scripts_2025/Final_Scripts/run_manuscript_workflow.R --execute
 Rscript Scripts_2025/Final_Scripts/run_manuscript_workflow.R --execute --skip-source
 ```
+
+The `--execute --skip-source` form is the fastest deterministic way to rebuild
+the repeated-measures sensitivity outputs and final Supplementary Table 6 from
+the current scored table and frozen model thresholds without rerunning upstream
+processing or cache-sensitive training.
 
 `run_manuscript_workflow.R` dry-runs by default. With `--execute`, it runs the
 numbered `Final_Scripts` pipeline through `run_pipeline.R`, refreshes the

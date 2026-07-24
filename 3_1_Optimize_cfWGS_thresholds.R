@@ -1111,26 +1111,47 @@ if (USE_PRESERVED_MODELS_ONLY) {
     )
   }
 
-  # Derive the best-specificity ROC threshold among points reaching at least
-  # 94% empirical sensitivity (the discrete-sample approximation to the named
-  # 95% target). If the subset cannot support an ROC curve, use the preserved
-  # Youden threshold so figure generation remains deterministic and explicit.
-  current_95sens_threshold <- function(eval_dat, model_name) {
-    prob_col <- paste0(model_name, "_prob")
-    model_eval <- eval_dat %>%
-      dplyr::transmute(
-        MRD_truth = as.integer(.data$MRD_truth),
-        prob = as.numeric(.data[[prob_col]])
-      ) %>%
+  # Derive the fixed high-sensitivity operating point from the preserved
+  # training data only. The independent test cohort must never be used to
+  # choose its own threshold: doing so would leak outcome information into the
+  # evaluation and force the displayed test sensitivity toward the target by
+  # construction. The selected point maximizes training specificity among ROC
+  # coordinates reaching at least 95% empirical training sensitivity.
+  training_95sens_threshold <- function(model_name) {
+    fit <- selected_models[[model_name]]
+    if (is.null(fit) || is.null(fit$trainingData) || !".outcome" %in% names(fit$trainingData)) {
+      stop(
+        "Cannot derive training-fixed 95% sensitivity threshold for ",
+        model_name,
+        ": preserved model does not contain caret trainingData/.outcome.",
+        call. = FALSE
+      )
+    }
+
+    training_eval <- tibble::tibble(
+      MRD_truth = dplyr::case_when(
+        as.character(fit$trainingData$.outcome) == "pos" ~ 1L,
+        as.character(fit$trainingData$.outcome) == "neg" ~ 0L,
+        TRUE ~ NA_integer_
+      ),
+      prob = as.numeric(
+        predict(fit, newdata = fit$trainingData, type = "prob")[["pos"]]
+      )
+    ) %>%
       dplyr::filter(!is.na(.data$MRD_truth), !is.na(.data$prob))
 
-    if (nrow(model_eval) < 2L || dplyr::n_distinct(model_eval$MRD_truth) < 2L) {
-      return(as.numeric(selected_thr[[model_name]]))
+    if (nrow(training_eval) < 2L || dplyr::n_distinct(training_eval$MRD_truth) < 2L) {
+      stop(
+        "Cannot derive training-fixed 95% sensitivity threshold for ",
+        model_name,
+        ": preserved training data do not contain both outcome classes.",
+        call. = FALSE
+      )
     }
 
     roc_obj <- pROC::roc(
-      response = model_eval$MRD_truth,
-      predictor = model_eval$prob,
+      response = training_eval$MRD_truth,
+      predictor = training_eval$prob,
       levels = c(0, 1),
       direction = "<",
       quiet = TRUE
@@ -1144,22 +1165,26 @@ if (USE_PRESERVED_MODELS_ONLY) {
       as_tibble()
 
     candidate <- roc_df %>%
-      dplyr::filter(.data$sensitivity >= 0.94) %>%
+      dplyr::filter(.data$sensitivity >= 0.95) %>%
       dplyr::arrange(dplyr::desc(.data$specificity), dplyr::desc(.data$sensitivity)) %>%
       dplyr::slice(1)
     if (nrow(candidate) == 0L) {
-      candidate <- roc_df %>%
-        dplyr::arrange(dplyr::desc(.data$sensitivity), dplyr::desc(.data$specificity)) %>%
-        dplyr::slice(1)
+      stop(
+        "Cannot find a training ROC coordinate reaching 95% sensitivity for ",
+        model_name,
+        ".",
+        call. = FALSE
+      )
     }
     as.numeric(candidate$threshold[[1]])
   }
 
   # Generate one current test-cohort performance panel and all of its source
   # data/provenance copies. Bars show preserved Youden-threshold metrics;
-  # triangles show metrics at the current cohort's high-sensitivity operating
-  # point. Legacy copies are refreshed because manuscript assembly still reads
-  # those stable paths, while ms_copy_artifact registers canonical outputs.
+  # triangles show test-cohort metrics at a high-sensitivity operating point
+  # fixed exclusively in the preserved training data. Legacy copies are
+  # refreshed because manuscript assembly still reads those stable paths,
+  # while ms_copy_artifact registers canonical outputs.
   write_current_test_performance_panel <- function(eval_dat,
                                                    model_names,
                                                    model_labels,
@@ -1197,8 +1222,8 @@ if (USE_PRESERVED_MODELS_ONLY) {
         calc_binary_metrics(
           truth = eval_dat$MRD_truth,
           prob = eval_dat[[prob_col]],
-          threshold = current_95sens_threshold(eval_dat, model_name)
-        ) %>% dplyr::mutate(operating_point = "95% sensitivity")
+          threshold = training_95sens_threshold(model_name)
+        ) %>% dplyr::mutate(operating_point = "Training-derived 95% sensitivity")
       ) %>%
         dplyr::mutate(model = model_name, combo = unname(model_labels[[model_name]]))
     })
@@ -1232,7 +1257,7 @@ if (USE_PRESERVED_MODELS_ONLY) {
       ) +
         geom_col(width = 0.6) +
         geom_point(
-          data = plot_df %>% dplyr::filter(.data$operating_point == "95% sensitivity"),
+          data = plot_df %>% dplyr::filter(.data$operating_point == "Training-derived 95% sensitivity"),
           aes(y = .data$value, shape = "95% sensitivity"),
           size = 2,
           colour = "black"
@@ -1491,48 +1516,10 @@ if (USE_PRESERVED_MODELS_ONLY) {
   # For platform comparisons, derive the high-sensitivity thresholds once in
   # the training cohort and freeze them before evaluating either platform.
   # This avoids test-set-specific threshold optimization and information leak.
-  training_95sens_thresholds <- purrr::map_dbl(fragmentomics_platform_models, function(model_name) {
-    fit <- selected_models[[model_name]]
-    if (is.null(fit$trainingData) || !".outcome" %in% names(fit$trainingData)) {
-      stop(
-        "Cannot derive locked fragmentomics 95% sensitivity threshold for ",
-        model_name, ": model object does not contain caret trainingData/.outcome.",
-        call. = FALSE
-      )
-    }
-    train_eval <- tibble::tibble(
-      MRD_truth = dplyr::if_else(as.character(fit$trainingData$.outcome) == "pos", 1L, 0L),
-      prob = as.numeric(predict(fit, newdata = fit$trainingData, type = "prob")[["pos"]])
-    ) %>%
-      dplyr::filter(!is.na(.data$MRD_truth), !is.na(.data$prob))
-    if (nrow(train_eval) < 2L || dplyr::n_distinct(train_eval$MRD_truth) < 2L) {
-      return(as.numeric(selected_thr[[model_name]]))
-    }
-    roc_obj <- pROC::roc(
-      response = train_eval$MRD_truth,
-      predictor = train_eval$prob,
-      levels = c(0, 1),
-      direction = "<",
-      quiet = TRUE
-    )
-    roc_df <- pROC::coords(
-      roc_obj,
-      x = "all",
-      ret = c("threshold", "sensitivity", "specificity"),
-      transpose = FALSE
-    ) %>%
-      as_tibble()
-    candidate <- roc_df %>%
-      dplyr::filter(.data$sensitivity >= 0.94) %>%
-      dplyr::arrange(dplyr::desc(.data$specificity), dplyr::desc(.data$sensitivity)) %>%
-      dplyr::slice(1)
-    if (nrow(candidate) == 0L) {
-      candidate <- roc_df %>%
-        dplyr::arrange(dplyr::desc(.data$sensitivity), dplyr::desc(.data$specificity)) %>%
-        dplyr::slice(1)
-    }
-    as.numeric(candidate$threshold[[1]])
-  })
+  training_95sens_thresholds <- purrr::map_dbl(
+    fragmentomics_platform_models,
+    training_95sens_threshold
+  )
   names(training_95sens_thresholds) <- fragmentomics_platform_models
 
   # Apply both fixed operating points to every model in a supplied cohort or

@@ -1415,7 +1415,10 @@ format_p <- function(p) {
 
 # Extended Data Figure 2 support - boxplots of baseline BM vs cfDNA mutation counts.
 # Older output filenames in this block may still contain "Figure2" labels.
-plot_df <- build_baseline_mutation_count_plot_data(dat_base)
+plot_df <- build_baseline_mutation_count_plot_data(
+  dat_base,
+  baseline_candidates = dat_tb_final
+)
 
 dir.create(file.path("Output_tables_2025", "clinical_support"), recursive = TRUE, showWarnings = FALSE)
 readr::write_csv(
@@ -2901,10 +2904,12 @@ ms_copy_artifact(
   script_name = "2_3_Feature_Concordance_And_Mutation_Counts.R"
 )
 
-# Manuscript note: Extended Data Figure 2D is currently recorded in
-# docs/manuscript_artifact_source_map.tsv as a PowerPoint-only focal 1q
-# schematic/annotation with no resolved local R image export. It remains
-# explicitly documented in provenance rather than silently fabricated here.
+# Manuscript note: Extended Data Figure 2D is the VA-09 BM WGS chr1
+# depth-ratio/copy-number line plot with the 1q FISH-probe interval marked.
+# The panel is still preserved as part of the manually assembled final PDF,
+# but its numerical source is no longer unresolved: the frozen Sequenza chr1
+# segments and FISH-probe interval are exported by
+# 5_1_Export_Locked_Figure_Source_Data.R.
 edfig2_final_pdf_candidates <- c(
   file.path("Manuscript_Exports", "02_extended_data_figures", "Extended_Data_Figure_2", "final_artifacts", "Extended_Data_Figure_2.pdf"),
   file.path("Figures_Exported", "Final_Feb2026", "Extended_Data_Figure_2.pdf"),
@@ -2917,12 +2922,12 @@ if (!is.na(edfig2_final_pdf)) {
     source_path = edfig2_final_pdf,
     artifact_id = "EDFIG2B_D_D",
     role = "manual_final_figure_pdf",
-    description = "Extended Data Figure 2D: PowerPoint-only focal 1q schematic/annotation preserved as part of the frozen Extended Data Figure 2 PDF.",
+    description = "Extended Data Figure 2D: VA-09 BM WGS chr1 depth-ratio/copy-number line plot with the 1q FISH-probe interval, preserved as part of the frozen Extended Data Figure 2 PDF.",
     script_name = "2_3_Feature_Concordance_And_Mutation_Counts.R"
   )
 } else {
   warning(
-    "Extended Data Figure 2D is a PowerPoint-only panel and no frozen Extended Data Figure 2 PDF was found locally."
+    "Extended Data Figure 2D is a manually assembled panel and no frozen Extended Data Figure 2 PDF was found locally."
   )
 }
 
