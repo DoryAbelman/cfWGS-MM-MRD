@@ -3514,6 +3514,323 @@ ms_copy_artifact(
   script_name = "2_4_Longitudinal_features_analysis.R"
 )
 
+# -------------------------------------------------------------------------
+# Alternate Extended Data Figure 4: all evaluable training + test cases
+#
+# The manuscript ED4 component above intentionally preserves the original
+# Frontline/training-only denominator. This alternate uses the durable,
+# Spring-2026-aware cohort assignment and includes every training or test
+# patient with at least one key longitudinal mutation or fragmentomics
+# measurement. The same evidence-of-disease masks, calcium cleanup, plotted
+# variables, pairwise-complete Spearman method, clustering, and visual scale
+# used by the original panel are retained.
+#
+# Because missingness differs by feature pair, the exported source-data bundle
+# includes both the row-level feature matrix and the exact pairwise denominator
+# for every displayed correlation.
+# -------------------------------------------------------------------------
+all_evaluable_cohort_df <- load_final_cohort_assignment(
+  required = TRUE,
+  validate_current = TRUE
+)
+
+duplicate_all_evaluable_patients <- all_evaluable_cohort_df %>%
+  count(Patient, name = "n") %>%
+  filter(n != 1L)
+
+if (nrow(duplicate_all_evaluable_patients) > 0L) {
+  stop(
+    "All-evaluable ED4 cohort assignment must contain exactly one row per patient. ",
+    "Duplicated patient(s): ",
+    paste(duplicate_all_evaluable_patients$Patient, collapse = ", "),
+    call. = FALSE
+  )
+}
+
+all_evaluable_dat <- file %>%
+  inner_join(
+    all_evaluable_cohort_df %>% select(Patient, Cohort),
+    by = "Patient"
+  ) %>%
+  mutate(
+    Date = as.Date(Date),
+    Analysis_cohort = case_when(
+      Cohort == "Frontline" ~ "Training",
+      Cohort == "Non-frontline" ~ "Test",
+      TRUE ~ NA_character_
+    )
+  ) %>%
+  filter(
+    !is.na(Analysis_cohort),
+    !is.na(zscore_BM) | !is.na(zscore_blood) | !is.na(FS)
+  ) %>%
+  mutate(
+    across(
+      all_of(bm_feats),
+      ~ if_else(Patient %in% BM_good_pts, .x, NA_real_)
+    ),
+    across(
+      all_of(blood_feats),
+      ~ if_else(Patient %in% cfDNA_good_pts, .x, NA_real_)
+    ),
+    Calcium = if_else(Calcium > 10, NA_real_, Calcium)
+  )
+
+all_evaluable_required_columns <- c(
+  "Patient", "Analysis_cohort", "Date", "timepoint_info",
+  "zscore_blood", "z_score_detection_rate_blood", "detect_rate_blood",
+  "zscore_BM", "z_score_detection_rate_BM", "detect_rate_BM",
+  "FS", "Mean.Coverage", "Proportion.Short",
+  "WGS_Tumor_Fraction_Blood_plasma_cfDNA",
+  "M_Protein", "Calcium", "B2_micro", "Kappa_Lambda_Ratio",
+  "Flow_pct_cells", "Adaptive_Frequency"
+)
+missing_all_evaluable_columns <- setdiff(
+  all_evaluable_required_columns,
+  names(all_evaluable_dat)
+)
+if (length(missing_all_evaluable_columns) > 0L) {
+  stop(
+    "Cannot build all-evaluable ED4; missing required column(s): ",
+    paste(missing_all_evaluable_columns, collapse = ", "),
+    call. = FALSE
+  )
+}
+
+all_evaluable_feature_matrix <- all_evaluable_dat %>%
+  select(all_of(all_evaluable_required_columns)) %>%
+  rename(
+    Cohort = Analysis_cohort,
+    `Blood cVAF z-score` = z_score_detection_rate_blood,
+    `Blood sites z-score` = zscore_blood,
+    `Blood cVAF (%)` = detect_rate_blood,
+    `BM sites z-score` = zscore_BM,
+    `BM cVAF z-score` = z_score_detection_rate_BM,
+    `BM cVAF (%)` = detect_rate_BM,
+    `Fragment-size score` = FS,
+    `Regulatory coverage (×)` = Mean.Coverage,
+    `Short-fragment proportion` = Proportion.Short,
+    `Tumor fraction (%)` = WGS_Tumor_Fraction_Blood_plasma_cfDNA,
+    `M-protein (g/L)` = M_Protein,
+    `Calcium (mmol/L)` = Calcium,
+    `β2-microglobulin (mg/L)` = B2_micro,
+    `Kappa:Lambda ratio` = Kappa_Lambda_Ratio,
+    `% aberrant plasma cells (MFC)` = Flow_pct_cells,
+    `clonoSEQ frequency` = Adaptive_Frequency
+  ) %>%
+  arrange(factor(Cohort, levels = c("Training", "Test")), Patient, Date)
+
+all_evaluable_metric_names <- setdiff(
+  names(all_evaluable_feature_matrix),
+  c("Patient", "Cohort", "Date", "timepoint_info")
+)
+all_evaluable_pair_df <- all_evaluable_feature_matrix %>%
+  select(all_of(all_evaluable_metric_names))
+
+non_numeric_all_evaluable_metrics <- all_evaluable_metric_names[
+  !vapply(all_evaluable_pair_df, is.numeric, logical(1))
+]
+if (length(non_numeric_all_evaluable_metrics) > 0L) {
+  stop(
+    "All-evaluable ED4 contains non-numeric plotted metric(s): ",
+    paste(non_numeric_all_evaluable_metrics, collapse = ", "),
+    call. = FALSE
+  )
+}
+
+all_evaluable_corr_mat <- cor(
+  all_evaluable_pair_df,
+  method = "spearman",
+  use = "pairwise.complete.obs"
+)
+all_evaluable_n_mat <- outer(
+  all_evaluable_metric_names,
+  all_evaluable_metric_names,
+  Vectorize(function(metric_1, metric_2) {
+    sum(
+      complete.cases(
+        all_evaluable_pair_df[[metric_1]],
+        all_evaluable_pair_df[[metric_2]]
+      )
+    )
+  })
+)
+dimnames(all_evaluable_n_mat) <- list(
+  all_evaluable_metric_names,
+  all_evaluable_metric_names
+)
+
+if (any(!is.finite(all_evaluable_corr_mat))) {
+  failing_pairs <- which(!is.finite(all_evaluable_corr_mat), arr.ind = TRUE)
+  failing_labels <- paste0(
+    rownames(all_evaluable_corr_mat)[failing_pairs[, "row"]],
+    " vs ",
+    colnames(all_evaluable_corr_mat)[failing_pairs[, "col"]]
+  )
+  stop(
+    "All-evaluable ED4 produced non-finite correlation(s): ",
+    paste(unique(failing_labels), collapse = "; "),
+    call. = FALSE
+  )
+}
+
+all_evaluable_order <- hclust(dist(all_evaluable_corr_mat))$order
+all_evaluable_levels <- colnames(all_evaluable_corr_mat)[all_evaluable_order]
+
+all_evaluable_corr_long <- as.data.frame(
+  as.table(all_evaluable_corr_mat),
+  stringsAsFactors = FALSE
+) %>%
+  set_names(c("Metric1", "Metric2", "rho")) %>%
+  left_join(
+    as.data.frame(as.table(all_evaluable_n_mat), stringsAsFactors = FALSE) %>%
+      set_names(c("Metric1", "Metric2", "n_complete_pairs")),
+    by = c("Metric1", "Metric2")
+  ) %>%
+  mutate(
+    Metric1 = factor(Metric1, levels = all_evaluable_levels),
+    Metric2 = factor(Metric2, levels = all_evaluable_levels),
+    row_index = as.integer(Metric1),
+    column_index = as.integer(Metric2)
+  )
+
+all_evaluable_corr_triangle <- all_evaluable_corr_long %>%
+  filter(row_index < column_index) %>%
+  select(-row_index, -column_index)
+
+all_evaluable_cohort_summary <- all_evaluable_feature_matrix %>%
+  group_by(Cohort) %>%
+  summarise(
+    n_patients = n_distinct(Patient),
+    n_feature_rows = n(),
+    first_sample_date = min(Date, na.rm = TRUE),
+    last_sample_date = max(Date, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  arrange(factor(Cohort, levels = c("Training", "Test")))
+
+expected_all_evaluable_counts <- tibble(
+  Cohort = c("Training", "Test"),
+  n_patients = c(44L, 29L)
+)
+observed_all_evaluable_counts <- all_evaluable_cohort_summary %>%
+  select(Cohort, n_patients)
+if (!identical(observed_all_evaluable_counts, expected_all_evaluable_counts)) {
+  stop(
+    "All-evaluable ED4 cohort denominator drifted from the validated ",
+    "44-training/29-test patient set.",
+    call. = FALSE
+  )
+}
+
+all_evaluable_feature_matrix_path <- file.path(
+  outdir,
+  "Extended_Data_Figure_4_all_evaluable_feature_matrix_source_data.csv"
+)
+all_evaluable_corr_path <- file.path(
+  outdir,
+  "Extended_Data_Figure_4_all_evaluable_spearman_source_data.csv"
+)
+all_evaluable_summary_path <- file.path(
+  outdir,
+  "Extended_Data_Figure_4_all_evaluable_cohort_summary.csv"
+)
+write_csv(all_evaluable_feature_matrix, all_evaluable_feature_matrix_path)
+write_csv(all_evaluable_corr_triangle, all_evaluable_corr_path)
+write_csv(all_evaluable_cohort_summary, all_evaluable_summary_path)
+
+p_heatmap_tri_all_evaluable <- ggplot(
+  all_evaluable_corr_triangle,
+  aes(x = Metric1, y = Metric2, fill = rho)
+) +
+  geom_tile(color = "white") +
+  geom_text(
+    aes(label = sprintf("%.2f", rho), color = rho < -0.3),
+    size = 2
+  ) +
+  scale_color_manual(
+    values = c(`TRUE` = "white", `FALSE` = "black"),
+    guide = "none"
+  ) +
+  scale_fill_viridis_c(
+    option = "D",
+    name = expression(rho ~ "(Spearman)"),
+    limits = c(-1, 1),
+    breaks = c(-1, -0.5, 0, 0.5, 1),
+    labels = c("-1.0", "-0.5", "0.0", "0.5", "1.0")
+  ) +
+  coord_equal() +
+  theme_minimal(base_size = 7) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 6),
+    axis.text.y = element_text(size = 6),
+    panel.grid = element_blank(),
+    plot.title = element_text(size = 8, face = "bold"),
+    plot.subtitle = element_text(size = 6.5),
+    legend.position = c(0.9, 0.2),
+    legend.justification = c(1, 0),
+    legend.background = element_rect(
+      fill = alpha("white", 0.7),
+      colour = NA
+    ),
+    legend.key.size = unit(0.6, "lines"),
+    legend.text = element_text(size = 6),
+    legend.title = element_text(size = 7),
+    panel.background = element_rect(fill = "white", colour = NA),
+    plot.background = element_rect(fill = "white", colour = NA)
+  ) +
+  labs(
+    x = NULL,
+    y = NULL,
+    title = "Spearman correlation heatmap",
+    subtitle = "All evaluable cases: 44 training + 29 test patients"
+  )
+
+all_evaluable_heatmap_path <- file.path(
+  outdir,
+  "Fig_heatmap_spearman_upper_triangle4_all_evaluable.png"
+)
+ggsave(
+  filename = all_evaluable_heatmap_path,
+  plot = p_heatmap_tri_all_evaluable,
+  width = 6,
+  height = 5,
+  dpi = 1800,
+  bg = "white"
+)
+
+ms_copy_artifact(
+  source_path = all_evaluable_heatmap_path,
+  artifact_id = "EDFIG4",
+  role = "all_evaluable_figure_panel_png",
+  description = paste(
+    "Alternate all-evaluable Extended Data Figure 4 Spearman heatmap;",
+    "44 training and 29 test patients."
+  ),
+  script_name = "2_4_Longitudinal_features_analysis.R"
+)
+ms_copy_artifact(
+  source_path = all_evaluable_feature_matrix_path,
+  artifact_id = "EDFIG4",
+  role = "all_evaluable_feature_matrix_csv",
+  description = "Row-level feature matrix for the all-evaluable Extended Data Figure 4 alternate.",
+  script_name = "2_4_Longitudinal_features_analysis.R"
+)
+ms_copy_artifact(
+  source_path = all_evaluable_corr_path,
+  artifact_id = "EDFIG4",
+  role = "all_evaluable_spearman_source_data_csv",
+  description = "Spearman rho and pairwise-complete denominator for every displayed all-evaluable ED4 cell.",
+  script_name = "2_4_Longitudinal_features_analysis.R"
+)
+ms_copy_artifact(
+  source_path = all_evaluable_summary_path,
+  artifact_id = "EDFIG4",
+  role = "all_evaluable_cohort_summary_csv",
+  description = "Training/test patient and feature-row counts for the all-evaluable ED4 alternate.",
+  script_name = "2_4_Longitudinal_features_analysis.R"
+)
+
 
 
 

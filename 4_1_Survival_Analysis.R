@@ -3411,7 +3411,7 @@ time_to_relapse_BM <- plot_df2
 
 
 
-### Extended Data Figure 8 bottom-left/bottom-right blood-derived time-to-relapse panels
+### Extended Data Figure 8E/8F blood-derived longitudinal and association panels
 df <- survival_df %>%                           # <- your tibble
   # keep samples beyond baseline / diagnosis
   filter(!str_detect(timepoint_info, regex("Diagnosis|Baseline", TRUE))) %>%
@@ -3604,20 +3604,20 @@ ggsave("Final Tables and Figures/F4C_cfWGS_prob_vs_time_updated3_blood4.png",
 ggsave("Final Tables and Figures/F4C_cfWGS_prob_vs_time_updated3_blood2_labelled3.png",
        p_prob2, width = 6, height = 4.5, dpi = 600)
 
-# MANUSCRIPT OUTPUT: Extended Data Figure 8 bottom-left panel
+# MANUSCRIPT OUTPUT: Extended Data Figure 8E
 # Blood-derived cfWGS probability versus time before relapse/censoring.
 ms_copy_artifact(
   source_path = "Final Tables and Figures/F4C_cfWGS_prob_vs_time_updated3_blood2_labelled3.png",
-  artifact_id = "EDFIG8_UNLABELED_BOTTOM_LEFT",
+  artifact_id = "EDFIG8E",
   role = "figure_panel_png",
-  description = "Extended Data Figure 8 bottom-left panel: cfDNA-derived cfWGS probability over time before relapse or censoring.",
+  description = "Extended Data Figure 8E: longitudinal cfDNA-derived cfWGS probability over time before relapse or censoring.",
   script_name = "4_1_Survival_Analysis.R"
 )
 
 
 ## Intermediate blood/cfDNA time-to-relapse scale check
 ### This plot is retained as an intermediate check. The manuscript-facing
-### Extended Data Figure 8 bottom-right panel is exported from the infinity-axis
+### Extended Data Figure 8F is exported from the infinity-axis
 ### layout below.
 df_plot <- df %>%
   mutate(days_before_event = months_before_event * 30.44) %>%   # months → days
@@ -3877,7 +3877,7 @@ plot_df2 %>%
 
 
 
-### Manuscript layout for Extended Data Figure 8 bottom-right panel
+### Manuscript layout for Extended Data Figure 8F
 
 # --- 1) build the main plot *without* a legend (legend handled below) ---
 p_main <-  ggplot(plot_df2,
@@ -3984,13 +3984,13 @@ print(final_plot)
 ggsave("Final Tables and Figures/Fig_4D_time_to_relapse_footer3cols_blood_muts.png",
        final_plot, width = 5.5, height = 5.5, dpi = 600)
 
-# MANUSCRIPT OUTPUT: Extended Data Figure 8 bottom-right panel
+# MANUSCRIPT OUTPUT: Extended Data Figure 8F
 # Blood-derived cfWGS probability by time-to-relapse window with footer summaries.
 ms_copy_artifact(
   source_path = "Final Tables and Figures/Fig_4D_time_to_relapse_footer3cols_blood_muts.png",
-  artifact_id = "EDFIG8_UNLABELED_BOTTOM_RIGHT",
+  artifact_id = "EDFIG8F",
   role = "figure_panel_png",
-  description = "Extended Data Figure 8 bottom-right panel: cfDNA-derived cfWGS probability versus days before relapse with summary footer.",
+  description = "Extended Data Figure 8F: association between cfDNA-derived cfWGS probability and days before relapse with summary footer.",
   script_name = "4_1_Survival_Analysis.R"
 )
 
@@ -4026,13 +4026,14 @@ safe_spearman_label <- function(df, x_col, y_col) {
 }
 
 plot_train_test_longitudinal_probability <- function(survival_data,
-                                                     prob_col,
-                                                     call_col,
-                                                     threshold,
-                                                     y_label,
-                                                     title_suffix,
-                                                     output_stem,
-                                                     y_limits = c(0, 1)) {
+                                                      prob_col,
+                                                      call_col,
+                                                      threshold,
+                                                      y_label,
+                                                      title_suffix,
+                                                      output_stem,
+                                                      y_limits = c(0, 1),
+                                                      title_text = NULL) {
   required_cols <- c(
     "Patient", "Cohort", "timepoint_info", "sample_date", "Time_to_event",
     "Relapsed_Binary", prob_col, call_col
@@ -4145,11 +4146,15 @@ plot_train_test_longitudinal_probability <- function(survival_data,
       )
     ) +
     labs(
-      title = paste0(
-        "Longitudinal cfWGS MRD Probability by Next Patient Outcome\n",
-        title_suffix, "\n",
-        cohort_title_note
-      )
+      title = if (is.null(title_text)) {
+        paste0(
+          "Longitudinal cfWGS MRD Probability by Next Patient Outcome\n",
+          title_suffix, "\n",
+          cohort_title_note
+        )
+      } else {
+        title_text
+      }
     ) +
     theme_classic(base_size = 11) +
     theme(
@@ -4196,7 +4201,10 @@ plot_train_test_time_to_relapse <- function(plot_df,
                                             x_label,
                                             title_suffix,
                                             output_stem,
-                                            x_limits = c(0, 1)) {
+                                            x_limits = c(0, 1),
+                                            title_text = NULL,
+                                            footer_statistics = FALSE,
+                                            infinity_label = "infinity") {
   if (is.null(plot_df) || nrow(plot_df) == 0) {
     return(invisible(NULL))
   }
@@ -4246,7 +4254,17 @@ plot_train_test_time_to_relapse <- function(plot_df,
     file.path(outdir_source_data, paste0(output_stem, "_source_data_", date_tag, ".csv"))
   )
 
-  p_time <- ggplot(
+  plot_title <- if (is.null(title_text)) {
+    paste0(
+      "cfWGS MRD Probability vs Time to Next Relapse/Progression\n",
+      title_suffix, "\n",
+      cohort_title_note
+    )
+  } else {
+    title_text
+  }
+
+  p_time_main <- ggplot(
     relapse_plot_df,
     aes(x = .data[[prob_col]], y = days_plot)
   ) +
@@ -4261,7 +4279,7 @@ plot_train_test_time_to_relapse <- function(plot_df,
       "Days until next relapse/progression (or infinity for censor)",
       limits = c(0, overflow),
       breaks = c(seq(0, max_days, by = 180), overflow),
-      labels = c(seq(0, max_days, by = 180), "infinity")
+      labels = c(seq(0, max_days, by = 180), infinity_label)
     ) +
     scale_x_continuous(
       x_label,
@@ -4273,36 +4291,125 @@ plot_train_test_time_to_relapse <- function(plot_df,
       "Patient outcome",
       values = c("No relapse" = "black", "Relapse" = "red")
     ) +
-    annotate(
-      "label",
-      x = x_limits[1] + 0.58 * diff(x_limits),
-      y = max_days,
-      label = annot_text,
-      hjust = 0,
-      size = 3.2,
-      fill = scales::alpha("white", 0.75)
-    ) +
-    labs(
-      title = paste0(
-        "cfWGS MRD Probability vs Time to Next Relapse/Progression\n",
-        title_suffix, "\n",
-        cohort_title_note
-      )
-    ) +
+    labs(title = plot_title) +
     theme_classic(base_size = 11) +
     theme(
       panel.grid = element_blank(),
       plot.title = element_text(face = "bold", hjust = 0.5, size = 12),
-      legend.position = "bottom",
       legend.title = element_text(size = 10),
       legend.text = element_text(size = 9)
     )
 
+  if (isTRUE(footer_statistics)) {
+    p_time_main <- p_time_main +
+      theme(legend.position = "none")
+
+    p_legend_only <- ggplot() +
+      annotate(
+        "text",
+        x = 0,
+        y = 1.08,
+        label = "Patient outcome",
+        hjust = 0,
+        vjust = 1,
+        size = 3.5
+      ) +
+      annotate(
+        "point",
+        x = 0.08,
+        y = 0.63,
+        shape = 21,
+        fill = "black",
+        colour = "black",
+        size = 3
+      ) +
+      annotate(
+        "text",
+        x = 0.18,
+        y = 0.63,
+        label = "No relapse",
+        hjust = 0,
+        size = 3.2
+      ) +
+      annotate(
+        "point",
+        x = 0.08,
+        y = 0.23,
+        shape = 21,
+        fill = "red",
+        colour = "black",
+        size = 3
+      ) +
+      annotate(
+        "text",
+        x = 0.18,
+        y = 0.23,
+        label = "Relapse",
+        hjust = 0,
+        size = 3.2
+      ) +
+      xlim(0, 1) +
+      coord_cartesian(ylim = c(0, 1), clip = "off") +
+      theme_void()
+
+    mini_box <- function(label_text) {
+      ggplot() +
+        annotate(
+          "label",
+          x = 0,
+          y = 1,
+          label = label_text,
+          hjust = 0,
+          vjust = 1,
+          size = 3.5,
+          linewidth = 0.3,
+          fill = scales::alpha("white", 0.75)
+        ) +
+        xlim(0, 1) +
+        ylim(0, 1) +
+        theme_void()
+    }
+
+    txt_all <- paste0(
+      "All relapse samples:\n",
+      safe_spearman_label(rel_all, prob_col, "days_before_event")
+    )
+    txt_pre <- paste0(
+      "Pre-relapse only:\n",
+      safe_spearman_label(rel_pre, prob_col, "days_before_event")
+    )
+    footer <- patchwork::wrap_plots(
+      p_legend_only,
+      mini_box(txt_all),
+      mini_box(txt_pre),
+      nrow = 1,
+      widths = c(1, 1, 1)
+    )
+    p_time <- patchwork::wrap_plots(
+      p_time_main,
+      footer,
+      ncol = 1,
+      heights = c(1, 0.22)
+    )
+  } else {
+    p_time <- p_time_main +
+      annotate(
+        "label",
+        x = x_limits[1] + 0.58 * diff(x_limits),
+        y = max_days,
+        label = annot_text,
+        hjust = 0,
+        size = 3.2,
+        fill = scales::alpha("white", 0.75)
+      ) +
+      theme(legend.position = "bottom")
+  }
+
   ggsave(
     file.path("Final Tables and Figures", paste0(output_stem, ".png")),
     p_time,
-    width = 5.8,
-    height = 4.9,
+    width = if (isTRUE(footer_statistics)) 6.5 else 5.8,
+    height = if (isTRUE(footer_statistics)) 5.5 else 4.9,
     dpi = 600
   )
 
@@ -4317,7 +4424,11 @@ bm_train_test_longitudinal_df <- plot_train_test_longitudinal_probability(
   y_label = "cVAF Model Probability",
   title_suffix = "Using BM-Derived Mutation Lists",
   output_stem = "F4C_cfWGS_prob_vs_time_all_train_test_BM_outcome_available",
-  y_limits = c(0, 1)
+  y_limits = c(0, 1),
+  title_text = paste0(
+    "Longitudinal cfWGS MRD Probability by Patient Outcome\n",
+    "Using BM-Derived Mutation Lists"
+  )
 )
 
 ms_copy_artifact(
@@ -4335,7 +4446,13 @@ plot_train_test_time_to_relapse(
   x_label = "cfWGS MRD probability (%)",
   title_suffix = "Using BM-Derived Mutations",
   output_stem = "Fig_4D_time_to_relapse_footer3cols_BM_muts_all_train_test_outcome_available",
-  x_limits = c(0, 1)
+  x_limits = c(0, 1),
+  title_text = paste0(
+    "Association Between cfWGS MRD Probability\n",
+    "and Time to Relapse Using BM-Derived Mutations"
+  ),
+  footer_statistics = TRUE,
+  infinity_label = "Inf"
 )
 
 ms_copy_artifact(
@@ -4354,14 +4471,18 @@ blood_train_test_longitudinal_df <- plot_train_test_longitudinal_probability(
   y_label = "Sites Model Probability",
   title_suffix = "Using cfDNA-Derived Mutation Lists",
   output_stem = "F4C_cfWGS_prob_vs_time_all_train_test_blood_outcome_available",
-  y_limits = c(0.3, 1)
+  y_limits = c(0.3, 1),
+  title_text = paste0(
+    "Longitudinal cfWGS MRD Probability by Patient Outcome\n",
+    "Using cfDNA-Derived Mutation Lists"
+  )
 )
 
 ms_copy_artifact(
   source_path = "Final Tables and Figures/F4C_cfWGS_prob_vs_time_all_train_test_blood_outcome_available.png",
-  artifact_id = "EDFIG8_UNLABELED_BOTTOM_LEFT",
+  artifact_id = "EDFIG8E",
   role = "all_samples_figure_panel_png",
-  description = "All-evaluable-sample training/test combined version of Extended Data Figure 8 bottom-left longitudinal panel using the next progression/censor endpoint after each sample.",
+  description = "All-evaluable-sample training/test combined version of Extended Data Figure 8E using the next progression/censor endpoint after each sample.",
   script_name = "4_1_Survival_Analysis.R"
 )
 
@@ -4372,14 +4493,20 @@ plot_train_test_time_to_relapse(
   x_label = "cfWGS MRD probability (%)",
   title_suffix = "Using cfDNA-Derived Mutations",
   output_stem = "Fig_4D_time_to_relapse_footer3cols_blood_muts_all_train_test_outcome_available",
-  x_limits = c(0.3, 1)
+  x_limits = c(0.3, 1),
+  title_text = paste0(
+    "Association Between cfWGS MRD Probability\n",
+    "and Time to Relapse Using cfDNA-Derived Mutations"
+  ),
+  footer_statistics = TRUE,
+  infinity_label = "Inf"
 )
 
 ms_copy_artifact(
   source_path = "Final Tables and Figures/Fig_4D_time_to_relapse_footer3cols_blood_muts_all_train_test_outcome_available.png",
-  artifact_id = "EDFIG8_UNLABELED_BOTTOM_RIGHT",
+  artifact_id = "EDFIG8F",
   role = "all_samples_figure_panel_png",
-  description = "All-evaluable-sample training/test combined version of Extended Data Figure 8 bottom-right time-to-relapse panel using the next progression/censor endpoint after each sample.",
+  description = "All-evaluable-sample training/test combined version of Extended Data Figure 8F using the next progression/censor endpoint after each sample.",
   script_name = "4_1_Survival_Analysis.R"
 )
 

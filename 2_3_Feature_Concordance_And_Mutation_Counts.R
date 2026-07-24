@@ -2123,8 +2123,14 @@ readr::write_csv(
   )
 )
 
+# Keep the aggregate sensitivity rows in the source-data export for auditability,
+# but do not display them in the concordance panel.
+tf_plot_df_all_evaluable_display <- tf_plot_df_all_evaluable %>%
+  filter(Measure %in% c("High TF", "Low TF")) %>%
+  mutate(Measure = droplevels(Measure))
+
 p_tf_sens2_all_evaluable <- ggplot(
-  tf_plot_df_all_evaluable,
+  tf_plot_df_all_evaluable_display,
   aes(x = value, y = event, group = event)
 ) +
   geom_point(aes(colour = Measure, shape = Measure), size = 3, stroke = 1) +
@@ -2134,16 +2140,14 @@ p_tf_sens2_all_evaluable <- ggplot(
     name = "Concordance",
     values = c(
       "High TF" = viridis(2, end = 0.8)[1],
-      "Low TF" = viridis(2, end = 0.8)[2],
-      "Overall sensitivity" = "black"
+      "Low TF" = viridis(2, end = 0.8)[2]
     )
   ) +
   scale_shape_manual(
     name = "Concordance",
     values = c(
       "High TF" = 16,
-      "Low TF" = 16,
-      "Overall sensitivity" = 8
+      "Low TF" = 16
     )
   ) +
   scale_x_continuous(

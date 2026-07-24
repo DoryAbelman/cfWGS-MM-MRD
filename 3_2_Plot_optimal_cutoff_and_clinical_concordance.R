@@ -744,7 +744,7 @@ p_pos_by_tech <- ggplot(combo_tbl,
   geom_text(aes(label = sprintf("%d%%", round(pos_rate * 100))),
             position = position_dodge(width = 0.8),
             vjust    = -0.3,
-            size     = 2.5,
+            size     = 3.5,
             family   = "sans") +
   
   # Manual fill to match the manuscript color palette.
@@ -774,7 +774,7 @@ p_pos_by_tech <- ggplot(combo_tbl,
   theme(
     plot.title      = element_text(face = "bold", size = 14, hjust = 0.5),
     strip.text      = element_text(face = "bold", size = 11),
-    axis.text.x     = element_text(angle = 30, hjust = 1, size = 9),
+    axis.text.x     = element_text(angle = 30, hjust = 1, size = 10.5),
     axis.text.y     = element_text(size = 9),
     panel.spacing   = unit(0.8, "lines"),
     legend.position = "top"
@@ -1083,7 +1083,7 @@ p_pos_by_tech <- ggplot(combo_tbl,
   geom_text(aes(label = sprintf("%d%%", round(pos_rate * 100))),
             position = position_dodge(width = 0.8),
             vjust    = -0.3,
-            size     = 2.5,
+            size     = 3.5,
             family   = "sans") +
   
   # Manual fill to match the manuscript color palette.
@@ -1113,7 +1113,7 @@ p_pos_by_tech <- ggplot(combo_tbl,
   theme(
     plot.title      = element_text(face = "bold", size = 14, hjust = 0.5),
     strip.text      = element_text(face = "bold", size = 11),
-    axis.text.x     = element_text(angle = 30, hjust = 1, size = 9),
+    axis.text.x     = element_text(angle = 30, hjust = 1, size = 10.5),
     axis.text.y     = element_text(size = 9),
     panel.spacing   = unit(0.8, "lines"),
     legend.position = "top"
@@ -3270,9 +3270,24 @@ write_all_timepoint_mfc_panel <- function(data, prob_col, call_col, threshold,
                                           title, stem, model_label,
                                           final_fig_dir = "Final Tables and Figures",
                                           source_data_dir = outdir_source_data,
-                                          date_tag = version_date) {
-  cohort_view_levels <- c("Training Cohort", "Test Cohort", "Training + Test")
+                                          date_tag = version_date,
+                                          cohort_views = c(
+                                            "Training Cohort",
+                                            "Test Cohort",
+                                            "Training + Test"
+                                          )) {
+  valid_cohort_views <- c("Training Cohort", "Test Cohort", "Training + Test")
   relapse_levels <- c("Relapsed <=365 d", "No relapse >365 d")
+
+  if (length(cohort_views) == 0L ||
+      anyDuplicated(cohort_views) ||
+      any(!cohort_views %in% valid_cohort_views)) {
+    stop(
+      "`cohort_views` must contain unique values drawn from: ",
+      paste(valid_cohort_views, collapse = ", "),
+      call. = FALSE
+    )
+  }
 
   dir.create(final_fig_dir, recursive = TRUE, showWarnings = FALSE)
   dir.create(source_data_dir, recursive = TRUE, showWarnings = FALSE)
@@ -3283,7 +3298,26 @@ write_all_timepoint_mfc_panel <- function(data, prob_col, call_col, threshold,
     call_col = call_col,
     threshold = threshold,
     model_label = model_label
-  )
+  ) %>%
+    filter(as.character(cohort_view) %in% cohort_views) %>%
+    mutate(
+      cohort_view = factor(as.character(cohort_view), levels = cohort_views)
+    )
+
+  if (nrow(plot_df) == 0L) {
+    stop(
+      "No evaluable MFC rows remain for requested cohort view(s): ",
+      paste(cohort_views, collapse = ", "),
+      call. = FALSE
+    )
+  }
+
+  if (anyDuplicated(plot_df[c("Patient", "Sample_Code", "cohort_view")])) {
+    stop(
+      "MFC panel source contains duplicate patient/sample/cohort-view rows.",
+      call. = FALSE
+    )
+  }
 
   corr_df <- plot_df %>%
     group_by(cohort_view, Comparator) %>%
@@ -3293,7 +3327,7 @@ write_all_timepoint_mfc_panel <- function(data, prob_col, call_col, threshold,
       label = pmap_chr(list(rho, p, n), format_spearman_label_for_plot),
       x = 0.035,
       y = 0.99,
-      cohort_view = factor(cohort_view, levels = cohort_view_levels),
+      cohort_view = factor(cohort_view, levels = cohort_views),
       Comparator = factor(Comparator, levels = "MFC")
     )
 
@@ -3305,28 +3339,31 @@ write_all_timepoint_mfc_panel <- function(data, prob_col, call_col, threshold,
       .groups = "drop"
     ) %>%
     complete(
-      cohort_view = factor(cohort_view_levels, levels = cohort_view_levels),
+      cohort_view = factor(cohort_views, levels = cohort_views),
       Comparator = factor("MFC", levels = "MFC"),
       relapse_cat = factor(relapse_levels, levels = relapse_levels),
       fill = list(n_rows = 0L, n_patients = 0L)
     ) %>%
     arrange(cohort_view, Comparator, relapse_cat)
 
-  readr::write_csv(
-    plot_df,
-    file.path(source_data_dir, paste0(stem, "_source_data_", date_tag, ".csv"))
+  source_data_path <- file.path(
+    source_data_dir,
+    paste0(stem, "_source_data_", date_tag, ".csv")
   )
-  readr::write_csv(
-    corr_df,
-    file.path(source_data_dir, paste0(stem, "_correlations_", date_tag, ".csv"))
+  correlations_path <- file.path(
+    source_data_dir,
+    paste0(stem, "_correlations_", date_tag, ".csv")
   )
-  readr::write_csv(
-    counts_df,
-    file.path(source_data_dir, paste0(stem, "_counts_", date_tag, ".csv"))
+  counts_path <- file.path(
+    source_data_dir,
+    paste0(stem, "_counts_", date_tag, ".csv")
   )
+  readr::write_csv(plot_df, source_data_path)
+  readr::write_csv(corr_df, correlations_path)
+  readr::write_csv(counts_df, counts_path)
 
   lod_line <- tidyr::crossing(
-    cohort_view = factor(cohort_view_levels, levels = cohort_view_levels),
+    cohort_view = factor(cohort_views, levels = cohort_views),
     Comparator = factor("MFC", levels = "MFC")
   ) %>%
     mutate(xintercept = lod_clonoMF)
@@ -3389,14 +3426,18 @@ write_all_timepoint_mfc_panel <- function(data, prob_col, call_col, threshold,
     )
 
   png_path <- file.path(final_fig_dir, paste0(stem, ".png"))
-  ggsave(png_path, plot, width = 5.8, height = 7.2, dpi = 600, bg = "white")
+  plot_height <- if (length(cohort_views) == 1L) 4.2 else 2.4 * length(cohort_views)
+  ggsave(png_path, plot, width = 5.8, height = plot_height, dpi = 600, bg = "white")
 
   invisible(list(
     plot = plot,
     source_data = plot_df,
     correlations = corr_df,
     counts = counts_df,
-    png_path = png_path
+    png_path = png_path,
+    source_data_path = source_data_path,
+    correlations_path = correlations_path,
+    counts_path = counts_path
   ))
 }
 
@@ -3878,6 +3919,49 @@ ms_copy_artifact(
   artifact_id = "FIG3E",
   role = "all_samples_mfc_only_figure_panel_png",
   description = "All-evaluable-timepoint training/test/combined MFC-only version of Main Figure 3E.",
+  script_name = "3_2_Plot_optimal_cutoff_and_clinical_concordance.R"
+)
+
+# Standalone test-cohort panel requested for direct manuscript/slide use. It
+# uses the same all-evaluable test-cohort rows and plotting conventions as the
+# middle facet of the three-cohort alternate above.
+test_cohort_mfc_bm <- write_all_timepoint_mfc_panel(
+  data = dat,
+  prob_col = "BM_zscore_only_detection_rate_prob",
+  call_col = "BM_zscore_only_detection_rate_call",
+  threshold = 0.4215524,
+  title = "cfWGS of BM-Derived Mutations MRD\nProbability vs. MFC\nTest Cohort",
+  stem = "Fig4K_test_cohort_only_BM_primary_model_vs_MFC",
+  model_label = "BM primary model",
+  cohort_views = "Test Cohort"
+)
+
+ms_copy_artifact(
+  source_path = test_cohort_mfc_bm$png_path,
+  artifact_id = "FIG3E",
+  role = "test_cohort_mfc_only_figure_panel_png",
+  description = "Standalone all-evaluable test-cohort MFC-only version of Main Figure 3E.",
+  script_name = "3_2_Plot_optimal_cutoff_and_clinical_concordance.R"
+)
+ms_copy_artifact(
+  source_path = test_cohort_mfc_bm$source_data_path,
+  artifact_id = "FIG3E",
+  role = "test_cohort_mfc_only_source_data_csv",
+  description = "Row-level source data for the standalone test-cohort MFC-only Figure 3E alternate.",
+  script_name = "3_2_Plot_optimal_cutoff_and_clinical_concordance.R"
+)
+ms_copy_artifact(
+  source_path = test_cohort_mfc_bm$correlations_path,
+  artifact_id = "FIG3E",
+  role = "test_cohort_mfc_only_correlations_csv",
+  description = "Spearman correlation statistics for the standalone test-cohort MFC-only Figure 3E alternate.",
+  script_name = "3_2_Plot_optimal_cutoff_and_clinical_concordance.R"
+)
+ms_copy_artifact(
+  source_path = test_cohort_mfc_bm$counts_path,
+  artifact_id = "FIG3E",
+  role = "test_cohort_mfc_only_counts_csv",
+  description = "Sample and patient counts for the standalone test-cohort MFC-only Figure 3E alternate.",
   script_name = "3_2_Plot_optimal_cutoff_and_clinical_concordance.R"
 )
 

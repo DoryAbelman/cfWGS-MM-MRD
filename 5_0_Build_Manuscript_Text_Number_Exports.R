@@ -139,6 +139,24 @@ latest_existing <- function(pattern) {
   hits[order(info$mtime, hits, decreasing = TRUE)][1]
 }
 
+latest_matching <- function(directory, pattern) {
+  hits <- list.files(
+    path = directory,
+    pattern = pattern,
+    full.names = TRUE
+  )
+  hits <- hits[file.exists(hits)]
+  if (!length(hits)) {
+    stop(
+      "No file matched the required pattern '", pattern,
+      "' in ", directory,
+      call. = FALSE
+    )
+  }
+  info <- file.info(hits)
+  hits[order(info$mtime, hits, decreasing = TRUE)][1]
+}
+
 slugify <- function(x, max_len = 90) {
   x <- str_replace_all(x, "[^A-Za-z0-9]+", "_")
   x <- str_replace_all(x, "^_+|_+$", "")
@@ -1210,7 +1228,11 @@ if (!is.null(bm_nested) && all(c("combo", "auc_mean") %in% names(bm_nested))) {
   }
 }
 
-bm_surv_path <- latest_existing(project_path("Output_tables_2025", "detection_progression_updated6", "cfWGS_vs_flow_progression_summary_*.csv"))
+survival_summary_dir <- project_path("Output_tables_2025", "detection_progression_updated6")
+bm_surv_path <- latest_matching(
+  survival_summary_dir,
+  "^cfWGS_vs_flow_progression_summary_[0-9]{4}-[0-9]{2}-[0-9]{2}\\.csv$"
+)
 bm_surv <- read_csv_if_exists(bm_surv_path)
 if (!is.null(bm_surv) && all(c("Landmark", "HR_cf", "MedRFS_cf_pos", "Patients", "Events") %in% names(bm_surv))) {
   bm_1yr <- bm_surv %>% filter(.data$Landmark == "1yr_maintenance") %>% slice_head(n = 1)
@@ -1261,7 +1283,10 @@ if (!is.null(bm_surv) && all(c("Landmark", "HR_cf", "MedRFS_cf_pos", "Patients",
   }
 }
 
-blood_surv_path <- latest_existing(project_path("Output_tables_2025", "detection_progression_updated6", "cfWGS_vs_flow_progression_summary_blood_muts_*.csv"))
+blood_surv_path <- latest_matching(
+  survival_summary_dir,
+  "^cfWGS_vs_flow_progression_summary_blood_muts_[0-9]{4}-[0-9]{2}-[0-9]{2}\\.csv$"
+)
 blood_surv <- read_csv_if_exists(blood_surv_path)
 if (!is.null(blood_surv) && all(c("Landmark", "HR_cf", "MedRFS_cf_pos", "Patients", "Events") %in% names(blood_surv))) {
   blood_1yr <- blood_surv %>% filter(.data$Landmark == "1yr_maintenance") %>% slice_head(n = 1)

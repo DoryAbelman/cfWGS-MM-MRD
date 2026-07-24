@@ -185,7 +185,8 @@ required_columns(baseline_dates, c("Patient", "baseline_date"), "baseline_dates"
 required_columns(
   feature_df,
   c(
-    "Patient", "Date", "Num_days_to_closest_relapse",
+    "Patient", "Timepoint", "Sample_Code", "timepoint_info", "Date",
+    "Num_days_to_closest_relapse",
     "detect_rate_BM", "z_score_detection_rate_BM", "sites_rate_BM",
     "zscore_BM", "detect_rate_blood", "z_score_detection_rate_blood",
     "sites_rate_blood", "zscore_blood", "FS", "Mean.Coverage",
@@ -407,17 +408,31 @@ flag_followup_relapse_points <- function(plot_df) {
       # patient's only available observation can still be a relapse-associated
       # follow-up point when it occurs after week 0.
       is_effective_baseline_point = near(Weeks_Since_Baseline, 0),
-      relapse_within_180 = if_else(
-        # True week-0 baseline observations are always shown in black. A point
-        # is red only when it is after week 0 and was collected 0--180 days
-        # before the patient's next documented relapse/progression.
+      is_first_observed_point = row_number() == 1L,
+      is_relapse_labeled_point = str_to_lower(str_trim(coalesce(timepoint_info, ""))) %in%
+        c("relapse", "progression"),
+      is_next_event_relapse_point =
         !is_effective_baseline_point &
           Relapsed_Binary == 1L &
           Num_days_to_closest_relapse >= 0 &
           Num_days_to_closest_relapse <= 180,
-        TRUE,
-        FALSE,
-        missing = FALSE
+      is_first_nonbaseline_relapse_point =
+        !is_effective_baseline_point &
+          is_first_observed_point &
+          is_relapse_labeled_point,
+      # A true week-0 baseline remains black even if its source metadata says
+      # relapse/progression. If the first assay-evaluable observation occurs
+      # after week 0 and is itself labeled relapse/progression, it belongs on
+      # the relapse side and is red even when the next-event endpoint is >180 d.
+      relapse_within_180 = replace_na(
+        is_next_event_relapse_point | is_first_nonbaseline_relapse_point,
+        FALSE
+      ),
+      relapse_flag_reason = case_when(
+        is_effective_baseline_point ~ "mutation_source_baseline_black",
+        is_first_nonbaseline_relapse_point ~ "first_nonbaseline_relapse_label",
+        is_next_event_relapse_point ~ "next_event_within_180_days",
+        TRUE ~ "no_relapse_flag"
       )
     ) %>%
     ungroup()
@@ -675,7 +690,8 @@ make_mutation_plot_df <- function(dat, assay) {
   if (assay == "BM") {
     out <- dat %>%
       select(
-        Patient, Cohort, Date, Baseline_Date, Clinical_Baseline_Date,
+        Patient, Timepoint, Sample_Code, timepoint_info,
+        Cohort, Date, Baseline_Date, Clinical_Baseline_Date,
         Weeks_Since_Baseline, Weeks_Since_Clinical_Baseline,
         Mutation_Source_Baseline_Timepoint,
         Mutation_Source_Baseline_Sample_Code,
@@ -687,7 +703,8 @@ make_mutation_plot_df <- function(dat, assay) {
   } else if (assay == "blood") {
     out <- dat %>%
       select(
-        Patient, Cohort, Date, Baseline_Date, Clinical_Baseline_Date,
+        Patient, Timepoint, Sample_Code, timepoint_info,
+        Cohort, Date, Baseline_Date, Clinical_Baseline_Date,
         Weeks_Since_Baseline, Weeks_Since_Clinical_Baseline,
         Mutation_Source_Baseline_Timepoint,
         Mutation_Source_Baseline_Sample_Code,
@@ -772,7 +789,8 @@ make_mutation_panel <- function(plot_df, title, cvaf_cap_at = NA_real_,
 make_fragmentomics_plot_df <- function(dat) {
   dat %>%
     select(
-      Patient, Cohort, Date, Baseline_Date, Clinical_Baseline_Date,
+      Patient, Timepoint, Sample_Code, timepoint_info,
+      Cohort, Date, Baseline_Date, Clinical_Baseline_Date,
       Weeks_Since_Baseline, Weeks_Since_Clinical_Baseline,
       Mutation_Source_Baseline_Timepoint,
       Mutation_Source_Baseline_Sample_Code,
@@ -844,7 +862,8 @@ make_raw_mutation_plot_df <- function(dat, assay) {
   if (assay == "BM") {
     out <- dat %>%
       select(
-        Patient, Cohort, Date, Baseline_Date, Clinical_Baseline_Date,
+        Patient, Timepoint, Sample_Code, timepoint_info,
+        Cohort, Date, Baseline_Date, Clinical_Baseline_Date,
         Weeks_Since_Baseline, Weeks_Since_Clinical_Baseline,
         Mutation_Source_Baseline_Timepoint,
         Mutation_Source_Baseline_Sample_Code,
@@ -856,7 +875,8 @@ make_raw_mutation_plot_df <- function(dat, assay) {
   } else if (assay == "blood") {
     out <- dat %>%
       select(
-        Patient, Cohort, Date, Baseline_Date, Clinical_Baseline_Date,
+        Patient, Timepoint, Sample_Code, timepoint_info,
+        Cohort, Date, Baseline_Date, Clinical_Baseline_Date,
         Weeks_Since_Baseline, Weeks_Since_Clinical_Baseline,
         Mutation_Source_Baseline_Timepoint,
         Mutation_Source_Baseline_Sample_Code,
@@ -934,7 +954,8 @@ make_raw_mutation_panel <- function(plot_df, title, cvaf_cap_at = NA_real_,
 make_extended_fragmentomics_plot_df <- function(dat) {
   dat %>%
     select(
-      Patient, Cohort, Date, Baseline_Date, Clinical_Baseline_Date,
+      Patient, Timepoint, Sample_Code, timepoint_info,
+      Cohort, Date, Baseline_Date, Clinical_Baseline_Date,
       Weeks_Since_Baseline, Weeks_Since_Clinical_Baseline,
       Mutation_Source_Baseline_Timepoint,
       Mutation_Source_Baseline_Sample_Code,
@@ -1014,6 +1035,59 @@ if (nrow(fragmentomics_plot_df) == 0) stop("No fragmentomics-evaluable rows avai
 if (nrow(ed3a_plot_df) == 0) stop("No ED3A all-evaluable rows available.", call. = FALSE)
 if (nrow(ed3b_plot_df) == 0) stop("No ED3B all-evaluable rows available.", call. = FALSE)
 if (nrow(ed3c_plot_df) == 0) stop("No ED3C all-evaluable rows available.", call. = FALSE)
+
+classification_validation_df <- bind_rows(
+  bm_plot_df %>% mutate(panel = "Figure_2B"),
+  blood_plot_df %>% mutate(panel = "Figure_2C"),
+  fragmentomics_plot_df %>% mutate(panel = "Figure_2D"),
+  ed3a_plot_df %>% mutate(panel = "Extended_Data_Figure_3A"),
+  ed3b_plot_df %>% mutate(panel = "Extended_Data_Figure_3B"),
+  ed3c_plot_df %>% mutate(panel = "Extended_Data_Figure_3C")
+)
+
+baseline_points_incorrectly_red <- classification_validation_df %>%
+  filter(is_effective_baseline_point, relapse_within_180)
+if (nrow(baseline_points_incorrectly_red) > 0) {
+  stop(
+    "Relapse classification invariant failed: mutation-source baseline points ",
+    "must remain black.",
+    call. = FALSE
+  )
+}
+
+first_nonbaseline_relapse_points_incorrectly_black <- classification_validation_df %>%
+  filter(is_first_nonbaseline_relapse_point, !relapse_within_180)
+if (nrow(first_nonbaseline_relapse_points_incorrectly_black) > 0) {
+  stop(
+    "Relapse classification invariant failed: first observed non-baseline ",
+    "relapse/progression points must be red and placed in the relapse facet.",
+    call. = FALSE
+  )
+}
+
+cross_panel_patient_classification_audit <- classification_validation_df %>%
+  distinct(panel, Patient, patient_relapse180) %>%
+  mutate(patient_relapse180 = as.character(patient_relapse180)) %>%
+  group_by(Patient) %>%
+  mutate(n_unique_cross_panel_statuses = n_distinct(patient_relapse180)) %>%
+  ungroup() %>%
+  arrange(Patient, panel)
+
+cross_panel_patient_classification_conflicts <-
+  cross_panel_patient_classification_audit %>%
+  filter(n_unique_cross_panel_statuses > 1)
+if (nrow(cross_panel_patient_classification_conflicts) > 0) {
+  stop(
+    "Cross-panel relapse classification invariant failed: at least one patient ",
+    "is assigned to different relapse facets across Figure 2B-D or ED Figure 3A-C.",
+    call. = FALSE
+  )
+}
+
+write_csv(
+  cross_panel_patient_classification_audit,
+  file.path(output_dir, "all_evaluable_cross_panel_patient_classification_audit.csv")
+)
 
 bm_panel <- make_mutation_panel(
   bm_plot_df,

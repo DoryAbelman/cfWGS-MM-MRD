@@ -682,7 +682,7 @@ p_overlap_all_evaluable <- ggplot(
     y = NULL,
     title = "Patient-level overlap of baseline mutations (BM vs. cfDNA)",
     subtitle = glue::glue(
-      "All cohort-assigned evaluable baseline/diagnosis pairs; median = {round(all_eval_med, 1)}% | IQR = {round(all_eval_iqr_l, 1)}-{round(all_eval_iqr_u, 1)}%"
+      "All evaluable baseline pairs (n = {nrow(plot_df_all_evaluable)}); median {round(all_eval_med, 1)}% (IQR {round(all_eval_iqr_l, 1)}-{round(all_eval_iqr_u, 1)}%)"
     )
   ) +
   theme_minimal(base_size = 8) +
@@ -710,7 +710,7 @@ edfig2g_all_evaluable_path <- file.path(
 ggsave(
   filename = edfig2g_all_evaluable_path,
   plot = p_overlap_all_evaluable,
-  width = 4,
+  width = 4.6,
   height = 5,
   dpi = 600
 )
