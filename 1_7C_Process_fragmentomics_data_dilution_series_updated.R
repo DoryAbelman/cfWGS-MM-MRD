@@ -140,20 +140,18 @@ combined_clinical <- read_dilution_metadata_with_spring2026(clinical.csv)
 
 ### 3.  READ & PROCESS NUCLEOSOME-ACCESSIBILITY (cfWGS + PON)  ##################
 
-# 3a) List all cfWGS dilution files
-results.files <- list.files(path = nuc_input.dir,
-                            pattern = "nucleosome_accessibility_distances.tsv$",
-                            full.names = TRUE)
-results.files <- unique(c(
-  results.files,
-  # Append Spring 2026 PWGVAL dilution nucleosome-accessibility output when
-  # present. These rows are dilution-series inputs, not main patient cohort
-  # fragmentomics rows.
-  spring2026_revision_files(
-    "Fragmentomics_Pipeeline_Suite_all_outputs",
-    "^2026-06-25_cfWGS_MM_fragmentomics_Revisions_Spring2026_PWGVAL_Dilution_series_nucleosome_accessibility_distances[.]tsv$"
-  )
-))
+# 3a) List dilution files separately by sequencing platform. The historical
+# dilution series was sequenced on NovaSeq 6000; VA-09/VA-12/VA-13 were newly
+# generated on NovaSeq XPlus and must never inherit the historical reference.
+historical_results_files <- list.files(
+  path = nuc_input.dir,
+  pattern = "nucleosome_accessibility_distances.tsv$",
+  full.names = TRUE
+)
+xplus_results_files <- spring2026_revision_files(
+  "Fragmentomics_Pipeeline_Suite_all_outputs",
+  "^2026-06-25_cfWGS_MM_fragmentomics_Revisions_Spring2026_PWGVAL_Dilution_series_nucleosome_accessibility_distances[.]tsv$"
+)
 
 # 3b) List PON (healthy) files; we only need the first one if they’re identical format
 pon.files <- rev(sort(
@@ -161,19 +159,60 @@ pon.files <- rev(sort(
              pattern = "nucleosome_accessibility_distances.tsv$",
              full.names = TRUE)
 ))
+xplus_pon_files <- spring2026_revision_files(
+  "Fragmentomics_Pipeeline_Suite_all_outputs",
+  "^2026-06-30_cfWGS_MM_fragmentomics_Revisions_Spring2026_CHARM_Xplus_HC_nucleosome_accessibility_distances[.]tsv$"
+)
+if (!length(pon.files) || !length(xplus_pon_files)) {
+  stop("Both NovaSeq 6000 and NovaSeq XPlus dilution healthy-control references are required.", call. = FALSE)
+}
+
+read_nucleosome_batch <- function(paths, platform, role) {
+  if (!length(paths)) return(tibble())
+  bind_rows(lapply(paths, function(path) {
+    read_tsv(path, show_col_types = FALSE) %>%
+      mutate(
+        fragmentomics_sequencing_platform = platform,
+        fragmentomics_sample_role = role,
+        fragmentomics_source_file = basename(path)
+      )
+  }))
+}
 
 # 3c) Read in all cfWGS dilution series data, bind rows
-cfWGS.data <- results.files %>%
-  lapply(read_tsv, show_col_types = FALSE) %>%
-  bind_rows()
+cfWGS.data <- bind_rows(
+  read_nucleosome_batch(historical_results_files, "NovaSeq 6000", "dilution_series"),
+  read_nucleosome_batch(xplus_results_files, "NovaSeq XPlus", "dilution_series")
+)
 
 # 3d) If any “TGL49” columns snuck in as columns, drop them (same as main script)
 if (any(grepl("TGL49", colnames(cfWGS.data)))) {
   cfWGS.data <- cfWGS.data[, !grepl("TGL49", colnames(cfWGS.data))]
 }
 
-# 3e) Read in PON once
-pon.data <- read_tsv(pon.files[[1]], show_col_types = FALSE)
+# 3e) Preserve the original 26-library NovaSeq 6000 scoring reference for the
+# historical VA-02 series. Use the 19 shared XPlus controls for the three new
+# XPlus series. The 19 matched historical subset is used only for the raw-input
+# platform transform below, not for historical z-score calculation.
+classify_fragmentomics_material <- function(sample) {
+  case_when(
+    str_detect(sample, "(^|[-_])Cf([-_]|$)|_Cf_|-Cf-") ~ "cfDNA",
+    str_detect(sample, "(^|[-_])Pb([-_]|$)|_Pb_|-Pb-") ~ "PB_cellular_or_buffy",
+    str_detect(sample, "(^|[-_])Ct([-_]|$)|_Ct_|-Ct-") ~ "cellular_or_tissue",
+    TRUE ~ "unknown"
+  )
+}
+historical_pon_data <- read_nucleosome_batch(
+  pon.files[[1]], "NovaSeq 6000", "healthy_control"
+) %>%
+  mutate(fragmentomics_material = classify_fragmentomics_material(.data$Sample)) %>%
+  filter_fragmentomics_original_historical_controls()
+xplus_pon_data <- read_nucleosome_batch(
+  xplus_pon_files[[1]], "NovaSeq XPlus", "healthy_control"
+) %>%
+  mutate(fragmentomics_material = classify_fragmentomics_material(.data$Sample)) %>%
+  filter_fragmentomics_shared_healthy_controls()
+pon.data <- bind_rows(historical_pon_data, xplus_pon_data)
 
 # 3f) Harmonize Sample names in cfWGS.data exactly as before,
 #     then left_join(tmp.clin) to grab Bam/Patient/Date/timepoint_info
@@ -207,14 +246,20 @@ pon.data <- pon.data %>%
   )
 
 # 3h) Build sample lists
-# NOTE: unlike 1_7A, there are no clinical subgroups (baseline / maintenance /
-# M4 / SPORE) here. All dilution-series samples are treated as a single
-# "tumour" group compared against the same CHARM TGL49 healthy-control PON.
+# NOTE: unlike 1_7A, there are no clinical subgroups. The dilution samples are
+# compared with controls from their own sequencing platform.
 # The relevant grouping variable for sensitivity analysis is the known
 # tumour fraction (from Metadata_dilution_series.csv, "LOD" column).
 all.tumour.samples <- unique(cfWGS.data$Sample)
 all.pon.samples    <- setdiff(unique(pon.data$Sample), "TGL49_0267_Pb_U_PE_428") # remove duplicate longitudinal
 all.samples        <- c(all.tumour.samples, all.pon.samples)
+
+sample_reference_map <- bind_rows(
+  cfWGS.data %>% distinct(Sample, fragmentomics_sequencing_platform, fragmentomics_sample_role),
+  pon.data %>% distinct(Sample, fragmentomics_sequencing_platform, fragmentomics_sample_role)
+) %>% distinct(Sample, .keep_all = TRUE)
+sample_platform <- setNames(sample_reference_map$fragmentomics_sequencing_platform, sample_reference_map$Sample)
+sample_role <- setNames(sample_reference_map$fragmentomics_sample_role, sample_reference_map$Sample)
 
 # 3i) Grab all sites present in the cfWGS (dilution) data
 all.sites <- unique(cfWGS.data$site_name)
@@ -234,7 +279,16 @@ all.sites   <- unique(cfWGS.data$site_name)
 
 ### UTILITY FUNCTIONS ##############################################################################
 calculate.zscore <- function(x, y) {
+  y <- y[is.finite(y)]
+  if (length(y) < 2L || !is.finite(sd(y)) || sd(y) == 0) return(NA_real_)
   (x - mean(y)) / sd(y)
+}
+
+calculate_platform_zscores <- function(values, platforms, roles) {
+  vapply(seq_along(values), function(i) {
+    reference <- values[roles == "healthy_control" & platforms == platforms[[i]]]
+    calculate.zscore(values[[i]], reference)
+  }, numeric(1))
 }
 
 get.ttest.p.and.foldchange <- function(i, group1, group2) {
@@ -302,6 +356,8 @@ for (site in all.sites) {
   metrics.per.site[[site]] <- data.frame(
     Sample            = valid.samples,
     Site              = rep(site, length(valid.samples)),
+    fragmentomics_sequencing_platform = unname(sample_platform[valid.samples]),
+    fragmentomics_sample_role = unname(sample_role[valid.samples]),
     Mean.Coverage     = colMeans(gc.distances[, valid.samples, drop = FALSE]),
     Midpoint.Coverage = colMeans(
       gc.distances[gc.distances$Position %in% c(-30, -15, 0, 15, 30), valid.samples, drop = FALSE]
@@ -319,30 +375,17 @@ for (site in all.sites) {
   # Z-scores vs. PON: same formula as 1_7A - z = (x - mean_PON) / sd_PON.
   # Reference vector y is the subset of values belonging to pon.samples,
   # i.e. the TGL49 healthy-control bank, not the dilution series samples.
+  metric_platform <- metrics.per.site[[site]]$fragmentomics_sequencing_platform
+  metric_role <- metrics.per.site[[site]]$fragmentomics_sample_role
   score.data <- data.frame(
     Sample        = valid.samples,
     Site          = rep(site, length(valid.samples)),
     Zscore.Coverage =
-      sapply(metrics.per.site[[site]]$Mean.Coverage,
-             calculate.zscore,
-             y = metrics.per.site[[site]]$Mean.Coverage[
-               metrics.per.site[[site]]$Sample %in% pon.samples
-             ]
-      ),
+      calculate_platform_zscores(metrics.per.site[[site]]$Mean.Coverage, metric_platform, metric_role),
     Zscore.Midpoint =
-      sapply(metrics.per.site[[site]]$Midpoint.normalized,
-             calculate.zscore,
-             y = metrics.per.site[[site]]$Midpoint.normalized[
-               metrics.per.site[[site]]$Sample %in% pon.samples
-             ]
-      ),
+      calculate_platform_zscores(metrics.per.site[[site]]$Midpoint.normalized, metric_platform, metric_role),
     Zscore.Amplitude =
-      sapply(metrics.per.site[[site]]$Amplitude,
-             calculate.zscore,
-             y = metrics.per.site[[site]]$Amplitude[
-               metrics.per.site[[site]]$Sample %in% pon.samples
-             ]
-      )
+      calculate_platform_zscores(metrics.per.site[[site]]$Amplitude, metric_platform, metric_role)
   )
   scores.per.site[[site]] <- score.data
   
@@ -350,8 +393,12 @@ for (site in all.sites) {
   mdata <- metrics.per.site[[site]]
   
   # tumour vs. healthy
-  idx_pon   <- which(mdata$Sample %in% pon.samples)
-  idx_tumor <- which(mdata$Sample %in% tumour.samples)
+  # Feature direction is frozen from the original NovaSeq 6000 dilution set.
+  # XPlus validation dilutions are not allowed to redefine the direction.
+  idx_pon <- which(mdata$fragmentomics_sample_role == "healthy_control" &
+                     mdata$fragmentomics_sequencing_platform == "NovaSeq 6000")
+  idx_tumor <- which(mdata$fragmentomics_sample_role == "dilution_series" &
+                       mdata$fragmentomics_sequencing_platform == "NovaSeq 6000")
   stats.data[stats.data$Site == site, c("Coverage.fc", "Coverage.p")] <-
     get.ttest.p.and.foldchange(mdata$Mean.Coverage, idx_pon, idx_tumor)
   stats.data[stats.data$Site == site, c("Midpoint.fc", "Midpoint.p")] <-
@@ -376,60 +423,60 @@ results.data <- merge(
   all = TRUE
 )
 
-# Identical ±10 % HBC threshold strategy as in 1_7A: max/min healthy z-score
-# inflated by 10 % defines the normal boundary. The SAME TGL49 healthy-control
-# panel is used here, so thresholds are directly comparable to main-cohort
-# calls-allowing dilution-series sensitivity to be interpreted on the same
-# scale as clinical patient results.
-thresholds.up <- aggregate(
-  results.data[grep("TGL49", results.data$Sample), grep("Zscore", colnames(results.data))],
-  by = list(Site = results.data[grep("TGL49", results.data$Sample), ]$Site),
-  FUN = function(i) { max(i) * 1.10 }
-)
-thresholds.down <- aggregate(
-  results.data[grep("TGL49", results.data$Sample), grep("Zscore", colnames(results.data))],
-  by = list(Site = results.data[grep("TGL49", results.data$Sample), ]$Site),
-  FUN = function(i) { min(i) * 1.10 }
-)
-
-thresholds.up$Site   <- factor(thresholds.up$Site, levels = stats.data$Site)
-thresholds.down$Site <- factor(thresholds.down$Site, levels = stats.data$Site)
-thresholds.up         <- thresholds.up[order(thresholds.up$Site), ]
-thresholds.down       <- thresholds.down[order(thresholds.down$Site), ]
-
-stats.data$Coverage.threshold  <- thresholds.up$Zscore.Coverage
-stats.data$Midpoint.threshold  <- thresholds.up$Zscore.Midpoint
-stats.data$Amplitude.threshold <- thresholds.up$Zscore.Amplitude
-
-# For sites where fold-change<0, use “down” threshold instead:
-neg.fc <- which(stats.data$Coverage.fc < 0)
-if (length(neg.fc)) {
-  stats.data$Coverage.threshold[neg.fc] <-
-    thresholds.down$Zscore.Coverage[neg.fc]
-}
-neg.fc2 <- which(stats.data$Midpoint.fc < 0)
-if (length(neg.fc2)) {
-  stats.data$Midpoint.threshold[neg.fc2] <-
-    thresholds.down$Zscore.Midpoint[neg.fc2]
-}
-neg.fc3 <- which(stats.data$Amplitude.fc < 0)
-if (length(neg.fc3)) {
-  stats.data$Amplitude.threshold[neg.fc3] <-
-    thresholds.down$Zscore.Amplitude[neg.fc3]
-}
-
-# apply thresholds to classify each sample's z-score. A per-site lookup avoids
-# grouped-vector recycling and leaves underpowered comparisons as NA.
-threshold_lookup <- stats.data %>%
-  dplyr::select(
-    Site,
-    Coverage.fc, Coverage.threshold,
-    Midpoint.fc, Midpoint.threshold,
-    Amplitude.fc, Amplitude.threshold
+# Match the threshold reference to each sample's platform. Feature direction is
+# retained from the original NovaSeq 6000 dilution series above.
+threshold_lookup <- results.data %>%
+  filter(.data$fragmentomics_sample_role == "healthy_control") %>%
+  group_by(.data$Site, .data$fragmentomics_sequencing_platform) %>%
+  summarise(
+    Coverage.threshold.up = max(.data$Zscore.Coverage, na.rm = TRUE) * 1.10,
+    Coverage.threshold.down = min(.data$Zscore.Coverage, na.rm = TRUE) * 1.10,
+    Midpoint.threshold.up = max(.data$Zscore.Midpoint, na.rm = TRUE) * 1.10,
+    Midpoint.threshold.down = min(.data$Zscore.Midpoint, na.rm = TRUE) * 1.10,
+    Amplitude.threshold.up = max(.data$Zscore.Amplitude, na.rm = TRUE) * 1.10,
+    Amplitude.threshold.down = min(.data$Zscore.Amplitude, na.rm = TRUE) * 1.10,
+    n_healthy_reference = n_distinct(.data$Sample),
+    .groups = "drop"
+  ) %>%
+  left_join(
+    stats.data %>%
+      dplyr::select(.data$Site, .data$Coverage.fc, .data$Midpoint.fc, .data$Amplitude.fc),
+    by = "Site"
+  ) %>%
+  mutate(
+    Coverage.threshold = if_else(.data$Coverage.fc >= 0, .data$Coverage.threshold.up, .data$Coverage.threshold.down),
+    Midpoint.threshold = if_else(.data$Midpoint.fc >= 0, .data$Midpoint.threshold.up, .data$Midpoint.threshold.down),
+    Amplitude.threshold = if_else(.data$Amplitude.fc >= 0, .data$Amplitude.threshold.up, .data$Amplitude.threshold.down)
   )
 
+stats.data <- stats.data %>%
+  left_join(
+    threshold_lookup %>%
+      filter(.data$fragmentomics_sequencing_platform == "NovaSeq 6000") %>%
+      dplyr::select(
+        .data$Site, .data$Coverage.threshold,
+        .data$Midpoint.threshold, .data$Amplitude.threshold
+      ),
+    by = "Site"
+  )
+
+write_csv(
+  threshold_lookup,
+  file.path(out.dir, "fragmentomics_platform_reference_thresholds_dilution.csv")
+)
+
 results.data <- results.data %>%
-  dplyr::left_join(threshold_lookup, by = "Site") %>%
+  dplyr::left_join(
+    threshold_lookup %>%
+      dplyr::select(
+        .data$Site, .data$fragmentomics_sequencing_platform,
+        .data$Coverage.fc, .data$Coverage.threshold,
+        .data$Midpoint.fc, .data$Midpoint.threshold,
+        .data$Amplitude.fc, .data$Amplitude.threshold,
+        .data$n_healthy_reference
+      ),
+    by = c("Site", "fragmentomics_sequencing_platform")
+  ) %>%
   dplyr::mutate(
     Threshold.Coverage = dplyr::case_when(
       is.na(Coverage.fc) | is.na(Coverage.threshold) ~ NA,
@@ -481,6 +528,8 @@ mm_dars_small <- results.data %>%
     Mean.Coverage, Midpoint.Coverage, Midpoint.normalized, Amplitude,
     Zscore.Coverage, Zscore.Midpoint, Zscore.Amplitude,
     Threshold.Coverage, Threshold.Midpoint, Threshold.Amplitude,
+    fragmentomics_sequencing_platform, fragmentomics_sample_role,
+    n_healthy_reference,
     Bam, Patient, Sample_ID, LOD
   ) %>%
   distinct()
@@ -488,44 +537,50 @@ mm_dars_small <- results.data %>%
 
 ### 9.  READ & MERGE INSERT-SIZE + FRAGMENT-SCORE (DILUTION) ###################
 # 9a) INSERT-SIZE (“Proportion.Short”)
-ins.files <- list.files(path = ins_fs.dir,
-                        pattern = "insert_size_summary.tsv$",
-                        full.names = TRUE)
-ins.files <- unique(c(
-  ins.files,
-  # Append Spring 2026 PWGVAL dilution insert-size summary. Proportion.Short is
-  # computed from this file and later joined by cleaned dilution Sample ID.
-  spring2026_revision_files(
-    "Fragmentomics_Pipeeline_Suite_all_outputs",
-    "^2026-06-25_cfWGS_MM_fragmentomics_Revisions_Spring2026_PWGVAL_Dilution_series_insert_size_summary[.]tsv$"
-  )
-))
+historical_ins_files <- list.files(
+  path = ins_fs.dir,
+  pattern = "insert_size_summary.tsv$",
+  full.names = TRUE
+)
+xplus_ins_files <- spring2026_revision_files(
+  "Fragmentomics_Pipeeline_Suite_all_outputs",
+  "^2026-06-25_cfWGS_MM_fragmentomics_Revisions_Spring2026_PWGVAL_Dilution_series_insert_size_summary[.]tsv$"
+)
 
-insert_df <- ins.files %>%
-  lapply(read_tsv, show_col_types = FALSE) %>%
-  bind_rows() %>%
+read_summary_batch <- function(paths, platform) {
+  if (!length(paths)) return(tibble())
+  bind_rows(lapply(paths, function(path) {
+    read_tsv(path, show_col_types = FALSE) %>%
+      mutate(fragmentomics_sequencing_platform = platform)
+  }))
+}
+
+insert_df <- bind_rows(
+  read_summary_batch(historical_ins_files, "NovaSeq 6000"),
+  read_summary_batch(xplus_ins_files, "NovaSeq XPlus")
+) %>%
   mutate(Sample = clean_sample(Sample)) %>%
-  dplyr::select(Sample, Proportion.Short)
+  dplyr::select(Sample, fragmentomics_sequencing_platform, Proportion.Short) %>%
+  distinct()
 
 # 9b) FRAGMENT SCORE (“FS”)
-fs.files <- list.files(path = ins_fs.dir,
-                       pattern = "fragment_scores.tsv$",
-                       full.names = TRUE)
-fs.files <- unique(c(
-  fs.files,
-  # Append Spring 2026 PWGVAL dilution CHARM fragment scores. These are model
-  # inputs for limit-of-detection scoring, not training data.
-  spring2026_revision_files(
-    "Fragmentomics_Pipeeline_Suite_all_outputs",
-    "^2026-06-25_cfWGS_MM_fragmentomics_Revisions_Spring2026_PWGVAL_Dilution_series_fragment_scores[.]tsv$"
-  )
-))
+historical_fs_files <- list.files(
+  path = ins_fs.dir,
+  pattern = "fragment_scores.tsv$",
+  full.names = TRUE
+)
+xplus_fs_files <- spring2026_revision_files(
+  "Fragmentomics_Pipeeline_Suite_all_outputs",
+  "^2026-06-25_cfWGS_MM_fragmentomics_Revisions_Spring2026_PWGVAL_Dilution_series_fragment_scores[.]tsv$"
+)
 
-fs_df <- fs.files %>%
-  lapply(read_tsv, show_col_types = FALSE) %>%
-  bind_rows() %>%
+fs_df <- bind_rows(
+  read_summary_batch(historical_fs_files, "NovaSeq 6000"),
+  read_summary_batch(xplus_fs_files, "NovaSeq XPlus")
+) %>%
   mutate(Sample = clean_sample(Sample)) %>%
-  dplyr::select(Sample, FS)
+  dplyr::select(Sample, fragmentomics_sequencing_platform, FS) %>%
+  distinct()
 
 
 ### 10. OPTIONAL: LOAD ADDITIONAL DILUTION METADATA  ######################################
@@ -555,14 +610,117 @@ if (file.exists(meta.csv)) {
 key_frag_dilution <- mm_dars_small %>%
   dplyr::select(-Site) %>%
   # now join insert-size and FS
-  left_join(insert_df, by = "Sample") %>%
-  left_join(fs_df,     by = "Sample") %>%
+  left_join(insert_df, by = c("Sample", "fragmentomics_sequencing_platform")) %>%
+  left_join(fs_df, by = c("Sample", "fragmentomics_sequencing_platform")) %>%
   # If any samples miss DARs entries (e.g. PON-only), they'll still appear with NA for DARs columns
   arrange(Sample)
 
 
 ## Remove healthy control info since already have in other table 
 key_frag_dilution <- key_frag_dilution %>% filter(!is.na(Bam))
+
+# Use the same healthy-control location/scale mapping as the main-cohort
+# classifier. Z-scores above are already platform matched; only the raw frozen
+# model predictors are mapped to the NovaSeq 6000 training scale.
+harmonization_path <- file.path(
+  "Results_Fragmentomics",
+  "fragmentomics_platform_harmonization_reference_parameters.csv"
+)
+if (!file.exists(harmonization_path)) {
+  stop(
+    "Missing platform harmonization parameters. Run 1_7B before 1_7C: ",
+    harmonization_path,
+    call. = FALSE
+  )
+}
+harmonization_reference <- read_csv(harmonization_path, show_col_types = FALSE)
+
+harmonize_to_historical_scale <- function(data, feature, parameters) {
+  historical <- parameters %>%
+    filter(.data$feature == .env$feature, .data$fragmentomics_sequencing_platform == "NovaSeq 6000")
+  xplus <- parameters %>%
+    filter(.data$feature == .env$feature, .data$fragmentomics_sequencing_platform == "NovaSeq XPlus")
+  if (nrow(historical) != 1L || nrow(xplus) != 1L ||
+      !is.finite(historical$sd[[1]]) || !is.finite(xplus$sd[[1]]) || xplus$sd[[1]] <= 0) {
+    stop("Invalid one-to-one harmonization parameters for feature: ", feature, call. = FALSE)
+  }
+  data[[paste0(feature, "_unharmonized")]] <- data[[feature]]
+  idx <- data$fragmentomics_sequencing_platform == "NovaSeq XPlus" & is.finite(data[[feature]])
+  data[[feature]][idx] <-
+    ((data[[feature]][idx] - xplus$mean[[1]]) / xplus$sd[[1]]) * historical$sd[[1]] + historical$mean[[1]]
+  data
+}
+
+for (feature in c("FS", "Proportion.Short", "Mean.Coverage")) {
+  key_frag_dilution <- harmonize_to_historical_scale(
+    key_frag_dilution,
+    feature,
+    harmonization_reference
+  )
+}
+
+add_robust_harmonization <- function(data, feature, parameters) {
+  historical <- parameters %>%
+    filter(.data$feature == .env$feature, .data$fragmentomics_sequencing_platform == "NovaSeq 6000")
+  xplus <- parameters %>%
+    filter(.data$feature == .env$feature, .data$fragmentomics_sequencing_platform == "NovaSeq XPlus")
+  if (nrow(historical) != 1L || nrow(xplus) != 1L ||
+      !is.finite(historical$mad[[1]]) || !is.finite(xplus$mad[[1]]) || xplus$mad[[1]] <= 0) {
+    stop("Invalid robust harmonization parameters for feature: ", feature, call. = FALSE)
+  }
+  raw_name <- paste0(feature, "_unharmonized")
+  robust_name <- paste0(feature, "_harmonized_median_mad")
+  data[[robust_name]] <- data[[raw_name]]
+  idx <- data$fragmentomics_sequencing_platform == "NovaSeq XPlus" & is.finite(data[[raw_name]])
+  data[[robust_name]][idx] <-
+    ((data[[raw_name]][idx] - xplus$median[[1]]) / xplus$mad[[1]]) *
+    historical$mad[[1]] + historical$median[[1]]
+  data
+}
+
+for (feature in c("FS", "Proportion.Short", "Mean.Coverage")) {
+  key_frag_dilution <- add_robust_harmonization(
+    key_frag_dilution,
+    feature,
+    harmonization_reference
+  )
+}
+key_frag_dilution <- key_frag_dilution %>%
+  mutate(
+    fragmentomics_harmonization_method = if_else(
+      .data$fragmentomics_sequencing_platform == "NovaSeq XPlus",
+      "XPlus healthy-control mean/SD mapped to NovaSeq 6000 healthy-control scale",
+      "No transform; native NovaSeq 6000 scale"
+    )
+  )
+
+# Fail loudly if the newly generated cases or historical dilution samples are
+# assigned to the wrong platform.
+new_case_rows <- key_frag_dilution %>% filter(str_detect(.data$Sample, "^VA-(09|12|13)-"))
+if (!nrow(new_case_rows) || any(new_case_rows$fragmentomics_sequencing_platform != "NovaSeq XPlus")) {
+  stop("VA-09, VA-12, and VA-13 dilution samples must all be labeled NovaSeq XPlus.", call. = FALSE)
+}
+historical_rows <- key_frag_dilution %>% filter(!str_detect(.data$Sample, "^VA-(09|12|13)-"))
+if (nrow(historical_rows) && any(historical_rows$fragmentomics_sequencing_platform != "NovaSeq 6000")) {
+  stop("Historical dilution samples must all be labeled NovaSeq 6000.", call. = FALSE)
+}
+
+write_csv(
+  key_frag_dilution %>%
+    dplyr::select(
+      Sample, Patient, Sample_ID, LOD,
+      fragmentomics_sequencing_platform, fragmentomics_harmonization_method,
+      FS_unharmonized, FS,
+      FS_harmonized_median_mad,
+      Proportion.Short_unharmonized, Proportion.Short,
+      Proportion.Short_harmonized_median_mad,
+      Mean.Coverage_unharmonized, Mean.Coverage,
+      Mean.Coverage_harmonized_median_mad,
+      Zscore.Coverage, Zscore.Midpoint, Zscore.Amplitude,
+      n_healthy_reference
+    ),
+  file.path(out.dir, "fragmentomics_platform_harmonization_dilution_audit.csv")
+)
 
 ### 12. WRITE OUT FINAL CSV & RDS  #############################################
 write_csv(

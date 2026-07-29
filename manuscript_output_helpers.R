@@ -1446,17 +1446,21 @@ ms_copy_artifact <- function(source_path,
     project_root = project_root,
     overwrite = overwrite
   )
-  current_final_destination <- ms_copy_current_final_artifact(
-    artifact_id = artifact_id,
-    project_root = project_root,
-    overwrite = TRUE
-  )
+  # Refresh the mapped legacy/current source before copying the assembled
+  # current-final artifact.  The previous order made current-final tables lag
+  # one generator run behind whenever the source map pointed at a renamed
+  # mirror (notably Supplementary Table 8).
   legacy_export_destination <- ms_copy_legacy_export_mirrors(
     source_path = source_abs,
     artifact_id = artifact_id,
     role = role,
     project_root = project_root,
     overwrite = overwrite
+  )
+  current_final_destination <- ms_copy_current_final_artifact(
+    artifact_id = artifact_id,
+    project_root = project_root,
+    overwrite = TRUE
   )
   codeocean_staging_destination <- ms_copy_codeocean_staging_mirrors(
     source_path = source_abs,

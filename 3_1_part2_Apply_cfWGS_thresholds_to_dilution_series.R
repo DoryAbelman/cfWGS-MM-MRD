@@ -101,6 +101,10 @@ PATH_THRESHOLD_LIST   <- file.path("Output_tables_2025", "selected_combo_thresho
 PATH_CURRENT_MODEL_LIST <- file.path("Output_tables_2025", "selected_combo_models_2026-02-16.rds")
 PATH_CURRENT_THRESHOLD_LIST <- file.path("Output_tables_2025", "selected_combo_thresholds_2026-02-16.rds")
 PATH_DILUTION_FRAGMENTOMICS <- file.path("Results_Fragmentomics", "Dilution_series", "key_fragmentomics_info_dilution_series.rds")
+PATH_FRAGMENTOMICS_HARMONIZATION <- file.path(
+  "Results_Fragmentomics",
+  "fragmentomics_platform_harmonization_reference_parameters.csv"
+)
 PATH_DILUTION_PROCESSED_MRDetect <- file.path("MRDetect_output_winter_2025", "Processed_R_outputs", "cfWGS_Winter2025Dilution_series_May2025_with_zscore.rds")
 PATH_DILUTION_CLINICAL <- file.path("Fragmentomics_data", "Dilution_series", "Metadata_dilution_series.csv")
 PATH_TUMOR_FRACTION <- file.path("Fragmentomics_data", "Dilution_series", "tumor_fraction_dilution_series.txt")
@@ -188,6 +192,52 @@ xplus_zero_fragmentomics <- xplus_zero_metadata %>%
     Threshold.Midpoint = NA,
     Threshold.Amplitude = NA
   )
+
+if (!file.exists(PATH_FRAGMENTOMICS_HARMONIZATION)) {
+  stop("Missing fragmentomics platform harmonization parameters: ", PATH_FRAGMENTOMICS_HARMONIZATION, call. = FALSE)
+}
+dilution_harmonization_reference <- read_csv(
+  PATH_FRAGMENTOMICS_HARMONIZATION,
+  show_col_types = FALSE
+)
+
+harmonize_xplus_zero_feature <- function(data, feature, parameters) {
+  historical <- parameters %>%
+    filter(.data$feature == .env$feature, .data$fragmentomics_sequencing_platform == "NovaSeq 6000")
+  xplus <- parameters %>%
+    filter(.data$feature == .env$feature, .data$fragmentomics_sequencing_platform == "NovaSeq XPlus")
+  if (nrow(historical) != 1L || nrow(xplus) != 1L ||
+      !is.finite(historical$sd[[1]]) || !is.finite(xplus$sd[[1]]) || xplus$sd[[1]] <= 0 ||
+      !is.finite(historical$mad[[1]]) || !is.finite(xplus$mad[[1]]) || xplus$mad[[1]] <= 0) {
+    stop("Invalid dilution harmonization parameters for feature: ", feature, call. = FALSE)
+  }
+  raw_name <- paste0(feature, "_unharmonized")
+  robust_name <- paste0(feature, "_harmonized_median_mad")
+  data[[raw_name]] <- data[[feature]]
+  data[[robust_name]] <-
+    ((data[[raw_name]] - xplus$median[[1]]) / xplus$mad[[1]]) *
+    historical$mad[[1]] + historical$median[[1]]
+  data[[feature]] <-
+    ((data[[raw_name]] - xplus$mean[[1]]) / xplus$sd[[1]]) *
+    historical$sd[[1]] + historical$mean[[1]]
+  data
+}
+
+xplus_zero_fragmentomics <- xplus_zero_fragmentomics %>%
+  mutate(
+    fragmentomics_sequencing_platform = "NovaSeq XPlus",
+    fragmentomics_sample_role = "dilution_series",
+    n_healthy_reference = 19L,
+    fragmentomics_harmonization_method =
+      "XPlus healthy-control mean/SD mapped to NovaSeq 6000 healthy-control scale"
+  )
+for (feature in c("FS", "Proportion.Short", "Mean.Coverage")) {
+  xplus_zero_fragmentomics <- harmonize_xplus_zero_feature(
+    xplus_zero_fragmentomics,
+    feature,
+    dilution_harmonization_reference
+  )
+}
 
 required_xplus_zero_fragmentomics <- c("FS", "Proportion.Short", "Mean.Coverage")
 if (nrow(xplus_zero_fragmentomics) != 3L ||
@@ -565,6 +615,137 @@ dilution_df <- apply_selected(
   models = current_selected_models[main_fragmentomics_model_names],
   thresholds = current_selected_thresholds[main_fragmentomics_model_names],
   positive_class = "pos"
+)
+
+# Audit the dilution-series effect of the primary mean/SD correction and the
+# robust median/MAD sensitivity correction with all model objects frozen.
+dilution_feature_map <- tibble::tribble(
+  ~primary, ~unharmonized, ~robust,
+  "FS", "FS_unharmonized", "FS_harmonized_median_mad",
+  "Proportion.Short", "Proportion.Short_unharmonized", "Proportion.Short_harmonized_median_mad",
+  "Mean.Coverage", "Mean.Coverage_unharmonized", "Mean.Coverage_harmonized_median_mad"
+)
+missing_dilution_impact_columns <- setdiff(
+  unique(unlist(dilution_feature_map, use.names = FALSE)),
+  names(dilution_df)
+)
+if (length(missing_dilution_impact_columns)) {
+  stop(
+    "Cannot build dilution platform impact audit; missing columns: ",
+    paste(missing_dilution_impact_columns, collapse = ", "),
+    call. = FALSE
+  )
+}
+
+xplus_dilution_index <- dilution_df$fragmentomics_sequencing_platform == "NovaSeq XPlus"
+dilution_uncorrected <- dilution_df
+dilution_robust <- dilution_df
+for (i in seq_len(nrow(dilution_feature_map))) {
+  primary <- dilution_feature_map$primary[[i]]
+  unharmonized <- dilution_feature_map$unharmonized[[i]]
+  robust <- dilution_feature_map$robust[[i]]
+  dilution_uncorrected[[primary]][xplus_dilution_index] <-
+    dilution_uncorrected[[unharmonized]][xplus_dilution_index]
+  dilution_robust[[primary]][xplus_dilution_index] <-
+    dilution_robust[[robust]][xplus_dilution_index]
+}
+
+score_all_dilution_models <- function(data) {
+  data <- apply_selected(
+    dat = data,
+    models = selected_models,
+    thresholds = selected_thr,
+    positive_class = "pos"
+  )
+  apply_selected(
+    dat = data,
+    models = current_selected_models[main_fragmentomics_model_names],
+    thresholds = current_selected_thresholds[main_fragmentomics_model_names],
+    positive_class = "pos"
+  )
+}
+dilution_uncorrected <- score_all_dilution_models(dilution_uncorrected)
+dilution_robust <- score_all_dilution_models(dilution_robust)
+
+audit_model_list <- c(
+  selected_models,
+  current_selected_models[main_fragmentomics_model_names]
+)
+audit_model_list <- audit_model_list[!duplicated(names(audit_model_list))]
+affected_dilution_models <- names(audit_model_list)[vapply(
+  audit_model_list,
+  function(fit) {
+    predictors <- setdiff(names(fit$trainingData), ".outcome")
+    length(intersect(predictors, dilution_feature_map$primary)) > 0L
+  },
+  logical(1)
+)]
+
+# Restricted model objects can be present in the frozen model list without a
+# matching dilution-series threshold/output column. Preserve those models in
+# the audit as explicitly non-evaluable instead of allowing a NULL extraction
+# to silently drop the requested tibble column.
+extract_dilution_audit_vector <- function(data, column, index) {
+  if (!column %in% names(data)) {
+    return(rep(NA, sum(index)))
+  }
+  data[[column]][index]
+}
+
+dilution_platform_impact <- purrr::map_dfr(affected_dilution_models, function(model_name) {
+  prob_col <- paste0(model_name, "_prob")
+  call_col <- paste0(model_name, "_call")
+  tibble::tibble(
+    Patient = dilution_df$Patient[xplus_dilution_index],
+    Sample_ID = dilution_df$Sample_ID[xplus_dilution_index],
+    Sample = dilution_df$Sample[xplus_dilution_index],
+    LOD = dilution_df$LOD[xplus_dilution_index],
+    model = model_name,
+    FS_uncorrected = dilution_df$FS_unharmonized[xplus_dilution_index],
+    FS_mean_sd = dilution_df$FS[xplus_dilution_index],
+    FS_median_mad = dilution_df$FS_harmonized_median_mad[xplus_dilution_index],
+    Proportion_Short_uncorrected = dilution_df$Proportion.Short_unharmonized[xplus_dilution_index],
+    Proportion_Short_mean_sd = dilution_df$Proportion.Short[xplus_dilution_index],
+    Proportion_Short_median_mad = dilution_df$Proportion.Short_harmonized_median_mad[xplus_dilution_index],
+    Mean_Coverage_uncorrected = dilution_df$Mean.Coverage_unharmonized[xplus_dilution_index],
+    Mean_Coverage_mean_sd = dilution_df$Mean.Coverage[xplus_dilution_index],
+    Mean_Coverage_median_mad = dilution_df$Mean.Coverage_harmonized_median_mad[xplus_dilution_index],
+    probability_uncorrected = extract_dilution_audit_vector(dilution_uncorrected, prob_col, xplus_dilution_index),
+    probability_mean_sd = extract_dilution_audit_vector(dilution_df, prob_col, xplus_dilution_index),
+    probability_median_mad = extract_dilution_audit_vector(dilution_robust, prob_col, xplus_dilution_index),
+    call_uncorrected = extract_dilution_audit_vector(dilution_uncorrected, call_col, xplus_dilution_index),
+    call_mean_sd = extract_dilution_audit_vector(dilution_df, call_col, xplus_dilution_index),
+    call_median_mad = extract_dilution_audit_vector(dilution_robust, call_col, xplus_dilution_index)
+  ) %>%
+    mutate(
+      call_flip_mean_sd_vs_uncorrected = if_else(
+        !is.na(.data$call_uncorrected) & !is.na(.data$call_mean_sd),
+        .data$call_uncorrected != .data$call_mean_sd,
+        NA
+      ),
+      call_flip_median_mad_vs_mean_sd = if_else(
+        !is.na(.data$call_mean_sd) & !is.na(.data$call_median_mad),
+        .data$call_mean_sd != .data$call_median_mad,
+        NA
+      )
+    )
+})
+
+write_csv(
+  dilution_platform_impact,
+  file.path(OUTPUT_DIR_TABLES, "fragmentomics_platform_correction_dilution_impact_audit.csv")
+)
+write_csv(
+  dilution_platform_impact %>%
+    group_by(.data$model) %>%
+    summarise(
+      n_xplus_dilution_samples = n_distinct(.data$Sample_ID),
+      n_evaluable_mean_sd = sum(!is.na(.data$probability_mean_sd)),
+      n_call_flips_mean_sd_vs_uncorrected = sum(.data$call_flip_mean_sd_vs_uncorrected, na.rm = TRUE),
+      n_call_flips_median_mad_vs_mean_sd = sum(.data$call_flip_median_mad_vs_mean_sd, na.rm = TRUE),
+      .groups = "drop"
+    ),
+  file.path(OUTPUT_DIR_TABLES, "fragmentomics_platform_correction_dilution_model_summary.csv")
 )
 
 ### Now edit the dilution LOD to the correct one 

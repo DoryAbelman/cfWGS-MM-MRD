@@ -839,6 +839,145 @@ if (USE_PRESERVED_MODELS_ONLY) {
     file.path(outdir, "fragmentomics_platform_split_audit.csv")
   )
 
+  # -----------------------------------------------------------------------
+  # Platform-correction impact and robust sensitivity audit
+  #
+  # Reapply the same frozen models to two alternate XPlus feature versions:
+  #   1) uncorrected raw XPlus values;
+  #   2) median/MAD harmonized XPlus values.
+  # The primary scored table above remains the prespecified mean/SD mapping.
+  # -----------------------------------------------------------------------
+  fragmentomics_feature_map <- tibble::tribble(
+    ~primary, ~unharmonized, ~robust,
+    "FS", "FS_unharmonized", "FS_harmonized_median_mad",
+    "Proportion.Short", "Proportion.Short_unharmonized", "Proportion.Short_harmonized_median_mad",
+    "Mean.Coverage", "Mean.Coverage_unharmonized", "Mean.Coverage_harmonized_median_mad"
+  )
+  required_impact_columns <- unique(unlist(fragmentomics_feature_map, use.names = FALSE))
+  missing_impact_columns <- setdiff(required_impact_columns, names(dat))
+  if (length(missing_impact_columns)) {
+    stop(
+      "Cannot build fragmentomics platform impact audit; aggregate table is missing: ",
+      paste(missing_impact_columns, collapse = ", "),
+      call. = FALSE
+    )
+  }
+
+  xplus_index <- data_scored$fragmentomics_sequencing_platform == FRAGMENTOMICS_PLATFORM_XPLUS
+  uncorrected_dat <- dat
+  robust_dat <- dat
+  for (i in seq_len(nrow(fragmentomics_feature_map))) {
+    primary <- fragmentomics_feature_map$primary[[i]]
+    unharmonized <- fragmentomics_feature_map$unharmonized[[i]]
+    robust <- fragmentomics_feature_map$robust[[i]]
+    uncorrected_dat[[primary]][xplus_index] <- uncorrected_dat[[unharmonized]][xplus_index]
+    robust_dat[[primary]][xplus_index] <- robust_dat[[robust]][xplus_index]
+  }
+
+  uncorrected_scored <- apply_preserved_selected(
+    dat = uncorrected_dat,
+    models = selected_models,
+    thresholds = selected_thr,
+    positive_class = "pos"
+  )
+  robust_scored <- apply_preserved_selected(
+    dat = robust_dat,
+    models = selected_models,
+    thresholds = selected_thr,
+    positive_class = "pos"
+  )
+
+  affected_models <- names(selected_models)[vapply(
+    selected_models,
+    function(fit) {
+      predictors <- setdiff(names(fit$trainingData), ".outcome")
+      length(intersect(predictors, fragmentomics_feature_map$primary)) > 0L
+    },
+    logical(1)
+  )]
+  if (!length(affected_models)) {
+    stop("No preserved models were identified as using fragmentomics predictors.", call. = FALSE)
+  }
+
+  fragmentomics_platform_impact <- purrr::map_dfr(affected_models, function(model_name) {
+    prob_col <- paste0(model_name, "_prob")
+    call_col <- paste0(model_name, "_call")
+    tibble::tibble(
+      Patient = data_scored$Patient[xplus_index],
+      Timepoint = data_scored$Timepoint[xplus_index],
+      Sample_Code = data_scored$Sample_Code[xplus_index],
+      Date = data_scored$Date[xplus_index],
+      timepoint_info = data_scored$timepoint_info[xplus_index],
+      Cohort = data_scored$Cohort[xplus_index],
+      fragmentomics_sequencing_platform = data_scored$fragmentomics_sequencing_platform[xplus_index],
+      model = model_name,
+      FS_uncorrected = dat$FS_unharmonized[xplus_index],
+      FS_mean_sd = dat$FS[xplus_index],
+      FS_median_mad = dat$FS_harmonized_median_mad[xplus_index],
+      Proportion_Short_uncorrected = dat$Proportion.Short_unharmonized[xplus_index],
+      Proportion_Short_mean_sd = dat$Proportion.Short[xplus_index],
+      Proportion_Short_median_mad = dat$Proportion.Short_harmonized_median_mad[xplus_index],
+      Mean_Coverage_uncorrected = dat$Mean.Coverage_unharmonized[xplus_index],
+      Mean_Coverage_mean_sd = dat$Mean.Coverage[xplus_index],
+      Mean_Coverage_median_mad = dat$Mean.Coverage_harmonized_median_mad[xplus_index],
+      probability_uncorrected = uncorrected_scored[[prob_col]][xplus_index],
+      probability_mean_sd = data_scored[[prob_col]][xplus_index],
+      probability_median_mad = robust_scored[[prob_col]][xplus_index],
+      call_uncorrected = uncorrected_scored[[call_col]][xplus_index],
+      call_mean_sd = data_scored[[call_col]][xplus_index],
+      call_median_mad = robust_scored[[call_col]][xplus_index]
+    ) %>%
+      dplyr::mutate(
+        probability_delta_mean_sd_vs_uncorrected = .data$probability_mean_sd - .data$probability_uncorrected,
+        probability_delta_median_mad_vs_uncorrected = .data$probability_median_mad - .data$probability_uncorrected,
+        call_flip_mean_sd_vs_uncorrected = dplyr::if_else(
+          !is.na(.data$call_uncorrected) & !is.na(.data$call_mean_sd),
+          .data$call_uncorrected != .data$call_mean_sd,
+          NA
+        ),
+        call_flip_median_mad_vs_uncorrected = dplyr::if_else(
+          !is.na(.data$call_uncorrected) & !is.na(.data$call_median_mad),
+          .data$call_uncorrected != .data$call_median_mad,
+          NA
+        ),
+        call_flip_median_mad_vs_mean_sd = dplyr::if_else(
+          !is.na(.data$call_mean_sd) & !is.na(.data$call_median_mad),
+          .data$call_mean_sd != .data$call_median_mad,
+          NA
+        )
+      )
+  })
+
+  fragmentomics_platform_impact_summary <- fragmentomics_platform_impact %>%
+    dplyr::group_by(.data$model) %>%
+    dplyr::summarise(
+      n_xplus_samples = dplyr::n_distinct(.data$Sample_Code),
+      n_evaluable_uncorrected = sum(!is.na(.data$probability_uncorrected)),
+      n_evaluable_mean_sd = sum(!is.na(.data$probability_mean_sd)),
+      n_evaluable_median_mad = sum(!is.na(.data$probability_median_mad)),
+      median_probability_delta_mean_sd_vs_uncorrected = median(
+        .data$probability_delta_mean_sd_vs_uncorrected,
+        na.rm = TRUE
+      ),
+      median_probability_delta_median_mad_vs_uncorrected = median(
+        .data$probability_delta_median_mad_vs_uncorrected,
+        na.rm = TRUE
+      ),
+      n_call_flips_mean_sd_vs_uncorrected = sum(.data$call_flip_mean_sd_vs_uncorrected, na.rm = TRUE),
+      n_call_flips_median_mad_vs_uncorrected = sum(.data$call_flip_median_mad_vs_uncorrected, na.rm = TRUE),
+      n_call_flips_median_mad_vs_mean_sd = sum(.data$call_flip_median_mad_vs_mean_sd, na.rm = TRUE),
+      .groups = "drop"
+    )
+
+  readr::write_csv(
+    fragmentomics_platform_impact,
+    file.path(outdir, "fragmentomics_platform_correction_sample_model_impact_audit.csv")
+  )
+  readr::write_csv(
+    fragmentomics_platform_impact_summary,
+    file.path(outdir, "fragmentomics_platform_correction_model_summary.csv")
+  )
+
   # Define mutually exclusive evaluation cohorts after excluding baseline and
   # diagnosis rows, where MRD response classification is not meaningful.
   # "Frontline" preserves the development/training cohort; "Non-frontline"
@@ -2624,7 +2763,14 @@ hold_fragmentomics  <- hold_df %>%
 #   - models: Fitted caret::train objects (one per combo, trained on full data)
 #   - validation_metrics: Test-set performance (1 row per combo)
 #   - outer_predictions: OOF predictions for outer folds (unbiased for AUC/calibration)
-#   - thresholds: Youden-optimal threshold per combo (from OOF predictions)
+#   - thresholds: Youden-optimal threshold per combo. NOTE (2026-07-29 audit):
+#       these are computed on the FULL-TRAINING REFIT, not from the OOF
+#       predictions (see the `roc_full`/`youden_full` block below). They are
+#       therefore apparent (resubstitution) operating points derived from
+#       training data only. This is safe with respect to the test cohort - no
+#       test data is involved - but the values are optimistic as descriptions of
+#       training-set performance, and the Methods now say so. The comment
+#       previously claimed these came from OOF predictions.
 #   - fold_indices: The outer fold structure (useful for reusing folds across models)
 #
 # KEY DESIGN: Outer folds are stratified to maintain class balance in train/test.
@@ -4571,8 +4717,10 @@ metrics_at_95sens <- map_dfr(prob_cols, function(prob_col) {
   ) %>% as_tibble()
   
   # 3) Filter to sens ≥ 0.95
+  #    2026-07-29 audit fix: the filter read `>= 0.94` while the section, the
+  #    object name, and the downstream panel titles all say 95%.
   cand <- roc_df %>%
-    filter(sensitivity >= 0.94)
+    filter(sensitivity >= 0.95)
   
   # 4) If none meet the bar, fall back to highest observed sens
   if (nrow(cand) == 0) {
@@ -4751,8 +4899,51 @@ metrics_youden_testing <- all_metrics_rescored_testing %>%
   select(-youden)
 
 
+# ============================================================================ #
+# LEGACY / DIAGNOSTIC ONLY - DO NOT USE FOR MANUSCRIPT VALUES
+# ---------------------------------------------------------------------------- #
+# 2026-07-29 audit note.
+#
+# The two blocks below (`metrics_at_95spec_test`, `metrics_at_95sens_test`)
+# search the *test-cohort* ROC for an operating point. That is threshold
+# selection on the independent test set, and any sensitivity/specificity read
+# off it is optimistically biased. It must never reach the manuscript.
+#
+# Retained only because the derived tables are useful as a diagnostic on how
+# separable the test cohort is at all. They are now written to an explicitly
+# quarantined output directory, and the panels that consumed them no longer
+# overwrite manuscript figures. Previously the bar panel built from these
+# tables wrote to
+#   Final Tables and Figures/Supp_7B_classifier_performance_bar_test_cohort_updated3.png
+# which is the same path the frozen-threshold branch writes at line ~1456, so
+# running with CFWGS_RETRAIN_MODELS=1 silently replaced a manuscript figure
+# with a test-set-optimised one under an identical filename.
+#
+# Manuscript operating points come exclusively from
+#   selected_combo_thresholds_2026-02-16.rds  (Youden, full-training refit)
+#   training_95sens_threshold()               (fixed sensitivity, training only)
+# ============================================================================ #
+
+quarantine_dir <- file.path(
+  "Output_tables_2025", "LEAKY_test_threshold_diagnostics_DO_NOT_PUBLISH"
+)
+dir.create(quarantine_dir, showWarnings = FALSE, recursive = TRUE)
+writeLines(
+  c(
+    "Files in this directory were produced by searching the independent",
+    "test-cohort ROC for an operating point. They are optimistically biased",
+    "and must not be used for any reported value, figure, or table.",
+    "See the audit note in 3_1_Optimize_cfWGS_thresholds.R."
+  ),
+  file.path(quarantine_dir, "README_DO_NOT_PUBLISH.txt")
+)
+
+# Test-cohort prevalence, defined before first use (see audit note below).
+prev <- mean(test_cohort$MRD_truth == 1, na.rm = TRUE)
+
 ### 3B) Now for each model, find the threshold with ≥95% specificity that maximizes sensitivity,
 #    then compute sensitivity, specificity and accuracy at that threshold
+#    LEAKY: threshold chosen on the test cohort. Diagnostic use only.
 metrics_at_95spec_test <- map_dfr(prob_cols, function(prob_col) {
   # build ROC
   roc_obj <- roc(
@@ -4804,10 +4995,16 @@ metrics_at_95spec_test <- map_dfr(prob_cols, function(prob_col) {
 
 ## Now for sens
 
-### Get more metrics 
-# Prevalence: proportion of positives in data
+### Get more metrics
+# Prevalence: proportion of positives in the TEST cohort.
+#
+# 2026-07-29 audit fix: this assignment previously sat *after* the
+# `metrics_at_95spec_test` block that uses `prev`, so that block silently used
+# the frontline/training prevalence still in scope from line ~4554. Moved above
+# both blocks so each uses the test-cohort prevalence its label implies.
 prev <- mean(test_cohort$MRD_truth == 1, na.rm = TRUE)
 
+# LEAKY: threshold chosen on the test cohort. Diagnostic use only.
 metrics_at_95sens_test <- map_dfr(prob_cols, function(prob_col) {
   # 1) Build ROC
   roc_obj <- roc(
@@ -4826,8 +5023,10 @@ metrics_at_95sens_test <- map_dfr(prob_cols, function(prob_col) {
   ) %>% as_tibble()
   
   # 3) Filter to sens ≥ 0.95
+  #    2026-07-29 audit fix: the filter read `>= 0.94` while the section, the
+  #    object name, and the downstream panel titles all say 95%.
   cand <- roc_df %>%
-    filter(sensitivity >= 0.94)
+    filter(sensitivity >= 0.95)
   
   # 4) If none meet the bar, fall back to highest observed sens
   if (nrow(cand) == 0) {
@@ -6618,8 +6817,17 @@ p_perf <- ggplot(plot_df, aes(x = combo, y = mean, fill = combo)) +
 
 # ──────────────────────────────────────────────────────────────────────────────
 # 9. Save
+#
+# 2026-07-29 audit fix: this panel is built from `metrics_at_95spec_test` /
+# `metrics_at_95sens_test`, whose operating points were chosen on the test
+# cohort. It previously wrote to
+#   Final Tables and Figures/Supp_7B_classifier_performance_bar_test_cohort_updated3.png
+# which is the identical path used by the frozen-threshold branch (line ~1456),
+# so a run with CFWGS_RETRAIN_MODELS=1 silently substituted a test-optimised
+# panel for the manuscript one. Redirected to the quarantine directory.
 ggsave(
-  file.path("Final Tables and Figures/Supp_7B_classifier_performance_bar_test_cohort_updated3.png"),
+  file.path(quarantine_dir,
+            "LEAKY_Supp_7B_classifier_performance_bar_test_cohort_DO_NOT_PUBLISH.png"),
   plot   = p_perf,
   width  = 5,
   height = 3.5,
@@ -7510,10 +7718,15 @@ marker_pts <- marker_pts %>%
 
 print(marker_pts)
 
-selected_models <- c("Blood_zscore_only_sites", "Blood_plus_fragment")
+# 2026-07-29 audit fix: this line previously reassigned `selected_models`,
+# clobbering the named list of fitted caret objects held in that variable
+# earlier in the script with a plain character vector. Renamed so the model list
+# survives; any later use of `selected_models` as a model list would otherwise
+# fail or misbehave silently.
+ed7e_plot_combos <- c("Blood_zscore_only_sites", "Blood_plus_fragment")
 
 roc_plot_tmp <- roc_df %>%
-  filter(combo %in% selected_models) %>%               # keep only those two
+  filter(combo %in% ed7e_plot_combos) %>%              # keep only those two
   ggplot(aes(x = fpr, y = tpr, colour = combo)) +
   geom_line(size = 1) +
   geom_abline(lty = 2, colour = "grey60") +

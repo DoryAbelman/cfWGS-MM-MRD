@@ -132,24 +132,48 @@ cat(sprintf("✓ Loaded %d rows from cfWGS dataset\n", nrow(dat)))
 # Keep these paths project-relative for Code Ocean portability. The scored calls
 # and probabilities are read from all_patients_with_BM_and_blood_calls_updated6.rds;
 # this script does not retrain the models.
-PATH_MODEL_LIST <- file.path(outdir, "selected_combo_models_2025-09-17.rds")
-PATH_THRESHOLD_LIST <- file.path(outdir, "selected_combo_thresholds_2025-09-17.rds")
+# 2026-07-29 audit fix: pinned to the 2026-02-16 frozen objects.
+#
+# This script previously loaded the 2025-09-17 model/threshold objects while
+# 3_1_Optimize_cfWGS_thresholds.R and 3_1C_Expanded_test_clustered_sensitivity.R
+# use the 2026-02-16 objects. The two *model* files are md5-identical
+# (6b7112f8...), so there was no numeric divergence, but the two *threshold*
+# files differ in size (450 vs 643 bytes; the February object adds
+# cohort-qualified fragmentomics keys). Carrying two vintages of a "frozen"
+# object through one pipeline is exactly the kind of drift this revision claims
+# to have eliminated, so all three scripts now read the same file.
+#
+# Note also that the filename dates are not write dates: both "2025-09-17" files
+# have an mtime of 2026-02-16.
+PATH_MODEL_LIST <- file.path(outdir, "selected_combo_models_2026-02-16.rds")
+PATH_THRESHOLD_LIST <- file.path(outdir, "selected_combo_thresholds_2026-02-16.rds")
 
-if (file.exists(PATH_MODEL_LIST)) {
-  selected_models <- readRDS(PATH_MODEL_LIST)
-  cat("✓ Loaded cfWGS model definitions\n")
-} else {
-  selected_models <- NULL
-  cat("⚠ cfWGS model file not found, proceeding without model details\n")
+# 2026-07-29 audit fix: these were silent fallbacks to NULL. A missing frozen
+# threshold object is a broken environment, not a condition to proceed through:
+# every downstream label and benchmark in this script describes a specific
+# operating point, and emitting them with `selected_thr = NULL` would produce
+# unlabelled or mislabelled output. Fail loudly instead.
+if (!file.exists(PATH_MODEL_LIST)) {
+  stop(
+    "Frozen model list not found: ", PATH_MODEL_LIST,
+    "\nStage the preserved training artifacts before running 3_2 ",
+    "(see prepare_local_inputs.R --check).",
+    call. = FALSE
+  )
 }
+selected_models <- readRDS(PATH_MODEL_LIST)
+cat("✓ Loaded cfWGS model definitions (frozen 2026-02-16)\n")
 
-if (file.exists(PATH_THRESHOLD_LIST)) {
-  selected_thr <- readRDS(PATH_THRESHOLD_LIST)
-  cat("✓ Loaded cfWGS threshold definitions\n")
-} else {
-  selected_thr <- NULL
-  cat("⚠ cfWGS threshold file not found, proceeding without threshold details\n")
+if (!file.exists(PATH_THRESHOLD_LIST)) {
+  stop(
+    "Frozen threshold list not found: ", PATH_THRESHOLD_LIST,
+    "\nStage the preserved training artifacts before running 3_2 ",
+    "(see prepare_local_inputs.R --check).",
+    call. = FALSE
+  )
 }
+selected_thr <- readRDS(PATH_THRESHOLD_LIST)
+cat("✓ Loaded cfWGS threshold definitions (frozen 2026-02-16)\n")
 
 # ===========================================================================
 # SECTION 1B: LOAD EasyM DATA FROM SCRIPT 3_1_A
@@ -3137,6 +3161,38 @@ BM_Test     <- prepare_tbl(combined_discord_tbl_non_frontline,  id_map, baseline
 Blood_Train <- prepare_tbl(combined_discord_tbl2,               id_map, baseline_join)
 Blood_Test  <- prepare_tbl(combined_discord_tbl_non_frontline2, id_map, baseline_join)
 
+# Fail loudly if the revision-expanded source tables collapse back to the
+# original seven-patient test set or become empty during a future rerun.  These
+# row counts are comparator rows, not the 28/25 classifier-evaluation sample
+# denominators reported in the manuscript.  Supplementary Table 8 intentionally
+# contains every eligible row-level comparison with MFC or clonoSEQ.
+supp_table8_expected <- tibble::tribble(
+  ~sheet,        ~n_rows, ~n_patients,
+  "BM_Train",        59L,          25L,
+  "BM_Test",         36L,          19L,
+  "Blood_Train",     60L,          28L,
+  "Blood_Test",      34L,          16L
+)
+supp_table8_tables <- list(
+  BM_Train = BM_Train,
+  BM_Test = BM_Test,
+  Blood_Train = Blood_Train,
+  Blood_Test = Blood_Test
+)
+purrr::pwalk(supp_table8_expected, function(sheet, n_rows, n_patients) {
+  observed <- supp_table8_tables[[sheet]]
+  observed_patients <- dplyr::n_distinct(observed$Patient)
+  if (nrow(observed) != n_rows || observed_patients != n_patients) {
+    stop(
+      "Supplementary Table 8 revision-cohort check failed for ", sheet,
+      ": expected ", n_rows, " rows from ", n_patients,
+      " patients; observed ", nrow(observed), " rows from ",
+      observed_patients, " patients. Refusing to write a stale or incomplete workbook.",
+      call. = FALSE
+    )
+  }
+})
+
 # Write the final workbook with filters and readable column widths.
 add_sheet_with_style <- function(wb, sheet_name, data) {
   addWorksheet(wb, sheet_name)
@@ -3157,6 +3213,32 @@ add_sheet_with_style(wb, "Blood_Test",  Blood_Test)
 
 saveWorkbook(wb, "Final Tables and Figures/Supplementary_Table_8_model_comparisons_to_clinical_metrics3.xlsx",
              overwrite = TRUE)
+
+# Verify the saved workbook itself, rather than trusting only the in-memory
+# objects.  This catches blank-sheet or write-range failures before the file is
+# propagated into the manuscript bundle.
+supp_table8_path <- "Final Tables and Figures/Supplementary_Table_8_model_comparisons_to_clinical_metrics3.xlsx"
+saved_sheet_names <- openxlsx::getSheetNames(supp_table8_path)
+if (!identical(saved_sheet_names, supp_table8_expected$sheet)) {
+  stop(
+    "Supplementary Table 8 sheet names are incorrect after saving: ",
+    paste(saved_sheet_names, collapse = ", "),
+    call. = FALSE
+  )
+}
+saved_row_counts <- vapply(
+  saved_sheet_names,
+  function(sheet) nrow(openxlsx::read.xlsx(supp_table8_path, sheet = sheet)),
+  integer(1)
+)
+if (!identical(unname(saved_row_counts), supp_table8_expected$n_rows)) {
+  stop(
+    "Supplementary Table 8 row counts changed during workbook serialization. Expected ",
+    paste(supp_table8_expected$n_rows, collapse = ", "), "; observed ",
+    paste(saved_row_counts, collapse = ", "), ".",
+    call. = FALSE
+  )
+}
 
 # -------------------------------------------------------------------------
 # Manuscript output: Supplementary Table 8

@@ -95,44 +95,83 @@ combined_clinical_data_updated <- read_combined_clinical_metadata_with_revision(
 # Together these rows form the nucleosome-accessibility coverage profile around
 # each regulatory site; a dip at position 0 with flanking peaks indicates an
 # accessible (nucleosome-depleted) region, as seen in myeloma-specific DARs.
-results.files <- list.files(path = input.dir,
-                            pattern = "nucleosome_accessibility_distances.tsv",
-                            full.names = TRUE)
-results.files <- unique(c(
-  results.files,
-  # Append the Spring 2026 nucleosome-accessibility output when present. It is
-  # intentionally sourced through the revision helper so this script remains
-  # portable across local and cluster layouts.
-  spring2026_revision_files(
-    "Fragmentomics_Pipeeline_Suite_all_outputs",
-    "^2026-06-25_cfWGS_MM_fragmentomics_Revisions_Spring2026_nucleosome_accessibility_distances[.]tsv$"
-  ),
-  # Append the Spring 2026 PWGVAL/M4CHIP dilution-series GRIFFIN output. These
-  # samples are not ordinary clinical timepoints, but downstream LOD analyses
-  # need the same Mean.Coverage/Midpoint/Amplitude features as patient samples.
-  spring2026_revision_files(
-    "Fragmentomics_Pipeeline_Suite_all_outputs",
-    "^2026-06-25_cfWGS_MM_fragmentomics_Revisions_Spring2026_PWGVAL_Dilution_series_nucleosome_accessibility_distances[.]tsv$"
-  )
-))
+historical_results_files <- list.files(
+  path = input.dir,
+  pattern = "nucleosome_accessibility_distances.tsv",
+  full.names = TRUE
+)
+revision_results_files <- spring2026_revision_files(
+  "Fragmentomics_Pipeeline_Suite_all_outputs",
+  "^2026-06-25_cfWGS_MM_fragmentomics_Revisions_Spring2026_nucleosome_accessibility_distances[.]tsv$"
+)
 pon.files <- rev(sort(
   list.files(path = pon.dir,
              pattern = "nucleosome_accessibility_distances.tsv",
              full.names = TRUE)
 ))
+xplus_pon_files <- spring2026_revision_files(
+  "Fragmentomics_Pipeeline_Suite_all_outputs",
+  "^2026-06-30_cfWGS_MM_fragmentomics_Revisions_Spring2026_CHARM_Xplus_HC_nucleosome_accessibility_distances[.]tsv$"
+)
+
+if (!length(pon.files) || !length(xplus_pon_files)) {
+  stop("Both historical and XPlus nucleosome healthy-control inputs are required.", call. = FALSE)
+}
+
+read_nucleosome_batch <- function(paths, platform, role) {
+  if (!length(paths)) return(tibble())
+  bind_rows(lapply(paths, function(path) {
+    read_tsv(path, show_col_types = FALSE) %>%
+      mutate(
+        fragmentomics_sequencing_platform = platform,
+        fragmentomics_sample_role = role,
+        fragmentomics_source_file = basename(path)
+      )
+  }))
+}
 
 ## Read cfWGS data
-cfWGS.data <- results.files %>%
-  lapply(read_tsv) %>%
-  bind_rows()
+cfWGS.data <- bind_rows(
+  read_nucleosome_batch(historical_results_files, "NovaSeq 6000", "patient"),
+  read_nucleosome_batch(revision_results_files, "NovaSeq XPlus", "patient_revision")
+) %>%
+  filter(
+    !(.data$fragmentomics_sample_role == "patient_revision" &
+        is_spring2026_revision_primary_analysis_excluded(.data$Sample))
+  )
 
 # If TGL49 columns sneaked in as columns, drop them
 if (any(grepl("TGL49", colnames(cfWGS.data)))) {
   cfWGS.data <- cfWGS.data[, !grepl("TGL49", colnames(cfWGS.data))]
 }
 
-# Read PON once
-pon.data <- read_tsv(pon.files[[1]])
+# Preserve the original 26-library NovaSeq 6000 reference exactly as used by
+# the locked historical analysis. The XPlus reference is restricted to the 19
+# identity-matched controls available on both platforms. The matched historical
+# subset is used later only for platform-harmonization parameter estimation;
+# it must not replace the original historical scoring reference.
+classify_fragmentomics_material <- function(sample) {
+  case_when(
+    str_detect(sample, "(^|[-_])Cf([-_]|$)|_Cf_|-Cf-") ~ "cfDNA",
+    str_detect(sample, "(^|[-_])Pb([-_]|$)|_Pb_|-Pb-") ~ "PB_cellular_or_buffy",
+    str_detect(sample, "(^|[-_])Ct([-_]|$)|_Ct_|-Ct-") ~ "cellular_or_tissue",
+    TRUE ~ "unknown"
+  )
+}
+
+historical_pon_data <- read_nucleosome_batch(
+  pon.files[[1]], "NovaSeq 6000", "healthy_control"
+) %>%
+  mutate(fragmentomics_material = classify_fragmentomics_material(.data$Sample)) %>%
+  filter_fragmentomics_original_historical_controls()
+
+xplus_pon_data <- read_nucleosome_batch(
+  xplus_pon_files[[1]], "NovaSeq XPlus", "healthy_control"
+) %>%
+  mutate(fragmentomics_material = classify_fragmentomics_material(.data$Sample)) %>%
+  filter_fragmentomics_shared_healthy_controls()
+
+pon.data <- bind_rows(historical_pon_data, xplus_pon_data)
 
 
 ### FORMAT SAMPLE NAMES & JOIN CLINICAL KEYS ########################################################
@@ -168,7 +207,14 @@ tmp <- bind_rows(
 ) %>%
   distinct(Merge_ID, Bam, Patient, Sample_ID, .keep_all = TRUE)
 
-sample_metadata <- tmp %>%
+# One fragmentomics sample must map to one clinical row. Retaining multiple BAM
+# metadata rows here multiplies every per-position GRIFFIN record before the site
+# loop and can silently average technical/platform replicates.
+tmp_join <- tmp %>%
+  arrange(.data$Merge_ID, desc(!is.na(.data$Date_of_sample_collection))) %>%
+  distinct(.data$Merge_ID, .keep_all = TRUE)
+
+sample_metadata <- tmp_join %>%
   dplyr::select(Sample = Merge_ID, Bam, Patient, Date_of_sample_collection) %>%
   dplyr::distinct()
 
@@ -182,10 +228,9 @@ cfWGS.data <- cfWGS.data %>%
     ),
     Sample = str_replace(Sample, "IMG", "MyP")
   ) %>%
-  left_join(tmp, by = c("Sample" = "Merge_ID"))
+  left_join(tmp_join, by = c("Sample" = "Merge_ID"), relationship = "many-to-one")
 
-pon.data <- pon.data %>%
-  mutate(Cohort = "HBC")
+pon.data <- pon.data %>% mutate(Cohort = "HBC")
 
 
 ### BUILD SAMPLE LISTS FOR GROUP COMPARISONS #########################################################
@@ -196,7 +241,20 @@ maintenance.samples<- unique(cfWGS.data %>% filter(timepoint_info %in% c("Post_i
                                                                          "2yr maintenance"))         %>% pull(Sample))
 M4_IMG.samples     <- tumour.samples[!grepl("SPORE", tumour.samples)]
 SPORE.samples      <- tumour.samples[grepl("SPORE", tumour.samples)]
-pon.samples        <- setdiff(unique(pon.data$Sample), "TGL49_0267_Pb_U_PE_428")
+pon.samples        <- unique(pon.data$Sample)
+
+sample_reference_map <- bind_rows(
+  cfWGS.data %>%
+    distinct(Sample, fragmentomics_sequencing_platform, fragmentomics_sample_role),
+  pon.data %>%
+    distinct(Sample, fragmentomics_sequencing_platform, fragmentomics_sample_role)
+) %>%
+  distinct(Sample, .keep_all = TRUE)
+sample_platform <- setNames(
+  sample_reference_map$fragmentomics_sequencing_platform,
+  sample_reference_map$Sample
+)
+sample_role <- setNames(sample_reference_map$fragmentomics_sample_role, sample_reference_map$Sample)
 
 all.samples <- c(tumour.samples, pon.samples)
 all.sites   <- unique(cfWGS.data$site_name)
@@ -209,7 +267,18 @@ all.sites   <- unique(cfWGS.data$site_name)
 # A positive z means the sample is MORE accessible than healthy controls;
 # for tumour-enriched DARs this should be elevated in MM plasma samples.
 calculate.zscore <- function(x, y) {
+  y <- y[is.finite(y)]
+  if (length(y) < 2L || !is.finite(stats::sd(y)) || stats::sd(y) == 0) return(NA_real_)
   (x - mean(y)) / sd(y)
+}
+
+calculate_platform_zscores <- function(values, samples, platforms, roles) {
+  vapply(seq_along(values), function(i) {
+    reference <- values[
+      roles == "healthy_control" & platforms == platforms[[i]]
+    ]
+    calculate.zscore(values[[i]], reference)
+  }, numeric(1))
 }
 
 get.ttest.p.and.foldchange <- function(i, group1, group2) {
@@ -286,6 +355,8 @@ for (site in all.sites) {
   metrics.per.site[[site]] <- data.frame(
     Sample            = valid.samples,
     Site              = rep(site, length(valid.samples)),
+    fragmentomics_sequencing_platform = unname(sample_platform[valid.samples]),
+    fragmentomics_sample_role = unname(sample_role[valid.samples]),
     # Mean.Coverage: average cfDNA coverage across the entire ±500 bp window
     # around the regulatory site centre - a global accessibility signal.
     Mean.Coverage     = colMeans(gc.distances[, valid.samples, drop = FALSE]),
@@ -314,30 +385,29 @@ for (site in all.sites) {
   # Reference vector y is restricted to pon.samples, so tumour samples
   # are scored against the healthy baseline (not against themselves).
   # Positive z → more open chromatin than healthy; negative → less open.
+  metric_platform <- metrics.per.site[[site]]$fragmentomics_sequencing_platform
+  metric_role <- metrics.per.site[[site]]$fragmentomics_sample_role
   score.data <- data.frame(
     Sample        = valid.samples,
     Site          = rep(site, length(valid.samples)),
-    Zscore.Coverage =
-      sapply(metrics.per.site[[site]]$Mean.Coverage,
-             calculate.zscore,
-             y = metrics.per.site[[site]]$Mean.Coverage[
-               metrics.per.site[[site]]$Sample %in% pon.samples
-             ]
-      ),
-    Zscore.Midpoint =
-      sapply(metrics.per.site[[site]]$Midpoint.normalized,
-             calculate.zscore,
-             y = metrics.per.site[[site]]$Midpoint.normalized[
-               metrics.per.site[[site]]$Sample %in% pon.samples
-             ]
-      ),
-    Zscore.Amplitude =
-      sapply(metrics.per.site[[site]]$Amplitude,
-             calculate.zscore,
-             y = metrics.per.site[[site]]$Amplitude[
-               metrics.per.site[[site]]$Sample %in% pon.samples
-             ]
-      )
+    Zscore.Coverage = calculate_platform_zscores(
+      metrics.per.site[[site]]$Mean.Coverage,
+      valid.samples,
+      metric_platform,
+      metric_role
+    ),
+    Zscore.Midpoint = calculate_platform_zscores(
+      metrics.per.site[[site]]$Midpoint.normalized,
+      valid.samples,
+      metric_platform,
+      metric_role
+    ),
+    Zscore.Amplitude = calculate_platform_zscores(
+      metrics.per.site[[site]]$Amplitude,
+      valid.samples,
+      metric_platform,
+      metric_role
+    )
   )
   scores.per.site[[site]] <- score.data
   
@@ -347,8 +417,17 @@ for (site in all.sites) {
   # FC < 1 means it is depleted relative to healthy controls.
   mdata <- metrics.per.site[[site]]
   # tumour vs. healthy
-  idx_pon   <- which(mdata$Sample %in% pon.samples)
-  idx_tumor <- which(mdata$Sample %in% tumour.samples)
+  # Preserve the original feature-discovery comparison: only historical tumour
+  # samples and historical healthy controls determine directionality/FDR. The
+  # XPlus revision set remains an external test-cohort expansion.
+  idx_pon <- which(
+    mdata$fragmentomics_sample_role == "healthy_control" &
+      mdata$fragmentomics_sequencing_platform == "NovaSeq 6000"
+  )
+  idx_tumor <- which(
+    mdata$fragmentomics_sample_role == "patient" &
+      mdata$fragmentomics_sequencing_platform == "NovaSeq 6000"
+  )
   stats.data[stats.data$Site == site, c("Coverage.fc", "Coverage.p")] <-
     get.ttest.p.and.foldchange(mdata$Mean.Coverage, idx_pon, idx_tumor)
   stats.data[stats.data$Site == site, c("Midpoint.fc", "Midpoint.p")] <-
@@ -357,7 +436,11 @@ for (site in all.sites) {
     get.ttest.p.and.foldchange(mdata$Amplitude, idx_pon, idx_tumor)
   
   # baseline vs. healthy
-  idx_baseline <- which(mdata$Sample %in% baseline.samples)
+  idx_baseline <- which(
+    mdata$Sample %in% baseline.samples &
+      mdata$fragmentomics_sample_role == "patient" &
+      mdata$fragmentomics_sequencing_platform == "NovaSeq 6000"
+  )
   stats.data[stats.data$Site == site, "PR.coverage.p"]   <-
     safe_ttest_p(mdata$Mean.Coverage[idx_baseline], mdata$Mean.Coverage[idx_pon])
   stats.data[stats.data$Site == site, "PR.midpoint.p"]   <-
@@ -367,7 +450,11 @@ for (site in all.sites) {
     safe_ttest_p(mdata$Amplitude[idx_baseline], mdata$Amplitude[idx_pon])
   
   # maintenance vs. healthy
-  idx_maint <- which(mdata$Sample %in% maintenance.samples)
+  idx_maint <- which(
+    mdata$Sample %in% maintenance.samples &
+      mdata$fragmentomics_sample_role == "patient" &
+      mdata$fragmentomics_sequencing_platform == "NovaSeq 6000"
+  )
   stats.data[stats.data$Site == site, "PS.coverage.p"]   <-
     safe_ttest_p(mdata$Mean.Coverage[idx_maint], mdata$Mean.Coverage[idx_pon])
   stats.data[stats.data$Site == site, "PS.midpoint.p"]   <-
@@ -384,8 +471,16 @@ for (site in all.sites) {
   stats.data[stats.data$Site == site, "response.p"] <- safe_min_p(p1, p2, p3)
   
   # M4_IMG vs. SPORE → “trial”
-  idx_M4  <- which(mdata$Sample %in% M4_IMG.samples)
-  idx_SPO <- which(mdata$Sample %in% SPORE.samples)
+  idx_M4 <- which(
+    mdata$Sample %in% M4_IMG.samples &
+      mdata$fragmentomics_sample_role == "patient" &
+      mdata$fragmentomics_sequencing_platform == "NovaSeq 6000"
+  )
+  idx_SPO <- which(
+    mdata$Sample %in% SPORE.samples &
+      mdata$fragmentomics_sample_role == "patient" &
+      mdata$fragmentomics_sequencing_platform == "NovaSeq 6000"
+  )
   p4 <- safe_ttest_p(mdata$Mean.Coverage[idx_M4], mdata$Mean.Coverage[idx_SPO])
   p5 <- safe_ttest_p(mdata$Midpoint.normalized[idx_M4],
                      mdata$Midpoint.normalized[idx_SPO])
@@ -420,66 +515,56 @@ results.data <- merge(
   all = TRUE
 )
 
-# Derive HBC-based thresholds (±10% of max/min z-score among healthy samples)
-# Strategy: take the maximum (or minimum) z-score observed across all
-# healthy controls (TGL49 samples), then inflate by 10 % as a buffer.
-# This defines the outer boundary of "normal" accessibility variation;
-# tumour samples exceeding these bounds are flagged as aberrant.
-# The 10 % buffer reduces false positives from healthy-control outliers.
-thresholds.up <- aggregate(
-  results.data[grep("TGL49", results.data$Sample), grep("Zscore", colnames(results.data))],
-  by = list(Site = results.data[grep("TGL49", results.data$Sample), ]$Site),
-  FUN = function(i) { max(i) * 1.10 }
-)
-thresholds.down <- aggregate(
-  results.data[grep("TGL49", results.data$Sample), grep("Zscore", colnames(results.data))],
-  by = list(Site = results.data[grep("TGL49", results.data$Sample), ]$Site),
-  FUN = function(i) { min(i) * 1.10 }
-)
-
-thresholds.up$Site   <- factor(thresholds.up$Site, levels = stats.data$Site)
-thresholds.down$Site <- factor(thresholds.down$Site, levels = stats.data$Site)
-thresholds.up         <- thresholds.up[order(thresholds.up$Site), ]
-thresholds.down       <- thresholds.down[order(thresholds.down$Site), ]
-
-stats.data$Coverage.threshold  <- thresholds.up$Zscore.Coverage
-stats.data$Midpoint.threshold  <- thresholds.up$Zscore.Midpoint
-stats.data$Amplitude.threshold <- thresholds.up$Zscore.Amplitude
-
-# Directionality correction: if the tumour fold-change is NEGATIVE (metric
-# is lower in tumour than in healthy controls), the relevant extreme is the
-# minimum healthy z-score (thresholds.down) rather than the maximum.
-# This ensures the binary flag always tests in the direction of the
-# observed tumour-vs-healthy difference for each site.
-neg.fc <- which(stats.data$Coverage.fc < 0)
-if (length(neg.fc)) {
-  stats.data$Coverage.threshold[neg.fc] <-
-    thresholds.down$Zscore.Coverage[neg.fc]
-}
-neg.fc2 <- which(stats.data$Midpoint.fc < 0)
-if (length(neg.fc2)) {
-  stats.data$Midpoint.threshold[neg.fc2] <-
-    thresholds.down$Zscore.Midpoint[neg.fc2]
-}
-neg.fc3 <- which(stats.data$Amplitude.fc < 0)
-if (length(neg.fc3)) {
-  stats.data$Amplitude.threshold[neg.fc3] <-
-    thresholds.down$Zscore.Amplitude[neg.fc3]
-}
-
-# apply thresholds to classify each sample's z-score. A per-site lookup avoids
-# ambiguous grouped-vector recycling and records NA when a comparison was
-# underpowered or a threshold could not be estimated.
-threshold_lookup <- stats.data %>%
-  dplyr::select(
-    Site,
-    Coverage.fc, Coverage.threshold,
-    Midpoint.fc, Midpoint.threshold,
-    Amplitude.fc, Amplitude.threshold
+# Derive platform-specific HBC thresholds. Each healthy control is first scored
+# against controls from its own platform; the outer healthy z-score boundary is
+# therefore estimated independently for NovaSeq 6000 and NovaSeq XPlus.
+platform_thresholds <- results.data %>%
+  filter(.data$fragmentomics_sample_role == "healthy_control") %>%
+  group_by(.data$Site, .data$fragmentomics_sequencing_platform) %>%
+  summarise(
+    Coverage.threshold.up = max(.data$Zscore.Coverage, na.rm = TRUE) * 1.10,
+    Coverage.threshold.down = min(.data$Zscore.Coverage, na.rm = TRUE) * 1.10,
+    Midpoint.threshold.up = max(.data$Zscore.Midpoint, na.rm = TRUE) * 1.10,
+    Midpoint.threshold.down = min(.data$Zscore.Midpoint, na.rm = TRUE) * 1.10,
+    Amplitude.threshold.up = max(.data$Zscore.Amplitude, na.rm = TRUE) * 1.10,
+    Amplitude.threshold.down = min(.data$Zscore.Amplitude, na.rm = TRUE) * 1.10,
+    n_healthy_reference = n_distinct(.data$Sample),
+    .groups = "drop"
+  ) %>%
+  left_join(
+    stats.data %>%
+      select(.data$Site, .data$Coverage.fc, .data$Midpoint.fc, .data$Amplitude.fc),
+    by = "Site"
+  ) %>%
+  mutate(
+    Coverage.threshold = if_else(.data$Coverage.fc >= 0, .data$Coverage.threshold.up, .data$Coverage.threshold.down),
+    Midpoint.threshold = if_else(.data$Midpoint.fc >= 0, .data$Midpoint.threshold.up, .data$Midpoint.threshold.down),
+    Amplitude.threshold = if_else(.data$Amplitude.fc >= 0, .data$Amplitude.threshold.up, .data$Amplitude.threshold.down)
   )
 
+historical_thresholds <- platform_thresholds %>%
+  filter(.data$fragmentomics_sequencing_platform == "NovaSeq 6000") %>%
+  select(.data$Site, .data$Coverage.threshold, .data$Midpoint.threshold, .data$Amplitude.threshold)
+stats.data <- stats.data %>%
+  left_join(historical_thresholds, by = "Site")
+
+write_csv(
+  platform_thresholds,
+  file.path(out.dir, "fragmentomics_platform_reference_thresholds.csv")
+)
+
 results.data <- results.data %>%
-  dplyr::left_join(threshold_lookup, by = "Site") %>%
+  dplyr::left_join(
+    platform_thresholds %>%
+      dplyr::select(
+        .data$Site, .data$fragmentomics_sequencing_platform,
+        .data$Coverage.fc, .data$Coverage.threshold,
+        .data$Midpoint.fc, .data$Midpoint.threshold,
+        .data$Amplitude.fc, .data$Amplitude.threshold,
+        .data$n_healthy_reference
+      ),
+    by = c("Site", "fragmentomics_sequencing_platform")
+  ) %>%
   dplyr::mutate(
     Threshold.Coverage = dplyr::case_when(
       is.na(Coverage.fc) | is.na(Coverage.threshold) ~ NA,
@@ -526,7 +611,8 @@ MM_DARs_data <- results.data %>%
     Mean.Coverage, Midpoint.Coverage, Midpoint.normalized,
     Amplitude, Zscore.Coverage, Zscore.Midpoint, Zscore.Amplitude,
     Threshold.Coverage, Threshold.Midpoint, Threshold.Amplitude,
-    Bam, Patient, Date_of_sample_collection
+    fragmentomics_sequencing_platform, fragmentomics_sample_role,
+    n_healthy_reference, Bam, Patient, Date_of_sample_collection
   ) %>%
   distinct()
 

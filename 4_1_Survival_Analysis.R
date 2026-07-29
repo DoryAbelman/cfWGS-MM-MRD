@@ -284,17 +284,33 @@ dat <- dat_all %>% filter(Cohort == "Frontline")
 cat(sprintf("  ✓ Filtered to Frontline cohort: %d samples from %d patients\n", 
             nrow(dat), n_distinct(dat$Patient)))
 
-# CREATE ADDITIONAL BM cfWGS MODELS (alternative decision rules)
-# Screen call: different threshold optimized for sensitivity (detect 95% of relapsers)
-#   Uses probability >= 0.350 instead of default optimized threshold
-dat <- dat %>%
-  mutate(
-    BM_zscore_only_detection_rate_screen_call = as.integer(BM_zscore_only_detection_rate_prob >= 0.350),
-  )
-dat_all <- dat_all %>%
-  mutate(
-    BM_zscore_only_detection_rate_screen_call = as.integer(BM_zscore_only_detection_rate_prob >= 0.350),
-  )
+# ---------------------------------------------------------------------------- #
+# 2026-07-29 audit fix: REMOVED the "high sensitivity screen" decision rule.
+#
+# This step previously created
+#   BM_zscore_only_detection_rate_screen_call =
+#     as.integer(BM_zscore_only_detection_rate_prob >= 0.350)
+# on both `dat` and `dat_all`, described in a comment as a "threshold optimized
+# for sensitivity (detect 95% of relapsers)".
+#
+# Three problems. First, no derivation of 0.350 existed anywhere in the
+# codebase. Second, 0.350 is not the training 95%-sensitivity threshold for this
+# model, which is ~0.20-0.22 in cfWGS_model_metrics_fixed_95sens*.csv; it is
+# combo_BM_prob = 0.35063, the 95%-sensitivity operating point of a different,
+# legacy model specification, so a threshold derived for one model was being
+# applied to another. Third, the comment implies the cutoff was tuned against
+# the relapse outcome in this cohort, which would make every survival estimate
+# computed at it circular.
+#
+# It is also obsolete. The screen was introduced because the blood models scored
+# negative across the older dilution series; the current patient-derived
+# dilution series are positive at the relevant levels, and the screen had
+# already been dropped from the figures.
+#
+# Removing it changes no reported value: all manuscript survival results use the
+# frozen Youden threshold (BM_zscore_only_detection_rate = 0.4216 in
+# all_model_thresholds_v2_with_fragmentomics_restricted_cohorts.csv).
+# ---------------------------------------------------------------------------- #
 
 cat("  ✓ Data preparation complete\n\n")
 
@@ -437,7 +453,8 @@ build_sample_survival_df <- function(sample_tbl) {
       PET_Binary,
       # cfWGS BM-derived models
       BM_zscore_only_detection_rate_call, BM_zscore_only_detection_rate_prob,
-      BM_zscore_only_detection_rate_screen_call,
+      # BM_zscore_only_detection_rate_screen_call removed 2026-07-29 (see audit
+      # note at the data-preparation step): unprovenanced 0.350 operating point.
       # cfWGS blood-derived models (multiple variants)
       Blood_zscore_only_sites_call, Blood_zscore_only_sites_prob,
       Blood_rate_only_call, Blood_rate_only_prob,
@@ -601,8 +618,9 @@ techs <- c(
   Adaptive_Binary    = "clonoSEQ",
   EasyM_reference_threshold_binary = "EasyM",
   # Bone Marrow-derived WGS mutations
-  BM_zscore_only_detection_rate_call    = "cfWGS of BM-Derived Mutations (cVAF Model)", 
-  BM_zscore_only_detection_rate_screen_call = "cfWGS of BM-derived mutations (High Sensitivity)", 
+  BM_zscore_only_detection_rate_call    = "cfWGS of BM-Derived Mutations (cVAF Model)",
+  # "High Sensitivity" screen call removed 2026-07-29 (unprovenanced 0.350
+  # threshold; see audit note at the data-preparation step).
   # Blood Plasma-derived WGS mutations
   Blood_zscore_only_sites_call = "cfWGS of cfDNA-Derived Mutations (Sites Model)",
   Blood_rate_only_call = "cfWGS of cfDNA-Derived Mutations (cVAF Model)",
@@ -1826,7 +1844,8 @@ assays <- c(
   clonoSEQ = "Adaptive_Binary",
   Flow     = "Flow_Binary",
   cfWGS_BM    = "BM_zscore_only_detection_rate_call",
-  cfWGS_BM_screen    = "BM_zscore_only_detection_rate_screen_call",
+  # cfWGS_BM_screen removed 2026-07-29 (unprovenanced 0.350 threshold; see audit
+  # note at the data-preparation step).
   cfWGS_Blood_Sites    = "Blood_zscore_only_sites_call",
   cfWGS_Blood_Combined = "Blood_plus_fragment_call"
 )
@@ -4535,12 +4554,11 @@ dat <- readRDS(dat_rds) %>%
   )
 
 
-## Do rescored 
-dat <- dat %>%
-  ## Add the screen column 
-  mutate(
-    BM_zscore_only_detection_rate_screen_call  = as.integer(BM_zscore_only_detection_rate_prob >= 0.350),
-  )
+## Do rescored
+# 2026-07-29 audit fix: the "screen column" re-creation was removed here too.
+# See the audit note at the data-preparation step: the 0.350 cutoff was an
+# unprovenanced operating point borrowed from a legacy combo_BM specification.
+# The non-frontline time-window analyses below use the frozen Youden calls.
 
 ################################################################################
 ##  Time-window prediction performance in Non-frontline cohort

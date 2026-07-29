@@ -18,7 +18,31 @@ as_date_safe <- function(x) {
   missing <- is.na(out) & !is.na(x) & nzchar(as.character(x))
   out[missing] <- suppressWarnings(lubridate::ymd(as.character(x[missing])))
   missing <- is.na(out) & !is.na(x) & nzchar(as.character(x))
-  out[missing] <- suppressWarnings(lubridate::mdy(as.character(x[missing])))
+
+  # 2026-07-29 audit fix: warn on order-dependent ambiguity.
+  #
+  # The mdy -> dmy fallback chain silently resolves ambiguous strings such as
+  # "03/04/2021" as month/day, because mdy is tried first. Every clinical date
+  # in the survival analyses flows through this function, so a silent
+  # misinterpretation would shift an event or censor date by up to eleven months
+  # without any diagnostic. Ambiguous values are now reported rather than
+  # resolved quietly. Unambiguous slash dates (day > 12) are unaffected.
+  if (any(missing)) {
+    candidates <- as.character(x[missing])
+    mdy_parsed <- suppressWarnings(lubridate::mdy(candidates))
+    dmy_parsed <- suppressWarnings(lubridate::dmy(candidates))
+    ambiguous <- !is.na(mdy_parsed) & !is.na(dmy_parsed) & mdy_parsed != dmy_parsed
+    if (any(ambiguous)) {
+      warning(
+        "Ambiguous date string(s) resolved as month/day: ",
+        paste(unique(candidates[ambiguous]), collapse = ", "),
+        ". Supply an unambiguous format (ISO 8601) to remove this warning.",
+        call. = FALSE
+      )
+    }
+    out[missing] <- mdy_parsed
+  }
+
   missing <- is.na(out) & !is.na(x) & nzchar(as.character(x))
   out[missing] <- suppressWarnings(lubridate::dmy(as.character(x[missing])))
   out
@@ -164,11 +188,35 @@ add_next_event_endpoint <- function(data,
                                     sample_date_col = "sample_date",
                                     event_grace_days = 30L,
                                     patient_col = "Patient",
+                                    # ------------------------------------------------------------------ #
+                                    # Manual per-patient endpoint overrides.
+                                    #
+                                    # 2026-07-29 audit note. These two entries force the named
+                                    # sample to `endpoint_status = 1L` at day 0, i.e. they assert
+                                    # that the listed draw was taken at clinical progression.
+                                    #
+                                    # ACTION REQUIRED BEFORE SUBMISSION: the clinical rationale for
+                                    # each override must be stated in the Methods, and the landmark
+                                    # survival estimates must be reported with and without them.
+                                    # Two manual outcome assignments in an analysis with 9 events is
+                                    # a legitimate referee concern if left undocumented; pass
+                                    # `relapse_sample_day0_overrides = NULL` to obtain the
+                                    # un-overridden sensitivity analysis.
+                                    #
+                                    # Deliberately exposed as an argument (rather than hard-coded in
+                                    # the body) so that the with/without comparison can be run
+                                    # without editing this file.
+                                    # ------------------------------------------------------------------ #
                                     relapse_sample_day0_overrides = tibble::tribble(
                                       ~Patient, ~relapse_sample_date,
                                       "CA-10", as.Date("2023-07-11"),
                                       "VA-07", as.Date("2021-01-01")
                                     )) {
+  if (is.null(relapse_sample_day0_overrides)) {
+    relapse_sample_day0_overrides <- tibble::tibble(
+      Patient = character(), relapse_sample_date = as.Date(character())
+    )
+  }
   if (!all(c(patient_col, sample_date_col) %in% names(data))) {
     stop("Input data missing patient/sample-date columns for next-event endpoint.", call. = FALSE)
   }

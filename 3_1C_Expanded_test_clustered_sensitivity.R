@@ -116,8 +116,8 @@ model_specs <- tribble(
   ~analysis_family, ~model_key, ~probability_column, ~expected_samples, ~expected_patients, ~seed,
   "BM-informed", "BM_zscore_only_detection_rate", "BM_zscore_only_detection_rate_prob", 28L, 19L, 202607231L,
   "BM-informed", "BM_base_zscore", "BM_base_zscore_prob", 28L, 19L, 202607231L,
-  "Baseline-plasma-informed", "Blood_zscore_only_sites", "Blood_zscore_only_sites_prob", 24L, 15L, 202607232L,
-  "Baseline-plasma-informed", "Blood_plus_fragment", "Blood_plus_fragment_prob", 24L, 15L, 202607232L
+  "Baseline-plasma-informed", "Blood_zscore_only_sites", "Blood_zscore_only_sites_prob", 25L, 16L, 202607232L,
+  "Baseline-plasma-informed", "Blood_plus_fragment", "Blood_plus_fragment_prob", 25L, 16L, 202607232L
 )
 
 scored <- read_csv(input_scored, show_col_types = FALSE)
@@ -722,8 +722,8 @@ expected_primary <- tribble(
   ~model_key, ~sensitivity, ~specificity, ~accuracy,
   "BM_zscore_only_detection_rate", 0.6667, 0.6842, 0.6786,
   "BM_base_zscore", 0.6667, 0.3684, 0.4643,
-  "Blood_zscore_only_sites", 0.2857, 0.7647, 0.6250,
-  "Blood_plus_fragment", 0.4286, 0.8824, 0.7500
+  "Blood_zscore_only_sites", 0.2857, 0.7778, 0.6400,
+  "Blood_plus_fragment", 0.2857, 0.8889, 0.7200
 )
 metric_tolerance <- 0.0011
 walk(seq_len(nrow(expected_primary)), function(i) {
@@ -770,7 +770,7 @@ if (nrow(one_sample_output) != 8L) {
 expected_family_counts <- tribble(
   ~analysis_family, ~all_samples, ~patient_samples,
   "BM-informed", 28L, 19L,
-  "Baseline-plasma-informed", 24L, 15L
+  "Baseline-plasma-informed", 25L, 16L
 )
 walk(seq_len(nrow(expected_family_counts)), function(i) {
   family_row <- expected_family_counts[i, ]
@@ -846,7 +846,7 @@ readme <- tibble(
     ),
     "Exact evaluable sample/patient rows used by the repeated-measures sensitivity analyses.",
     "28 samples from 19 patients.",
-    "24 samples from 15 patients.",
+    "25 samples from 16 patients (including revision sample IMG-257-T2).",
     "BM-informed: 202607231; baseline-plasma-informed: 202607232.",
     paste(
       "Scripts_2025/Final_Scripts/3_1_Optimize_cfWGS_thresholds.R",

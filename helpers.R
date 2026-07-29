@@ -96,6 +96,40 @@ spring2026_revision_primary_analysis_exclusion_path <- function() {
   )
 }
 
+load_spring2026_revision_primary_analysis_exclusions <- function(required = FALSE) {
+  path <- spring2026_revision_primary_analysis_exclusion_path()
+  if (!file.exists(path)) {
+    if (isTRUE(required)) {
+      stop("Missing Spring 2026 primary-analysis exclusion table: ", path, call. = FALSE)
+    }
+    return(data.frame(Sample_ID = character(), exclusion_reason = character()))
+  }
+
+  exclusions <- utils::read.csv(path, check.names = FALSE, stringsAsFactors = FALSE)
+  require_columns(
+    exclusions,
+    c("Sample_ID", "exclusion_reason"),
+    "Spring 2026 primary-analysis exclusion table"
+  )
+  exclusions$Sample_ID <- trimws(as.character(exclusions$Sample_ID))
+  exclusions$exclusion_reason <- trimws(as.character(exclusions$exclusion_reason))
+  exclusions <- exclusions[!is.na(exclusions$Sample_ID) & nzchar(exclusions$Sample_ID), , drop = FALSE]
+  duplicate_sample_id <- exclusions$Sample_ID[duplicated(exclusions$Sample_ID)]
+  if (length(duplicate_sample_id)) {
+    stop(
+      "Spring 2026 primary-analysis exclusion table has duplicate Sample_ID values: ",
+      paste(unique(duplicate_sample_id), collapse = ", "),
+      call. = FALSE
+    )
+  }
+  exclusions
+}
+
+is_spring2026_revision_primary_analysis_excluded <- function(x) {
+  exclusions <- load_spring2026_revision_primary_analysis_exclusions(required = FALSE)
+  as.character(x) %in% exclusions$Sample_ID
+}
+
 manual_img_rescue_metadata_path <- function() {
   # ## Manual rescue metadata for legacy IMMAGINE/MyP rows
   # These rows are not inferred from cBioPortal relative intervals. They are
@@ -411,6 +445,103 @@ is_xplus_charm_healthy_bam <- function(x) {
   basename(as.character(x)) %in% xplus_charm_healthy_bams()
 }
 
+fragmentomics_shared_healthy_control_ids <- function() {
+  # Healthy-control identities with fragmentomics outputs on both NovaSeq 6000
+  # and NovaSeq XPlus. TGL49_0267 has cfDNA and PB libraries in both datasets;
+  # the PB library is excluded below so every control identity contributes once.
+  c(
+    "TGL49_0197", "TGL49_0199",
+    "TGL49_0255", "TGL49_0256", "TGL49_0257",
+    "TGL49_0259", "TGL49_0260", "TGL49_0261", "TGL49_0262",
+    "TGL49_0263", "TGL49_0264", "TGL49_0265", "TGL49_0266",
+    "TGL49_0267",
+    "TGL49_0302", "TGL49_0303", "TGL49_0304", "TGL49_0305",
+    "TGL49_0306"
+  )
+}
+
+fragmentomics_healthy_control_id <- function(x) {
+  x <- as.character(x)
+  matched <- grepl("TGL49[-_][0-9]{4}", x)
+  out <- rep(NA_character_, length(x))
+  out[matched] <- sub(
+    ".*TGL49[-_]([0-9]{4}).*",
+    "TGL49_\\1",
+    x[matched]
+  )
+  out
+}
+
+filter_fragmentomics_original_historical_controls <- function(data, sample_col = "Sample") {
+  # Preserve the exact healthy-control panel used by the original NovaSeq 6000
+  # GRIFFIN analysis. The legacy output used all 26 libraries representing 25
+  # identities: both the cfDNA and PB libraries for TGL49_0267 contributed to
+  # the historical z-score reference. This function is intentionally separate
+  # from the 19-control matched-platform subset used to estimate the
+  # XPlus-to-6000 harmonization transform.
+  if (!sample_col %in% names(data)) {
+    stop("Historical healthy-control table is missing sample column: ", sample_col, call. = FALSE)
+  }
+  out <- data
+  ids <- fragmentomics_healthy_control_id(out[[sample_col]])
+  sample_id_pairs <- unique(data.frame(
+    Sample = as.character(out[[sample_col]]),
+    control_id = ids,
+    stringsAsFactors = FALSE
+  ))
+  if (nrow(sample_id_pairs) != 26L || anyNA(sample_id_pairs$control_id) ||
+      length(unique(sample_id_pairs$control_id)) != 25L ||
+      sum(sample_id_pairs$control_id == "TGL49_0267") != 2L) {
+    stop(
+      paste(
+        "Expected the original NovaSeq 6000 reference to contain 26 libraries",
+        "from 25 identities, including two TGL49_0267 libraries."
+      ),
+      call. = FALSE
+    )
+  }
+  out$fragmentomics_healthy_control_id <- ids
+  out
+}
+
+is_duplicate_fragmentomics_healthy_control_library <- function(x) {
+  id <- fragmentomics_healthy_control_id(x)
+  is_pb <- grepl("(^|[-_])Pb([-_]|$)", as.character(x))
+  !is.na(id) & id == "TGL49_0267" & is_pb
+}
+
+filter_fragmentomics_shared_healthy_controls <- function(data, sample_col = "Sample") {
+  if (!sample_col %in% names(data)) {
+    stop("Healthy-control table is missing sample column: ", sample_col, call. = FALSE)
+  }
+  sample <- as.character(data[[sample_col]])
+  id <- fragmentomics_healthy_control_id(sample)
+  keep <- id %in% fragmentomics_shared_healthy_control_ids() &
+    !is_duplicate_fragmentomics_healthy_control_library(sample)
+  out <- data[keep, , drop = FALSE]
+  out$fragmentomics_healthy_control_id <- id[keep]
+  platform_col <- intersect(
+    c("fragmentomics_sequencing_platform", "Platform"),
+    names(out)
+  )[1]
+  platform <- if (is.na(platform_col)) rep("single_platform", nrow(out)) else as.character(out[[platform_col]])
+  sample_id_pairs <- unique(data.frame(
+    platform = platform,
+    Sample = as.character(out[[sample_col]]),
+    control_id = out$fragmentomics_healthy_control_id,
+    stringsAsFactors = FALSE
+  ))
+  platform_counts <- table(sample_id_pairs$platform)
+  if (any(platform_counts != 19L) ||
+      anyDuplicated(sample_id_pairs[c("platform", "control_id")])) {
+    stop(
+      "Expected exactly 19 one-to-one shared healthy-control identities after filtering.",
+      call. = FALSE
+    )
+  }
+  out
+}
+
 load_spring2026_revision_metadata <- function(required = FALSE) {
   # ## Load and validate revision metadata
   # Returns NULL when revision integration is disabled or optional and absent.
@@ -483,22 +614,7 @@ load_spring2026_revision_metadata <- function(required = FALSE) {
     # Apply sample-level exclusions after overrides. The exclusion reason remains
     # in the external CSV, while this loader returns only rows eligible for the
     # current primary-analysis workflow.
-    exclusions <- utils::read.csv(exclusion_path, check.names = FALSE, stringsAsFactors = FALSE)
-    require_columns(
-      exclusions,
-      c("Sample_ID", "exclusion_reason"),
-      "Spring 2026 primary-analysis exclusion table"
-    )
-    duplicate_exclusion_sample_id <- exclusions$Sample_ID[
-      !is.na(exclusions$Sample_ID) & duplicated(exclusions$Sample_ID)
-    ]
-    if (length(duplicate_exclusion_sample_id)) {
-      stop(
-        "Spring 2026 primary-analysis exclusion table has duplicate Sample_ID values: ",
-        paste(unique(duplicate_exclusion_sample_id), collapse = ", "),
-        call. = FALSE
-      )
-    }
+    exclusions <- load_spring2026_revision_primary_analysis_exclusions(required = TRUE)
     unmatched_exclusion_sample_id <- setdiff(exclusions$Sample_ID, metadata$Sample_ID)
     if (length(unmatched_exclusion_sample_id)) {
       stop(

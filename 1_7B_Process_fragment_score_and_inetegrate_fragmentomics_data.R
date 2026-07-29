@@ -103,38 +103,60 @@ dir.create(out.dir, recursive = TRUE, showWarnings = FALSE)
 # cfDNA leads to an elevated proportion of short fragments relative to healthy
 # donors. Higher Proportion.Short therefore correlates with higher tumour
 # fraction and is a tumour-naive MRD feature.
-results.files <- list.files(path = input.dir,
-                            pattern = "insert_size_summary.tsv",
-                            full.names = TRUE)
-results.files <- unique(c(
-  results.files,
-  # Append Spring 2026 insert-size summary rows for revision cfDNA samples. This
-  # extends the tumor-naive fragmentomics feature table without changing the
-  # historical PON/reference input selection.
-  spring2026_revision_files(
-    "Fragmentomics_Pipeeline_Suite_all_outputs",
-    "^2026-06-25_cfWGS_MM_fragmentomics_Revisions_Spring2026_insert_size_summary[.]tsv$"
-  ),
-  # Append Spring 2026 PWGVAL/M4CHIP dilution-series insert-size rows for LOD
-  # analyses that use fragmentomics combined models.
-  spring2026_revision_files(
-    "Fragmentomics_Pipeeline_Suite_all_outputs",
-    "^2026-06-25_cfWGS_MM_fragmentomics_Revisions_Spring2026_PWGVAL_Dilution_series_insert_size_summary[.]tsv$"
-  )
-))
+historical_insert_files <- list.files(
+  path = input.dir,
+  pattern = "insert_size_summary.tsv",
+  full.names = TRUE
+)
+revision_insert_files <- spring2026_revision_files(
+  "Fragmentomics_Pipeeline_Suite_all_outputs",
+  "^2026-06-25_cfWGS_MM_fragmentomics_Revisions_Spring2026_insert_size_summary[.]tsv$"
+)
 pon.files <- rev(sort(
   list.files(path = pon.dir,
              pattern = "insert_size_summary.tsv",
              full.names = TRUE)
 ))
+xplus_pon_insert_files <- spring2026_revision_files(
+  "Fragmentomics_Pipeeline_Suite_all_outputs",
+  "^2026-06-30_cfWGS_MM_fragmentomics_Revisions_Spring2026_CHARM_Xplus_HC_insert_size_summary[.]tsv$"
+)
 
-cfWGS_insert <- results.files %>%
-  lapply(read_tsv) %>%
-  bind_rows()
+read_fragmentomics_summary_batch <- function(paths, platform, role) {
+  if (!length(paths)) return(tibble())
+  bind_rows(lapply(paths, function(path) {
+    read_tsv(path, show_col_types = FALSE) %>%
+      mutate(
+        fragmentomics_sequencing_platform = platform,
+        fragmentomics_sample_role = role,
+        fragmentomics_source_file = basename(path)
+      )
+  }))
+}
 
-pon_insert <- pon.files %>%
-  lapply(read_tsv) %>%
-  bind_rows()
+filter_revision_exclusions <- function(data) {
+  data %>%
+    filter(
+      !(.data$fragmentomics_sample_role == "patient_revision" &
+          is_spring2026_revision_primary_analysis_excluded(.data$Sample))
+    )
+}
+
+cfWGS_insert <- bind_rows(
+  read_fragmentomics_summary_batch(historical_insert_files, "NovaSeq 6000", "patient"),
+  read_fragmentomics_summary_batch(revision_insert_files, "NovaSeq XPlus", "patient_revision")
+) %>%
+  filter_revision_exclusions()
+
+if (!length(pon.files) || !length(xplus_pon_insert_files)) {
+  stop("Both historical and XPlus insert-size healthy-control inputs are required.", call. = FALSE)
+}
+pon_insert <- bind_rows(
+  read_fragmentomics_summary_batch(pon.files[[1]], "NovaSeq 6000", "healthy_control") %>%
+    filter_fragmentomics_original_historical_controls(),
+  read_fragmentomics_summary_batch(xplus_pon_insert_files[[1]], "NovaSeq XPlus", "healthy_control") %>%
+    filter_fragmentomics_shared_healthy_controls()
+)
 
 # Load clinical tables
 combined_clinical <- read_combined_clinical_metadata_with_revision(
@@ -173,6 +195,10 @@ tmp.clin <- bind_rows(
 ) %>%
   distinct(Merge_ID, Patient, Sample_ID, .keep_all = TRUE)
 
+tmp.clin <- tmp.clin %>%
+  arrange(.data$Merge_ID, desc(!is.na(.data$Date_of_sample_collection))) %>%
+  distinct(.data$Merge_ID, .keep_all = TRUE)
+
 # Standardize cfWGS_insert sample names, then join to clinical keys
 cfWGS_insert <- cfWGS_insert %>%
   mutate(
@@ -184,10 +210,23 @@ cfWGS_insert <- cfWGS_insert %>%
     ),
     Sample = str_replace(Sample, "IMG", "MyP")
   ) %>%
-  left_join(tmp.clin, by = c("Sample" = "Merge_ID"))
+  left_join(tmp.clin, by = c("Sample" = "Merge_ID"), relationship = "many-to-one")
 
 # Mark PON samples as “Healthy”
-pon_insert <- pon_insert %>% mutate(Group = "Healthy")
+classify_fragmentomics_material <- function(sample) {
+  case_when(
+    str_detect(sample, "(^|[-_])Cf([-_]|$)|_Cf_|-Cf-") ~ "cfDNA",
+    str_detect(sample, "(^|[-_])Pb([-_]|$)|_Pb_|-Pb-") ~ "PB_cellular_or_buffy",
+    str_detect(sample, "(^|[-_])Ct([-_]|$)|_Ct_|-Ct-") ~ "cellular_or_tissue",
+    TRUE ~ "unknown"
+  )
+}
+
+pon_insert <- pon_insert %>%
+  mutate(
+    Group = "Healthy",
+    fragmentomics_material = classify_fragmentomics_material(.data$Sample)
+  )
 
 # Define “Monitoring” vs “Diagnosis/Baseline” groups
 # Clinical timepoint groupings used for group comparisons:
@@ -221,11 +260,19 @@ pon_insert2 <- pon_insert %>%
 # Bind together
 all_insert <- bind_rows(
   data_insert %>%
-    select(Sample, Patient, timepoint_info, Group, Proportion.Short),
+    select(Sample, Patient, timepoint_info, Group, Proportion.Short,
+           fragmentomics_sequencing_platform, fragmentomics_sample_role),
   
   pon_insert2 %>%
-    select(Sample, Patient, timepoint_info, Group, Proportion.Short)
+    select(Sample, Patient, timepoint_info, Group, Proportion.Short,
+           fragmentomics_sequencing_platform, fragmentomics_sample_role)
 )
+
+# Preserve the original NovaSeq 6000-only group-comparison analysis. XPlus
+# patient and control rows remain in `all_insert` for feature integration and
+# harmonization, but must not alter the historical descriptive statistics.
+all_insert_stats <- all_insert %>%
+  filter(.data$fragmentomics_sequencing_platform == "NovaSeq 6000")
 
 
 # TEST NORMALITY (Shapiro–Wilk per group)
@@ -233,7 +280,7 @@ all_insert <- bind_rows(
 # and pairwise t-tests. If any group fails normality, fall back to
 # non-parametric Kruskal-Wallis global test and Wilcoxon pairwise tests.
 # This adaptive branching preserves valid inference regardless of distribution.
-shapiro_results <- all_insert %>%
+shapiro_results <- all_insert_stats %>%
   group_by(Group) %>%
   summarise(p_value = shapiro.test(Proportion.Short)$p.value)
 
@@ -242,11 +289,11 @@ print(shapiro_results)
 # DECIDE whether to use ANOVA or Kruskal–Wallis based on shapiro_results
 if (all(shapiro_results$p_value > 0.05)) {
   # parametric ANOVA
-  test_insert_global <- aov(Proportion.Short ~ Group, data = all_insert)
+  test_insert_global <- aov(Proportion.Short ~ Group, data = all_insert_stats)
   print(summary(test_insert_global))
 } else {
   # nonparametric Kruskal–Wallis
-  test_insert_global <- kruskal.test(Proportion.Short ~ Group, data = all_insert)
+  test_insert_global <- kruskal.test(Proportion.Short ~ Group, data = all_insert_stats)
   print(test_insert_global)
 }
 
@@ -256,16 +303,16 @@ if (all(shapiro_results$p_value > 0.05)) {
 # and the p-value from either a t-test (normal) or Wilcoxon (non-normal).
 # Saved to CSV for downstream reporting in manuscript Table / Figure.
 pairwise_t_results <- list()
-groups <- unique(all_insert$Group)
+groups <- unique(all_insert_stats$Group)
 
 for (i in seq_len(length(groups) - 1)) {
   for (j in seq((i + 1), length(groups))) {
     g1 <- groups[i]
     g2 <- groups[j]
-    vec1 <- all_insert %>%
+    vec1 <- all_insert_stats %>%
       filter(Group == g1) %>%
       pull(Proportion.Short)
-    vec2 <- all_insert %>%
+    vec2 <- all_insert_stats %>%
       filter(Group == g2) %>%
       pull(Proportion.Short)
     
@@ -309,40 +356,46 @@ write_csv(
 # reference panel. It integrates fragment-length information over many loci
 # simultaneously, making it more robust than a simple short-fragment ratio.
 # Higher FS → more tumour-like fragment landscape.
-fs.files <- list.files(path = input.dir,
-                       pattern = "fragment_scores.tsv",
-                       full.names = TRUE)
-fs.files <- unique(c(
-  fs.files,
-  # Append Spring 2026 CHARM fragment-score rows. The clinical metadata join
-  # below determines which of these rows are valid patient cfDNA samples.
-  spring2026_revision_files(
-    "Fragmentomics_Pipeeline_Suite_all_outputs",
-    "^2026-06-25_cfWGS_MM_fragmentomics_Revisions_Spring2026_fragment_scores[.]tsv$"
-  ),
-  # Append Spring 2026 PWGVAL/M4CHIP dilution-series fragment-score rows for LOD
-  # analyses that use fragmentomics combined models.
-  spring2026_revision_files(
-    "Fragmentomics_Pipeeline_Suite_all_outputs",
-    "^2026-06-25_cfWGS_MM_fragmentomics_Revisions_Spring2026_PWGVAL_Dilution_series_fragment_scores[.]tsv$"
-  )
-))
+historical_fs_files <- list.files(
+  path = input.dir,
+  pattern = "fragment_scores.tsv",
+  full.names = TRUE
+)
+revision_fs_files <- spring2026_revision_files(
+  "Fragmentomics_Pipeeline_Suite_all_outputs",
+  "^2026-06-25_cfWGS_MM_fragmentomics_Revisions_Spring2026_fragment_scores[.]tsv$"
+)
 pon.fs.files <- rev(sort(
   list.files(path = pon.dir,
              pattern = "fragment_scores.tsv",
              full.names = TRUE)
 ))
+xplus_pon_fs_files <- spring2026_revision_files(
+  "Fragmentomics_Pipeeline_Suite_all_outputs",
+  "^2026-06-30_cfWGS_MM_fragmentomics_Revisions_Spring2026_CHARM_Xplus_HC_fragment_scores[.]tsv$"
+)
 
-cfWGS_fs <- fs.files %>%
-  lapply(read_tsv) %>%
-  bind_rows()
+cfWGS_fs <- bind_rows(
+  read_fragmentomics_summary_batch(historical_fs_files, "NovaSeq 6000", "patient"),
+  read_fragmentomics_summary_batch(revision_fs_files, "NovaSeq XPlus", "patient_revision")
+) %>%
+  filter_revision_exclusions()
 
 # Drop any “TGL49” rows if they snuck in
 if (any(grepl("TGL49", cfWGS_fs$Sample))) {
   cfWGS_fs <- cfWGS_fs[!grepl("TGL49", cfWGS_fs$Sample), ]
 }
 
-pon_fs <- read_tsv(pon.fs.files[[1]])
+if (!length(pon.fs.files) || !length(xplus_pon_fs_files)) {
+  stop("Both historical and XPlus fragment-score healthy-control inputs are required.", call. = FALSE)
+}
+pon_fs <- bind_rows(
+  read_fragmentomics_summary_batch(pon.fs.files[[1]], "NovaSeq 6000", "healthy_control") %>%
+    filter_fragmentomics_original_historical_controls(),
+  read_fragmentomics_summary_batch(xplus_pon_fs_files[[1]], "NovaSeq XPlus", "healthy_control") %>%
+    filter_fragmentomics_shared_healthy_controls()
+) %>%
+  mutate(fragmentomics_material = classify_fragmentomics_material(.data$Sample))
 
 # Standardize sample names & join clinical keys just as above
 cfWGS_fs <- cfWGS_fs %>%
@@ -355,7 +408,11 @@ cfWGS_fs <- cfWGS_fs %>%
     ),
     Sample = str_replace(Sample, "IMG", "MyP")
   ) %>%
-  left_join(tmp.clin %>% dplyr::select(Patient, Timepoint, timepoint_info, Merge_ID), by = c("Sample" = "Merge_ID")) %>%
+  left_join(
+    tmp.clin %>% dplyr::select(Patient, Timepoint, timepoint_info, Merge_ID),
+    by = c("Sample" = "Merge_ID"),
+    relationship = "many-to-one"
+  ) %>%
   mutate(Cohort = "cfWGS")
 
 cfWGS_fs <- cfWGS_fs %>% unique()
@@ -377,7 +434,7 @@ combined_fs <- combined_fs %>% dplyr::select(-dplyr::any_of("...1"))
   
 # Deduplicate numeric fields (take mean) and non‐numeric (first non‐NA)
 combined_fs_dedup <- combined_fs %>%
-  group_by(Sample) %>%
+  group_by(Sample, fragmentomics_sequencing_platform, fragmentomics_sample_role) %>%
   summarise(
     across(where(is.numeric), ~ mean(.x, na.rm = TRUE)),
     across(where(~ !is.numeric(.x)), ~ first(.x)),
@@ -394,43 +451,33 @@ combined_fs_dedup <- combined_fs %>%
 # is Gaussian, use mean ± 1.96·SD (≈95th-percentile reference interval);
 # otherwise use the empirical 97.5th percentile.
 
-# 1) Pull FS from healthy (PON) samples
-fs_healthy <- pon_fs %>%
-  filter(Cohort == "HBC") %>%
-  pull(FS) %>%
-  na.omit()
-
-# 2) Test normality (Shapiro–Wilk)
-shp_p <- shapiro.test(fs_healthy)$p.value
-message(sprintf("Shapiro–Wilk p‑value for healthy FS = %.3g", shp_p))
-
-# 3) Choose cut‑offs
-if (shp_p > 0.05) {
-  # Normal‑ish → use mean ± 1.96 SD (≈ 95 % reference range)
-  mu  <- mean(fs_healthy)
-  sig <- sd(fs_healthy)
-  lower_cut <- mu - 1.96 * sig
-  upper_cut <- mu + 1.96 * sig
-  method_used <- "mean ± 1.96·SD"
-} else {
-  # Non‑normal → use empirical 2.5th and 97.5th percentiles
-  qs <- quantile(fs_healthy, probs = c(0.025, 0.975), na.rm = TRUE)
-  lower_cut <- qs[1]; upper_cut <- qs[2]
-  method_used <- "2.5th / 97.5th percentiles"
+safe_platform_cutoffs <- function(values) {
+  values <- values[is.finite(values)]
+  if (length(values) < 3L) {
+    return(tibble(Method = "insufficient controls", Lower_Cutoff = NA_real_, Upper_Cutoff = NA_real_))
+  }
+  shp_p <- shapiro.test(values)$p.value
+  if (shp_p > 0.05) {
+    tibble(
+      Method = "mean +/- 1.96 SD",
+      Lower_Cutoff = mean(values) - 1.96 * sd(values),
+      Upper_Cutoff = mean(values) + 1.96 * sd(values)
+    )
+  } else {
+    qs <- quantile(values, probs = c(0.025, 0.975), na.rm = TRUE)
+    tibble(
+      Method = "2.5th / 97.5th percentiles",
+      Lower_Cutoff = qs[[1]],
+      Upper_Cutoff = qs[[2]]
+    )
+  }
 }
 
-cat(sprintf(
-  "FS cut‑offs (%s): lower = %.3f, upper = %.3f\n",
-  method_used, lower_cut, upper_cut
-))
-
-## Now export
-# 1) Build a tibble with  cut-off info
-fs_cutoffs_tbl <- tibble::tibble(
-  Method        = method_used,
-  Lower_Cutoff  = lower_cut,
-  Upper_Cutoff  = upper_cut
-)
+fs_cutoffs_tbl <- pon_fs %>%
+  filter(.data$Cohort == "HBC") %>%
+  group_by(.data$fragmentomics_sequencing_platform) %>%
+  group_modify(~ safe_platform_cutoffs(.x$FS)) %>%
+  ungroup()
 
 # 2) (Optional) print to console
 print(fs_cutoffs_tbl)
@@ -472,17 +519,25 @@ mm_dars2 <- read.csv("Results_Fragmentomics/MM_Griffin_all_relevant_sites_data_u
 mm_dars2_small <- mm_dars2 %>%
   mutate(
     Date_of_sample_collection = as.Date(Date_of_sample_collection),
-    Date                     = as.Date(Date)
+    Date = as.Date(Date),
+    fragmentomics_sequencing_platform = "NovaSeq 6000",
+    fragmentomics_sample_role = if_else(str_detect(.data$Sample, "^TGL"), "healthy_control", "patient"),
+    n_healthy_reference = NA_integer_
   ) %>%
   select(
     Sample, Site,
     Mean.Coverage, Midpoint.Coverage, Midpoint.normalized,
     Amplitude, Zscore.Coverage, Zscore.Midpoint, Zscore.Amplitude,
     Threshold.Coverage, Threshold.Midpoint, Threshold.Amplitude,
+    fragmentomics_sequencing_platform, fragmentomics_sample_role,
+    n_healthy_reference,
     Bam, Patient, Date_of_sample_collection
   ) %>%
   distinct() %>%
-  filter(Site == "MM_DARs_chromatin_activation")
+  filter(
+    Site == "MM_DARs_chromatin_activation",
+    !str_detect(.data$Sample, "^TGL49[-_]")
+  )
 
 # Keep only the “MM_DARs_chromatin_activation” site rows
 mm_dars_small <- mm_dars %>%
@@ -495,13 +550,20 @@ mm_dars_small <- mm_dars %>%
     Mean.Coverage, Midpoint.Coverage, Midpoint.normalized,
     Amplitude, Zscore.Coverage, Zscore.Midpoint, Zscore.Amplitude,
     Threshold.Coverage, Threshold.Midpoint, Threshold.Amplitude,
+    fragmentomics_sequencing_platform, fragmentomics_sample_role,
+    n_healthy_reference,
     Bam, Patient, Date_of_sample_collection
   ) %>%
   distinct() %>%
   filter(Site == "MM_DARs_chromatin_activation")
 
-# Combine (optional)
-mm_dars_combined <- bind_rows(mm_dars_small, mm_dars2_small) %>%
+# Combine only genuinely missing legacy patient rows. Healthy controls must
+# come exclusively from the newly regenerated, platform-filtered PON table;
+# the optional legacy batch contains unmatched controls as well as differently
+# punctuated duplicates of the current matched-control rows.
+mm_dars2_missing <- mm_dars2_small %>%
+  anti_join(mm_dars_small %>% distinct(.data$Sample), by = "Sample")
+mm_dars_combined <- bind_rows(mm_dars_small, mm_dars2_missing) %>%
   # normalize your date columns
   mutate(
     Date_of_sample_collection = as.Date(Date_of_sample_collection)
@@ -518,12 +580,29 @@ mm_dars_small <- mm_dars_combined %>% unique()
 # (First, restore combined_fs_dedup into a data frame we can join onto)
 fragdata_for_merge <- combined_fs_dedup
 
-fragdata_for_merge <- fragdata_for_merge %>% dplyr::select(Sample, Patient, Date_of_sample_collection, FS)
+fragdata_for_merge <- fragdata_for_merge %>%
+  dplyr::select(
+    Sample, Patient, Date_of_sample_collection, FS,
+    fragmentomics_sequencing_platform, fragmentomics_sample_role
+  )
 
 
 merged_data <- fragdata_for_merge %>%
-  full_join(mm_dars_small %>% dplyr::select(Sample, Patient, Date_of_sample_collection, Site, Mean.Coverage, Midpoint.Coverage, Midpoint.normalized, Amplitude, Zscore.Coverage, Zscore.Midpoint, Zscore.Amplitude, Threshold.Coverage, Threshold.Midpoint, Threshold.Amplitude),
-            by = c("Sample", "Patient", "Date_of_sample_collection"))
+  full_join(
+    mm_dars_small %>%
+      dplyr::select(
+        Sample, Patient, Date_of_sample_collection, Site,
+        Mean.Coverage, Midpoint.Coverage, Midpoint.normalized, Amplitude,
+        Zscore.Coverage, Zscore.Midpoint, Zscore.Amplitude,
+        Threshold.Coverage, Threshold.Midpoint, Threshold.Amplitude,
+        fragmentomics_sequencing_platform, fragmentomics_sample_role,
+        n_healthy_reference
+      ),
+    by = c(
+      "Sample", "Patient", "Date_of_sample_collection",
+      "fragmentomics_sequencing_platform", "fragmentomics_sample_role"
+    )
+  )
 
 
 ### If minor difference in dates due to different versions of log being used 
@@ -534,13 +613,13 @@ merged_data <- fragdata_for_merge %>%
 # averaged within each window; the earliest date in the window is retained.
 merged_data_grouped <- merged_data %>%
   arrange(Patient, Date_of_sample_collection) %>%
-  group_by(Patient) %>%
+  group_by(Patient, fragmentomics_sequencing_platform, fragmentomics_sample_role) %>%
   mutate(
     date_diff = as.numeric(Date_of_sample_collection - lag(Date_of_sample_collection)),
     new_group = is.na(date_diff) | date_diff > 7,
     group_id = cumsum(new_group)
   ) %>%
-  group_by(Patient, group_id) %>%
+  group_by(Patient, fragmentomics_sequencing_platform, fragmentomics_sample_role, group_id) %>%
   summarise(
     Sample = first(Sample),  # Pick one sample name (can be adapted to paste0 if needed)
     Date_of_sample_collection = min(Date_of_sample_collection),
@@ -548,6 +627,7 @@ merged_data_grouped <- merged_data %>%
     Threshold.Coverage = first_nonmissing(Threshold.Coverage),
     Threshold.Midpoint = first_nonmissing(Threshold.Midpoint),
     Threshold.Amplitude = first_nonmissing(Threshold.Amplitude),
+    n_healthy_reference = first_nonmissing(n_healthy_reference),
     Mean.Coverage = mean(Mean.Coverage, na.rm = TRUE),
     Midpoint.Coverage = mean(Midpoint.Coverage, na.rm = TRUE),
     Midpoint.normalized = mean(Midpoint.normalized, na.rm = TRUE),
@@ -587,11 +667,14 @@ merged_data_grouped <- merged_data_grouped %>%
 ## Add insert size data 
 # 1) Deduplicate all_insert so there's only one Proportion.Short per Sample
 all_insert_unique <- all_insert %>%
-  distinct(Sample, Proportion.Short)
+  distinct(Sample, fragmentomics_sequencing_platform, fragmentomics_sample_role, Proportion.Short)
 
 # 2) Left‐join onto your merged_data_grouped by Sample
 merged_with_short <- merged_data_grouped %>%
-  left_join(all_insert_unique, by = "Sample")
+  left_join(
+    all_insert_unique,
+    by = c("Sample", "fragmentomics_sequencing_platform", "fragmentomics_sample_role")
+  )
 
 # 3) Quick check: how many got filled?
 merged_with_short %>%
@@ -633,7 +716,7 @@ first_non_na_numeric <- function(x) {
 
 # 3) Summarise per Sample
 merged_final_metrics <- merged_with_short %>%
-  group_by(Sample) %>%
+  group_by(Sample, fragmentomics_sequencing_platform, fragmentomics_sample_role) %>%
   summarise(
     across(
       all_of(metrics),
@@ -643,7 +726,18 @@ merged_final_metrics <- merged_with_short %>%
   )
 
 # 4) Add columns back 
-merged_final_metrics <- merged_final_metrics %>% left_join(merged_with_short %>% select(Patient, Sample, Date_of_sample_collection, Site, Threshold.Coverage, Threshold.Midpoint, Threshold.Amplitude)) 
+merged_final_metrics <- merged_final_metrics %>%
+  left_join(
+    merged_with_short %>%
+      select(
+        Patient, Sample, Date_of_sample_collection, Site,
+        Threshold.Coverage, Threshold.Midpoint, Threshold.Amplitude,
+        fragmentomics_sequencing_platform, fragmentomics_sample_role,
+        n_healthy_reference
+      ) %>%
+      distinct(),
+    by = c("Sample", "fragmentomics_sequencing_platform", "fragmentomics_sample_role")
+  )
 
 # Remove healthy duplicates
 # columns to blank for TGL* samples
@@ -662,6 +756,130 @@ merged_final_metrics_clean <- merged_final_metrics %>%
     )
   ) %>%
   distinct()   # drop exact duplicates
+
+# Harmonize XPlus model inputs onto the frozen NovaSeq 6000 training scale.
+# Platform-matched z-scores remain in the Zscore.* columns; this location/scale
+# mapping is only for the raw predictors consumed by the preserved classifier.
+build_reference_parameters <- function(data, feature) {
+  data %>%
+    filter(.data$fragmentomics_sample_role == "healthy_control") %>%
+    distinct(.data$Sample, .data$fragmentomics_sequencing_platform, .data[[feature]]) %>%
+    group_by(.data$fragmentomics_sequencing_platform) %>%
+    summarise(
+      feature = feature,
+      n = sum(is.finite(.data[[feature]])),
+      mean = mean(.data[[feature]], na.rm = TRUE),
+      sd = sd(.data[[feature]], na.rm = TRUE),
+      median = median(.data[[feature]], na.rm = TRUE),
+      mad = mad(.data[[feature]], na.rm = TRUE),
+      .groups = "drop"
+    )
+}
+
+mean_coverage_reference <- mm_dars_small %>%
+  filter(.data$fragmentomics_sample_role == "healthy_control") %>%
+  transmute(
+    Sample, fragmentomics_sequencing_platform, fragmentomics_sample_role,
+    Mean.Coverage
+  )
+matched_pon_fs <- filter_fragmentomics_shared_healthy_controls(pon_fs)
+matched_pon_insert <- filter_fragmentomics_shared_healthy_controls(pon_insert)
+matched_mean_coverage_reference <- filter_fragmentomics_shared_healthy_controls(
+  mean_coverage_reference
+)
+harmonization_reference <- bind_rows(
+  build_reference_parameters(matched_pon_fs, "FS"),
+  build_reference_parameters(matched_pon_insert, "Proportion.Short"),
+  build_reference_parameters(matched_mean_coverage_reference, "Mean.Coverage")
+)
+
+if (any(harmonization_reference$n < 3L) ||
+    any(!is.finite(harmonization_reference$sd)) ||
+    any(harmonization_reference$sd <= 0) ||
+    any(!is.finite(harmonization_reference$mad)) ||
+    any(harmonization_reference$mad <= 0)) {
+  stop("Invalid fragmentomics platform harmonization reference parameters.", call. = FALSE)
+}
+
+harmonize_to_historical_scale <- function(data, feature, parameters) {
+  hist <- parameters %>%
+    filter(.data$feature == .env$feature, .data$fragmentomics_sequencing_platform == "NovaSeq 6000")
+  xplus <- parameters %>%
+    filter(.data$feature == .env$feature, .data$fragmentomics_sequencing_platform == "NovaSeq XPlus")
+  if (nrow(hist) != 1L || nrow(xplus) != 1L) {
+    stop("Missing one-to-one harmonization parameters for feature: ", feature, call. = FALSE)
+  }
+  raw_name <- paste0(feature, "_unharmonized")
+  data[[raw_name]] <- data[[feature]]
+  idx <- data$fragmentomics_sequencing_platform == "NovaSeq XPlus" & is.finite(data[[feature]])
+  data[[feature]][idx] <-
+    ((data[[feature]][idx] - xplus$mean[[1]]) / xplus$sd[[1]]) * hist$sd[[1]] + hist$mean[[1]]
+  data
+}
+
+for (feature in c("FS", "Proportion.Short", "Mean.Coverage")) {
+  merged_final_metrics_clean <- harmonize_to_historical_scale(
+    merged_final_metrics_clean,
+    feature,
+    harmonization_reference
+  )
+}
+
+add_robust_harmonization <- function(data, feature, parameters) {
+  historical <- parameters %>%
+    filter(.data$feature == .env$feature, .data$fragmentomics_sequencing_platform == "NovaSeq 6000")
+  xplus <- parameters %>%
+    filter(.data$feature == .env$feature, .data$fragmentomics_sequencing_platform == "NovaSeq XPlus")
+  if (nrow(historical) != 1L || nrow(xplus) != 1L ||
+      !is.finite(historical$mad[[1]]) || !is.finite(xplus$mad[[1]]) || xplus$mad[[1]] <= 0) {
+    stop("Invalid robust harmonization parameters for feature: ", feature, call. = FALSE)
+  }
+  raw_name <- paste0(feature, "_unharmonized")
+  robust_name <- paste0(feature, "_harmonized_median_mad")
+  data[[robust_name]] <- data[[raw_name]]
+  idx <- data$fragmentomics_sequencing_platform == "NovaSeq XPlus" & is.finite(data[[raw_name]])
+  data[[robust_name]][idx] <-
+    ((data[[raw_name]][idx] - xplus$median[[1]]) / xplus$mad[[1]]) *
+    historical$mad[[1]] + historical$median[[1]]
+  data
+}
+
+for (feature in c("FS", "Proportion.Short", "Mean.Coverage")) {
+  merged_final_metrics_clean <- add_robust_harmonization(
+    merged_final_metrics_clean,
+    feature,
+    harmonization_reference
+  )
+}
+merged_final_metrics_clean <- merged_final_metrics_clean %>%
+  mutate(
+    fragmentomics_harmonization_method = if_else(
+      .data$fragmentomics_sequencing_platform == "NovaSeq XPlus",
+      "XPlus healthy-control mean/SD mapped to NovaSeq 6000 healthy-control scale",
+      "No transform; native NovaSeq 6000 scale"
+    )
+  )
+
+write_csv(
+  harmonization_reference,
+  "Results_Fragmentomics/fragmentomics_platform_harmonization_reference_parameters.csv"
+)
+write_csv(
+  merged_final_metrics_clean %>%
+    select(
+      Sample, Patient, Date_of_sample_collection,
+      fragmentomics_sequencing_platform, fragmentomics_sample_role,
+      fragmentomics_harmonization_method,
+      FS_unharmonized, FS,
+      FS_harmonized_median_mad,
+      Proportion.Short_unharmonized, Proportion.Short,
+      Proportion.Short_harmonized_median_mad,
+      Mean.Coverage_unharmonized, Mean.Coverage,
+      Mean.Coverage_harmonized_median_mad,
+      Zscore.Coverage, Zscore.Midpoint, Zscore.Amplitude
+    ),
+  "Results_Fragmentomics/fragmentomics_platform_harmonization_sample_audit.csv"
+)
 
 
 # Save “Key_fragmentomics_data.csv” 
@@ -689,7 +907,10 @@ selected_metrics <- c(
 # Compute healthy control ranges for those metrics
 healthy_dars <- mm_dars_small %>% 
   filter(!grepl("TGL49_0267_Pb_U_PE_428", Sample)) %>% 
-  filter(grepl("TGL49", Sample))
+  filter(
+    grepl("TGL49", Sample),
+    .data$fragmentomics_sequencing_platform == "NovaSeq 6000"
+  )
 
 # Test normality 
 # 1) Gather into long form
