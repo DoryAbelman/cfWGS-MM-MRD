@@ -225,6 +225,8 @@ empty_revision_event_tbl <- tibble(
   baseline_value = numeric(),
   relapse_value = numeric(),
   Delta = numeric(),
+  baseline_tumor_fraction = numeric(),
+  followup_tumor_fraction = numeric(),
   Date_of_sample_collection = as.Date(character()),
   Num_days_to_closest_relapse = numeric()
 )
@@ -240,7 +242,7 @@ make_revision_cna_change_table <- function(revision_cfDNA_df, event_cols) {
     group_by(Patient) %>%
     slice(1) %>%
     ungroup() %>%
-    select(Patient, all_of(event_cols)) %>%
+    select(Patient, baseline_tumor_fraction = Tumor_Fraction, all_of(event_cols)) %>%
     pivot_longer(
       cols = all_of(event_cols),
       names_to = "Event",
@@ -252,7 +254,9 @@ make_revision_cna_change_table <- function(revision_cfDNA_df, event_cols) {
     arrange(Patient, Sample_Date) %>%
     select(
       Patient, Sample_ID, Sample, Date_of_sample_collection,
-      Num_days_to_closest_relapse, all_of(event_cols)
+      Num_days_to_closest_relapse,
+      followup_tumor_fraction = Tumor_Fraction,
+      all_of(event_cols)
     ) %>%
     pivot_longer(
       cols = all_of(event_cols),
@@ -269,6 +273,7 @@ make_revision_cna_change_table <- function(revision_cfDNA_df, event_cols) {
     ) %>%
     select(
       Patient, Sample_ID, Sample, Event, baseline_value, relapse_value, Delta,
+      baseline_tumor_fraction, followup_tumor_fraction,
       Date_of_sample_collection, Num_days_to_closest_relapse
     ) %>%
     arrange(Patient, Sample_ID, Event)
@@ -361,6 +366,21 @@ if (!is.null(revision_metadata)) {
              length(event_cols)) %>%
     ungroup()
 
+  missing_revision_cna_calls <- revision_cfDNA_evaluable %>%
+    filter(if_any(all_of(event_cols), is.na)) %>%
+    distinct(Patient, Sample_ID)
+  if (nrow(missing_revision_cna_calls) > 0L) {
+    stop(
+      "Revision patients classified as CNA-evaluable have missing target-arm calls: ",
+      paste(
+        paste0(missing_revision_cna_calls$Patient, "/",
+               missing_revision_cna_calls$Sample_ID),
+        collapse = ", "
+      ),
+      call. = FALSE
+    )
+  }
+
   revision_cna_calls <- revision_cfDNA_evaluable %>%
     select(
       Patient, Sample_ID, Sample, timepoint_info, Date_of_sample_collection,
@@ -395,7 +415,9 @@ if (!is.null(revision_metadata)) {
       "revision_emergent_cna_event_rows",
       "revision_patients_with_emergent_cna_events",
       "revision_lost_cna_event_rows",
-      "revision_patients_with_lost_cna_events"
+      "revision_patients_with_lost_cna_events",
+      "revision_lost_call_followup_tumor_fraction_min",
+      "revision_lost_call_followup_tumor_fraction_max"
     ),
     value = as.character(c(
       nrow(revision_metadata),
@@ -408,13 +430,41 @@ if (!is.null(revision_metadata)) {
       nrow(revision_emergent_tbl),
       n_distinct(revision_emergent_tbl$Patient),
       nrow(revision_loss_events_tbl),
-      n_distinct(revision_loss_events_tbl$Patient)
+      n_distinct(revision_loss_events_tbl$Patient),
+      if (nrow(revision_loss_events_tbl) > 0L) {
+        min(revision_loss_events_tbl$followup_tumor_fraction, na.rm = TRUE)
+      } else {
+        NA_real_
+      },
+      if (nrow(revision_loss_events_tbl) > 0L) {
+        max(revision_loss_events_tbl$followup_tumor_fraction, na.rm = TRUE)
+      } else {
+        NA_real_
+      }
     ))
   ) %>%
     bind_rows(
       tibble(
         metric = "interpretation",
-        value = if (nrow(revision_emergent_tbl) == 0) {
+        value = if (nrow(revision_emergent_tbl) == 0 &&
+                    nrow(revision_loss_events_tbl) > 0) {
+          paste0(
+            "No emergent del1p/amp1q/del13q/del17p CNA events were detected ",
+            "among revision patients evaluable under baseline-plus-relapse/",
+            "progression plasma cfDNA rules. ",
+            nrow(revision_loss_events_tbl),
+            " apparent 1-to-0 transitions were observed across ",
+            n_distinct(revision_loss_events_tbl$Patient),
+            " patients at follow-up tumor fractions of ",
+            sprintf(
+              "%.1f%%-%.1f%%",
+              100 * min(revision_loss_events_tbl$followup_tumor_fraction, na.rm = TRUE),
+              100 * max(revision_loss_events_tbl$followup_tumor_fraction, na.rm = TRUE)
+            ),
+            "; these are reported as loss of detectability and do ",
+            "not establish biological clonal loss."
+          )
+        } else if (nrow(revision_emergent_tbl) == 0) {
           "No emergent del1p/amp1q/del13q/del17p CNA events were detected among revision patients evaluable under baseline-plus-relapse/progression plasma cfDNA rules."
         } else {
           "Emergent del1p/amp1q/del13q/del17p CNA events were detected among revision patients evaluable under baseline-plus-relapse/progression plasma cfDNA rules."

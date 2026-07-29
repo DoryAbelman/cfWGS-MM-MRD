@@ -83,13 +83,20 @@ input_blood_confusion <- file.path(
   "Figure_4B",
   "F4B_supporting_data_csv_test_confusion.csv"
 )
+input_thresholds <- file.path(
+  project_root,
+  "Output_tables_2025",
+  "selected_combo_thresholds_2026-02-16.rds"
+)
 output_dir <- file.path(
   project_root,
   "Output_tables_2025",
   "expanded_test_clustered_sensitivity"
 )
 
-required_files <- c(input_scored, input_bm_confusion, input_blood_confusion)
+required_files <- c(
+  input_scored, input_bm_confusion, input_blood_confusion, input_thresholds
+)
 missing_files <- required_files[!file.exists(required_files)]
 if (length(missing_files) > 0L) {
   stop(
@@ -438,8 +445,177 @@ bootstrap_summary <- map_dfr(analysis_results, "bootstrap_summary")
 one_sample_summary <- map_dfr(analysis_results, "one_sample_summary")
 sample_manifest <- map_dfr(analysis_results, "manifest")
 
+# Same-sample comparison requested during peer review. Every model below is
+# evaluated on the identical 28-sample/19-patient BM-informed expanded-test
+# stratum. Fragmentomics probabilities are evaluated at the fixed thresholds
+# selected by the original training workflow; no test-set refitting or
+# threshold selection is performed here.
+matched_model_specs <- tribble(
+  ~workflow, ~model_key, ~probability_column,
+  "BM-informed mutation tracking", "BM_zscore_only_detection_rate", "BM_zscore_only_detection_rate_prob",
+  "Fragmentomics only; full-cohort training", "Fragmentomics_full_Full", "Fragmentomics_full_Full_prob",
+  "Fragmentomics only; full-cohort training", "Fragmentomics_mean_coverage_only_Full", "Fragmentomics_mean_coverage_only_Full_prob",
+  "Fragmentomics only; BM-restricted training", "Fragmentomics_full_BM_restricted", "Fragmentomics_full_BM_restricted_prob",
+  "Fragmentomics only; BM-restricted training", "Fragmentomics_mean_coverage_only_BM_restricted", "Fragmentomics_mean_coverage_only_BM_restricted_prob"
+)
+
+fixed_thresholds <- readRDS(input_thresholds)
+if (!is.numeric(fixed_thresholds) || is.null(names(fixed_thresholds))) {
+  stop("Frozen-threshold input must be a named numeric vector.", call. = FALSE)
+}
+missing_matched_columns <- setdiff(
+  matched_model_specs$probability_column,
+  names(scored)
+)
+if (length(missing_matched_columns) > 0L) {
+  stop(
+    "Scored table is missing matched-comparison probability column(s): ",
+    paste(missing_matched_columns, collapse = ", "),
+    call. = FALSE
+  )
+}
+missing_matched_thresholds <- setdiff(
+  matched_model_specs$model_key,
+  names(fixed_thresholds)
+)
+if (length(missing_matched_thresholds) > 0L) {
+  stop(
+    "Frozen threshold(s) missing for matched comparison: ",
+    paste(missing_matched_thresholds, collapse = ", "),
+    call. = FALSE
+  )
+}
+
+matched_rows <- scored %>%
+  filter(
+    .data$Cohort == "Non-frontline",
+    !.data$timepoint_info %in% c("Baseline", "Diagnosis"),
+    !is.na(.data$MRD_truth),
+    if_all(all_of(matched_model_specs$probability_column), ~ !is.na(.x))
+  )
+
+if (nrow(matched_rows) != 28L || n_distinct(matched_rows$Patient) != 19L) {
+  stop(
+    "Matched workflow comparison cohort drift: expected 28 samples from 19 patients; observed ",
+    nrow(matched_rows), " samples from ", n_distinct(matched_rows$Patient), " patients.",
+    call. = FALSE
+  )
+}
+
+matched_workflow_comparison <- pmap_dfr(
+  matched_model_specs,
+  function(workflow, model_key, probability_column) {
+    threshold <- unname(fixed_thresholds[[model_key]])
+    metrics <- calculate_metrics(
+      truth = as.integer(matched_rows$MRD_truth),
+      probability = as.numeric(matched_rows[[probability_column]]),
+      threshold = threshold
+    )
+    as_tibble_row(metrics) %>%
+      mutate(
+        analysis_set = "BM-informed expanded-test evaluable stratum",
+        workflow = workflow,
+        model_key = model_key,
+        probability_column = probability_column,
+        threshold = threshold,
+        n_patients = n_distinct(matched_rows$Patient),
+        .before = 1
+      )
+  }
+)
+
 round_numeric <- function(data, digits = 4L) {
   data %>% mutate(across(where(is.numeric), ~ round(.x, digits)))
+}
+
+# openxlsx can leave empty drawing relationships and an A1-only worksheet
+# dimension in otherwise valid workbooks. Excel usually repairs these silently,
+# but strict OOXML readers do not. Remove only relationships whose drawing
+# targets are absent and set each worksheet dimension from its actual cell refs.
+sanitize_openxlsx_package <- function(path) {
+  staging <- tempfile("st6_ooxml_")
+  dir.create(staging, recursive = TRUE)
+  on.exit(unlink(staging, recursive = TRUE, force = TRUE), add = TRUE)
+  utils::unzip(path, exdir = staging)
+
+  read_xml_text <- function(xml_path) {
+    paste(readLines(xml_path, warn = FALSE, encoding = "UTF-8"), collapse = "")
+  }
+  write_xml_text <- function(xml_path, value) {
+    writeLines(value, xml_path, useBytes = TRUE)
+  }
+  column_number <- function(label) {
+    values <- utf8ToInt(label) - utf8ToInt("A") + 1L
+    as.integer(sum(values * 26L ^ rev(seq_along(values) - 1L)))
+  }
+  column_label <- function(number) {
+    output <- character()
+    while (number > 0L) {
+      number <- number - 1L
+      output <- c(intToUtf8(number %% 26L + utf8ToInt("A")), output)
+      number <- number %/% 26L
+    }
+    paste(output, collapse = "")
+  }
+
+  rel_paths <- list.files(
+    file.path(staging, "xl", "worksheets", "_rels"),
+    pattern = "[.]rels$", full.names = TRUE
+  )
+  walk(rel_paths, function(rel_path) {
+    xml <- read_xml_text(rel_path)
+    xml <- gsub(
+      '<Relationship[^>]+Type="[^"]+/relationships/(drawing|vmlDrawing)"[^>]*/>',
+      "", xml, perl = TRUE
+    )
+    write_xml_text(rel_path, xml)
+  })
+
+  sheet_paths <- list.files(
+    file.path(staging, "xl", "worksheets"),
+    pattern = "^sheet[0-9]+[.]xml$", full.names = TRUE
+  )
+  walk(sheet_paths, function(sheet_path) {
+    xml <- read_xml_text(sheet_path)
+    refs <- regmatches(
+      xml,
+      gregexpr('(?<= r=")[A-Z]+[0-9]+(?=")', xml, perl = TRUE)
+    )[[1]]
+    refs <- refs[nzchar(refs)]
+    if (length(refs) == 0L) return(invisible(NULL))
+    rows <- as.integer(gsub("[A-Z]+", "", refs))
+    cols <- vapply(
+      gsub("[0-9]+", "", refs), column_number, integer(1)
+    )
+    dimension <- paste0("A1:", column_label(max(cols)), max(rows))
+    xml <- sub(
+      '<dimension ref="[^"]*"/>',
+      paste0('<dimension ref="', dimension, '"/>'),
+      xml
+    )
+    write_xml_text(sheet_path, xml)
+  })
+
+  rebuilt <- tempfile(
+    "Supplementary_Table_6_sanitized_", tmpdir = dirname(path), fileext = ".xlsx"
+  )
+  old_wd <- getwd()
+  on.exit(setwd(old_wd), add = TRUE)
+  setwd(staging)
+  archive_files <- list.files(
+    ".", recursive = TRUE, all.files = TRUE, no.. = TRUE,
+    include.dirs = FALSE
+  )
+  utils::zip(rebuilt, files = archive_files, flags = "-q -r -X")
+  setwd(old_wd)
+  if (!file.exists(rebuilt) || file.info(rebuilt)$size <= 0L) {
+    stop("Failed to rebuild sanitized Supplementary Table 6 OOXML package.", call. = FALSE)
+  }
+  if (!file.copy(rebuilt, path, overwrite = TRUE)) {
+    stop("Failed to replace Supplementary Table 6 with sanitized package.", call. = FALSE)
+  }
+  unlink(rebuilt)
+  invisible(path)
 }
 
 bootstrap_output <- round_numeric(bootstrap_summary)
@@ -462,6 +638,12 @@ write_csv(
     "expanded_test_repeated_measures_sample_manifest_", analysis_date, ".csv"
   ))
 )
+write_csv(
+  round_numeric(matched_workflow_comparison),
+  file.path(output_dir, paste0(
+    "expanded_test_matched_workflow_comparison_", analysis_date, ".csv"
+  ))
+)
 
 audit_lines <- c(
   "Expanded-test repeated-measures sensitivity analysis",
@@ -470,6 +652,7 @@ audit_lines <- c(
   paste0("Scored input: ", input_scored),
   paste0("BM threshold input: ", input_bm_confusion),
   paste0("Blood threshold input: ", input_blood_confusion),
+  paste0("Frozen threshold vector: ", input_thresholds),
   paste0("Patient-clustered bootstrap replicates: ", n_bootstrap),
   paste0("Confidence level: ", ci_level),
   "",
@@ -484,6 +667,7 @@ audit_lines <- c(
   "Interpretation:",
   "- Cluster-bootstrap intervals account for patient-level clustering while preserving the sample-level estimand.",
   "- The earliest-visit check changes the estimand to one selected sample per patient."
+  ,"- The matched workflow comparison evaluates mutation-informed and fragmentomics-only models on the identical 28-sample/19-patient BM-informed stratum."
 )
 write_lines(
   audit_lines,
@@ -615,6 +799,7 @@ sheet_names <- c(
   "Classifier performance",
   "Clustered bootstrap",
   "One sample per patient",
+  "Matched workflow comparison",
   "Sample manifest"
 )
 walk(sheet_names, ~ addWorksheet(workbook, .x, gridLines = FALSE))
@@ -641,7 +826,7 @@ count_style <- createStyle(numFmt = "0")
 readme <- tibble(
   Section = c(
     "Scope", "Classifier performance", "Clustered bootstrap",
-    "One sample per patient", "Sample manifest", "BM-informed denominator",
+    "One sample per patient", "Matched workflow comparison", "Sample manifest", "BM-informed denominator",
     "Baseline-plasma denominator", "Fixed random seeds", "Canonical analysis scripts"
   ),
   Description = c(
@@ -654,6 +839,10 @@ readme <- tibble(
     paste0(
       "Deterministic sensitivity analysis using the earliest evaluable post-baseline ",
       "sample per patient, selected without reference to truth or prediction."
+    ),
+    paste0(
+      "Mutation-informed and fragmentomics-only models evaluated on the identical ",
+      "28-sample/19-patient BM-informed expanded-test stratum using frozen thresholds."
     ),
     "Exact evaluable sample/patient rows used by the repeated-measures sensitivity analyses.",
     "28 samples from 19 patients.",
@@ -691,6 +880,7 @@ data_sheets <- list(
   "Classifier performance" = performance,
   "Clustered bootstrap" = bootstrap_output,
   "One sample per patient" = one_sample_output,
+  "Matched workflow comparison" = round_numeric(matched_workflow_comparison),
   "Sample manifest" = sample_manifest
 )
 rate_columns <- c(
@@ -702,7 +892,7 @@ rate_columns <- c(
 )
 count_columns <- c(
   "n_samples", "n_positive", "n_negative", "tp", "fn", "tn", "fp",
-  "valid_replicates", "total_replicates", "samples_for_patient"
+  "valid_replicates", "total_replicates", "samples_for_patient", "n_patients"
 )
 
 walk(names(data_sheets), function(sheet) {
@@ -749,6 +939,7 @@ walk(names(data_sheets), function(sheet) {
 
 workbook_path <- file.path(output_dir, "Supplementary_Table_6_FINAL.xlsx")
 saveWorkbook(workbook, workbook_path, overwrite = TRUE)
+sanitize_openxlsx_package(workbook_path)
 if (!file.exists(workbook_path) || file.info(workbook_path)$size <= 0L) {
   stop("Supplementary Table 6 workbook was not written successfully.", call. = FALSE)
 }

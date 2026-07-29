@@ -118,6 +118,20 @@ support_file <- function(filename) {
   file.path(support_table_dir, filename)
 }
 
+# Normalize chromosome identifiers before any cross-sample join. Legacy SEG
+# files use identifiers such as "1", whereas Spring 2026 revision SEG files use
+# "chr1". Keeping both forms creates separate genomic keys and can silently
+# turn valid revision calls into missing values downstream.
+normalize_chromosome_id <- function(x) {
+  normalized <- as.character(x) %>%
+    stringr::str_trim() %>%
+    stringr::str_remove(stringr::regex("^chr", ignore_case = TRUE)) %>%
+    toupper()
+  normalized[normalized == "M"] <- "MT"
+  normalized[normalized == ""] <- NA_character_
+  normalized
+}
+
 first_existing_file <- function(paths, description) {
   hit <- paths[file.exists(paths)][1]
   if (is.na(hit)) {
@@ -178,6 +192,26 @@ spring2026_seg_files <- spring2026_revision_files(
 spring2026_seg_files <- spring2026_seg_files[!grepl("^M4CHIP_", basename(spring2026_seg_files))]
 seg_files <- unique(c(seg_files, spring2026_seg_files))
 
+# A small number of Spring 2026 files share a sample basename with a legacy
+# copy. A many-file join cannot safely retain two columns with the same sample
+# name, so choose one deterministically. Because revision files are appended
+# after legacy files above, retaining the last occurrence gives precedence to
+# the current Spring 2026 source.
+seg_sample_names <- gsub("\\.cna\\.seg$", "", basename(seg_files))
+duplicate_seg_sample_names <- unique(
+  seg_sample_names[duplicated(seg_sample_names) | duplicated(seg_sample_names, fromLast = TRUE)]
+)
+if (length(duplicate_seg_sample_names) > 0L) {
+  message(
+    "Duplicate ichorCNA sample basenames detected; retaining the current ",
+    "Spring 2026 occurrence for: ",
+    paste(duplicate_seg_sample_names, collapse = ", ")
+  )
+  keep_seg_file <- !duplicated(seg_sample_names, fromLast = TRUE)
+  seg_files <- seg_files[keep_seg_file]
+  seg_sample_names <- seg_sample_names[keep_seg_file]
+}
+
 combined_seg_cache_rds <- support_file("Oct_2024_combined_corrected_calls.rds")
 combined_seg_cache_csv <- support_file("Oct_2024_combined_corrected_calls.csv")
 
@@ -203,7 +237,8 @@ if (length(seg_files) > 0L) {
     
     sample_name <- gsub("\\.cna\\.seg$", "", basename(file))
     seg_corrected_call <- seg_data %>%
-      dplyr::select(chr, start, end, Corrected_Call = all_of(corrected_call_cols))
+      dplyr::select(chr, start, end, Corrected_Call = all_of(corrected_call_cols)) %>%
+      dplyr::mutate(chr = normalize_chromosome_id(chr))
     colnames(seg_corrected_call)[4] <- sample_name
     seg_corrected_call
   })
@@ -232,7 +267,7 @@ if (length(seg_files) > 0L) {
   cb_frame_arm <- cb_frame %>%
     mutate(arm = paste0(gsub("chr", "", chr), substr(band, 1, 1))) %>%
     dplyr::select(chr, start, end, arm) %>%
-    mutate(chr = gsub("chr", "", chr))
+    mutate(chr = normalize_chromosome_id(chr))
   
   check_overlap <- function(chr, start1, end1, cb_frame_arm) {
     cb_matches <- cb_frame_arm %>%
@@ -268,6 +303,52 @@ if (length(seg_files) > 0L) {
   message("No raw ichorCNA SEG files found in ", seg_dir,
           "; using preserved support cache: ", combined_seg_cache_rds)
   combined_seg_data <- readRDS(combined_seg_cache_rds)
+}
+
+# Apply the same normalization to preserved caches and fail loudly if a future
+# input reintroduces mixed chromosome namespaces.
+combined_seg_data <- combined_seg_data %>%
+  mutate(chr = normalize_chromosome_id(chr))
+if (any(is.na(combined_seg_data$chr))) {
+  stop("Combined ichorCNA segment data contain missing chromosome identifiers.",
+       call. = FALSE)
+}
+if (any(grepl("^chr", combined_seg_data$chr, ignore.case = TRUE))) {
+  stop("Chromosome normalization failed: 'chr'-prefixed identifiers remain.",
+       call. = FALSE)
+}
+
+# Regression guard for the exact Spring 2026 failure mode: every supplied
+# revision sample must retain at least one non-missing corrected call after the
+# cross-sample join. A zero count indicates an identifier/join mismatch, not a
+# biologically CNA-negative sample.
+if (length(spring2026_seg_files) > 0L) {
+  spring2026_sample_names <- gsub(
+    "\\.cna\\.seg$", "", basename(spring2026_seg_files)
+  )
+  missing_revision_columns <- setdiff(
+    spring2026_sample_names, names(combined_seg_data)
+  )
+  if (length(missing_revision_columns) > 0L) {
+    stop(
+      "Revision ichorCNA samples missing after segment join: ",
+      paste(missing_revision_columns, collapse = ", "),
+      call. = FALSE
+    )
+  }
+  revision_nonmissing_counts <- vapply(
+    combined_seg_data[spring2026_sample_names],
+    function(x) sum(!is.na(x)),
+    integer(1)
+  )
+  if (any(revision_nonmissing_counts == 0L)) {
+    stop(
+      "Revision ichorCNA samples have zero retained segment calls after join: ",
+      paste(names(revision_nonmissing_counts)[revision_nonmissing_counts == 0L],
+            collapse = ", "),
+      call. = FALSE
+    )
+  }
 }
 
 
@@ -643,10 +724,18 @@ for (i in 1:nrow(myeloma_arms_df)) {
   # Determine if it's an amplification or deletion
   if (startsWith(arm_name, "amp")) {
     data_arm <- data_arm %>%
-      mutate(IsAltered = ifelse(Value %in% gain_labels, 1, 0))
+      mutate(IsAltered = case_when(
+        is.na(Value) ~ NA_real_,
+        Value %in% gain_labels ~ 1,
+        TRUE ~ 0
+      ))
   } else if (startsWith(arm_name, "del")) {
     data_arm <- data_arm %>%
-      mutate(IsAltered = ifelse(Value %in% loss_labels, 1, 0))
+      mutate(IsAltered = case_when(
+        is.na(Value) ~ NA_real_,
+        Value %in% loss_labels ~ 1,
+        TRUE ~ 0
+      ))
   } else {
     next
   }
@@ -654,14 +743,27 @@ for (i in 1:nrow(myeloma_arms_df)) {
   # Calculate the proportion of altered segments per sample
   sample_proportions <- data_arm %>%
     group_by(Sample) %>%
-    summarise(ProportionAltered = mean(IsAltered))
+    summarise(
+      NumSegmentsEvaluated = sum(!is.na(IsAltered)),
+      ProportionAltered = if_else(
+        NumSegmentsEvaluated > 0,
+        mean(IsAltered, na.rm = TRUE),
+        NA_real_
+      ),
+      .groups = "drop"
+    )
   
   # Ensure all samples are included (set missing samples to 0)
   missing_samples <- setdiff(samples, sample_proportions$Sample)
   if (length(missing_samples) > 0) {
     sample_proportions <- bind_rows(
       sample_proportions,
-      data.frame(Sample = missing_samples, ProportionAltered = 0, stringsAsFactors = FALSE)
+      data.frame(
+        Sample = missing_samples,
+        NumSegmentsEvaluated = 0L,
+        ProportionAltered = NA_real_,
+        stringsAsFactors = FALSE
+      )
     )
   }
   
@@ -673,8 +775,16 @@ for (i in 1:nrow(myeloma_arms_df)) {
   # as arm-level. This mirrors common cytogenetic reporting practice
   # where >30% of interphase cells positive defines an abnormality.
   results <- left_join(results, sample_proportions, by = "Sample")
-  results[[arm_name]] <- ifelse(results$ProportionAltered > 1/3, 1, 0)
-  results <- results %>% select(-ProportionAltered)
+  results[[arm_name]] <- ifelse(
+    is.na(results$ProportionAltered),
+    NA_integer_,
+    as.integer(results$ProportionAltered > 1/3)
+  )
+  results[[paste0(arm_name, "_segments_evaluated")]] <-
+    results$NumSegmentsEvaluated
+  results[[paste0(arm_name, "_proportion_altered")]] <-
+    results$ProportionAltered
+  results <- results %>% select(-NumSegmentsEvaluated, -ProportionAltered)
 }
 
 # View results to check the output
@@ -782,6 +892,15 @@ cna_data <- myeloma_CNA_matrix_with_HRD %>%
 cna_data_backup <- cna_data
 cna_data_hyperdiploid_qc <- myeloma_CNA_matrix_with_HRD %>%
   mutate_at(vars(-Sample), as.character)
+
+# Arm-level audit table preserves the evaluated-segment denominator and raw
+# altered proportion behind every binary call.
+cna_arm_call_qc <- myeloma_CNA_matrix_with_HRD %>%
+  dplyr::select(
+    Sample,
+    matches("^(del1p|amp1q|del13q|del17p)(_segments_evaluated|_proportion_altered)?$")
+  )
+readr::write_tsv(cna_arm_call_qc, support_file("cna_arm_call_qc.tsv"))
 
 ## Export final ichorCNA arm-level feature table
 # This is the main output consumed by 1_5_Integrate_WGS_Feature_Data.R.

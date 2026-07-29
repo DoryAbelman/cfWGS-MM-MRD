@@ -815,6 +815,18 @@ readr::write_csv(
   combo_tbl %>% mutate(Figure = "Fig_4I_BM_positivity_by_tech_facet6"),
   file.path(outdir_source_data, "Fig_4I_BM_positivity_by_tech_facet6_source_data.csv")
 )
+ms_copy_artifact(
+  source_path = file.path(
+    outdir_source_data, "Fig_4I_BM_positivity_by_tech_facet6_source_data.csv"
+  ),
+  artifact_id = "FIG3D",
+  role = "source_data_csv",
+  description = paste(
+    "Revision-inclusive BM-informed positivity counts and denominators for",
+    "Main Figure 3D."
+  ),
+  script_name = "3_2_Plot_optimal_cutoff_and_clinical_concordance.R"
+)
 
 
 
@@ -1144,6 +1156,30 @@ ms_copy_artifact(
   artifact_id = "FIG4C",
   role = "figure_panel_png",
   description = "Blood/cfDNA-informed cfWGS positivity by technology panel used as Main Figure 4C.",
+  script_name = "3_2_Plot_optimal_cutoff_and_clinical_concordance.R"
+)
+
+# Source data for the exact faceted Figure 4C panel. This is intentionally
+# exported from the plotted `combo_tbl` so that the table, labels, and panel
+# denominators cannot drift independently.
+readr::write_csv(
+  combo_tbl %>% mutate(Figure = "Fig_5I_Blood_positivity_by_tech_facet_updated6"),
+  file.path(
+    outdir_source_data,
+    "Fig_5I_Blood_positivity_by_tech_facet_updated6_source_data.csv"
+  )
+)
+ms_copy_artifact(
+  source_path = file.path(
+    outdir_source_data,
+    "Fig_5I_Blood_positivity_by_tech_facet_updated6_source_data.csv"
+  ),
+  artifact_id = "FIG4C",
+  role = "source_data_csv",
+  description = paste(
+    "Revision-inclusive baseline-plasma-informed positivity counts and",
+    "denominators for Main Figure 4C."
+  ),
   script_name = "3_2_Plot_optimal_cutoff_and_clinical_concordance.R"
 )
 
