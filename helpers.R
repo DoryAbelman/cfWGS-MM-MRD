@@ -445,6 +445,133 @@ is_xplus_charm_healthy_bam <- function(x) {
   basename(as.character(x)) %in% xplus_charm_healthy_bams()
 }
 
+read_mrdetect_csv_strict <- function(file) {
+  # MRDetect combined exports historically contain a trailing empty field on
+  # every data row even though the header has no corresponding column. Read the
+  # extra field explicitly, require it to be empty, and then remove it. This
+  # prevents readr from silently shifting or discarding scientific columns.
+  if (!file.exists(file)) stop("Missing MRDetect CSV: ", file, call. = FALSE)
+
+  header_line <- readLines(file, n = 1L, warn = FALSE)
+  if (!length(header_line) || !nzchar(header_line)) {
+    stop("MRDetect CSV has no header: ", file, call. = FALSE)
+  }
+  header_cols <- trimws(strsplit(header_line, ",", fixed = TRUE)[[1]])
+  field_counts <- count.fields(
+    file,
+    sep = ",",
+    quote = "",
+    blank.lines.skip = TRUE
+  )
+  if (length(field_counts) < 2L) {
+    stop("MRDetect CSV has no data rows: ", file, call. = FALSE)
+  }
+
+  header_field_count <- field_counts[[1]]
+  data_field_counts <- field_counts[-1]
+  unexpected_counts <- setdiff(
+    unique(data_field_counts),
+    c(header_field_count, header_field_count + 1L)
+  )
+  if (length(unexpected_counts)) {
+    stop(
+      "MRDetect CSV has unexpected data-field counts in ", file, ": ",
+      paste(sort(unexpected_counts), collapse = ", "),
+      call. = FALSE
+    )
+  }
+
+  probe_lines <- readLines(file, n = 25L, warn = FALSE)[-1]
+  probe_lines <- probe_lines[nzchar(probe_lines)]
+  has_extra_field <- any(data_field_counts == header_field_count + 1L)
+  has_terminal_empty <- has_extra_field &&
+    !endsWith(header_line, ",") &&
+    any(endsWith(probe_lines, ","))
+  has_legacy_empty_before_filename <- has_extra_field &&
+    identical(tail(header_cols, 1L), "filename") &&
+    !has_terminal_empty
+
+  if (!has_extra_field) {
+    return(readr::read_csv(file, show_col_types = FALSE))
+  }
+  if (!has_terminal_empty && !has_legacy_empty_before_filename) {
+    stop(
+      "MRDetect CSV has an extra field whose position could not be identified: ",
+      file,
+      call. = FALSE
+    )
+  }
+
+  extra_name <- if (has_legacy_empty_before_filename) {
+    "legacy_empty_field"
+  } else {
+    "terminal_empty_field"
+  }
+  col_names <- if (has_legacy_empty_before_filename) {
+    c(head(header_cols, -1L), extra_name, tail(header_cols, 1L))
+  } else {
+    c(header_cols, extra_name)
+  }
+  out <- readr::read_csv(
+    file,
+    col_names = col_names,
+    skip = 1L,
+    show_col_types = FALSE
+  )
+  extra_values <- as.character(out[[extra_name]])
+  extra_values[is.na(extra_values)] <- ""
+  if (any(nzchar(extra_values))) {
+    stop(
+      "MRDetect CSV has a non-empty unlabelled field: ", file,
+      call. = FALSE
+    )
+  }
+  dplyr::select(out, -dplyr::all_of(extra_name))
+}
+
+deduplicate_mrdetect_results <- function(
+    data,
+    key_cols = c("filename", "BAM"),
+    provenance_cols = c("input_source_file", "source_file")) {
+  # The same MRDetect BAM/VCF result can be present in more than one combined
+  # export. Identical duplicates must count once in a healthy-control reference;
+  # conflicting duplicates are a hard error rather than an arbitrary choice.
+  require_columns(data, key_cols, "MRDetect result table")
+  duplicate_keys <- data %>%
+    dplyr::count(dplyr::across(dplyr::all_of(key_cols)), name = "n_rows") %>%
+    dplyr::filter(.data$n_rows > 1L)
+  if (!nrow(duplicate_keys)) return(data)
+
+  scientific_cols <- setdiff(names(data), provenance_cols)
+  conflicting <- data %>%
+    dplyr::semi_join(duplicate_keys, by = key_cols) %>%
+    dplyr::distinct(dplyr::across(dplyr::all_of(scientific_cols))) %>%
+    dplyr::count(
+      dplyr::across(dplyr::all_of(key_cols)),
+      name = "n_distinct_results"
+    ) %>%
+    dplyr::filter(.data$n_distinct_results > 1L)
+  if (nrow(conflicting)) {
+    examples <- utils::capture.output(print(utils::head(conflicting, 10L)))
+    stop(
+      "Conflicting duplicate MRDetect BAM/VCF results were found. Examples:\n",
+      paste(examples, collapse = "\n"),
+      call. = FALSE
+    )
+  }
+
+  message(
+    "Deduplicating ",
+    sum(duplicate_keys$n_rows - 1L),
+    " repeated MRDetect result row(s) across combined exports."
+  )
+  data %>%
+    dplyr::distinct(
+      dplyr::across(dplyr::all_of(key_cols)),
+      .keep_all = TRUE
+    )
+}
+
 fragmentomics_shared_healthy_control_ids <- function() {
   # Healthy-control identities with fragmentomics outputs on both NovaSeq 6000
   # and NovaSeq XPlus. TGL49_0267 has cfDNA and PB libraries in both datasets;
@@ -540,6 +667,42 @@ filter_fragmentomics_shared_healthy_controls <- function(data, sample_col = "Sam
     )
   }
   out
+}
+
+xplus_mrdetect_paired_reference_bams <- function() {
+  # ## Paired-control MRDetect sensitivity panel
+  # This 19-control panel exactly matches the one-to-one identities used to
+  # estimate the fragmentomics platform transform. It is retained for a
+  # prespecified sensitivity analysis, not as the primary MRDetect reference.
+  bams <- xplus_charm_healthy_bams()
+  ids <- fragmentomics_healthy_control_id(bams)
+  keep <- ids %in% fragmentomics_shared_healthy_control_ids() &
+    !is_duplicate_fragmentomics_healthy_control_library(bams)
+  out <- bams[keep]
+  if (length(out) != 19L || anyDuplicated(fragmentomics_healthy_control_id(out))) {
+    stop("Expected exactly 19 one-to-one XPlus MRDetect reference BAMs.", call. = FALSE)
+  }
+  out
+}
+
+xplus_mrdetect_reference_bams <- function() {
+  # ## Primary XPlus MRDetect healthy-control reference
+  # MRDetect z-scoring is performed wholly within the XPlus platform and does
+  # not require paired NovaSeq 6000 fragmentomics measurements. Use every
+  # predefined XPlus healthy-control library in the complete all-by-all export
+  # to capture the observed background range and avoid outcome-driven exclusion.
+  # The 22 libraries represent 21 control identities because TGL49_0267 has both
+  # cfDNA and PB libraries; this mirrors the library-level reference convention
+  # used by the locked historical workflow.
+  out <- xplus_charm_healthy_bams()
+  if (length(out) != 22L || anyDuplicated(out)) {
+    stop("Expected exactly 22 unique XPlus MRDetect reference BAMs.", call. = FALSE)
+  }
+  out
+}
+
+is_xplus_mrdetect_reference_bam <- function(x) {
+  basename(as.character(x)) %in% xplus_mrdetect_reference_bams()
 }
 
 load_spring2026_revision_metadata <- function(required = FALSE) {

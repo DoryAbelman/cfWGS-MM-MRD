@@ -105,6 +105,24 @@ spring2026_combined_mrdetect_files <- spring2026_revision_files(
   "MRDetect_outputs",
   "^MRDetect_all_RESULTS_combined_with_source[.]csv$"
 )
+spring2026_xplus_control_rerun_files <- spring2026_revision_files(
+  # Incremental XPlus healthy-control reruns can contain both main-cohort and
+  # dilution VCFs. 1_8A retains only their TFRIM4 dilution VCF rows after the
+  # usual metadata/panel filtering, while 1_8 consumes the IMG rows.
+  "MRDetect_outputs",
+  "^MRDetect_all_RESULTS_combined_with_source_healthy_control_rerun[0-9]+[.]csv$"
+)
+spring2026_final_xplus_control_files <- spring2026_revision_files(
+  "MRDetect_outputs",
+  "^MRDetect_all_RESULTS_combined_with_source_final_healthy_control_Xplus[.]csv$"
+)
+# Prefer the complete all-by-all export; retain incremental reruns only as a
+# fallback for reproducibility when the final aggregation is absent.
+spring2026_xplus_control_files <- if (length(spring2026_final_xplus_control_files)) {
+  spring2026_final_xplus_control_files
+} else {
+  spring2026_xplus_control_rerun_files
+}
 xplus_zero_mrdetect_files <- spring2026_revision_files(
   file.path("Additional Dilution Series Data", "MRDetect"),
   "[.]csv$"
@@ -113,6 +131,7 @@ csv_files <- unique(c(
   csv_files,
   spring2026_dilution_mrdetect_files,
   spring2026_combined_mrdetect_files,
+  spring2026_xplus_control_files,
   xplus_zero_mrdetect_files
 ))
 if (!length(csv_files)) {
@@ -181,7 +200,19 @@ read_and_label <- function(file) {
   # Standardize provenance columns across historical and Spring 2026 MRDetect
   # exports. input_source_file is retained so audit tables can identify whether a
   # row came from the combined Spring export or a dilution-specific file.
-  df <- read_mrdetect_csv(file)
+  df <- read_mrdetect_csv_strict(file)
+  if (basename(file) %in% basename(spring2026_xplus_control_files)) {
+    unexpected_bams <- unique(df$BAM[!is_xplus_charm_healthy_bam(df$BAM)])
+    if (length(unexpected_bams)) {
+      stop(
+        "Incremental XPlus healthy-control rerun contains non-allowlisted BAMs: ",
+        paste(utils::head(unexpected_bams, 10L), collapse = ", "),
+        call. = FALSE
+      )
+    }
+    df <- df %>%
+      filter(str_detect(.data$source_file, "_VS_TFRIM4"))
+  }
   if (!"filename" %in% names(df)) {
     if ("source_file" %in% names(df)) {
       df$filename <- df$source_file
@@ -196,6 +227,16 @@ read_and_label <- function(file) {
   return(df)
 }
 all_files <- bind_rows(lapply(csv_files, read_and_label))
+
+if (length(spring2026_final_xplus_control_files)) {
+  # The final file supersedes partial XPlus-control rows in earlier combined
+  # exports. This guarantees one authoritative result per BAM/VCF pair.
+  all_files <- all_files %>%
+    filter(
+      !is_xplus_charm_healthy_bam(.data$BAM) |
+        .data$input_source_file %in% basename(spring2026_final_xplus_control_files)
+    )
+}
 
 pwgval_dilution_metadata_for_mrdetect <- load_spring2026_pwgval_dilution_metadata(required = FALSE)
 xplus_zero_metadata_for_mrdetect <- load_spring2026_xplus_zero_dilution_metadata(required = FALSE)
@@ -263,6 +304,8 @@ extract_mrdetect_mutation_list_patient <- function(x) {
     TRUE ~ NA_character_
   )
 }
+
+all_files <- deduplicate_mrdetect_results(all_files)
 
 extract_mrdetect_mutation_list_timepoint <- function(x) {
   # Parse the mutation-list timepoint from the VCF filename. VA-style IDs encode
@@ -676,79 +719,204 @@ Merged_MRDetect_dilution <- Merged_MRDetect_dilution %>%
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# 11) Laod in the matched healthy control data and join
+# 11) Assemble platform-matched healthy-control references
 # ──────────────────────────────────────────────────────────────────────────────
-Healthy_reference <- readRDS("MRDetect_output_winter_2025/Processed_R_outputs/cfWGS_Winter2025All_MRDetect_May2025.rds")
-needed_healthy_reference_vcfs <- Merged_MRDetect_dilution %>%
-  # Restrict healthy controls to the exact VCF/mutation lists represented in the
-  # dilution rows. This avoids carrying unrelated CHARM rows into the z-score
-  # reference table.
-  filter(!is.na(.data$VCF_clean), nzchar(.data$VCF_clean)) %>%
-  distinct(VCF_clean)
+# Historical VA-02 dilution BAMs were sequenced on NovaSeq 6000 and retain the
+# original 26-library CHARM reference. Spring 2026 PWGVAL VA-09/12/13 BAMs and
+# their physical 0% diluents were sequenced on NovaSeq XPlus and must use only
+# exact allowlisted XPlus CHARM controls run against the same personalized VCF.
+Merged_MRDetect_dilution <- Merged_MRDetect_dilution %>%
+  mutate(
+    Date_of_sample_collection = as.Date(.data$Date_of_sample_collection),
+    healthy_reference_requested = case_when(
+      .data$Study == "XPLUS_CHARM_healthy" ~ "XPLUS_CHARM_healthy",
+      .data$dilution_series == "PWGVAL_M4CHIP" ~ "XPLUS_CHARM_healthy",
+      TRUE ~ "CHARM_healthy"
+    )
+  )
 
-Healthy_reference <- Healthy_reference %>%
+needed_healthy_reference_vcfs <- Merged_MRDetect_dilution %>%
+  filter(
+    .data$Study == "M4",
+    !is.na(.data$VCF_clean),
+    nzchar(.data$VCF_clean)
+  ) %>%
+  distinct(.data$VCF_clean)
+
+Healthy_reference <- readRDS(
+  "MRDetect_output_winter_2025/Processed_R_outputs/cfWGS_Winter2025All_MRDetect_May2025.rds"
+) %>%
   filter(
     .data$Study == "CHARM_healthy",
     .data$VCF_clean %in% needed_healthy_reference_vcfs$VCF_clean
-  )
-
-healthy_reference_audit <- needed_healthy_reference_vcfs %>%
-  # If healthy-reference rows are missing for a VCF, z-scores for that VCF will
-  # be NA. The audit makes that limitation explicit before model application.
-  left_join(
-    Healthy_reference %>%
-      count(VCF_clean, Mut_source, Filter_source, name = "healthy_reference_rows"),
-    by = "VCF_clean"
   ) %>%
   mutate(
-    healthy_reference_rows = coalesce(.data$healthy_reference_rows, 0L),
+    Date_of_sample_collection = as.Date(.data$Date_of_sample_collection),
+    healthy_reference_requested = "CHARM_healthy"
+  )
+
+Merged_MRDetect_dilution_joined <- bind_rows(
+  Merged_MRDetect_dilution,
+  Healthy_reference
+)
+Merged_MRDetect_dilution_joined$VCF_factor <- factor(
+  Merged_MRDetect_dilution_joined$VCF,
+  levels = unique(Merged_MRDetect_dilution_joined$VCF)
+)
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 12) Compute platform- and VCF-specific healthy-control means and SDs
+# ──────────────────────────────────────────────────────────────────────────────
+healthy_reference_candidates <- Merged_MRDetect_dilution_joined %>%
+  filter(.data$Study %in% c("CHARM_healthy", "XPLUS_CHARM_healthy")) %>%
+  filter(
+    .data$Study != "XPLUS_CHARM_healthy" |
+      is_xplus_mrdetect_reference_bam(.data$BAM)
+  ) %>%
+  mutate(
+    healthy_reference_tier = case_when(
+      .data$Study == "XPLUS_CHARM_healthy" ~ "XPLUS_CHARM_healthy",
+      TRUE ~ "CHARM_healthy"
+    )
+  )
+
+healthy_reference_counts <- healthy_reference_candidates %>%
+  count(
+    .data$VCF_factor,
+    .data$Mut_source,
+    .data$Filter_source,
+    .data$healthy_reference_tier,
+    name = "n_healthy_reference_rows"
+  )
+
+healthy_reference_choice <- Merged_MRDetect_dilution_joined %>%
+  distinct(
+    .data$VCF_factor,
+    .data$Mut_source,
+    .data$Filter_source,
+    .data$healthy_reference_requested
+  ) %>%
+  left_join(
+    healthy_reference_counts,
+    by = c(
+      "VCF_factor",
+      "Mut_source",
+      "Filter_source",
+      "healthy_reference_requested" = "healthy_reference_tier"
+    )
+  ) %>%
+  mutate(
+    n_healthy_reference_rows = coalesce(.data$n_healthy_reference_rows, 0L),
+    healthy_reference_tier = if_else(
+      .data$n_healthy_reference_rows > 0L,
+      .data$healthy_reference_requested,
+      NA_character_
+    ),
     healthy_reference_status = if_else(
-      .data$healthy_reference_rows > 0,
+      .data$n_healthy_reference_rows > 0L,
       "available",
       "missing"
     )
-  ) %>%
-  arrange(.data$VCF_clean, .data$Mut_source, .data$Filter_source)
+  )
+
 readr::write_csv(
-  healthy_reference_audit,
+  healthy_reference_choice,
   file.path(outdir, "spring2026_dilution_mrdetect_healthy_reference_audit.csv")
 )
 
-## Ensure matching column types
-Merged_MRDetect_dilution <- Merged_MRDetect_dilution %>%
-  mutate(Date_of_sample_collection = as.Date(Date_of_sample_collection))
-
-Healthy_reference <- Healthy_reference %>%
-  mutate(Date_of_sample_collection = as.Date(Date_of_sample_collection))
-
-Merged_MRDetect_dilution_joined <- bind_rows(Merged_MRDetect_dilution, Healthy_reference)
-# ──────────────────────────────────────────────────────────────────────────────
-# 12) Compute CHARM_healthy means & SDs → join back for z-scores
-# ──────────────────────────────────────────────────────────────────────────────
-Merged_MRDetect_dilution_joined$VCF_factor <- factor(Merged_MRDetect_dilution_joined$VCF, levels = unique(Merged_MRDetect_dilution_joined$VCF))
-
-zscore_lookup <- Merged_MRDetect_dilution_joined %>%
-  filter(Study == "CHARM_healthy") %>%
-  dplyr::select(VCF_factor, Mut_source, Filter_source,
-         detection_rate,
-         detection_rate_as_reads_detected_over_reads_checked,
-         detection_rate_as_reads_detected_over_total_reads,
-         sites_detection_rate) %>%
-  group_by(VCF_factor, Mut_source, Filter_source) %>%
-  summarize(
-    mean_det_charm                     = mean(detection_rate, na.rm = TRUE),
-    sd_det_charm                       = sd(detection_rate, na.rm = TRUE),
-    mean_det_checked_charm             = mean(detection_rate_as_reads_detected_over_reads_checked, na.rm = TRUE),
-    sd_det_checked_charm               = sd(detection_rate_as_reads_detected_over_reads_checked, na.rm = TRUE),
-    mean_det_total_charm               = mean(detection_rate_as_reads_detected_over_total_reads, na.rm = TRUE),
-    sd_det_total_charm                 = sd(detection_rate_as_reads_detected_over_total_reads, na.rm = TRUE),
-    mean_sites_charm                   = mean(sites_detection_rate, na.rm = TRUE),
-    sd_sites_charm                     = sd(sites_detection_rate, na.rm = TRUE)
+xplus_control_coverage_audit <- healthy_reference_candidates %>%
+  filter(.data$healthy_reference_tier == "XPLUS_CHARM_healthy") %>%
+  group_by(.data$VCF_factor, .data$Mut_source, .data$Filter_source) %>%
+  summarise(
+    n_xplus_control_bams = n_distinct(.data$BAM),
+    xplus_control_bams = paste(sort(unique(basename(.data$BAM))), collapse = ";"),
+    n_expected_allowlist_bams = length(xplus_mrdetect_reference_bams()),
+    missing_allowlist_bams = paste(
+      setdiff(xplus_mrdetect_reference_bams(), unique(basename(.data$BAM))),
+      collapse = ";"
+    ),
+    .groups = "drop"
   ) %>%
-  ungroup()
+  arrange(.data$VCF_factor, .data$Mut_source, .data$Filter_source)
+readr::write_csv(
+  xplus_control_coverage_audit,
+  file.path(outdir, "spring2026_dilution_mrdetect_xplus_control_coverage_audit.csv")
+)
+
+missing_xplus_reference <- healthy_reference_choice %>%
+  filter(
+    .data$healthy_reference_requested == "XPLUS_CHARM_healthy",
+    .data$healthy_reference_status != "available"
+  )
+if (nrow(missing_xplus_reference)) {
+  stop(
+    "XPlus dilution rows are missing platform-matched healthy controls for ",
+    nrow(missing_xplus_reference),
+    " VCF/source group(s).",
+    call. = FALSE
+  )
+}
+
+zscore_lookup <- healthy_reference_candidates %>%
+  select(-.data$healthy_reference_requested) %>%
+  inner_join(
+    healthy_reference_choice %>%
+      filter(.data$healthy_reference_status == "available") %>%
+      select(
+        .data$VCF_factor,
+        .data$Mut_source,
+        .data$Filter_source,
+        .data$healthy_reference_requested,
+        .data$healthy_reference_tier
+      ),
+    by = c("VCF_factor", "Mut_source", "Filter_source", "healthy_reference_tier")
+  ) %>%
+  select(
+    .data$VCF_factor,
+    .data$Mut_source,
+    .data$Filter_source,
+    .data$healthy_reference_requested,
+    .data$detection_rate,
+    .data$detection_rate_as_reads_detected_over_reads_checked,
+    .data$detection_rate_as_reads_detected_over_total_reads,
+    .data$sites_detection_rate
+  ) %>%
+  group_by(
+    .data$VCF_factor,
+    .data$Mut_source,
+    .data$Filter_source,
+    .data$healthy_reference_requested
+  ) %>%
+  summarize(
+    mean_det_charm = mean(.data$detection_rate, na.rm = TRUE),
+    sd_det_charm = sd(.data$detection_rate, na.rm = TRUE),
+    mean_det_checked_charm = mean(.data$detection_rate_as_reads_detected_over_reads_checked, na.rm = TRUE),
+    sd_det_checked_charm = sd(.data$detection_rate_as_reads_detected_over_reads_checked, na.rm = TRUE),
+    mean_det_total_charm = mean(.data$detection_rate_as_reads_detected_over_total_reads, na.rm = TRUE),
+    sd_det_total_charm = sd(.data$detection_rate_as_reads_detected_over_total_reads, na.rm = TRUE),
+    mean_sites_charm = mean(.data$sites_detection_rate, na.rm = TRUE),
+    sd_sites_charm = sd(.data$sites_detection_rate, na.rm = TRUE),
+    .groups = "drop"
+  )
 
 Merged_MRDetect_dilution_zscore <- Merged_MRDetect_dilution_joined %>%
-  left_join(zscore_lookup, by = c("VCF_factor","Mut_source","Filter_source")) %>%
+  left_join(
+    healthy_reference_choice %>%
+      select(
+        .data$VCF_factor,
+        .data$Mut_source,
+        .data$Filter_source,
+        .data$healthy_reference_requested,
+        .data$healthy_reference_tier,
+        .data$n_healthy_reference_rows,
+        .data$healthy_reference_status
+      ),
+    by = c("VCF_factor", "Mut_source", "Filter_source", "healthy_reference_requested")
+  ) %>%
+  left_join(
+    zscore_lookup,
+    by = c("VCF_factor", "Mut_source", "Filter_source", "healthy_reference_requested")
+  ) %>%
   mutate(
     detection_rate_zscore_charm                   = (detection_rate - mean_det_charm) / sd_det_charm,
     detection_rate_zscore_reads_checked_charm     = (detection_rate_as_reads_detected_over_reads_checked - mean_det_checked_charm) / sd_det_checked_charm,

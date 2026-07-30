@@ -318,13 +318,32 @@ if (!dir.exists(outdir)) {
 # 3) Read and combine all CSVs, label with ‘source_file’, ‘Mut_source’ & ‘Filter_source’
 # ──────────────────────────────────────────────────────────────────────────────
 csv_files <- list.files(input_root, pattern = "\\.csv$", full.names = TRUE)
-spring2026_mrdetect_files <- spring2026_revision_files(
-  # Spring 2026 MRDetect outputs live under the revision data root. The main
-  # patient processor reads the combined source file but later removes M4CHIP
-  # query BAMs because those are dilution-series rows handled by 1_8A.
+spring2026_patient_mrdetect_files <- spring2026_revision_files(
+  # The combined patient export contains the Spring 2026 query BAMs. M4CHIP
+  # query rows are removed below because they belong to the dilution workflow.
   "MRDetect_outputs",
   "^MRDetect_all_RESULTS_combined_with_source[.]csv$"
 )
+spring2026_final_xplus_control_files <- spring2026_revision_files(
+  "MRDetect_outputs",
+  "^MRDetect_all_RESULTS_combined_with_source_final_healthy_control_Xplus[.]csv$"
+)
+spring2026_incremental_xplus_control_files <- spring2026_revision_files(
+  "MRDetect_outputs",
+  "^MRDetect_all_RESULTS_combined_with_source_healthy_control_rerun[0-9]+[.]csv$"
+)
+# The complete final export is authoritative when present. Incremental reruns
+# remain a supported fallback so the script is still reproducible before final
+# aggregation is available.
+spring2026_xplus_control_files <- if (length(spring2026_final_xplus_control_files)) {
+  spring2026_final_xplus_control_files
+} else {
+  spring2026_incremental_xplus_control_files
+}
+spring2026_mrdetect_files <- unique(c(
+  spring2026_patient_mrdetect_files,
+  spring2026_xplus_control_files
+))
 csv_files <- unique(c(csv_files, spring2026_mrdetect_files))
 if (!length(csv_files)) {
   stop("No MRDetect CSV files found in historical or Spring 2026 revision inputs.", call. = FALSE)
@@ -334,7 +353,19 @@ read_and_label <- function(file) {
   # Historical MRDetect CSVs and Spring 2026 combined exports do not always carry
   # the same file provenance columns. Standardize to filename/source_file and add
   # input_source_file so later code can infer mutation source and audit origin.
-  df <- read_csv(file, show_col_types = FALSE)
+  df <- read_mrdetect_csv_strict(file)
+  if (basename(file) %in% basename(spring2026_xplus_control_files)) {
+    unexpected_bams <- unique(df$BAM[!is_xplus_charm_healthy_bam(df$BAM)])
+    if (length(unexpected_bams)) {
+      stop(
+        "Incremental XPlus healthy-control rerun contains non-allowlisted BAMs: ",
+        paste(utils::head(unexpected_bams, 10L), collapse = ", "),
+        call. = FALSE
+      )
+    }
+    df <- df %>%
+      filter(str_detect(.data$source_file, "_VS_IMG-"))
+  }
   if (!"filename" %in% names(df)) {
     if ("source_file" %in% names(df)) {
       df$filename <- df$source_file
@@ -350,6 +381,16 @@ read_and_label <- function(file) {
 }
 all_files <- bind_rows(lapply(csv_files, read_and_label))
 
+if (length(spring2026_final_xplus_control_files)) {
+  # Do not mix partial legacy control rows with the authoritative all-by-all
+  # final export. Patient/query rows from the other files remain unchanged.
+  all_files <- all_files %>%
+    filter(
+      !is_xplus_charm_healthy_bam(.data$BAM) |
+        .data$input_source_file %in% basename(spring2026_final_xplus_control_files)
+    )
+}
+
 all_files <- all_files %>%
   filter(
     # M4CHIP/PWGVAL rows are dilution-series query BAMs. They are excluded from
@@ -359,6 +400,18 @@ all_files <- all_files %>%
     !str_detect(filename, "^M4CHIP_"),
     !str_detect(input_source_file, "dilution_series")
   )
+
+# Preserve legacy non-control row handling exactly. Only XPlus healthy-control
+# rows can be repeated across incremental rerun exports and therefore require
+# deduplication before estimating the reference mean and SD.
+xplus_control_rows <- all_files %>%
+  filter(is_xplus_charm_healthy_bam(.data$BAM)) %>%
+  deduplicate_mrdetect_results()
+all_files <- bind_rows(
+  all_files %>% filter(!is_xplus_charm_healthy_bam(.data$BAM)),
+  xplus_control_rows
+)
+rm(xplus_control_rows)
 
 all_files <- all_files %>%
   mutate(
@@ -737,8 +790,11 @@ bam_info <- cfWGS_identity_map %>%
     Sample_ID,
     Patient,
     Study,
-    revision_new_xplus_bam = Study == "IMMAGINE_revision_OICR" &
-      existing_repo_patient_timepoint_type_overlap %in% FALSE,
+    # Platform follows the physical sequencing run, not whether the biological
+    # specimen overlaps an existing cohort row. Keep the legacy column name for
+    # downstream compatibility; it now marks every revision-run XPlus BAM,
+    # including the IMG-159 technical repeat.
+    revision_new_xplus_bam = Study == "IMMAGINE_revision_OICR",
     Sample_type,
     timepoint_info
   ) %>%
@@ -831,7 +887,7 @@ Merged_MRDetect <- Merged_MRDetect %>%
     healthy_reference_requested = case_when(
       # Spring 2026 revision queried BAMs were sequenced on the NovaSeq X Plus
       # workflow, so their MRDetect z-scores should use XPlus CHARM controls.
-      # Existing-repo overlap rows stay on the original CHARM background.
+      # Biological overlap does not change the sequencing platform.
       revision_new_xplus_bam_Bam %in% TRUE ~ "XPLUS_CHARM_healthy",
       Study == "XPLUS_CHARM_healthy" ~ "XPLUS_CHARM_healthy",
       TRUE ~ "CHARM_healthy"
@@ -840,6 +896,10 @@ Merged_MRDetect <- Merged_MRDetect %>%
 
 healthy_reference_candidates <- Merged_MRDetect %>%
   filter(Study %in% c("CHARM_healthy", "XPLUS_CHARM_healthy", "HCC_healthy")) %>%
+  filter(
+    .data$Study != "XPLUS_CHARM_healthy" |
+      is_xplus_mrdetect_reference_bam(.data$BAM)
+  ) %>%
   mutate(
     healthy_reference_tier = case_when(
       # Keep XPlus CHARM controls separate from legacy CHARM controls. Historical
@@ -856,6 +916,25 @@ healthy_reference_counts <- healthy_reference_candidates %>%
     VCF_factor, Mut_source, Filter_source, healthy_reference_tier,
     name = "n_healthy_reference_rows"
   )
+
+xplus_control_coverage_audit <- healthy_reference_candidates %>%
+  filter(.data$healthy_reference_tier == "XPLUS_CHARM_healthy") %>%
+  group_by(.data$VCF_factor, .data$Mut_source, .data$Filter_source) %>%
+  summarise(
+    n_xplus_control_bams = n_distinct(.data$BAM),
+    xplus_control_bams = paste(sort(unique(basename(.data$BAM))), collapse = ";"),
+    n_expected_allowlist_bams = length(xplus_mrdetect_reference_bams()),
+    missing_allowlist_bams = paste(
+      setdiff(xplus_mrdetect_reference_bams(), unique(basename(.data$BAM))),
+      collapse = ";"
+    ),
+    .groups = "drop"
+  ) %>%
+  arrange(.data$VCF_factor, .data$Mut_source, .data$Filter_source)
+write_csv(
+  xplus_control_coverage_audit,
+  file.path(outdir, "spring2026_mrdetect_xplus_control_coverage_audit.csv")
+)
 
 healthy_reference_requests <- Merged_MRDetect %>%
   distinct(VCF_factor, Mut_source, Filter_source, healthy_reference_requested)

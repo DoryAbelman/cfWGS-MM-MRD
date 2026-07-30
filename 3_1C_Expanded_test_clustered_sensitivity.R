@@ -110,7 +110,7 @@ dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
 n_bootstrap <- 10000L
 ci_level <- 0.95
 ci_probs <- c((1 - ci_level) / 2, 1 - (1 - ci_level) / 2)
-analysis_date <- "2026-07-23"
+analysis_date <- "2026-07-30"
 
 model_specs <- tribble(
   ~analysis_family, ~model_key, ~probability_column, ~expected_samples, ~expected_patients, ~seed,
@@ -720,9 +720,12 @@ if (nrow(performance) != 32L) {
 
 expected_primary <- tribble(
   ~model_key, ~sensitivity, ~specificity, ~accuracy,
-  "BM_zscore_only_detection_rate", 0.6667, 0.6842, 0.6786,
-  "BM_base_zscore", 0.6667, 0.3684, 0.4643,
-  "Blood_zscore_only_sites", 0.2857, 0.7778, 0.6400,
+  # Frozen-model metrics after routing XPlus MRDetect queries to the complete
+  # 22-library XPlus healthy-control reference (legacy NovaSeq 6000 routing is
+  # unchanged).
+  "BM_zscore_only_detection_rate", 0.6667, 0.8947, 0.8214,
+  "BM_base_zscore", 0.6667, 0.8421, 0.7857,
+  "Blood_zscore_only_sites", 0.2857, 0.9444, 0.7600,
   "Blood_plus_fragment", 0.2857, 0.8889, 0.7200
 )
 metric_tolerance <- 0.0011

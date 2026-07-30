@@ -3169,9 +3169,11 @@ Blood_Test  <- prepare_tbl(combined_discord_tbl_non_frontline2, id_map, baseline
 supp_table8_expected <- tibble::tribble(
   ~sheet,        ~n_rows, ~n_patients,
   "BM_Train",        59L,          25L,
-  "BM_Test",         36L,          19L,
+  # IMG-159 contributes one MFC comparator row from its retained original
+  # NovaSeq 6000 measurement. The revision repeat is not averaged into it.
+  "BM_Test",         37L,          19L,
   "Blood_Train",     60L,          28L,
-  "Blood_Test",      34L,          16L
+  "Blood_Test",      35L,          16L
 )
 supp_table8_tables <- list(
   BM_Train = BM_Train,
