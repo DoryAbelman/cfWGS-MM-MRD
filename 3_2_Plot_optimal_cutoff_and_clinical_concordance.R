@@ -3195,31 +3195,17 @@ purrr::pwalk(supp_table8_expected, function(sheet, n_rows, n_patients) {
   }
 })
 
-# Write the final workbook with filters and readable column widths.
-add_sheet_with_style <- function(wb, sheet_name, data) {
-  addWorksheet(wb, sheet_name)
-  if (is.null(ncol(data)) || is.na(ncol(data)) || ncol(data) == 0) {
-    writeData(wb, sheet_name, data.frame(`(empty)` = character(0)))
-    return(invisible(NULL))
-  }
-  writeData(wb, sheet_name, data, headerStyle = createStyle(textDecoration = "bold"))
-  addFilter(wb, sheet = sheet_name, rows = 1, cols = 1:ncol(data))
-  setColWidths(wb, sheet = sheet_name, cols = 1:ncol(data), widths = "auto")
-}
-
-wb <- createWorkbook()
-add_sheet_with_style(wb, "BM_Train",    BM_Train)
-add_sheet_with_style(wb, "BM_Test",     BM_Test)
-add_sheet_with_style(wb, "Blood_Train", Blood_Train)
-add_sheet_with_style(wb, "Blood_Test",  Blood_Test)
-
-saveWorkbook(wb, "Final Tables and Figures/Supplementary_Table_8_model_comparisons_to_clinical_metrics3.xlsx",
-             overwrite = TRUE)
+# Write the final workbook with writexl.  openxlsx 4.2.8.1 can emit dangling
+# drawing relationships for otherwise data-only workbooks, which causes strict
+# OOXML readers (including openpyxl) to reject the file.  writexl produces a
+# compact, standards-compliant workbook while preserving the exact four-sheet
+# data contract validated above.
+supp_table8_path <- "Final Tables and Figures/Supplementary_Table_8_model_comparisons_to_clinical_metrics3.xlsx"
+writexl::write_xlsx(supp_table8_tables, supp_table8_path)
 
 # Verify the saved workbook itself, rather than trusting only the in-memory
 # objects.  This catches blank-sheet or write-range failures before the file is
 # propagated into the manuscript bundle.
-supp_table8_path <- "Final Tables and Figures/Supplementary_Table_8_model_comparisons_to_clinical_metrics3.xlsx"
 saved_sheet_names <- openxlsx::getSheetNames(supp_table8_path)
 if (!identical(saved_sheet_names, supp_table8_expected$sheet)) {
   stop(
@@ -3241,6 +3227,32 @@ if (!identical(unname(saved_row_counts), supp_table8_expected$n_rows)) {
     call. = FALSE
   )
 }
+saved_patient_counts <- vapply(
+  saved_sheet_names,
+  function(sheet) {
+    serialized <- readxl::read_xlsx(supp_table8_path, sheet = sheet)
+    if (!"Patient" %in% names(serialized)) {
+      stop(
+        "Supplementary Table 8 serialized sheet lacks Patient: ",
+        sheet,
+        call. = FALSE
+      )
+    }
+    dplyr::n_distinct(serialized$Patient)
+  },
+  integer(1)
+)
+if (!identical(
+  unname(saved_patient_counts),
+  supp_table8_expected$n_patients
+)) {
+  stop(
+    "Supplementary Table 8 patient counts changed during workbook serialization. Expected ",
+    paste(supp_table8_expected$n_patients, collapse = ", "), "; observed ",
+    paste(saved_patient_counts, collapse = ", "), ".",
+    call. = FALSE
+  )
+}
 
 # -------------------------------------------------------------------------
 # Manuscript output: Supplementary Table 8
@@ -3253,13 +3265,65 @@ if (!identical(unname(saved_row_counts), supp_table8_expected$n_rows)) {
 # Why it is here:
 #   This is the code-generated workbook mapped to final Supplementary Table 8.
 # -------------------------------------------------------------------------
-ms_copy_artifact(
+supp_table8_destination <- ms_copy_artifact(
   source_path = "Final Tables and Figures/Supplementary_Table_8_model_comparisons_to_clinical_metrics3.xlsx",
   artifact_id = "STABLE8",
   role = "workbook_xlsx",
   description = "Model comparisons to clinical metrics workbook used as Supplementary Table 8.",
   script_name = "3_2_Plot_optimal_cutoff_and_clinical_concordance.R"
 )
+supp_table8_current_final_destination <- ms_copy_current_final_artifact(
+  artifact_id = "STABLE8"
+)
+
+# Validate the canonical workbook, its traceability copy, and the current-final
+# manuscript mirror so serialization or propagation failures stop this original
+# workflow without requiring a separate repair script.
+supp_table8_validation_targets <- unique(c(
+  supp_table8_path,
+  supp_table8_destination,
+  supp_table8_current_final_destination
+))
+for (target in supp_table8_validation_targets) {
+  target_sheets <- readxl::excel_sheets(target)
+  if (!identical(target_sheets, supp_table8_expected$sheet)) {
+    stop(
+      "Supplementary Table 8 staged artifact has incorrect sheet names: ",
+      target,
+      call. = FALSE
+    )
+  }
+  target_rows <- vapply(
+    target_sheets,
+    function(sheet) nrow(readxl::read_xlsx(target, sheet = sheet)),
+    integer(1)
+  )
+  if (!identical(unname(target_rows), supp_table8_expected$n_rows)) {
+    stop(
+      "Supplementary Table 8 staged artifact has incorrect row counts: ",
+      target,
+      call. = FALSE
+    )
+  }
+}
+
+supp_table8_audit <- data.frame(
+  target = normalizePath(
+    supp_table8_validation_targets,
+    winslash = "/",
+    mustWork = TRUE
+  ),
+  bytes = file.info(supp_table8_validation_targets)$size,
+  md5 = unname(tools::md5sum(supp_table8_validation_targets)),
+  status = "PASS",
+  stringsAsFactors = FALSE
+)
+supp_table8_audit_path <- file.path(
+  "Scripts_2025", "Final_Scripts", "final_manuscript_objects", "logs",
+  "Supplementary_Table_8_full22_valid_xlsx_audit.csv"
+)
+dir.create(dirname(supp_table8_audit_path), recursive = TRUE, showWarnings = FALSE)
+readr::write_csv(supp_table8_audit, supp_table8_audit_path)
 
 # ------------------------------------------------------------------------------
 # SECTION: MAIN FIGURE 3E AND MAIN FIGURE 4D - PROBABILITY VS CLINICAL ASSAYS

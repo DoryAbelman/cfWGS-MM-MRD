@@ -2081,16 +2081,23 @@ make_cVAF_hc_plot <- function(pid,
     abort(paste0("No data found in `dat` for patient ", pid, "."))
   }
   
-  # Determine relapse / progressor status (≤180 days at ANY timepoint)
+  # Determine whether relapse occurred within 2 years after the last sample
+  # displayed in this plot. Negative values would indicate relapse before the
+  # sample and therefore do not qualify as a subsequent relapse.
   if (!"Num_days_to_closest_relapse" %in% names(pat_df)) {
     pat_is_prog <- NA
   } else {
-    pat_is_prog <- any(pat_df$Num_days_to_closest_relapse <= 180, na.rm = TRUE)
+    days_from_last_sample_to_relapse <- dplyr::last(
+      pat_df$Num_days_to_closest_relapse
+    )
+    pat_is_prog <- is.finite(days_from_last_sample_to_relapse) &&
+      days_from_last_sample_to_relapse >= 0 &&
+      days_from_last_sample_to_relapse <= 2 * 365
   }
   
   # Choose colour & title suffix
   pat_col <- if (isTRUE(pat_is_prog)) progressor_color else nonprogressor_color
-  title_suffix <- if (isTRUE(pat_is_prog)) "Relapsed" else "Non-relapsed"
+  title_suffix <- if (isTRUE(pat_is_prog)) "Relapsed" else "Stable"
   
   # x-axis ordering
   if (is.null(tp_order)) {
@@ -3711,14 +3718,14 @@ all_evaluable_cohort_summary <- all_evaluable_feature_matrix %>%
 
 expected_all_evaluable_counts <- tibble(
   Cohort = c("Training", "Test"),
-  n_patients = c(44L, 29L)
+  n_patients = c(44L, 27L)
 )
 observed_all_evaluable_counts <- all_evaluable_cohort_summary %>%
   select(Cohort, n_patients)
 if (!identical(observed_all_evaluable_counts, expected_all_evaluable_counts)) {
   stop(
     "All-evaluable ED4 cohort denominator drifted from the validated ",
-    "44-training/29-test patient set.",
+    "44-training/27-test patient set.",
     call. = FALSE
   )
 }
@@ -3783,7 +3790,7 @@ p_heatmap_tri_all_evaluable <- ggplot(
     x = NULL,
     y = NULL,
     title = "Spearman correlation heatmap",
-    subtitle = "All evaluable cases: 44 training + 29 test patients"
+    subtitle = "All evaluable cases: 44 training + 27 test patients"
   )
 
 all_evaluable_heatmap_path <- file.path(
@@ -3805,7 +3812,7 @@ ms_copy_artifact(
   role = "all_evaluable_figure_panel_png",
   description = paste(
     "Alternate all-evaluable Extended Data Figure 4 Spearman heatmap;",
-    "44 training and 29 test patients."
+    "44 training and 27 test patients."
   ),
   script_name = "2_4_Longitudinal_features_analysis.R"
 )

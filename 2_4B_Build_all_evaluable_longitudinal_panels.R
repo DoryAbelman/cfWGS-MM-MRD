@@ -24,6 +24,15 @@
 #       Extended_Data_Figure_3A_all_evaluable_BM_raw_longitudinal_pseudolog.png
 #       Extended_Data_Figure_3B_all_evaluable_blood_raw_longitudinal_pseudolog.png
 #       Extended_Data_Figure_3C_all_evaluable_fragmentomics_longitudinal_pseudolog.png
+#     reviewer_alternative_terminal_summary_v2/
+#       Figure_2B_V2_trajectory_plus_terminal_summary.{png,pdf,tiff}
+#       Figure_2C_V2_trajectory_plus_terminal_summary.{png,pdf,tiff}
+#       Figure_2D_V2_trajectory_plus_terminal_summary.{png,pdf,tiff}
+#       Extended_Data_Figure_3A_V2_trajectory_plus_terminal_summary.{png,pdf,tiff}
+#       Extended_Data_Figure_3B_V2_trajectory_plus_terminal_summary.{png,pdf,tiff}
+#       Extended_Data_Figure_3C_V2_trajectory_plus_terminal_summary.{png,pdf,tiff}
+#       terminal_sample_patient_level_source_data.csv
+#       terminal_sample_group_statistics.csv
 #       *_source_data.csv
 #       all_evaluable_longitudinal_panel_qc.csv
 #
@@ -1093,7 +1102,7 @@ bm_panel <- make_mutation_panel(
   bm_plot_df,
   title = "Baseline BM-informed longitudinal tracking: Relapsed vs Non-relapsed patients",
   cvaf_cap_at = 1500,
-  sites_cap_at = 1000,
+  sites_cap_at = 500,
   show_cap_labels = FALSE,
   x_cap_at = 250
 )
@@ -1169,6 +1178,1243 @@ ed3c_panel_pseudolog <- make_extended_fragmentomics_panel(
   ed3c_plot_df,
   x_cap_at = 250,
   y_transform = "pseudo_log"
+)
+
+# ------------------------------------------------------------------------------
+# Reviewer-requested alternative: trajectories plus terminal patient summaries
+# ------------------------------------------------------------------------------
+#
+# Referee 5 noted that the trajectory panels were visually dense and asked for
+# a display that made the between-group comparison more direct. This V2 keeps
+# the complete within-patient trajectories but adds, immediately to the right
+# of each metric, a narrow patient-level box-and-jitter summary of the terminal
+# evaluable observation.
+#
+# Each patient contributes at most once per metric to the statistical
+# comparison. The comparison is deliberately two-sided and exploratory:
+# Wilcoxon rank-sum p values are Benjamini-Hochberg adjusted across all 12
+# prespecified terminal-point comparisons (six panels x two metrics). The
+# terminal sample is selected deterministically by week, date, timepoint and
+# sample code. A hard validation requires the terminal row's sample-level
+# relapse flag to agree with the patient-level trajectory facet.
+
+v2_output_dir <- file.path(output_dir, "reviewer_alternative_terminal_summary_v2")
+dir.create(v2_output_dir, recursive = TRUE, showWarnings = FALSE)
+
+terminal_group_levels <- c(
+  "No relapse within 180 days",
+  "Relapse within 180 days"
+)
+terminal_group_colors <- c(
+  "No relapse within 180 days" = "black",
+  "Relapse within 180 days" = "#EF3B3A"
+)
+
+select_terminal_observations <- function(plot_df, panel_id, panel_family) {
+  required_columns(
+    plot_df,
+    c(
+      "Patient", "Metric", "Value", "Weeks_Since_Baseline", "Date",
+      "Timepoint", "Sample_Code", "Cohort", "relapse_within_180",
+      "patient_relapse180"
+    ),
+    panel_id
+  )
+
+  terminal_df <- plot_df %>%
+    filter(is.finite(Value), !is.na(Patient), !is.na(Metric)) %>%
+    arrange(
+      Patient, Metric, Weeks_Since_Baseline, Date,
+      coalesce(Timepoint, ""), coalesce(Sample_Code, "")
+    ) %>%
+    group_by(Patient, Metric) %>%
+    slice_tail(n = 1L) %>%
+    ungroup() %>%
+    mutate(
+      panel = panel_id,
+      panel_family = panel_family,
+      patient_relapse180_logical =
+        as.character(patient_relapse180) == "TRUE",
+      terminal_group = factor(
+        if_else(
+          patient_relapse180_logical,
+          terminal_group_levels[[2]],
+          terminal_group_levels[[1]]
+        ),
+        levels = terminal_group_levels
+      )
+    )
+
+  duplicate_keys <- terminal_df %>%
+    count(panel, Patient, Metric, name = "n") %>%
+    filter(n != 1L)
+  if (nrow(duplicate_keys) > 0) {
+    stop(
+      "Terminal-point selection did not produce exactly one row per ",
+      "patient and metric for ", panel_id, ".",
+      call. = FALSE
+    )
+  }
+
+  discordant_flags <- terminal_df %>%
+    filter(
+      replace_na(relapse_within_180, FALSE) !=
+        patient_relapse180_logical
+    )
+  if (nrow(discordant_flags) > 0) {
+    stop(
+      "Terminal sample-level relapse flags disagree with patient-level ",
+      "trajectory facets for ", panel_id, ". Review endpoint routing before ",
+      "using the terminal comparison.",
+      call. = FALSE
+    )
+  }
+
+  terminal_df
+}
+
+terminal_point_data <- bind_rows(
+  select_terminal_observations(bm_plot_df, "Figure 2B", "Figure 2"),
+  select_terminal_observations(blood_plot_df, "Figure 2C", "Figure 2"),
+  select_terminal_observations(fragmentomics_plot_df, "Figure 2D", "Figure 2"),
+  select_terminal_observations(
+    ed3a_plot_df, "Extended Data Figure 3A", "Extended Data Figure 3"
+  ),
+  select_terminal_observations(
+    ed3b_plot_df, "Extended Data Figure 3B", "Extended Data Figure 3"
+  ),
+  select_terminal_observations(
+    ed3c_plot_df, "Extended Data Figure 3C", "Extended Data Figure 3"
+  )
+)
+
+rank_biserial_effect <- function(relapse_values, no_relapse_values) {
+  if (length(relapse_values) == 0L || length(no_relapse_values) == 0L) {
+    return(NA_real_)
+  }
+  pairwise_scores <- outer(
+    relapse_values,
+    no_relapse_values,
+    FUN = function(relapse_value, no_relapse_value) {
+      as.numeric(relapse_value > no_relapse_value) +
+        0.5 * as.numeric(relapse_value == no_relapse_value)
+    }
+  )
+  2 * mean(pairwise_scores) - 1
+}
+
+terminal_statistics <- terminal_point_data %>%
+  group_by(panel_family, panel, Metric) %>%
+  group_modify(~ {
+    relapse_values <- .x$Value[.x$patient_relapse180_logical]
+    no_relapse_values <- .x$Value[!.x$patient_relapse180_logical]
+
+    if (length(relapse_values) < 2L || length(no_relapse_values) < 2L) {
+      stop(
+        "At least two patients per relapse group are required for panel ",
+        unique(.x$panel), ", metric ", unique(.x$Metric), ".",
+        call. = FALSE
+      )
+    }
+
+    wilcox_result <- suppressWarnings(
+      wilcox.test(
+        relapse_values,
+        no_relapse_values,
+        alternative = "two.sided",
+        exact = FALSE,
+        conf.int = FALSE
+      )
+    )
+
+    tibble(
+      n_no_relapse = length(no_relapse_values),
+      n_relapse = length(relapse_values),
+      median_no_relapse = median(no_relapse_values),
+      q1_no_relapse = quantile(no_relapse_values, 0.25, names = FALSE),
+      q3_no_relapse = quantile(no_relapse_values, 0.75, names = FALSE),
+      median_relapse = median(relapse_values),
+      q1_relapse = quantile(relapse_values, 0.25, names = FALSE),
+      q3_relapse = quantile(relapse_values, 0.75, names = FALSE),
+      median_difference_relapse_minus_no_relapse =
+        median(relapse_values) - median(no_relapse_values),
+      rank_biserial_relapse_vs_no_relapse =
+        rank_biserial_effect(relapse_values, no_relapse_values),
+      wilcoxon_p_two_sided = unname(wilcox_result$p.value)
+    )
+  }) %>%
+  ungroup() %>%
+  group_by(panel_family) %>%
+  mutate(
+    wilcoxon_q_bh_within_figure_family =
+      p.adjust(wilcoxon_p_two_sided, method = "BH")
+  ) %>%
+  ungroup() %>%
+  mutate(
+    wilcoxon_q_bh_global_12_tests =
+      p.adjust(wilcoxon_p_two_sided, method = "BH")
+  ) %>%
+  arrange(panel_family, panel, Metric)
+
+terminal_group_counts <- terminal_point_data %>%
+  count(
+    panel_family, panel, Metric, terminal_group, Cohort,
+    name = "n_patients"
+  ) %>%
+  arrange(panel_family, panel, Metric, terminal_group, Cohort)
+
+format_q_value <- function(q_value) {
+  if (is.na(q_value)) {
+    return("q = NA")
+  }
+  if (q_value < 0.001) {
+    return("q < 0.001")
+  }
+  paste0("q = ", formatC(q_value, format = "f", digits = 3))
+}
+
+terminal_axis_labels <- function(endpoint_df) {
+  endpoint_counts <- endpoint_df %>%
+    count(terminal_group, name = "n")
+  count_for <- function(group_label) {
+    out <- endpoint_counts$n[
+      as.character(endpoint_counts$terminal_group) == group_label
+    ]
+    if (length(out) == 0L) 0L else as.integer(out[[1]])
+  }
+  c(
+    "No relapse within 180 days" =
+      paste0("No relapse\nn=", count_for(terminal_group_levels[[1]])),
+    "Relapse within 180 days" =
+      paste0("Relapse\nn=", count_for(terminal_group_levels[[2]]))
+  )
+}
+
+terminal_display_limits <- function(
+    metric_df,
+    cap_at = NA_real_,
+    include_zero_for_nonnegative = TRUE) {
+  observed_range <- range(metric_df$Value, na.rm = TRUE)
+  if (is.finite(cap_at)) {
+    return(c(0, cap_at * 1.04))
+  }
+  observed_span <- diff(observed_range)
+  if (!is.finite(observed_span) || observed_span == 0) {
+    observed_span <- max(abs(observed_range), 1) * 0.1
+  }
+  padding <- observed_span * 0.035
+  lower <- observed_range[[1]] - padding
+  upper <- observed_range[[2]] + padding
+  if (isTRUE(include_zero_for_nonnegative) && observed_range[[1]] >= 0) {
+    lower <- 0
+  }
+  c(lower, upper)
+}
+
+add_terminal_y_scale <- function(
+    plot,
+    metric_df,
+    y_transform = c("identity", "pseudo_log"),
+    y_transform_sigma = 1,
+    y_transform_breaks = NULL,
+    reverse_display = FALSE,
+    display_as_percent = FALSE,
+    cap_at = NA_real_,
+    include_zero_for_nonnegative = TRUE) {
+  y_transform <- match.arg(y_transform)
+  display_limits <- terminal_display_limits(
+    metric_df,
+    cap_at = cap_at,
+    include_zero_for_nonnegative = include_zero_for_nonnegative
+  )
+  axis_labels <- if (isTRUE(display_as_percent)) {
+    scales::label_percent(accuracy = 1)
+  } else {
+    scales::label_number(big.mark = ",")
+  }
+  axis_breaks <- if (is.null(y_transform_breaks)) {
+    waiver()
+  } else {
+    y_transform_breaks
+  }
+
+  if (y_transform == "identity") {
+    if (isTRUE(reverse_display)) {
+      plot <- plot + scale_y_reverse(
+        breaks = axis_breaks,
+        labels = axis_labels
+      )
+    } else {
+      plot <- plot + scale_y_continuous(
+        breaks = axis_breaks,
+        labels = axis_labels
+      )
+    }
+  } else {
+    pseudo_log_transform <- scales::pseudo_log_trans(
+      sigma = y_transform_sigma,
+      base = 10
+    )
+    display_transform <- if (isTRUE(reverse_display)) {
+      scales::transform_compose(
+        pseudo_log_transform,
+        scales::reverse_trans()
+      )
+    } else {
+      pseudo_log_transform
+    }
+    plot <- plot + scale_y_continuous(
+      trans = display_transform,
+      breaks = axis_breaks,
+      labels = axis_labels
+    )
+  }
+
+  plot + coord_cartesian(ylim = display_limits, clip = "on")
+}
+
+make_terminal_summary_plot <- function(
+    plot_df,
+    metric,
+    metric_title = metric,
+    y_axis_label = NULL,
+    y_transform = c("identity", "pseudo_log"),
+    y_transform_sigma = 1,
+    y_transform_breaks = NULL,
+    reverse_display = FALSE,
+    display_as_percent = FALSE,
+    cap_at = NA_real_,
+    compact = TRUE,
+    show_cohort_shapes = TRUE,
+    use_endpoint_scale = FALSE) {
+  y_transform <- match.arg(y_transform)
+  panel_id <- unique(plot_df$panel)
+  if (length(panel_id) != 1L) {
+    stop("Endpoint summary data must contain exactly one panel.", call. = FALSE)
+  }
+  metric_df <- plot_df %>% filter(Metric == metric)
+  endpoint_df <- terminal_point_data %>%
+    filter(panel == panel_id, Metric == metric)
+  metric_stats <- terminal_statistics %>%
+    filter(panel == panel_id, Metric == metric)
+  if (nrow(endpoint_df) == 0L || nrow(metric_stats) != 1L) {
+    stop(
+      "Missing endpoint rows or statistics for ", panel_id, " / ", metric,
+      call. = FALSE
+    )
+  }
+
+  endpoint_labels <- terminal_axis_labels(endpoint_df)
+  endpoint_df <- endpoint_df %>%
+    mutate(
+      Value_plot = if (is.finite(cap_at)) pmin(Value, cap_at) else Value
+    )
+  q_label <- format_q_value(
+    metric_stats$wilcoxon_q_bh_global_12_tests[[1]]
+  )
+
+  endpoint_plot <- ggplot(
+    endpoint_df,
+    aes(x = terminal_group, y = Value)
+  ) +
+    geom_hline(
+      data = tibble(yintercept = 0),
+      aes(yintercept = yintercept),
+      colour = "grey82",
+      linewidth = 0.3,
+      linetype = "22",
+      inherit.aes = FALSE
+    ) +
+    geom_boxplot(
+      aes(fill = terminal_group),
+      width = 0.56,
+      outlier.shape = NA,
+      colour = "grey20",
+      linewidth = 0.45,
+      alpha = 0.18
+    ) +
+    scale_x_discrete(labels = endpoint_labels) +
+    scale_fill_manual(values = terminal_group_colors, guide = "none") +
+    scale_colour_manual(values = terminal_group_colors, guide = "none") +
+    labs(
+      title = if (isTRUE(compact)) {
+        "Terminal evaluable sample"
+      } else {
+        paste0("Terminal evaluable sample: ", metric_title)
+      },
+      subtitle = if (isTRUE(compact)) {
+        paste0(q_label, "\nBH-adjusted")
+      } else {
+        paste0(
+          "Patient-level two-sided Wilcoxon; ", q_label,
+          "\n(BH across 12 comparisons)"
+        )
+      },
+      x = NULL,
+      y = y_axis_label
+    ) +
+    theme_classic(base_size = 9) +
+    theme(
+      plot.title = element_text(
+        size = if (isTRUE(compact)) 9.5 else 10.5,
+        face = "bold",
+        hjust = 0.5
+      ),
+      plot.subtitle = element_text(
+        size = if (isTRUE(compact)) 7.4 else 8.3,
+        hjust = 0.5,
+        lineheight = 0.95
+      ),
+      axis.title.y = element_text(
+        size = if (isTRUE(compact)) 6.8 else 8.5
+      ),
+      axis.text.x = element_text(
+        size = if (isTRUE(compact)) 7.6 else 8.5,
+        lineheight = 0.9
+      ),
+      axis.text.y = element_text(
+        size = if (isTRUE(compact)) 6.5 else 7.8
+      ),
+      axis.ticks.y = element_line(linewidth = 0.25),
+      legend.position = "bottom",
+      legend.title = element_text(size = 7.5),
+      legend.text = element_text(size = 7.5),
+      legend.key.height = unit(0.32, "cm"),
+      plot.margin = margin(5.5, 5.5, 5.5, 2)
+    )
+
+  if (isTRUE(show_cohort_shapes)) {
+    endpoint_plot <- endpoint_plot +
+      geom_point(
+        aes(y = Value_plot, colour = terminal_group, shape = Cohort),
+        position = position_jitter(
+          width = 0.12,
+          height = 0,
+          seed = 20260730
+        ),
+        size = 1.75,
+        alpha = 0.82,
+        stroke = 0.35
+      ) +
+      scale_shape_manual(
+        values = c("Frontline" = 16, "Non-frontline" = 17),
+        labels = cohort_display_labels,
+        name = "Cohort"
+      )
+  } else {
+    endpoint_plot <- endpoint_plot +
+      geom_point(
+        aes(y = Value_plot, colour = terminal_group),
+        position = position_jitter(
+          width = 0.12,
+          height = 0,
+          seed = 20260730
+        ),
+        shape = 16,
+        size = 1.9,
+        alpha = 0.82
+      )
+  }
+
+  scale_data <- if (isTRUE(use_endpoint_scale)) endpoint_df else metric_df
+
+  add_terminal_y_scale(
+    endpoint_plot,
+    metric_df = scale_data,
+    y_transform = y_transform,
+    y_transform_sigma = y_transform_sigma,
+    y_transform_breaks = y_transform_breaks,
+    reverse_display = reverse_display,
+    display_as_percent = display_as_percent,
+    cap_at = cap_at,
+    include_zero_for_nonnegative = !isTRUE(use_endpoint_scale)
+  )
+}
+
+make_v2_metric_block <- function(
+    plot_df,
+    panel_id,
+    metric,
+    metric_title,
+    y_label,
+    cap_at = NA_real_,
+    reverse_display = FALSE,
+    show_cap_labels = TRUE,
+    x_cap_at = 250,
+    y_transform = c("identity", "pseudo_log"),
+    y_transform_sigma = 1,
+    y_transform_breaks = NULL,
+    display_as_percent = FALSE,
+    overcap_shape = 17,
+    prefix_cap_axis_label = TRUE,
+    summary_y_transform = NULL,
+    summary_y_transform_sigma = NULL,
+    summary_y_transform_breaks = NULL,
+    summary_reverse_display = FALSE,
+    summary_display_as_percent = NULL,
+    summary_y_label = NULL) {
+  y_transform <- match.arg(y_transform)
+  if (is.null(summary_y_transform)) {
+    summary_y_transform <- y_transform
+  }
+  if (is.null(summary_y_transform_sigma)) {
+    summary_y_transform_sigma <- y_transform_sigma
+  }
+  if (is.null(summary_y_transform_breaks)) {
+    summary_y_transform_breaks <- y_transform_breaks
+  }
+  if (is.null(summary_display_as_percent)) {
+    summary_display_as_percent <- display_as_percent
+  }
+  if (is.null(summary_y_label)) {
+    summary_y_label <- y_label
+  }
+  panel_plot_df <- plot_df %>% mutate(panel = panel_id)
+
+  trajectory_plot <- make_metric_panel(
+    plot_df,
+    metric = metric,
+    panel_title = metric_title,
+    y_label = y_label,
+    cap_at = cap_at,
+    reverse_display = reverse_display,
+    show_cap_labels = show_cap_labels,
+    x_cap_at = x_cap_at,
+    y_transform = y_transform,
+    y_transform_sigma = y_transform_sigma,
+    y_transform_breaks = y_transform_breaks,
+    display_as_percent = display_as_percent,
+    overcap_shape = overcap_shape,
+    prefix_cap_axis_label = prefix_cap_axis_label
+  ) +
+    theme(
+      plot.title = element_text(size = 11.5),
+      strip.text = element_text(size = 8.2),
+      axis.title = element_text(size = 9.5),
+      axis.text = element_text(size = 8),
+      legend.text = element_text(size = 8),
+      legend.title = element_text(size = 8),
+      legend.position = "none"
+    )
+
+  endpoint_plot <- make_terminal_summary_plot(
+    panel_plot_df,
+    metric = metric,
+    metric_title = metric_title,
+    y_axis_label = summary_y_label,
+    y_transform = summary_y_transform,
+    y_transform_sigma = summary_y_transform_sigma,
+    y_transform_breaks = summary_y_transform_breaks,
+    reverse_display = summary_reverse_display,
+    display_as_percent = summary_display_as_percent,
+    cap_at = NA_real_,
+    compact = TRUE,
+    show_cohort_shapes = FALSE,
+    use_endpoint_scale = TRUE
+  )
+
+  trajectory_plot + endpoint_plot +
+    plot_layout(widths = c(4.7, 1.55), guides = "collect")
+}
+
+make_v2_bottom_panel <- function(
+    trajectory_panel,
+    plot_df,
+    panel_id,
+    overall_title,
+    first_metric,
+    second_metric) {
+  panel_plot_df <- plot_df %>% mutate(panel = panel_id)
+  first_summary <- do.call(
+    make_terminal_summary_plot,
+    c(
+      list(
+        plot_df = panel_plot_df,
+        compact = FALSE,
+        show_cohort_shapes = FALSE
+      ),
+      first_metric
+    )
+  )
+  second_summary <- do.call(
+    make_terminal_summary_plot,
+    c(
+      list(
+        plot_df = panel_plot_df,
+        compact = FALSE,
+        show_cohort_shapes = FALSE
+      ),
+      second_metric
+    )
+  )
+  summary_row <- (first_summary | second_summary) +
+    plot_layout(widths = c(1, 1), guides = "collect")
+
+  trajectory_panel / summary_row +
+    plot_layout(heights = c(3.4, 1.7), guides = "collect") +
+    plot_annotation(
+      title = overall_title,
+      theme = theme(
+        plot.title = element_text(
+          size = 16,
+          face = "bold",
+          hjust = 0.5
+        )
+      )
+    ) &
+    theme(legend.position = "bottom")
+}
+
+make_v2_two_metric_panel <- function(
+    plot_df,
+    panel_id,
+    overall_title,
+    first_metric,
+    second_metric) {
+  first_block <- do.call(
+    make_v2_metric_block,
+    c(list(plot_df = plot_df, panel_id = panel_id), first_metric)
+  )
+  second_block <- do.call(
+    make_v2_metric_block,
+    c(list(plot_df = plot_df, panel_id = panel_id), second_metric)
+  )
+
+  (first_block | second_block) +
+    plot_layout(guides = "keep") +
+    plot_annotation(
+      title = overall_title,
+      caption = paste(
+        "Black: no relapse within 180 days; red: relapse within 180 days.",
+        "Solid trajectories: training cohort; dashed trajectories: test cohort.",
+        "Summary plots use metric-specific linear endpoint-focused scales."
+      ),
+      theme = theme(
+        plot.title = element_text(size = 16, face = "bold", hjust = 0.5),
+        plot.caption = element_text(size = 8, hjust = 0.5)
+      )
+    ) &
+    theme(legend.position = "none")
+}
+
+v2_panels <- list(
+  Figure_2B_V2_trajectory_plus_terminal_summary =
+    make_v2_bottom_panel(
+      trajectory_panel = bm_panel,
+      plot_df = bm_plot_df,
+      panel_id = "Figure 2B",
+      overall_title =
+        "Baseline BM-informed longitudinal tracking: Relapsed vs Non-relapsed patients",
+      first_metric = list(
+        metric = "cVAF_z",
+        metric_title = "Cumulative VAF Z-score",
+        y_axis_label = "Cumulative VAF (Z)",
+        y_transform = "identity"
+      ),
+      second_metric = list(
+        metric = "sites_z",
+        metric_title = "Proportion of Sites Detected Z-score",
+        y_axis_label = "Sites detected (Z)",
+        y_transform = "identity"
+      )
+    ),
+  Figure_2C_V2_trajectory_plus_terminal_summary =
+    make_v2_bottom_panel(
+      trajectory_panel = blood_panel_capped300,
+      plot_df = blood_plot_df,
+      panel_id = "Figure 2C",
+      overall_title =
+        "Baseline cfDNA-informed longitudinal tracking: Relapsed vs Non-relapsed patients",
+      first_metric = list(
+        metric = "cVAF_z",
+        metric_title = "Cumulative VAF Z-score",
+        y_axis_label = "Cumulative VAF (Z)",
+        y_transform = "identity"
+      ),
+      second_metric = list(
+        metric = "sites_z",
+        metric_title = "Proportion of Sites Detected Z-score",
+        y_axis_label = "Sites detected (Z)",
+        y_transform = "identity"
+      )
+    ),
+  Figure_2D_V2_trajectory_plus_terminal_summary =
+    make_v2_bottom_panel(
+      trajectory_panel = fragmentomics_panel,
+      plot_df = fragmentomics_plot_df,
+      panel_id = "Figure 2D",
+      overall_title =
+        "Fragmentomic tumour-agnostic longitudinal tracking: Relapsed vs Non-relapsed patients",
+      first_metric = list(
+        metric = "FS",
+        metric_title = "Fragment-size score",
+        y_axis_label = "Fragment-size score",
+        y_transform = "identity"
+      ),
+      second_metric = list(
+        metric = "Mean.Coverage",
+        metric_title = "Mean cfDNA coverage (lower = tumour-associated)",
+        y_axis_label = "Mean cfDNA coverage",
+        y_transform = "identity",
+        y_transform_breaks = c(0.9, 1)
+      )
+    ),
+  Extended_Data_Figure_3A_V2_trajectory_plus_terminal_summary =
+    make_v2_bottom_panel(
+      trajectory_panel = ed3a_panel,
+      plot_df = ed3a_plot_df,
+      panel_id = "Extended Data Figure 3A",
+      overall_title =
+        "Baseline BM-informed longitudinal tracking: Relapsed vs Non-relapsed patients",
+      first_metric = list(
+        metric = "cVAF",
+        metric_title = "Cumulative VAF",
+        y_axis_label = "Cumulative VAF",
+        y_transform = "identity",
+        display_as_percent = TRUE
+      ),
+      second_metric = list(
+        metric = "sites",
+        metric_title = "Proportion of Sites Detected",
+        y_axis_label = "Sites detected",
+        y_transform = "identity",
+        display_as_percent = TRUE
+      )
+    ),
+  Extended_Data_Figure_3B_V2_trajectory_plus_terminal_summary =
+    make_v2_bottom_panel(
+      trajectory_panel = ed3b_panel,
+      plot_df = ed3b_plot_df,
+      panel_id = "Extended Data Figure 3B",
+      overall_title =
+        "Baseline cfDNA-informed longitudinal tracking: Relapsed vs Non-relapsed patients",
+      first_metric = list(
+        metric = "cVAF",
+        metric_title = "Cumulative VAF",
+        y_axis_label = "Cumulative VAF",
+        y_transform = "identity",
+        display_as_percent = TRUE
+      ),
+      second_metric = list(
+        metric = "sites",
+        metric_title = "Proportion of Sites Detected",
+        y_axis_label = "Sites detected",
+        y_transform = "identity",
+        display_as_percent = TRUE
+      )
+    ),
+  Extended_Data_Figure_3C_V2_trajectory_plus_terminal_summary =
+    make_v2_bottom_panel(
+      trajectory_panel = ed3c_panel,
+      plot_df = ed3c_plot_df,
+      panel_id = "Extended Data Figure 3C",
+      overall_title =
+        "Fragmentomic tumour-agnostic longitudinal tracking: Relapsed vs Non-relapsed patients",
+      first_metric = list(
+        metric = "Proportion.Short",
+        metric_title = "Short-fragment proportion",
+        y_axis_label = "Short cfDNA fragments",
+        y_transform = "identity",
+        display_as_percent = TRUE
+      ),
+      second_metric = list(
+        metric = "TF_ichorCNA",
+        metric_title = "cfDNA tumour fraction",
+        y_axis_label = "cfDNA tumour fraction",
+        y_transform = "identity",
+        display_as_percent = TRUE
+      )
+    )
+)
+
+walk2(
+  v2_panels,
+  names(v2_panels),
+  function(panel_plot, file_stem) {
+    ggsave(
+      file.path(v2_output_dir, paste0(file_stem, ".png")),
+      plot = panel_plot,
+      width = 12,
+      height = 7.2,
+      dpi = 600,
+      bg = "white"
+    )
+    ggsave(
+      file.path(v2_output_dir, paste0(file_stem, ".pdf")),
+      plot = panel_plot,
+      width = 12,
+      height = 7.2,
+      device = cairo_pdf,
+      bg = "white"
+    )
+    ggsave(
+      file.path(v2_output_dir, paste0(file_stem, ".tiff")),
+      plot = panel_plot,
+      width = 180,
+      height = 108,
+      units = "mm",
+      dpi = 300,
+      compression = "lzw",
+      bg = "white"
+    )
+  }
+)
+
+# Narrow summaries immediately to the right of each trajectory metric. These
+# retain the active all-evaluable trajectory display used in the submitted
+# PowerPoint while adding the reviewer-requested patient-level comparison.
+adjacent_output_dir <- file.path(v2_output_dir, "adjacent")
+dir.create(adjacent_output_dir, recursive = TRUE, showWarnings = FALSE)
+
+adjacent_v2_panels <- list(
+  Figure_2B_V2_adjacent_terminal_summary =
+    make_v2_two_metric_panel(
+      bm_plot_df,
+      panel_id = "Figure 2B",
+      overall_title =
+        "Baseline BM-informed longitudinal tracking: Relapsed vs Non-relapsed patients",
+      first_metric = list(
+        metric = "cVAF_z",
+        metric_title = "Cumulative VAF Z-score",
+        y_label = "Cumulative VAF (Z)",
+        cap_at = 1500,
+        show_cap_labels = FALSE,
+        y_transform = "identity",
+        summary_y_transform = "identity",
+        summary_y_label = "cVAF Z"
+      ),
+      second_metric = list(
+        metric = "sites_z",
+        metric_title = "Proportion of Sites Detected Z-score",
+        y_label = "Prop. Mutant Sites Detected (Z)",
+        cap_at = 500,
+        show_cap_labels = FALSE,
+        y_transform = "identity",
+        summary_y_transform = "identity",
+        summary_y_label = "Sites Z"
+      )
+    ),
+  Figure_2C_V2_adjacent_terminal_summary =
+    make_v2_two_metric_panel(
+      blood_plot_df,
+      panel_id = "Figure 2C",
+      overall_title =
+        "Baseline cfDNA-informed longitudinal tracking: Relapsed vs Non-relapsed patients",
+      first_metric = list(
+        metric = "cVAF_z",
+        metric_title = "Cumulative VAF Z-score",
+        y_label = "Cumulative VAF (Z)",
+        cap_at = 300,
+        show_cap_labels = FALSE,
+        y_transform = "identity",
+        summary_y_transform = "identity",
+        summary_y_label = "cVAF Z"
+      ),
+      second_metric = list(
+        metric = "sites_z",
+        metric_title = "Proportion of Sites Detected Z-score",
+        y_label = "Prop. Mutant Sites Detected (Z)",
+        cap_at = 300,
+        show_cap_labels = FALSE,
+        y_transform = "identity",
+        summary_y_transform = "identity",
+        summary_y_label = "Sites Z"
+      )
+    ),
+  Figure_2D_V2_adjacent_terminal_summary =
+    make_v2_two_metric_panel(
+      fragmentomics_plot_df,
+      panel_id = "Figure 2D",
+      overall_title =
+        "Fragmentomic tumour-agnostic longitudinal tracking: Relapsed vs Non-relapsed patients",
+      first_metric = list(
+        metric = "FS",
+        metric_title = "Fragment-size score",
+        y_label = "Fragment-size score",
+        y_transform = "identity",
+        summary_y_transform = "identity",
+        summary_y_label = "FS"
+      ),
+      second_metric = list(
+        metric = "Mean.Coverage",
+        metric_title = "cfDNA coverage at MM active regulatory sites",
+        y_label = "Mean cfDNA coverage (MM regs)",
+        reverse_display = TRUE,
+        y_transform = "identity",
+        summary_y_transform = "identity",
+        summary_y_transform_breaks = c(0.9, 0.95, 1),
+        summary_y_label = "Mean coverage"
+      )
+    ),
+  Extended_Data_Figure_3A_V2_adjacent_terminal_summary =
+    make_v2_two_metric_panel(
+      ed3a_plot_df,
+      panel_id = "Extended Data Figure 3A",
+      overall_title =
+        "Baseline BM-informed longitudinal tracking: Relapsed vs Non-relapsed patients",
+      first_metric = list(
+        metric = "cVAF",
+        metric_title = "Cumulative VAF",
+        y_label = "Cumulative VAF (%)",
+        cap_at = 0.25,
+        y_transform = "identity",
+        display_as_percent = TRUE,
+        overcap_shape = 18,
+        prefix_cap_axis_label = FALSE,
+        summary_y_transform = "identity",
+        summary_y_label = "cVAF"
+      ),
+      second_metric = list(
+        metric = "sites",
+        metric_title = "Proportion of Sites Detected",
+        y_label = "Proportion of Mutant Sites Detected (%)",
+        y_transform = "identity",
+        display_as_percent = TRUE,
+        overcap_shape = 18,
+        prefix_cap_axis_label = FALSE,
+        summary_y_transform = "identity",
+        summary_y_label = "Sites"
+      )
+    ),
+  Extended_Data_Figure_3B_V2_adjacent_terminal_summary =
+    make_v2_two_metric_panel(
+      ed3b_plot_df,
+      panel_id = "Extended Data Figure 3B",
+      overall_title =
+        "Baseline cfDNA-informed longitudinal tracking: Relapsed vs Non-relapsed patients",
+      first_metric = list(
+        metric = "cVAF",
+        metric_title = "Cumulative VAF",
+        y_label = "Cumulative VAF (%)",
+        cap_at = 0.25,
+        y_transform = "identity",
+        display_as_percent = TRUE,
+        overcap_shape = 18,
+        prefix_cap_axis_label = FALSE,
+        summary_y_transform = "identity",
+        summary_y_label = "cVAF"
+      ),
+      second_metric = list(
+        metric = "sites",
+        metric_title = "Proportion of Sites Detected",
+        y_label = "Proportion of Mutant Sites Detected (%)",
+        y_transform = "identity",
+        display_as_percent = TRUE,
+        overcap_shape = 18,
+        prefix_cap_axis_label = FALSE,
+        summary_y_transform = "identity",
+        summary_y_label = "Sites"
+      )
+    ),
+  Extended_Data_Figure_3C_V2_adjacent_terminal_summary =
+    make_v2_two_metric_panel(
+      ed3c_plot_df,
+      panel_id = "Extended Data Figure 3C",
+      overall_title =
+        "Fragmentomic tumour-agnostic longitudinal tracking: Relapsed vs Non-relapsed patients",
+      first_metric = list(
+        metric = "Proportion.Short",
+        metric_title = "Short-fragment proportion",
+        y_label = "Short cfDNA Fragments (%)",
+        y_transform = "identity",
+        display_as_percent = TRUE,
+        overcap_shape = 18,
+        prefix_cap_axis_label = FALSE,
+        summary_y_transform = "identity",
+        summary_y_label = "Short fragments"
+      ),
+      second_metric = list(
+        metric = "TF_ichorCNA",
+        metric_title = "cfDNA tumour fraction",
+        y_label = "cfDNA Tumour Fraction (%)",
+        cap_at = 0.5,
+        y_transform = "identity",
+        display_as_percent = TRUE,
+        overcap_shape = 18,
+        prefix_cap_axis_label = FALSE,
+        summary_y_transform = "identity",
+        summary_y_label = "Tumour fraction"
+      )
+    )
+)
+
+walk2(
+  adjacent_v2_panels,
+  names(adjacent_v2_panels),
+  function(panel_plot, file_stem) {
+    ggsave(
+      file.path(adjacent_output_dir, paste0(file_stem, ".png")),
+      plot = panel_plot,
+      width = 15.5,
+      height = 5.2,
+      dpi = 600,
+      bg = "white"
+    )
+    ggsave(
+      file.path(adjacent_output_dir, paste0(file_stem, ".pdf")),
+      plot = panel_plot,
+      width = 15.5,
+      height = 5.2,
+      device = cairo_pdf,
+      bg = "white"
+    )
+    ggsave(
+      file.path(adjacent_output_dir, paste0(file_stem, ".tiff")),
+      plot = panel_plot,
+      width = 180,
+      height = 60.4,
+      units = "mm",
+      dpi = 300,
+      compression = "lzw",
+      bg = "white"
+    )
+  }
+)
+
+# A second, assembly-friendly option collects all terminal comparisons into one
+# short strip. No panel letter is assigned here because Extended Data Figure 3
+# already has panels D-G in the active submission package.
+make_strip_item <- function(
+    plot_df,
+    panel_id,
+    metric,
+    title,
+    y_axis_label,
+    y_transform = "identity",
+    y_transform_sigma = 1,
+    y_transform_breaks = NULL,
+    reverse_display = FALSE,
+    display_as_percent = FALSE) {
+  make_terminal_summary_plot(
+    plot_df %>% mutate(panel = panel_id),
+    metric = metric,
+    metric_title = title,
+    y_axis_label = y_axis_label,
+    y_transform = y_transform,
+    y_transform_sigma = y_transform_sigma,
+    y_transform_breaks = y_transform_breaks,
+    reverse_display = reverse_display,
+    display_as_percent = display_as_percent,
+    compact = TRUE,
+    show_cohort_shapes = FALSE,
+    use_endpoint_scale = TRUE
+  ) +
+    labs(title = title) +
+    theme(
+      plot.title = element_text(
+        size = 8.4,
+        face = "bold",
+        hjust = 0.5,
+        margin = margin(b = 1)
+      ),
+      plot.subtitle = element_text(
+        size = 6.7,
+        hjust = 0.5,
+        lineheight = 0.86,
+        margin = margin(b = 1.5)
+      ),
+      axis.title.y = element_text(size = 6.2, margin = margin(r = 2)),
+      axis.text.x = element_text(
+        size = 6.8,
+        lineheight = 0.84,
+        margin = margin(t = 2)
+      ),
+      axis.text.y = element_text(size = 6.2),
+      axis.ticks.length = unit(1.5, "pt"),
+      plot.margin = margin(2, 2, 2, 1)
+    )
+}
+
+figure2_terminal_strip <- wrap_plots(
+  make_strip_item(
+    bm_plot_df, "Figure 2B", "cVAF_z", "BM cVAF Z-score",
+    y_axis_label = "cVAF Z-score",
+    y_transform = "identity"
+  ),
+  make_strip_item(
+    bm_plot_df, "Figure 2B", "sites_z", "BM sites Z-score",
+    y_axis_label = "Sites Z-score",
+    y_transform = "identity"
+  ),
+  make_strip_item(
+    blood_plot_df, "Figure 2C", "cVAF_z", "cfDNA cVAF Z-score",
+    y_axis_label = "cVAF Z-score",
+    y_transform = "identity"
+  ),
+  make_strip_item(
+    blood_plot_df, "Figure 2C", "sites_z", "cfDNA sites Z-score",
+    y_axis_label = "Sites Z-score",
+    y_transform = "identity"
+  ),
+  make_strip_item(
+    fragmentomics_plot_df, "Figure 2D", "FS", "Fragment-size score",
+    y_axis_label = "FS",
+    y_transform = "identity"
+  ),
+  make_strip_item(
+    fragmentomics_plot_df, "Figure 2D", "Mean.Coverage",
+    "Mean coverage",
+    y_axis_label = "Mean coverage",
+    y_transform_breaks = c(0.9, 0.95, 1),
+    reverse_display = TRUE
+  ),
+  nrow = 1,
+  guides = "collect"
+) +
+  plot_annotation(
+    title = "Terminal evaluable sample by relapse status",
+    theme = theme(
+      plot.title = element_text(
+        size = 12.5,
+        face = "bold",
+        hjust = 0.5,
+        margin = margin(b = 2)
+      )
+    )
+  ) &
+  theme(legend.position = "none")
+
+ed3_terminal_strip <- wrap_plots(
+  make_strip_item(
+    ed3a_plot_df, "Extended Data Figure 3A", "cVAF", "BM cVAF",
+    y_axis_label = "cVAF",
+    y_transform = "identity",
+    display_as_percent = TRUE
+  ),
+  make_strip_item(
+    ed3a_plot_df, "Extended Data Figure 3A", "sites", "BM sites detected",
+    y_axis_label = "Sites detected",
+    y_transform = "identity",
+    display_as_percent = TRUE
+  ),
+  make_strip_item(
+    ed3b_plot_df, "Extended Data Figure 3B", "cVAF", "cfDNA cVAF",
+    y_axis_label = "cVAF",
+    y_transform = "identity",
+    display_as_percent = TRUE
+  ),
+  make_strip_item(
+    ed3b_plot_df, "Extended Data Figure 3B", "sites", "cfDNA sites detected",
+    y_axis_label = "Sites detected",
+    y_transform = "identity",
+    display_as_percent = TRUE
+  ),
+  make_strip_item(
+    ed3c_plot_df, "Extended Data Figure 3C", "Proportion.Short",
+    "Short-fragment proportion",
+    y_axis_label = "Short fragments",
+    y_transform = "identity",
+    display_as_percent = TRUE
+  ),
+  make_strip_item(
+    ed3c_plot_df, "Extended Data Figure 3C", "TF_ichorCNA",
+    "ichorCNA tumour fraction",
+    y_axis_label = "Tumour fraction",
+    y_transform = "identity",
+    display_as_percent = TRUE
+  ),
+  nrow = 1,
+  guides = "collect"
+) +
+  plot_annotation(
+    title = "Terminal evaluable sample by relapse status",
+    theme = theme(
+      plot.title = element_text(
+        size = 12.5,
+        face = "bold",
+        hjust = 0.5,
+        margin = margin(b = 2)
+      )
+    )
+  ) &
+  theme(legend.position = "none")
+
+strip_output_dir <- file.path(v2_output_dir, "consolidated_strips")
+dir.create(strip_output_dir, recursive = TRUE, showWarnings = FALSE)
+strip_plots <- list(
+  Figure_2_terminal_sample_comparison_strip = figure2_terminal_strip,
+  Extended_Data_Figure_3_terminal_sample_comparison_strip = ed3_terminal_strip
+)
+walk2(
+  strip_plots,
+  names(strip_plots),
+  function(strip_plot, file_stem) {
+    ggsave(
+      file.path(strip_output_dir, paste0(file_stem, ".png")),
+      plot = strip_plot,
+      width = 13.5,
+      height = 2.43,
+      dpi = 600,
+      bg = "white"
+    )
+    ggsave(
+      file.path(strip_output_dir, paste0(file_stem, ".pdf")),
+      plot = strip_plot,
+      width = 13.5,
+      height = 2.43,
+      device = cairo_pdf,
+      bg = "white"
+    )
+    ggsave(
+      file.path(strip_output_dir, paste0(file_stem, ".tiff")),
+      plot = strip_plot,
+      width = 190,
+      height = 34.2,
+      units = "mm",
+      dpi = 300,
+      compression = "lzw",
+      bg = "white"
+    )
+  }
+)
+
+# Stage the compact Figure 2 strip as an optional Figure 2E component in the
+# canonical final-manuscript object tree. The Extended Data strip remains only
+# in the reviewer-alternative directory until its final panel assignment is
+# confirmed.
+figure2e_output_dir <- file.path(figure2_dir, "Figure_2E")
+dir.create(figure2e_output_dir, recursive = TRUE, showWarnings = FALSE)
+legacy_figure2e_paths <- file.path(
+  figure2e_output_dir,
+  paste0(
+    "F2E_terminal_sample_by_relapse_status.",
+    c("png", "pdf", "tiff")
+  )
+)
+unlink(legacy_figure2e_paths[file.exists(legacy_figure2e_paths)])
+figure2e_source_stem <- file.path(
+  strip_output_dir,
+  "Figure_2_terminal_sample_comparison_strip"
+)
+walk(
+  c("png", "pdf", "tiff"),
+  function(extension) {
+    source_path <- paste0(figure2e_source_stem, ".", extension)
+    destination_path <- file.path(
+      figure2e_output_dir,
+      paste0("Fig_2E.", extension)
+    )
+    if (!file.exists(source_path)) {
+      stop("Missing Figure 2E source export: ", source_path, call. = FALSE)
+    }
+    copied <- file.copy(source_path, destination_path, overwrite = TRUE)
+    if (!isTRUE(copied)) {
+      stop("Failed to stage Figure 2E export: ", destination_path, call. = FALSE)
+    }
+  }
+)
+
+write_csv(
+  terminal_point_data,
+  file.path(v2_output_dir, "terminal_sample_patient_level_source_data.csv")
+)
+write_csv(
+  terminal_statistics,
+  file.path(v2_output_dir, "terminal_sample_group_statistics.csv")
+)
+write_csv(
+  terminal_group_counts,
+  file.path(v2_output_dir, "terminal_sample_group_counts_by_cohort.csv")
 )
 
 ggsave(

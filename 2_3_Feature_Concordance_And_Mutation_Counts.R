@@ -2282,9 +2282,11 @@ tf_cutoff <- 0.05   # 5% ctDNA threshold
 # 1) Build a per‐event × TF‐group performance table
 ## First CNA
 perf_by_tf <- merged_CNA %>%
-  # only frontline, baseline blood samples
+  # Revision-inclusive analysis: retain all cohort-assigned patients with an
+  # evaluable matched baseline BM/cfDNA pair. Historically this block filtered
+  # to the frontline cohort, which silently excluded eligible test-cohort pairs
+  # from Supplementary Table 2 and Extended Data Figure 2B.
   filter(
-    cohort                == "Frontline induction-transplant",
     timepoint_info_blood  == "Baseline"
   ) %>%
   # assign each sample to Low / High TF
@@ -2359,10 +2361,53 @@ merged_trans <- merged_trans %>%
     Patient = str_remove(Patient_Timepoint, "_Baseline$")
   )
 
+# Patient/event-level audit for the revision-inclusive matched-pair analysis.
+# This makes the denominator and the contribution of each cohort directly
+# traceable rather than recoverable only from aggregate confusion matrices.
+translocation_pair_audit <- merged_trans %>%
+  filter(timepoint_info_blood == "Baseline") %>%
+  mutate(
+    tf_group = case_when(
+      is.na(Tumor_Fraction_blood) ~ NA_character_,
+      Tumor_Fraction_blood >= tf_cutoff ~ "High TF",
+      TRUE ~ "Low TF"
+    )
+  ) %>%
+  pivot_longer(
+    cols = matches("^(IGH_MAF|IGH_MYC|IGH_CCND1|IGH_FGFR3)_(BM|blood)$"),
+    names_to = c("event", "source"),
+    names_pattern = "(.*)_(BM|blood)$",
+    values_to = "call"
+  ) %>%
+  pivot_wider(
+    id_cols = c(Patient, cohort, Tumor_Fraction_blood, tf_group, event),
+    names_from = source,
+    values_from = call
+  ) %>%
+  filter(!is.na(BM), !is.na(blood)) %>%
+  mutate(
+    pair_class = case_when(
+      BM == "Yes" & blood == "Yes" ~ "TP",
+      BM == "No" & blood == "No" ~ "TN",
+      BM == "No" & blood == "Yes" ~ "FP",
+      BM == "Yes" & blood == "No" ~ "FN",
+      TRUE ~ NA_character_
+    )
+  ) %>%
+  arrange(cohort, Patient, event)
+
+if (!any(translocation_pair_audit$cohort == "Non-frontline")) {
+  stop("Revision-inclusive translocation audit contains no test-cohort pairs.")
+}
+readr::write_csv(
+  translocation_pair_audit,
+  "Final Tables and Figures/Baseline_concordance/revision_inclusive_baseline_translocation_pair_audit.csv"
+)
+
 perf_by_tf <- merged_trans %>%
-  # only frontline, baseline blood samples
+  # Revision-inclusive analysis: retain eligible training- and test-cohort
+  # matched baseline pairs (see the corresponding CNA block above).
   filter(
-    cohort                == "Frontline induction-transplant",
     timepoint_info_blood  == "Baseline"
   ) %>%
   # assign each sample to Low / High TF
@@ -2435,7 +2480,29 @@ perf_tf_complete <- bind_rows(perf_tf_complete, perf_tf_complete_trans)
 
 ## Add the mutations 
 concordance_global$event <- "Mutations"
-tmp <- concordance_global %>% filter(Cohort == "Frontline")
+tmp <- concordance_global %>%
+  # Pool the frozen training and expanded test cohorts by summing their
+  # confusion-matrix counts, then recompute all derived metrics. Averaging the
+  # cohort-specific rates would weight cohorts equally rather than weighting
+  # the underlying evaluable mutation events.
+  group_by(tf_group, event) %>%
+  summarise(
+    tp = sum(tp, na.rm = TRUE),
+    fn = sum(fn, na.rm = TRUE),
+    fp = sum(fp, na.rm = TRUE),
+    tn = sum(tn, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    sensitivity = if_else((tp + fn) > 0, tp / (tp + fn), NA_real_),
+    specificity = if_else((tn + fp) > 0, tn / (tn + fp), NA_real_),
+    jaccard = if_else((tp + fp + fn) > 0, tp / (tp + fp + fn), NA_real_),
+    concordance = if_else(
+      (tp + tn + fp + fn) > 0,
+      (tp + tn) / (tp + tn + fp + fn),
+      NA_real_
+    )
+  )
 tmp <- tmp %>% 
   mutate(
     tf_group = case_when(
@@ -3229,15 +3296,34 @@ dat_small <- dat_small %>%
   mutate(Patient = coalesce(New_ID, Patient)) 
 
 
-## 3. (Optional) one XLSX workbook with the key performance tables -----
+## 3. One XLSX workbook with the key performance tables ----------------
+## Keep the analysis output and the source consumed by the submission-package
+## assembler synchronized. Previously the assembler read an older workbook in
+## Output_tables_2025, allowing the frontline-only table to persist even after
+## the revision-inclusive analysis had been generated elsewhere.
+supplementary_table_2_sheets <- list(
+  A_BM_cfDNA_perf_byTF = perf_combined,
+  B_FISH_vs_Sample_Concordance = concordance_tbl %>% filter(!is.na(cohort)),
+  C_FISH_vs_Sample_At_Probe = concordance_tbl_at_FISH_probe %>% filter(!is.na(cohort)),
+  D_Individual_Calls = dat_small %>% select(-New_ID)
+)
+
+supplementary_table_2_analysis_path <- file.path(
+  outdir,
+  "Supplementary_Table_2_SV_CNA_performance_summary_updated2.xlsx"
+)
+supplementary_table_2_package_source_path <- file.path(
+  "Output_tables_2025",
+  "Supplementary_Table_2_SV_CNA_performance_summary_updated2.xlsx"
+)
+
 writexl::write_xlsx(
-  list(
-    A_BM_cfDNA_perf_byTF        = perf_combined,
-    B_FISH_vs_Sample_Concordance = concordance_tbl %>% filter(!is.na(cohort)),
-    C_FISH_vs_Sample_At_Probe = concordance_tbl_at_FISH_probe %>% filter(!is.na(cohort)),
-    D_Individual_Calls = dat_small %>% select(-New_ID)
-  ),
-  path = file.path(outdir, "Supplementary_Table_2_SV_CNA_performance_summary_updated2.xlsx") 
+  supplementary_table_2_sheets,
+  path = supplementary_table_2_analysis_path
+)
+writexl::write_xlsx(
+  supplementary_table_2_sheets,
+  path = supplementary_table_2_package_source_path
 )
 
 message("✓ Additional outputs written to ", outdir)

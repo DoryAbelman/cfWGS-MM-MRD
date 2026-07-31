@@ -70,6 +70,8 @@ library(patchwork)   # optional – for combining plots, if needed
 library(viridis)
 library(ggplot2)
 library(scales)
+library(readxl)     # workbook round-trip validation
+library(writexl)    # standards-compliant supplementary workbooks
 
 # Shared helper for final manuscript-organized outputs.
 # This script keeps its historical dilution-series filenames. The helper copies
@@ -967,7 +969,6 @@ corr_tbl <- plot_df %>%
 write_csv(corr_tbl, file.path(OUTPUT_DIR_TABLES, "Supplementary_Table_8_LOD_feature_correlations_with_dilution_series3.csv"))
 
 ## Do together
-library(writexl)
 
 corr_tbl_export <- corr_tbl %>%
   arrange(desc(r2)) %>%
@@ -1020,32 +1021,176 @@ custom_labels2 <- c(
 corr_tbl_export <- corr_tbl_export %>%
   mutate(Feature = dplyr::recode(Feature, !!!custom_labels2))
 
-# Move LOD to first column and remove unwanted columns
-dilution_df_clean <- dilution_df |>
-  dplyr::select(
-    LOD,  # make LOD the first column
-    -c(
-      Patient,
-      Date_of_sample_collection,
-      Sample,
-      Bam,
-      Sample_ID,
-      LOD_updated,
-      LOD_original
+# Validate the scored analysis object before creating the manuscript table.
+# The current release contains the nine historical NovaSeq 6000 measurements
+# and 36 NovaSeq X Plus PWGVAL/M4CHIP measurements. These are fixed release
+# expectations, not model-training inputs.
+supp_table7_required <- c(
+  "LOD", "dilution_series", "sequencing_platform_context",
+  "fragmentomics_sequencing_platform", "n_healthy_reference",
+  "mrdetect_status", "zscore_BM", "zscore_blood",
+  "z_score_detection_rate_BM", "z_score_detection_rate_blood",
+  "BM_zscore_only_detection_rate_call", "Blood_zscore_only_sites_call",
+  "Blood_plus_fragment_call"
+)
+supp_table7_missing <- setdiff(supp_table7_required, names(dilution_df))
+if (length(supp_table7_missing)) {
+  stop(
+    "Supplementary Table 7 cannot be written because required field(s) are missing: ",
+    paste(supp_table7_missing, collapse = ", "),
+    call. = FALSE
+  )
+}
+if (nrow(dilution_df) != 45L) {
+  stop(
+    "Supplementary Table 7 release check expected 45 scored dilution rows; observed ",
+    nrow(dilution_df), ".",
+    call. = FALSE
+  )
+}
+if (any(is.na(dilution_df$mrdetect_status)) ||
+    any(dilution_df$mrdetect_status != "available")) {
+  stop(
+    "Supplementary Table 7 contains a dilution row without an available MRDetect result.",
+    call. = FALSE
+  )
+}
+
+# Add explicit mutation-reference provenance to the export. The generic
+# n_healthy_reference column is the fragmentomics reference size; the three
+# mrdetect_* columns below prevent readers from confusing it with the MRDetect
+# mutation reference.
+supp_table7_scored <- dilution_df |>
+  dplyr::mutate(
+    mrdetect_reference_platform = dplyr::case_when(
+      grepl("X Plus", .data$sequencing_platform_context, fixed = TRUE) ~
+        "NovaSeq X Plus",
+      .data$sequencing_platform_context == "Historical dilution series" ~
+        "NovaSeq 6000",
+      TRUE ~ NA_character_
+    ),
+    mrdetect_healthy_reference_libraries = dplyr::case_when(
+      .data$mrdetect_reference_platform == "NovaSeq X Plus" ~ 22L,
+      .data$mrdetect_reference_platform == "NovaSeq 6000" ~ 26L,
+      TRUE ~ NA_integer_
+    ),
+    mrdetect_healthy_reference_identities = dplyr::case_when(
+      .data$mrdetect_reference_platform == "NovaSeq X Plus" ~ 21L,
+      .data$mrdetect_reference_platform == "NovaSeq 6000" ~ 25L,
+      TRUE ~ NA_integer_
     )
   )
 
-
-write_xlsx(
-  list(
-    "Correlations" = corr_tbl_export,
-    "Scored Data"            = dilution_df_clean
-  ),
-  path = file.path(
-    OUTPUT_DIR_TABLES,
-    "Supplementary_Table_7_Dilution_Series_Combined_updated.xlsx"
+# Remove direct identifiers and internal LOD bookkeeping, then move the
+# manuscript-facing dilution label and platform provenance to the first
+# columns. Do not mix a positive LOD selection with negative selections in one
+# select() call: tidyselect interprets that expression as retaining only LOD.
+dilution_df_clean <- supp_table7_scored |>
+  dplyr::select(
+    -dplyr::any_of(c(
+      "Patient",
+      "Date_of_sample_collection",
+      "Sample",
+      "Bam",
+      "Sample_ID",
+      "LOD_updated",
+      "LOD_original"
+    ))
+  ) |>
+  dplyr::relocate(
+    LOD,
+    dilution_series,
+    sequencing_platform_context,
+    mrdetect_reference_platform,
+    mrdetect_healthy_reference_libraries,
+    mrdetect_healthy_reference_identities
   )
+
+if (ncol(dilution_df_clean) != 82L) {
+  stop(
+    "Supplementary Table 7 release check expected 82 de-identified scored fields; observed ",
+    ncol(dilution_df_clean), ".",
+    call. = FALSE
+  )
+}
+if (anyNA(dilution_df_clean$mrdetect_healthy_reference_libraries) ||
+    !identical(
+      sort(unique(dilution_df_clean$mrdetect_healthy_reference_libraries)),
+      c(22L, 26L)
+    )) {
+  stop(
+    "Supplementary Table 7 MRDetect reference provenance is incomplete or unexpected.",
+    call. = FALSE
+  )
+}
+
+supp_table7_tables <- list(
+  "Correlations" = corr_tbl_export,
+  "Scored Data" = dilution_df_clean
 )
+supp_table7_path <- file.path(
+  OUTPUT_DIR_TABLES,
+  "Supplementary_Table_7_Dilution_Series_Combined_updated.xlsx"
+)
+supp_table7_temporary <- tempfile(
+  "Supplementary_Table_7_",
+  tmpdir = OUTPUT_DIR_TABLES,
+  fileext = ".xlsx"
+)
+writexl::write_xlsx(
+  supp_table7_tables,
+  path = supp_table7_temporary
+)
+
+# Round-trip the temporary workbook before replacing the canonical file. This
+# prevents an incomplete or unreadable workbook from being propagated.
+if (!identical(
+  readxl::excel_sheets(supp_table7_temporary),
+  c("Correlations", "Scored Data")
+)) {
+  unlink(supp_table7_temporary)
+  stop("Supplementary Table 7 serialization produced incorrect sheet names.", call. = FALSE)
+}
+supp_table7_serialized <- readxl::read_xlsx(
+  supp_table7_temporary,
+  sheet = "Scored Data"
+)
+if (nrow(supp_table7_serialized) != 45L ||
+    ncol(supp_table7_serialized) != 82L) {
+  unlink(supp_table7_temporary)
+  stop(
+    "Supplementary Table 7 serialization changed the scored-data dimensions.",
+    call. = FALSE
+  )
+}
+if (!file.copy(
+  supp_table7_temporary,
+  supp_table7_path,
+  overwrite = TRUE
+)) {
+  unlink(supp_table7_temporary)
+  stop("Failed to replace the canonical Supplementary Table 7 workbook.", call. = FALSE)
+}
+unlink(supp_table7_temporary)
+
+# Unambiguous CSV companions for repositories or submission systems that do
+# not preserve multi-sheet workbooks.
+supp_table7_correlations_csv <- file.path(
+  OUTPUT_DIR_TABLES,
+  "Supplementary_Table_7_Correlations_full22.csv"
+)
+supp_table7_scored_csv <- file.path(
+  OUTPUT_DIR_TABLES,
+  "Supplementary_Table_7_Scored_Data_full22.csv"
+)
+readr::write_csv(corr_tbl_export, supp_table7_correlations_csv, na = "")
+readr::write_csv(dilution_df_clean, supp_table7_scored_csv, na = "")
+if (nrow(readr::read_csv(
+  supp_table7_scored_csv,
+  show_col_types = FALSE
+)) != 45L) {
+  stop("Supplementary Table 7 scored-data CSV failed its row-count check.", call. = FALSE)
+}
 
 # -------------------------------------------------------------------------
 # Manuscript output: Supplementary Table 7
@@ -1055,24 +1200,63 @@ write_xlsx(
 #   Scored Data sheet.
 #
 # Why it is here:
-#   This workbook is the script-generated old-name source corresponding to
-#   final Supplementary Table 7. The audited map notes that the final renamed
-#   workbook is authoritative where old-name scored-data width differs.
+#   This validated workbook is the canonical source for Supplementary Table 7
+#   and for every manuscript-object mirror of that table.
 # -------------------------------------------------------------------------
-ms_copy_artifact(
-  source_path = file.path(OUTPUT_DIR_TABLES, "Supplementary_Table_7_Dilution_Series_Combined_updated.xlsx"),
+supp_table7_corr_destination <- ms_copy_artifact(
+  source_path = supp_table7_path,
   artifact_id = "STABLE7_COR",
   role = "workbook_xlsx_correlations_sheet",
   description = "Dilution-series correlations sheet used in Supplementary Table 7.",
   script_name = "3_1_part2_Apply_cfWGS_thresholds_to_dilution_series.R"
 )
-ms_copy_artifact(
-  source_path = file.path(OUTPUT_DIR_TABLES, "Supplementary_Table_7_Dilution_Series_Combined_updated.xlsx"),
+supp_table7_scored_destination <- ms_copy_artifact(
+  source_path = supp_table7_path,
   artifact_id = "STABLE7_SCORED",
   role = "workbook_xlsx_scored_data_sheet",
   description = "Dilution-series scored-data sheet used in Supplementary Table 7.",
   script_name = "3_1_part2_Apply_cfWGS_thresholds_to_dilution_series.R"
 )
+supp_table7_current_final_destination <- ms_copy_current_final_artifact(
+  artifact_id = "STABLE7_SCORED"
+)
+
+supp_table7_validation_targets <- unique(c(
+  supp_table7_path,
+  supp_table7_corr_destination,
+  supp_table7_scored_destination,
+  supp_table7_current_final_destination
+))
+for (target in supp_table7_validation_targets) {
+  observed <- readxl::read_xlsx(target, sheet = "Scored Data")
+  if (nrow(observed) != 45L || ncol(observed) != 82L) {
+    stop(
+      "Supplementary Table 7 staged-artifact validation failed: ",
+      target,
+      call. = FALSE
+    )
+  }
+}
+
+supp_table7_audit <- data.frame(
+  target = normalizePath(
+    supp_table7_validation_targets,
+    winslash = "/",
+    mustWork = TRUE
+  ),
+  scored_rows = 45L,
+  scored_columns = 82L,
+  bytes = file.info(supp_table7_validation_targets)$size,
+  md5 = unname(tools::md5sum(supp_table7_validation_targets)),
+  status = "PASS",
+  stringsAsFactors = FALSE
+)
+supp_table7_audit_path <- file.path(
+  "Scripts_2025", "Final_Scripts", "final_manuscript_objects", "logs",
+  "Supplementary_Table_7_full22_complete_scored_data_audit.csv"
+)
+dir.create(dirname(supp_table7_audit_path), recursive = TRUE, showWarnings = FALSE)
+readr::write_csv(supp_table7_audit, supp_table7_audit_path)
 
 
 ## ----------------------------------------------------------------------
@@ -3671,10 +3855,21 @@ format_lod_percent_with_zero <- function(x) {
   out
 }
 
-zero_final_breaks <- sort(c(
-  major_breaks[major_breaks > min(major_breaks, na.rm = TRUE)],
+# Retain every positive decade represented by the data. Previously the
+# smallest positive major break was removed when the pseudo-position for 0%
+# was added; this left the real 0.0001% dilution point visible but unlabeled.
+positive_major_breaks <- major_breaks[major_breaks > 0]
+if (length(positive_major_breaks) == 0L ||
+    zero_final_plot_x >= min(positive_major_breaks, na.rm = TRUE)) {
+  stop(
+    "The 0% plotting coordinate must be below the smallest positive x-axis break.",
+    call. = FALSE
+  )
+}
+zero_final_breaks <- sort(unique(c(
+  positive_major_breaks,
   zero_final_plot_x
-))
+)))
 zero_final_break_labels <- format_lod_percent(zero_final_breaks)
 zero_final_break_labels[zero_final_breaks == zero_final_plot_x] <- "0%"
 zero_final_minor_breaks <- minor_ext[

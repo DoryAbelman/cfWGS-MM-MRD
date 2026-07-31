@@ -131,12 +131,15 @@ script runs, the final manuscript-facing files are copied or saved into
 | Script | Final manuscript outputs |
 | --- | --- |
 | `1_2_Part2_Get_Mutation_Overlap.R` | Extended Data Figure 2G |
+| `1_8C_Reviewer_MRDetect_Platform_Shift.R`; `1_8D_Build_ED3DE_MRDetect_Platform_Calibration.R` | Extended Data Figure 3D-E (MRDetect healthy-control platform shift and platform-matched z-score calibration) |
+| `1_8E_Build_ED3FG_Fragmentomics_Platform_Calibration.R` | Extended Data Figure 3F-G (paired fragmentomics platform shift and leave-one-control-out calibration validation) |
 | `1_6_Identify_High_Quality_Patient_Pairs.R` | Figure 1B source table |
 | `2_1_Clinical_Demographics_Table.R` | Table 1 |
 | `2_1_Part2_Cohort_Swim_Plot.R` | Figure 1A; Supplementary Table 1 |
 | `2_2_Baseline_demographics_by_WGS_heatmap_updated.R` | Extended Data Figure 1; Supplementary Table 1A |
 | `2_3_Feature_Concordance_And_Mutation_Counts.R` | Extended Data Figure 2A-F; Supplementary Tables 2-3 |
 | `2_4_Longitudinal_features_analysis.R` | Figure 2A-D; Extended Data Figure 3A-C; Extended Data Figure 4 |
+| `2_4B_Build_all_evaluable_longitudinal_panels.R` | Figure 2E terminal-evaluable patient summaries and the all-evaluable Figure 2B-D / Extended Data Figure 3A-C longitudinal companion panels |
 | `3_1_Optimize_cfWGS_thresholds.R` | Figure 3A-B; Figure 4A-B; Extended Data Figure 5A-C; Extended Data Figure 7A-C and 7E; Extended Data Figure 9A-F; Supplementary Tables 4-6 base performance exports |
 | `3_1C_Expanded_test_clustered_sensitivity.R` | Patient-clustered bootstrap and deterministic one-sample-per-patient sensitivity outputs for the revision-inclusive Figure 3B/Figure 4B test analyses; final Supplementary Table 6 workbook combining those results with the preserved expanded-test classifier metrics and exact sample manifest |
 | `3_1_part2_Apply_cfWGS_thresholds_to_dilution_series.R` | Figure 3C; Extended Data Figure 5D; Extended Data Figure 7D; Supplementary Table 7 |

@@ -885,7 +885,48 @@ ms_copy_current_final_artifact <- function(artifact_id,
   final_dir <- ms_final_category_dirname(meta$artifact_category[[1]])
   if (is.na(final_dir)) return(invisible(NA_character_))
 
-  source <- ms_existing_path_from_map(meta$current_final_artifact_path[[1]], project_root)
+  # For script-generated supplementary tables, the newest recorded generator
+  # output is the source of truth. Looking up the historical mapped workbook
+  # first allowed a valid newly generated workbook to be overwritten by a
+  # stale manuscript copy when ms_write_output_index() refreshed all current
+  # artifacts. Restrict this preference to supplementary tables so manually
+  # assembled figures continue to use their mapped final assemblies.
+  source <- NA_character_
+  if (identical(meta$artifact_category[[1]], "supplementary_table") &&
+      file.exists(ms_manifest_path(project_root))) {
+    manifest <- utils::read.delim(
+      ms_manifest_path(project_root),
+      stringsAsFactors = FALSE,
+      check.names = FALSE
+    )
+    manifest_hit <- manifest[
+      manifest$artifact_id == artifact_id &
+        !is.na(manifest$source_path) &
+        nzchar(manifest$source_path),
+      ,
+      drop = FALSE
+    ]
+    if (nrow(manifest_hit)) {
+      candidate <- ms_existing_path_from_map(
+        tail(manifest_hit$source_path, 1),
+        project_root
+      )
+      final_extension <- tolower(tools::file_ext(meta$final_filename[[1]]))
+      candidate_extension <- if (is.na(candidate)) {
+        ""
+      } else {
+        tolower(tools::file_ext(candidate))
+      }
+      if (!is.na(candidate) &&
+          nzchar(final_extension) &&
+          identical(candidate_extension, final_extension)) {
+        source <- candidate
+      }
+    }
+  }
+  if (is.na(source)) {
+    source <- ms_existing_path_from_map(meta$current_final_artifact_path[[1]], project_root)
+  }
   if (is.na(source)) {
     source <- ms_existing_path_from_map(meta$manuscript_source_path[[1]], project_root)
   }

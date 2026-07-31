@@ -602,7 +602,7 @@ model_metric_files <- tibble::tribble(
   project_path("Final Tables and Figures", "Supplementary_Table_4_All_Model_Metrics_Refit6_Feb2026.csv"),
   "Scripts_2025/Final_Scripts/3_1_Optimize_cfWGS_thresholds.R", "Figure_3B; Figure_4B; Supplementary_Table_5",
   "Results", "Blood cfWGS model performance", "Supplementary Table 6 test-cohort metrics",
-  project_path("Figures_Exported", "Tables_exported", "Renamed", "Supplementary_Table_6_All_Model_performance_nested_CV_on_test_cohort.csv"),
+  project_path("Scripts_2025", "Final_Scripts", "final_manuscript_objects", "04_supplementary_tables", "Supplementary_Table_6_All_Model_performance_nested_CV_on_test_cohort.csv"),
   "Scripts_2025/Final_Scripts/3_1_Optimize_cfWGS_thresholds.R", "Figure_4A; Supplementary_Table_6"
 )
 

@@ -41,7 +41,11 @@ value_changed <- function(x, y) {
 }
 
 feature_cols <- intersect(
-  c("zscore_BM", "zscore_blood", "detect_rate_BM", "detect_rate_blood"),
+  c(
+    "zscore_BM", "zscore_blood",
+    "z_score_detection_rate_BM", "z_score_detection_rate_blood",
+    "detect_rate_BM", "detect_rate_blood"
+  ),
   intersect(names(old), names(new))
 )
 call_cols <- intersect(grep("_call$", names(new), value = TRUE), names(old))
@@ -66,7 +70,13 @@ new_values <- as_tibble(new[affected, audit_cols, drop = FALSE])
 names(old_values) <- paste0(audit_cols, "_old")
 names(new_values) <- paste0(audit_cols, "_corrected")
 
-zscore_cols <- intersect(feature_cols, c("zscore_BM", "zscore_blood"))
+zscore_cols <- intersect(
+  feature_cols,
+  c(
+    "zscore_BM", "zscore_blood",
+    "z_score_detection_rate_BM", "z_score_detection_rate_blood"
+  )
+)
 any_zscore_change <- Reduce(
   `|`,
   lapply(zscore_cols, function(column) {
