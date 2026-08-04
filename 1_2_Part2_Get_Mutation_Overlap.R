@@ -129,20 +129,6 @@ rm(df_blood)
 # mutations. These help inspect individual overlap patterns but are not mapped
 # to a final manuscript panel; the manuscript-facing output is the lollipop
 # summary saved later as Extended Data Figure 2G.
-# Create unique identifiers for each mutation
-# Two ID fields are built:
-#   Unique_ID_patient = chr:start:end:ref:alt:Patient  -> used to COMPARE BM vs cfDNA
-#     within the same patient (the Venn diagram is per-patient, so Patient is part of key).
-#   Mutation_ID       = chr:start:end:ref:alt         -> used to ask whether the exact
-#     same somatic variant appears in any sample regardless of patient (cross-patient dedup).
-# Using coordinates + alleles (not gene name) ensures indistinguishable multimappers
-# or allele-specific variants are treated separately.
-combined_maf <- combined_maf %>%
-  mutate(
-    Unique_ID_patient = paste(Chromosome, Start_Position, End_Position, Reference_Allele, Tumor_Seq_Allele2, Patient, sep = ":"),
-    Mutation_ID = paste(Chromosome, Start_Position, End_Position, Reference_Allele, Tumor_Seq_Allele2, sep = ":")
-  )
-
 # Create a column to indicate presence (1) of the mutation
 combined_maf <- combined_maf %>%
   mutate(Presence = 1)
@@ -200,6 +186,40 @@ combined_maf <- left_join(combined_maf %>% select(-Bam), metada_df_mutation_comp
 
 ## First filter to just diagnosis timepoints
 combined_maf <- combined_maf %>% filter(timepoint_info %in% c("Diagnosis", "Baseline"))
+
+# Create mutation identifiers only after the metadata join has supplied the
+# authoritative patient ID. Some legacy MAF rows (including baseline cfDNA for
+# IMG-159/IMG-05) have a missing raw Patient field. Building a patient-aware key
+# before this join incorrectly makes matched BM/cfDNA variants non-identical.
+if (any(is.na(combined_maf$Patient) | !nzchar(combined_maf$Patient))) {
+  missing_key_barcodes <- combined_maf %>%
+    filter(is.na(Patient) | !nzchar(Patient)) %>%
+    distinct(Tumor_Sample_Barcode) %>%
+    pull(Tumor_Sample_Barcode)
+  stop(
+    "Cannot build patient-specific mutation keys after metadata harmonization; ",
+    "missing Patient for: ",
+    paste(missing_key_barcodes, collapse = ", "),
+    call. = FALSE
+  )
+}
+
+# Two ID fields are built:
+#   Unique_ID_patient = chr:start:end:ref:alt:Patient  -> compare BM vs cfDNA
+#     within the same harmonized patient.
+#   Mutation_ID       = chr:start:end:ref:alt          -> coordinate-level key
+#     independent of patient.
+combined_maf <- combined_maf %>%
+  mutate(
+    Unique_ID_patient = paste(
+      Chromosome, Start_Position, End_Position, Reference_Allele,
+      Tumor_Seq_Allele2, Patient, sep = ":"
+    ),
+    Mutation_ID = paste(
+      Chromosome, Start_Position, End_Position, Reference_Allele,
+      Tumor_Seq_Allele2, sep = ":"
+    )
+  )
 
 ## Add cohort df 
 cohort_df <- load_final_cohort_assignment()

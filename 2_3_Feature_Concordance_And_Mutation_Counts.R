@@ -96,6 +96,15 @@ if (!file.exists(.helpers_path)) {
 source(.helpers_path)
 rm(.helpers_path)
 
+.publication_export_helper <- file.path(
+  "Scripts_2025", "Final_Scripts", "publication_export_helpers.R"
+)
+if (!file.exists(.publication_export_helper)) {
+  .publication_export_helper <- "publication_export_helpers.R"
+}
+source(.publication_export_helper)
+rm(.publication_export_helper)
+
 file <- readRDS("Final_aggregate_table_cfWGS_features_with_clinical_and_demographics_updated9.rds")
 
 
@@ -279,6 +288,62 @@ dat_base <- dat_base %>%
   ))
 
 dat_base$cohort <- dat_base$Cohort ## for consistency 
+
+# Recover baseline FISH calls that can be lost when the integrated aggregate is
+# rebuilt from clinical metadata without assay-specific FISH columns.  Calls in
+# the aggregate remain authoritative; the deeper IMMAGINE patient/master tables
+# only fill missing values.  The audit and hard checks prevent the known
+# IMG-060/IMG-098/IMG-181 positive events from silently disappearing again.
+fish_fields <- c("T_4_14", "T_11_14", "T_14_16", "DEL_17P", "DEL_1P", "AMP_1Q")
+fish_before <- dat_base %>%
+  dplyr::select(.data$Patient, dplyr::all_of(fish_fields))
+fish_catalogue <- load_revision_inclusive_baseline_fish_calls(file)
+fish_call_sources <- attr(fish_catalogue, "call_sources")
+
+dat_base <- dat_base %>%
+  dplyr::select(-dplyr::all_of(fish_fields)) %>%
+  dplyr::left_join(fish_catalogue, by = "Patient")
+
+fish_recovery_audit <- fish_before %>%
+  tidyr::pivot_longer(-.data$Patient, names_to = "feature", values_to = "call_before") %>%
+  dplyr::left_join(
+    dat_base %>%
+      dplyr::select(.data$Patient, dplyr::all_of(fish_fields)) %>%
+      tidyr::pivot_longer(-.data$Patient, names_to = "feature", values_to = "call_after"),
+    by = c("Patient", "feature")
+  ) %>%
+  dplyr::left_join(fish_call_sources, by = c("Patient", "feature", "call_after" = "call")) %>%
+  dplyr::filter(is.na(.data$call_before) & !is.na(.data$call_after)) %>%
+  dplyr::arrange(.data$Patient, .data$feature)
+
+dir.create("Output_tables_2025/feature_concordance_support", recursive = TRUE, showWarnings = FALSE)
+readr::write_csv(
+  fish_recovery_audit,
+  "Output_tables_2025/feature_concordance_support/baseline_fish_call_recovery_audit.csv"
+)
+
+expected_positive_calls <- tibble::tribble(
+  ~Patient,  ~feature,
+  "IMG-060", "DEL_1P",
+  "IMG-060", "DEL_17P",
+  "IMG-098", "T_4_14",
+  "IMG-181", "DEL_17P"
+)
+missing_expected_positive_calls <- expected_positive_calls %>%
+  dplyr::left_join(
+    dat_base %>%
+      dplyr::select(.data$Patient, dplyr::all_of(fish_fields)) %>%
+      tidyr::pivot_longer(-.data$Patient, names_to = "feature", values_to = "call"),
+    by = c("Patient", "feature")
+  ) %>%
+  dplyr::filter(.data$call != "Positive" | is.na(.data$call))
+if (nrow(missing_expected_positive_calls)) {
+  stop(
+    "Required baseline FISH-positive calls are missing after clinical-source recovery: ",
+    paste0(missing_expected_positive_calls$Patient, "/", missing_expected_positive_calls$feature, collapse = ", "),
+    call. = FALSE
+  )
+}
 
 ## Edit low confidence call
 dat_base <- dat_base %>%
@@ -1262,9 +1327,9 @@ write.csv(all_corrs %>% filter(!is.na(p_adj)), file = "Final Tables and Figures/
 #   manuscript source map identifies this export as final Supplementary Table 3.
 #
 # Current provenance note:
-#   The retained renamed manuscript CSV remains authoritative until the known
-#   row-count mismatch in direct recomputation is reconciled. This copy records
-#   the regenerated table produced by the current source script.
+#   The revision-inclusive table regenerated from the current combined cohort is
+#   authoritative. Packaging workflows must use this regenerated artifact rather
+#   than the older retained manuscript CSV.
 # -------------------------------------------------------------------------
 ms_copy_artifact(
   source_path = "Final Tables and Figures/Suplementary_Table_2_All_Feature_Correlations_updated2.csv",
@@ -1760,6 +1825,7 @@ df_long <- dat_base %>%
 corr_df <- df_long %>%
   group_by(panel_lab) %>%
   summarise(
+    n_complete = sum(complete.cases(x, Blood_Mutation_Count)),
     rho = cor(
       x, Blood_Mutation_Count,
       method = "spearman",
@@ -1819,6 +1885,55 @@ ggsave("Final Tables and Figures/Baseline_concordance/Figure2D_facetted_scatter.
        height = 4,
        dpi    = 600)
 
+# Keep the plotted rows and displayed Spearman statistics synchronized with
+# the ED2F image. These sidecars are regenerated from the same `df_long` and
+# `corr_df` objects used above, so future cohort additions cannot leave stale
+# source tables behind a newly rendered panel.
+edfig2f_source_path <- file.path(
+  outdir,
+  "Extended_Data_Figure_2F_clinical_correlates_source_data.csv"
+)
+edfig2f_summary_path <- file.path(
+  outdir,
+  "Extended_Data_Figure_2F_clinical_correlates_spearman_summary.csv"
+)
+
+readr::write_csv(
+  df_long %>%
+    select(Patient, cohort, Blood_Mutation_Count, var, x, panel_lab),
+  edfig2f_source_path
+)
+readr::write_csv(
+  corr_df %>%
+    select(panel_lab, n_complete, rho, p, p_text, label),
+  edfig2f_summary_path
+)
+
+# Refresh the established generated-component filenames as well as the compact
+# manuscript-object copies written below. Some source-data assembly workflows
+# still discover ED2F through these longer legacy filenames.
+edfig2f_component_dir <- file.path(
+  "Scripts_2025", "Final_Scripts", "final_manuscript_objects",
+  "generated", "figure_components", "Extended_Data_Figure_2", "panel_F"
+)
+dir.create(edfig2f_component_dir, recursive = TRUE, showWarnings = FALSE)
+readr::write_csv(
+  df_long %>%
+    select(Patient, cohort, Blood_Mutation_Count, var, x, panel_lab),
+  file.path(
+    edfig2f_component_dir,
+    "Extended_Data_Figure_2F_clinical_correlates_source_data.csv"
+  )
+)
+readr::write_csv(
+  corr_df %>%
+    select(panel_lab, n_complete, rho, p, p_text, label),
+  file.path(
+    edfig2f_component_dir,
+    "Extended_Data_Figure_2F_clinical_correlates_spearman_summary.csv"
+  )
+)
+
 # -------------------------------------------------------------------------
 # Manuscript output: Extended Data Figure 2F
 #
@@ -1834,6 +1949,20 @@ ms_copy_artifact(
   artifact_id = "EDFIG2F",
   role = "figure_panel_png",
   description = "Faceted mutation-burden correlation scatterplot used as Extended Data Figure 2F.",
+  script_name = "2_3_Feature_Concordance_And_Mutation_Counts.R"
+)
+ms_copy_artifact(
+  source_path = edfig2f_source_path,
+  artifact_id = "EDFIG2F",
+  role = "source_data_csv",
+  description = "Source data plotted in Extended Data Figure 2F.",
+  script_name = "2_3_Feature_Concordance_And_Mutation_Counts.R"
+)
+ms_copy_artifact(
+  source_path = edfig2f_summary_path,
+  artifact_id = "EDFIG2F",
+  role = "summary_csv",
+  description = "Complete-case Spearman statistics displayed in Extended Data Figure 2F.",
   script_name = "2_3_Feature_Concordance_And_Mutation_Counts.R"
 )
 
@@ -2048,8 +2177,8 @@ ggsave(
 ms_copy_artifact(
   source_path = "Final Tables and Figures/Baseline_concordance/Fig2B_event_concordance_with_sensitivity_updated5.png",
   artifact_id = "EDFIG2B_D_C",
-  role = "figure_panel_png",
-  description = "FISH concordance by tumor fraction used as Extended Data Figure 2C.",
+  role = "training_cohort_figure_panel_png",
+  description = "Training-cohort-only FISH concordance panel retained as a secondary analysis.",
   script_name = "2_3_Feature_Concordance_And_Mutation_Counts.R"
 )
 
@@ -2185,7 +2314,7 @@ ms_copy_artifact(
   source_path = all_evaluable_ed2c_path,
   artifact_id = "EDFIG2B_D_C",
   role = "all_evaluable_figure_panel_png",
-  description = "Alternate all-evaluable baseline/diagnosis FISH concordance panel for Extended Data Figure 2C.",
+  description = "All-evaluable training-plus-test baseline/diagnosis FISH concordance panel for Extended Data Figure 2C.",
   script_name = "2_3_Feature_Concordance_And_Mutation_Counts.R"
 )
 ms_copy_artifact(
@@ -2196,6 +2325,28 @@ ms_copy_artifact(
   artifact_id = "EDFIG2B_D_C",
   role = "all_evaluable_source_data_csv",
   description = "Source data for the alternate all-evaluable baseline/diagnosis FISH concordance panel.",
+  script_name = "2_3_Feature_Concordance_And_Mutation_Counts.R"
+)
+
+# The revision-inclusive, training-plus-test panel is the manuscript-facing
+# Extended Data Figure 2C.  Re-export it under the primary roles after retaining
+# the historical training-only companion above so downstream assemblers cannot
+# silently select the narrower panel.
+ms_copy_artifact(
+  source_path = all_evaluable_ed2c_path,
+  artifact_id = "EDFIG2B_D_C",
+  role = "figure_panel_png",
+  description = "Primary Extended Data Figure 2C: all-evaluable training-plus-test FISH concordance by tumor fraction.",
+  script_name = "2_3_Feature_Concordance_And_Mutation_Counts.R"
+)
+ms_copy_artifact(
+  source_path = file.path(
+    outdir,
+    "Extended_Data_Figure_2C_all_evaluable_baseline_FISH_concordance_source_data.csv"
+  ),
+  artifact_id = "EDFIG2B_D_C",
+  role = "source_data_csv",
+  description = "Primary Extended Data Figure 2C source data across all evaluable training and test baseline specimens.",
   script_name = "2_3_Feature_Concordance_And_Mutation_Counts.R"
 )
 
@@ -3306,6 +3457,10 @@ supplementary_table_2_sheets <- list(
   B_FISH_vs_Sample_Concordance = concordance_tbl %>% filter(!is.na(cohort)),
   C_FISH_vs_Sample_At_Probe = concordance_tbl_at_FISH_probe %>% filter(!is.na(cohort)),
   D_Individual_Calls = dat_small %>% select(-New_ID)
+)
+supplementary_table_2_sheets <- relabel_publication_workbook_tables(
+  supplementary_table_2_sheets,
+  "Supplementary Table 2"
 )
 
 supplementary_table_2_analysis_path <- file.path(

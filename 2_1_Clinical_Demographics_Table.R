@@ -86,6 +86,15 @@ if (!file.exists(.helpers_path)) {
 source(.helpers_path)
 rm(.helpers_path)
 
+.publication_export_helper <- file.path(
+  "Scripts_2025", "Final_Scripts", "publication_export_helpers.R"
+)
+if (!file.exists(.publication_export_helper)) {
+  .publication_export_helper <- "publication_export_helpers.R"
+}
+source(.publication_export_helper)
+rm(.publication_export_helper)
+
 
 # -----------------------------------------------------------
 # 1. Load baseline table inputs
@@ -640,10 +649,12 @@ message("Table 1 baseline cohort patients: ", nrow(dat_base))
 
 
 dat_base <- dat_base %>%
-  mutate(cohort = case_when(
-    Cohort == "Frontline"     ~ "Frontline induction-transplant",
-    TRUE                      ~ Cohort
-  ))
+  mutate(
+    cohort = factor(
+      publication_cohort_label(Cohort),
+      levels = c("Training", "Testing")
+    )
+  )
 
 
 # -----------------------------------------------------------
@@ -750,7 +761,7 @@ table1_labels <- c(
   Subtype = "Myeloma Ig Subtype",
   ECOG_SCORE = "ECOG Performance Status"
 )
-table1_cohort_levels <- c("Frontline induction-transplant", "Non-frontline")
+table1_cohort_levels <- c("Training", "Testing")
 
 table1_source_rows <- list()
 for (variable in vars_cat) {
@@ -801,8 +812,8 @@ table1_source_qc <- data.frame(
   n_narrow_cohort_csv_patients = length(unique(patient_cohort_tbl_csv$Patient)),
   n_patients_added_beyond_narrow_csv = length(setdiff(dat_base$Patient, patient_cohort_tbl_csv$Patient)),
   n_baseline_table_patients = nrow(dat_base),
-  n_frontline = sum(dat_base$cohort == "Frontline induction-transplant", na.rm = TRUE),
-  n_non_frontline = sum(dat_base$cohort == "Non-frontline", na.rm = TRUE),
+  n_training = sum(dat_base$cohort == "Training", na.rm = TRUE),
+  n_testing = sum(dat_base$cohort == "Testing", na.rm = TRUE),
   n_missing_cohort = sum(is.na(dat_base$cohort)),
   output_csv = table1_source_counts_path,
   stringsAsFactors = FALSE
@@ -898,8 +909,8 @@ write_table1_pdf_from_source_counts <- function(table1_source_counts, table1_sou
   grid::grid.text(
     paste0(
       "Current cohort: n = ", table1_source_qc$n_baseline_table_patients,
-      " (Frontline induction-transplant n = ", table1_source_qc$n_frontline,
-      "; Non-frontline n = ", table1_source_qc$n_non_frontline, ")."
+      " (Training n = ", table1_source_qc$n_training,
+      "; Testing n = ", table1_source_qc$n_testing, ")."
     ),
     x = 0.03,
     y = 0.925,

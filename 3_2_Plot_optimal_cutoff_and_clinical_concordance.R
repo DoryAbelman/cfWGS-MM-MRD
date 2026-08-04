@@ -94,6 +94,15 @@ if (!file.exists(.manuscript_helper)) {
 source(.manuscript_helper)
 rm(.manuscript_helper)
 
+.publication_export_helper <- file.path(
+  "Scripts_2025", "Final_Scripts", "publication_export_helpers.R"
+)
+if (!file.exists(.publication_export_helper)) {
+  .publication_export_helper <- "publication_export_helpers.R"
+}
+source(.publication_export_helper)
+rm(.publication_export_helper)
+
 
 # ===========================================================================
 # SECTION 1: DATA INPUT AND IDENTIFICATION OF SOURCE FILES
@@ -3180,6 +3189,10 @@ supp_table8_tables <- list(
   BM_Test = BM_Test,
   Blood_Train = Blood_Train,
   Blood_Test = Blood_Test
+)
+supp_table8_tables <- relabel_publication_workbook_tables(
+  supp_table8_tables,
+  "Supplementary Table 8"
 )
 purrr::pwalk(supp_table8_expected, function(sheet, n_rows, n_patients) {
   observed <- supp_table8_tables[[sheet]]

@@ -2134,3 +2134,131 @@ read_dilution_tumor_fraction_with_spring2026 <- function(path) {
   dplyr::bind_rows(current, revision) %>%
     dplyr::distinct(Bam, .keep_all = TRUE)
 }
+
+# Build one patient-level baseline FISH catalogue from the integrated aggregate
+# plus the two deeper IMMAGINE clinical sources.  The aggregate is retained as
+# the primary source; deeper sources only fill calls that are missing after
+# feature integration.  This prevents clinical FISH fields from disappearing
+# when a WGS/clinical aggregate is rebuilt from a metadata table that does not
+# carry the assay-specific columns.
+load_revision_inclusive_baseline_fish_calls <- function(
+    aggregate,
+    img_patient_path = file.path(
+      "Clinical data", "IMMAGINE", "IMMAGINE_PCM_Import_24Mar2023",
+      "data_clinical_patients.txt"
+    ),
+    img_master_path = file.path(
+      "Clinical data", "Master_clinical_data_table_all_projects_May2025_updated2.csv"
+    ),
+    baseline_labels = c("diagnosis", "baseline")) {
+  fish_fields <- c("T_4_14", "T_11_14", "T_14_16", "DEL_17P", "DEL_1P", "AMP_1Q")
+
+  normalize_call <- function(x) {
+    value <- stringr::str_squish(as.character(x))
+    dplyr::case_when(
+      is.na(value) | value == "" ~ NA_character_,
+      stringr::str_to_lower(value) %in% c("positive", "pos", "yes", "y", "true", "1") ~ "Positive",
+      stringr::str_to_lower(value) %in% c("negative", "neg", "no", "n", "false", "0") ~ "Negative",
+      TRUE ~ NA_character_
+    )
+  }
+
+  collapse_patient_calls <- function(data, source_label) {
+    for (field in fish_fields) {
+      if (!field %in% names(data)) data[[field]] <- NA_character_
+    }
+    data %>%
+      dplyr::mutate(dplyr::across(dplyr::all_of(fish_fields), normalize_call)) %>%
+      dplyr::group_by(.data$Patient) %>%
+      dplyr::summarise(
+        dplyr::across(dplyr::all_of(fish_fields), ~ {
+          values <- .x[!is.na(.x)]
+          if (length(values)) values[[1]] else NA_character_
+        }),
+        .groups = "drop"
+      ) %>%
+      dplyr::mutate(.fish_source = source_label)
+  }
+
+  require_columns(
+    aggregate,
+    c("Patient", "timepoint_info", fish_fields),
+    "revision-inclusive aggregate used for baseline FISH recovery"
+  )
+  aggregate_calls <- aggregate %>%
+    dplyr::filter(stringr::str_to_lower(.data$timepoint_info) %in% baseline_labels) %>%
+    dplyr::select(.data$Patient, dplyr::all_of(fish_fields)) %>%
+    collapse_patient_calls("Final aggregate clinical feature table")
+
+  source_tables <- list(aggregate_calls)
+
+  if (file.exists(img_patient_path)) {
+    img_patient <- readr::read_tsv(img_patient_path, comment = "#", show_col_types = FALSE)
+    require_columns(
+      img_patient,
+      c("PATIENT_ID", "TX_T4_14", "TX_T11_14", "TX_T14_16", "CNV_DEL17P", "CNV_DEL1P", "CNV_AMP1Q"),
+      "IMMAGINE PCM patient-level FISH table"
+    )
+    source_tables[[length(source_tables) + 1L]] <- img_patient %>%
+      dplyr::transmute(
+        Patient = .data$PATIENT_ID,
+        T_4_14 = .data$TX_T4_14,
+        T_11_14 = .data$TX_T11_14,
+        T_14_16 = .data$TX_T14_16,
+        DEL_17P = .data$CNV_DEL17P,
+        DEL_1P = .data$CNV_DEL1P,
+        AMP_1Q = .data$CNV_AMP1Q
+      ) %>%
+      collapse_patient_calls("IMMAGINE PCM clinical patient table")
+  }
+
+  if (file.exists(img_master_path)) {
+    img_master <- readr::read_csv(img_master_path, show_col_types = FALSE)
+    require_columns(
+      img_master,
+      c("Patient", "timepoint_info", fish_fields),
+      "IMMAGINE master clinical table"
+    )
+    source_tables[[length(source_tables) + 1L]] <- img_master %>%
+      dplyr::filter(stringr::str_to_lower(.data$timepoint_info) %in% baseline_labels) %>%
+      dplyr::select(.data$Patient, dplyr::all_of(fish_fields)) %>%
+      collapse_patient_calls("IMMAGINE master clinical table")
+  }
+
+  combined <- dplyr::bind_rows(source_tables) %>%
+    dplyr::mutate(.source_rank = dplyr::case_match(
+      .data$.fish_source,
+      "Final aggregate clinical feature table" ~ 1L,
+      "IMMAGINE PCM clinical patient table" ~ 2L,
+      "IMMAGINE master clinical table" ~ 3L,
+      .default = 99L
+    )) %>%
+    dplyr::arrange(.data$Patient, .data$.source_rank)
+
+  calls <- combined %>%
+    dplyr::group_by(.data$Patient) %>%
+    dplyr::summarise(
+      dplyr::across(dplyr::all_of(fish_fields), ~ {
+        values <- .x[!is.na(.x)]
+        if (length(values)) values[[1]] else NA_character_
+      }),
+      .groups = "drop"
+    )
+
+  sources <- purrr::map_dfr(fish_fields, function(field) {
+    combined %>%
+      dplyr::filter(!is.na(.data[[field]])) %>%
+      dplyr::group_by(.data$Patient) %>%
+      dplyr::slice_min(.data$.source_rank, n = 1L, with_ties = FALSE) %>%
+      dplyr::ungroup() %>%
+      dplyr::transmute(
+        Patient = .data$Patient,
+        feature = field,
+        call = .data[[field]],
+        source = .data$.fish_source
+      )
+  })
+
+  attr(calls, "call_sources") <- sources
+  calls
+}

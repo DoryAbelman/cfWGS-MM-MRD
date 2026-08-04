@@ -299,6 +299,10 @@ Final_Scripts/
 ├── manuscript_output_helpers.R ← direct manuscript-output helper for numbered scripts
 ├── validate_manuscript_outputs.R ← direct manuscript-output validator
 ├── 5_0_Build_Manuscript_Text_Number_Exports.R ← manuscript text-number export helper
+├── 6_12_Patient_Grouped_Repeated_Nested_CV.R ← leakage-free grouped internal validation
+├── 6_13_Assemble_All_Model_Grouped_CV_Results.R ← optional 32-model grouped-CV assembly
+├── 6_13_Temporal_Validation_Subset_Audit.R ← original-seven versus later-accrued frozen-model audit
+├── 6_14_Build_Corrected_Grouped_CV_Panels.R ← corrected Figure 3A/4A panel generator
 ├── pipeline_metadata.R      ← shared script/output metadata helpers
 ├── final_manuscript_objects/ ← manuscript-labeled outputs created at run time
 ├── manuscript_writing/      ← section-organized manuscript text-number exports
@@ -340,6 +344,104 @@ Each script runs in a fresh R process from the project root and writes its outpu
    ```sh
    Rscript Scripts_2025/Final_Scripts/validate_manuscript_outputs.R
    ```
+
+### Corrected classifier validation
+
+This workflow corrects the **internal validation procedure** for repeated
+samples. Patients—not sample rows—are assigned to both outer and inner folds,
+so samples from one patient can never appear on both sides of a split. The
+correction is deliberately versioned: it does not overwrite the legacy
+row-level CV results, reselect features, or change the frozen models and
+thresholds used to score the independent test cohort.
+
+#### What each script does and why
+
+| Step | Script | What it does | Why it is separate |
+|---|---|---|---|
+| 1 | `6_12_Patient_Grouped_Repeated_Nested_CV.R` | Reconstructs the historical training frame, creates repeated outer and inner folds grouped by patient, tunes `glmnet` inside each outer-training set, derives a Youden threshold from inner out-of-fold predictions, and scores outer-held-out patients. It then reports repeat-pooled metrics with patient-clustered bootstrap intervals. | This is the only step that fits validation models. Keeping it versioned protects the frozen test-scoring models and makes every fold, prediction, threshold, and warning auditable. |
+| 2, optional | `6_13_Assemble_All_Model_Grouped_CV_Results.R` | Combines separately executed BM, blood, and fragmentomics blocks for the complete 32-model sensitivity analysis; verifies model completeness, prediction uniqueness, fold integrity, finite probabilities, and source-run QC. | Large model-library runs can be executed in blocks. Assembly is kept separate from fitting so it cannot silently alter results. This all-model analysis is broader than the four-model headline figure workflow. |
+| 3 | `6_13_Temporal_Validation_Subset_Audit.R` | Applies the already-fixed test predictions and thresholds to two visible phases: the original seven-patient selection-informed hold-out and the later-accrued temporal-validation patients. Reports all-evaluable-sample and earliest-evaluable-sample-per-patient results separately. | The original hold-out influenced which feature specifications were emphasized and should not be presented as equivalent to later-accrued validation data. This step does not retrain or rescore a model. |
+| 4 | `6_14_Build_Corrected_Grouped_CV_Panels.R` | Reads the locked grouped-CV summaries, verifies the exact four headline models and resampling settings, writes plotted source data and checksums, and renders corrected Figure 3A and Figure 4A components. | Plotting is deterministic and separate from fitting, so a layout change cannot alter model estimates. Historical figure files are not overwritten. |
+
+#### Headline grouped-CV runs
+
+Run from the project root. The current locked panel inputs were produced as a
+three-model headline run plus a separate `Blood_Sites` run; the same engine and
+resampling safeguards are used for both.
+
+```sh
+Rscript Scripts_2025/Final_Scripts/6_12_Patient_Grouped_Repeated_Nested_CV.R \
+  --run-id 2026-07-31_v1 \
+  --models BM_Sites,BM_cVAF,Blood_Combined \
+  --outer-repeats 50 --inner-repeats 5 --bootstrap-reps 2000
+
+Rscript Scripts_2025/Final_Scripts/6_12_Patient_Grouped_Repeated_Nested_CV.R \
+  --run-id 2026-07-31_blood_sites_v1 \
+  --models Blood_Sites \
+  --outer-repeats 50 --inner-repeats 5 --bootstrap-reps 2000
+```
+
+`--models` accepts a comma-separated subset of the named model specifications.
+`--model-library all` exposes the complete 32-model sensitivity library. Every
+run refuses to overwrite an existing run directory and writes `RUN_COMPLETE`
+only after its correctness checks pass.
+
+#### Optional complete model-library assembly
+
+The all-model analysis can be split into independently completed blocks. After
+those source runs finish, review the three explicit `source_run_ids` and the
+new `output_run_id` at the top of the assembler, then run:
+
+```sh
+Rscript Scripts_2025/Final_Scripts/6_13_Assemble_All_Model_Grouped_CV_Results.R
+```
+
+This produces the complete 32-model comparison and grouped-versus-legacy AUC
+table. It is a sensitivity analysis and is not an input to the four-model
+headline panels.
+
+#### Temporal validation audit
+
+First generate the expanded-test scored manifest with
+`3_1C_Expanded_test_clustered_sensitivity.R`. For a release, pass the exact
+manifest explicitly rather than relying on automatic latest-file discovery:
+
+```sh
+Rscript Scripts_2025/Final_Scripts/6_13_Temporal_Validation_Subset_Audit.R \
+  --run-id 2026-07-31_v1 \
+  --scored-manifest Output_tables_2025/expanded_test_clustered_sensitivity/expanded_test_repeated_measures_sample_manifest_YYYY-MM-DD.csv \
+  --bootstrap-reps 10000
+```
+
+#### Corrected Figure 3A and Figure 4A panels
+
+The panel builder defaults to the two locked grouped-CV summary paths shown
+above. Alternative versioned summaries must be supplied explicitly with
+`--headline-run` and `--blood-sites-run`.
+
+```sh
+Rscript Scripts_2025/Final_Scripts/6_14_Build_Corrected_Grouped_CV_Panels.R \
+  --run-id 2026-07-31_v4_compact --layout compact
+```
+
+#### Interpretation boundaries
+
+- The grouped-CV AUC estimates internal discrimination for a previously unseen
+  patient, conditional on the already-selected feature specification.
+- Inner folds tune `glmnet` and generate out-of-fold predictions for threshold
+  selection; outer-held-out patients are used only for evaluation.
+- Patient-clustered bootstrap intervals preserve all repeated samples from a
+  resampled patient.
+- The temporal audit reports the original selection-informed and later-accrued
+  phases separately; their combined total is not a purely independent temporal
+  validation estimate.
+- None of these scripts overwrites the frozen production models, thresholds,
+  legacy CV objects, or independent test-cohort predictions.
+
+Outputs are written to new versioned directories under
+`Output_tables_2025/patient_grouped_repeated_nested_cv/`,
+`Output_tables_2025/temporal_validation_subset/`, and
+`Output_figures_2025/patient_grouped_repeated_nested_cv/`.
 
 ---
 

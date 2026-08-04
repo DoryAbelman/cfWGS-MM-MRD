@@ -3590,6 +3590,7 @@ make_blood_patient_line_plot <- function(plot_dat,
                                          probability_thresholds = blood_thresholds,
                                          confirmatory_feature = "Blood_zscore_only_sites_prob",
                                          confirmatory_threshold = 0.380,
+                                         healthy_control_dat = NULL,
                                          feature_y_transform = c("identity", "pseudo_log"),
                                          feature_pseudo_log_sigma = 0.00001) {
   feature_y_transform <- match.arg(feature_y_transform)
@@ -3612,6 +3613,26 @@ make_blood_patient_line_plot <- function(plot_dat,
 
   feature_df <- plot_dat %>% filter(.data$panel_type == "Feature")
   probability_df <- plot_dat %>% filter(.data$panel_type == "Probability")
+  if (is.null(healthy_control_dat)) {
+    healthy_control_dat <- tibble(
+      feature = character(),
+      value = numeric(),
+      healthy_control_plot_x = numeric()
+    )
+  }
+  required_hc_columns <- c("feature", "value", "healthy_control_plot_x")
+  missing_hc_columns <- setdiff(required_hc_columns, names(healthy_control_dat))
+  if (length(missing_hc_columns)) {
+    stop(
+      "Healthy-control overlay is missing column(s): ",
+      paste(missing_hc_columns, collapse = ", "),
+      call. = FALSE
+    )
+  }
+  healthy_control_medians <- healthy_control_dat %>%
+    filter(!is.na(.data$value)) %>%
+    group_by(.data$feature) %>%
+    summarise(median_value = median(.data$value), .groups = "drop")
 
   p_feature_lines <- ggplot(
     feature_df,
@@ -3621,6 +3642,34 @@ make_blood_patient_line_plot <- function(plot_dat,
               linewidth = 0.45, alpha = 0.75) +
     geom_point(aes(color = .data[[color_var]]),
                shape = 16, size = 1.8, alpha = 0.9) +
+    {
+      if (nrow(healthy_control_medians)) {
+        geom_hline(
+          data = healthy_control_medians,
+          aes(yintercept = .data$median_value),
+          inherit.aes = FALSE,
+          linetype = "dotted",
+          color = "gray50",
+          linewidth = 0.5
+        )
+      }
+    } +
+    {
+      if (nrow(healthy_control_dat)) {
+        geom_point(
+          data = healthy_control_dat,
+          aes(
+            x = .data$healthy_control_plot_x,
+            y = .data$value
+          ),
+          inherit.aes = FALSE,
+          color = "gray60",
+          shape = 16,
+          size = 1.5,
+          alpha = 0.6
+        )
+      }
+    } +
     facet_wrap(
       ~ feature,
       scales = "free_y",
@@ -4321,6 +4370,221 @@ ms_copy_artifact(
   description = paste(
     "De-identified BM-informed dilution-series patient-line panel with one color per patient and mutation-list sizes in the legend;",
     "PWGVAL series include the matched NovaSeq X Plus 0% physical diluent endpoint."
+  ),
+  script_name = "3_1_part2_Apply_cfWGS_thresholds_to_dilution_series.R"
+)
+
+# -------------------------------------------------------------------------
+# Alternate ED5D/ED7D exports with healthy-control background after 0%
+#
+# Preserve the current patient-line panels above as the manuscript defaults.
+# These additional exports restore the comparison used in the older figure:
+# independent healthy-control measurements are plotted in gray at an "HC"
+# position to the right of the measured 0% diluent, with a dotted median line.
+# Healthy controls are not connected to patient trajectories and are excluded
+# from the dilution-series correlations. Platform matching is explicit:
+# NovaSeq 6000 controls for the historical series and XPlus controls for the
+# three PWGVAL/M4CHIP series.
+# -------------------------------------------------------------------------
+
+healthy_control_plot_x <- zero_final_plot_x * 0.35
+if (!is.finite(healthy_control_plot_x) || healthy_control_plot_x <= 0 ||
+    healthy_control_plot_x >= zero_final_plot_x) {
+  stop("The HC plotting coordinate must be positive and below the 0% plotting coordinate.", call. = FALSE)
+}
+
+healthy_control_breaks <- sort(unique(c(
+  zero_final_breaks,
+  healthy_control_plot_x
+)))
+healthy_control_break_labels <- format_lod_percent(healthy_control_breaks)
+healthy_control_break_labels[healthy_control_breaks == zero_final_plot_x] <- "0%"
+healthy_control_break_labels[healthy_control_breaks == healthy_control_plot_x] <- "HC"
+healthy_control_minor_breaks <- minor_ext[
+  minor_ext >= min(c(xr, healthy_control_plot_x), na.rm = TRUE) &
+    minor_ext <= max(c(xr, healthy_control_plot_x), na.rm = TRUE)
+]
+
+healthy_reference_by_patient <- dilution_df %>%
+  group_by(.data$Patient) %>%
+  summarise(
+    plot_healthy_reference_tier = if_else(
+      any(coalesce(.data$is_pwgval_dilution, FALSE)),
+      "XPLUS_CHARM_healthy",
+      "CHARM_healthy"
+    ),
+    .groups = "drop"
+  )
+
+healthy_control_background <- mrdetect_df %>%
+  inner_join(healthy_reference_by_patient, by = "Patient") %>%
+  filter(
+    .data$Study == .data$plot_healthy_reference_tier,
+    .data$healthy_reference_requested == .data$plot_healthy_reference_tier,
+    .data$Filter_source == "STR_encode",
+    coalesce(
+      as.character(.data$VCF_mutation_list_timepoint_for_dilution),
+      as.character(.data$Timepoint.x),
+      as.character(.data$Timepoint)
+    ) == "01",
+    .data$Mut_source %in% c("BM_cells", "Blood")
+  ) %>%
+  distinct(
+    .data$Patient,
+    .data$Mut_source,
+    .data$BAM,
+    .data$VCF_clean,
+    .keep_all = TRUE
+  )
+
+expected_healthy_control_groups <- tidyr::expand_grid(
+  Patient = healthy_reference_by_patient$Patient,
+  Mut_source = c("BM_cells", "Blood")
+)
+missing_healthy_control_groups <- expected_healthy_control_groups %>%
+  anti_join(
+    healthy_control_background %>% distinct(.data$Patient, .data$Mut_source),
+    by = c("Patient", "Mut_source")
+  )
+if (nrow(missing_healthy_control_groups)) {
+  stop(
+    "Missing platform-matched healthy-control background for: ",
+    paste(
+      paste(missing_healthy_control_groups$Patient,
+            missing_healthy_control_groups$Mut_source, sep = "/"),
+      collapse = ", "
+    ),
+    call. = FALSE
+  )
+}
+
+make_healthy_control_background_long <- function(dat, mut_source, feature_map) {
+  dat %>%
+    filter(.data$Mut_source == .env$mut_source) %>%
+    transmute(
+      Patient,
+      control_bam = basename(.data$BAM),
+      VCF_clean,
+      healthy_reference_tier,
+      healthy_control_plot_x = .env$healthy_control_plot_x,
+      !!!feature_map
+    ) %>%
+    deidentify_dilution_patients() %>%
+    pivot_longer(
+      cols = all_of(names(feature_map)),
+      names_to = "feature",
+      values_to = "value"
+    ) %>%
+    filter(!is.na(.data$value)) %>%
+    arrange(.data$feature, .data$Patient, .data$control_bam)
+}
+
+bm_healthy_control_background <- make_healthy_control_background_long(
+  healthy_control_background,
+  "BM_cells",
+  list(
+    detect_rate_BM = rlang::expr(.data$detection_rate),
+    zscore_BM = rlang::expr(.data$sites_rate_zscore_charm),
+    z_score_detection_rate_BM =
+      rlang::expr(.data$detection_rate_zscore_reads_checked_charm)
+  )
+)
+blood_healthy_control_background <- make_healthy_control_background_long(
+  healthy_control_background,
+  "Blood",
+  list(
+    detect_rate_blood = rlang::expr(.data$detection_rate),
+    zscore_blood = rlang::expr(.data$sites_rate_zscore_charm),
+    z_score_detection_rate_blood =
+      rlang::expr(.data$detection_rate_zscore_reads_checked_charm)
+  )
+)
+
+write_csv(
+  bm_healthy_control_background,
+  file.path(
+    SOURCE_DATA_DIR,
+    "SourceData_ED5D_BM_healthy_control_background_after_zero.csv"
+  )
+)
+write_csv(
+  blood_healthy_control_background,
+  file.path(
+    SOURCE_DATA_DIR,
+    "SourceData_ED7D_Blood_healthy_control_background_after_zero.csv"
+  )
+)
+
+ed7d_with_healthy_background <- make_blood_patient_line_plot(
+  plot_dat = blood_patient_zero_final_source,
+  plot_title = "Correlation of cfDNA Feature Values with Tumor Fraction in a Controlled Dilution Series",
+  patient_specific = FALSE,
+  x_col = "LOD_plot_zero_final",
+  x_breaks = healthy_control_breaks,
+  x_minor_breaks = healthy_control_minor_breaks,
+  x_labels = healthy_control_break_labels,
+  confirmatory_feature = NULL,
+  confirmatory_threshold = NULL,
+  healthy_control_dat = blood_healthy_control_background
+)
+ed5d_with_healthy_background <- make_blood_patient_line_plot(
+  plot_dat = bm_patient_zero_final_source,
+  plot_title = "Correlation of cfDNA Feature Values with Tumor Fraction in a Controlled Dilution Series",
+  patient_specific = FALSE,
+  x_col = "LOD_plot_zero_final",
+  x_breaks = healthy_control_breaks,
+  x_minor_breaks = healthy_control_minor_breaks,
+  x_labels = healthy_control_break_labels,
+  facet_label_map = facet_labels_bm_hc,
+  probability_thresholds = bm_thresholds,
+  confirmatory_feature = NULL,
+  confirmatory_threshold = NULL,
+  healthy_control_dat = bm_healthy_control_background
+)
+
+ed7d_with_healthy_background_path <- file.path(
+  OUTPUT_DIR_FIGURES,
+  "Fig5G_LOD_combined_patient_series_lines_zero_final_tf_with_healthy_control_background.png"
+)
+ed5d_with_healthy_background_path <- file.path(
+  OUTPUT_DIR_FIGURES,
+  "Fig4G_LOD_combined_patient_series_lines_zero_final_tf_with_healthy_control_background.png"
+)
+ggsave(
+  ed7d_with_healthy_background_path,
+  ed7d_with_healthy_background,
+  width = 13.8,
+  height = 4.8,
+  dpi = 600,
+  bg = "white"
+)
+ggsave(
+  ed5d_with_healthy_background_path,
+  ed5d_with_healthy_background,
+  width = 13.8,
+  height = 4.8,
+  dpi = 600,
+  bg = "white"
+)
+message("Saved alternate ED5D/ED7D panels with healthy-control background after 0%.")
+
+ms_copy_artifact(
+  source_path = ed7d_with_healthy_background_path,
+  artifact_id = "EDFIG7D",
+  role = "alternate_patient_lines_with_healthy_control_background_png",
+  description = paste(
+    "Alternate de-identified blood/cfDNA dilution-series patient-line panel with an independent gray healthy-control background after 0%;",
+    "controls are platform matched and the dotted line is the feature-specific healthy-control median."
+  ),
+  script_name = "3_1_part2_Apply_cfWGS_thresholds_to_dilution_series.R"
+)
+ms_copy_artifact(
+  source_path = ed5d_with_healthy_background_path,
+  artifact_id = "EDFIG5D",
+  role = "alternate_patient_lines_with_healthy_control_background_png",
+  description = paste(
+    "Alternate de-identified BM-informed dilution-series patient-line panel with an independent gray healthy-control background after 0%;",
+    "controls are platform matched and the dotted line is the feature-specific healthy-control median."
   ),
   script_name = "3_1_part2_Apply_cfWGS_thresholds_to_dilution_series.R"
 )
