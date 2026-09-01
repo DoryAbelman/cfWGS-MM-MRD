@@ -341,9 +341,13 @@ if (nrow(dat) == 0) {
   stop("No evaluable longitudinal rows remain after all-evaluable filters.", call. = FALSE)
 }
 
+# Manuscript display order: relapsed patients first, non-relapsed patients
+# second. Keep the underlying logical endpoint unchanged; this vector controls
+# only facet and legend presentation.
+relapse_display_order <- c(TRUE, FALSE)
 relapse_legend_labels <- c(
-  `FALSE` = "No relapse within 180 days of blood draw",
-  `TRUE` = "Relapse within 180 days of blood draw"
+  `TRUE` = "Relapse within 180 days of blood draw",
+  `FALSE` = "No relapse within 180 days of blood draw"
 )
 cohort_linetypes <- c("Frontline" = "solid", "Non-frontline" = "22")
 cohort_display_labels <- c("Frontline" = "Training Cohort", "Non-frontline" = "Test Cohort")
@@ -402,7 +406,10 @@ add_patient_relapse_flag <- function(plot_df) {
     ungroup() %>%
     mutate(
       relapse_within_180 = replace_na(relapse_within_180, FALSE),
-      patient_relapse180 = factor(patient_relapse180, levels = c(FALSE, TRUE)),
+      patient_relapse180 = factor(
+        patient_relapse180,
+        levels = relapse_display_order
+      ),
       Cohort = factor(Cohort, levels = c("Frontline", "Non-frontline"))
     )
 }
@@ -568,6 +575,7 @@ make_metric_panel <- function(df, metric, panel_title, y_label, cap_at = NA_real
         ) +
         scale_color_manual(
           values = c(`FALSE` = "black", `TRUE` = "red"),
+          breaks = relapse_display_order,
           labels = relapse_legend_labels,
           name = NULL
         ) +
@@ -644,6 +652,7 @@ make_metric_panel <- function(df, metric, panel_title, y_label, cap_at = NA_real
     ) +
     scale_color_manual(
       values = c(`FALSE` = "black", `TRUE` = "red"),
+      breaks = relapse_display_order,
       labels = relapse_legend_labels,
       name = NULL
     ) +
@@ -1202,8 +1211,8 @@ v2_output_dir <- file.path(output_dir, "reviewer_alternative_terminal_summary_v2
 dir.create(v2_output_dir, recursive = TRUE, showWarnings = FALSE)
 
 terminal_group_levels <- c(
-  "No relapse within 180 days",
-  "Relapse within 180 days"
+  "Relapse within 180 days",
+  "No relapse within 180 days"
 )
 terminal_group_colors <- c(
   "No relapse within 180 days" = "black",
@@ -1238,8 +1247,8 @@ select_terminal_observations <- function(plot_df, panel_id, panel_family) {
       terminal_group = factor(
         if_else(
           patient_relapse180_logical,
-          terminal_group_levels[[2]],
-          terminal_group_levels[[1]]
+          "Relapse within 180 days",
+          "No relapse within 180 days"
         ),
         levels = terminal_group_levels
       )
@@ -1383,10 +1392,10 @@ terminal_axis_labels <- function(endpoint_df) {
     if (length(out) == 0L) 0L else as.integer(out[[1]])
   }
   c(
-    "No relapse within 180 days" =
-      paste0("No relapse\nn=", count_for(terminal_group_levels[[1]])),
     "Relapse within 180 days" =
-      paste0("Relapse\nn=", count_for(terminal_group_levels[[2]]))
+      paste0("Relapse\nn=", count_for("Relapse within 180 days")),
+    "No relapse within 180 days" =
+      paste0("No relapse\nn=", count_for("No relapse within 180 days"))
   )
 }
 

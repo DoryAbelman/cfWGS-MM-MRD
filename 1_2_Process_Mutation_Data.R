@@ -240,6 +240,7 @@ bm_maf_source <- resolve_maf_files(
   label = "BM",
   env_var = "CFWGS_BM_MAF_DIR",
   candidate_dirs = c(
+    "Old MAF data backup/MAF files/BM",
     "Ultima data comparison/OncoKB annotated mafs"
   )
 )
@@ -495,6 +496,7 @@ blood_maf_source <- resolve_maf_files(
   label = "Blood",
   env_var = "CFWGS_BLOOD_MAF_DIR",
   candidate_dirs = c(
+    "Old MAF data backup/MAF files/Blood",
     "Ultima data comparison/OncoKB annotated mafs/Plasma_mafs"
   )
 )

@@ -114,6 +114,101 @@ spring2026_revision_sample_ids_for_heatmap <- if (is.null(spring2026_revision_me
   unique(spring2026_revision_metadata_for_heatmap$Sample_ID)
 }
 
+# Use the scoring manifest as the authority for whether a specimen labelled
+# Diagnosis/Baseline is actually an eligible study baseline. This prevents
+# later collections with legacy baseline-like metadata (notably
+# SPORE_0009_T3_BM_cells) from entering the baseline heatmap while preserving
+# those specimens in longitudinal analyses.
+baseline_scoring_manifest_path <- file.path(
+  "Output_tables_2025", "clinical_support", "sample_scoring_status_manifest.csv"
+)
+if (!file.exists(baseline_scoring_manifest_path)) {
+  stop(
+    "Missing baseline scoring manifest required for heatmap eligibility: ",
+    baseline_scoring_manifest_path,
+    call. = FALSE
+  )
+}
+
+baseline_scoring_eligibility_for_heatmap <- readr::read_csv(
+  baseline_scoring_manifest_path,
+  show_col_types = FALSE
+) %>%
+  transmute(
+    Patient = as.character(.data$Patient),
+    Timepoint = as.character(.data$Timepoint),
+    is_baseline_for_scoring = tolower(as.character(.data$is_baseline_for_scoring)) %in%
+      c("true", "1", "yes"),
+    sample_scoring_role = as.character(.data$sample_scoring_role)
+  ) %>%
+  group_by(.data$Patient, .data$Timepoint) %>%
+  summarise(
+    is_baseline_for_scoring = any(.data$is_baseline_for_scoring, na.rm = TRUE),
+    sample_scoring_role = paste(sort(unique(na.omit(.data$sample_scoring_role))), collapse = ";"),
+    .groups = "drop"
+  )
+
+exclude_non_scoring_baseline_heatmap_rows <- function(data, compartment) {
+  required <- c("Patient", "Timepoint", "Sample_ID", "Tumor_Sample_Barcode")
+  if (!all(required %in% names(data))) {
+    stop(
+      "Cannot enforce baseline heatmap eligibility; missing columns: ",
+      paste(setdiff(required, names(data)), collapse = ", "),
+      call. = FALSE
+    )
+  }
+
+  checked <- data %>%
+    mutate(
+      Patient = as.character(.data$Patient),
+      Timepoint = as.character(.data$Timepoint)
+    ) %>%
+    left_join(
+      baseline_scoring_eligibility_for_heatmap,
+      by = c("Patient", "Timepoint")
+    )
+
+  excluded <- checked %>%
+    filter(!is.na(.data$is_baseline_for_scoring), !.data$is_baseline_for_scoring) %>%
+    mutate(
+      heatmap_compartment = compartment,
+      exclusion_reason = "Diagnosis/Baseline label but not an eligible scoring baseline"
+    )
+
+  if (nrow(excluded)) {
+    audit_path <- file.path(
+      "Output_tables_2025", "baseline_heatmap_excluded_non_scoring_samples.csv"
+    )
+    # Keep this audit deliberately narrow and type-stable. Binding the full
+    # heatmap rows is fragile because alteration columns can be logical in one
+    # compartment and character in another.
+    audit_cols <- c(
+      "heatmap_compartment", "Sample_ID", "Patient", "Timepoint",
+      "Tumor_Sample_Barcode", "sample_scoring_role", "exclusion_reason"
+    )
+    excluded_audit <- excluded %>%
+      select(any_of(audit_cols)) %>%
+      mutate(across(everything(), as.character))
+    existing <- if (file.exists(audit_path)) {
+      readr::read_csv(audit_path, show_col_types = FALSE) %>%
+        select(any_of(audit_cols)) %>%
+        mutate(across(everything(), as.character)) %>%
+        filter(.data$heatmap_compartment != compartment)
+    } else {
+      NULL
+    }
+    readr::write_csv(
+      bind_rows(existing, excluded_audit) %>%
+        distinct(.data$heatmap_compartment, .data$Sample_ID, .keep_all = TRUE),
+      audit_path
+    )
+  }
+
+  checked %>%
+    filter(is.na(.data$is_baseline_for_scoring) | .data$is_baseline_for_scoring) %>%
+    select(-.data$is_baseline_for_scoring, -.data$sample_scoring_role)
+}
+
 write_spring2026_heatmap_exclusion_audit <- function(data, compartment) {
   # ## Audit revision samples excluded from baseline heatmaps
   # The heatmap is explicitly a baseline/diagnosis figure. Revision samples with
@@ -314,6 +409,26 @@ maf_bm_data <- readRDS(
 )
 maf_blood_data <- readRDS("combined_maf_blood_all_muts_updated.rds")
 
+# Harmonize current and historical gene symbols before constructing MAF
+# objects. Without this step, qualifying calls annotated with current symbols
+# (notably TENT5C) are silently missed by a catalogue that uses the historical
+# aliases FAM46C/MMSET/HIST1H1E.
+harmonize_mm_gene_symbols <- function(data) {
+  if (!is.data.frame(data) || !"Hugo_Symbol" %in% names(data)) return(data)
+  data %>%
+    mutate(
+      Hugo_Symbol = recode(
+        .data$Hugo_Symbol,
+        "FAM46C" = "TENT5C",
+        "MMSET" = "NSD2",
+        "H1-4" = "HIST1H1E",
+        .default = .data$Hugo_Symbol
+      )
+    )
+}
+maf_bm_data <- harmonize_mm_gene_symbols(maf_bm_data)
+maf_blood_data <- harmonize_mm_gene_symbols(maf_blood_data)
+
 # Convert data frames to MAF objects if needed
 if (is.data.frame(maf_bm_data)) {
   maf_object_bm <- read.maf(maf = maf_bm_data)
@@ -338,7 +453,7 @@ myeloma_genes <- c(
   "KRAS",    # ~20-25%; MAPK/ERK pathway
   "NRAS",    # ~20-25%; MAPK/ERK pathway
   "BRAF",    # ~5-10%; MAPK/ERK pathway
-  "FAM46C",  # ~10-15%; RNA stability
+  "TENT5C",  # formerly FAM46C; recurrent MM driver
   "DIS3",    # ~10-15%; RNA degradation
   "CYLD",    # ~5-10%; NF-κB regulator
   "ATM",     # ~5%; DNA damage repair
@@ -348,7 +463,7 @@ myeloma_genes <- c(
   "TRAF3",   # ~5%; NF-κB regulator
   "IRF4",    # ~5%; plasma cell differentiation
   "FGFR3",   # ~10-15%; t(4;14), receptor tyrosine kinase
-  "MMSET",   # ~10-15%; t(4;14), epigenetics
+  "NSD2",    # formerly MMSET; t(4;14), epigenetics
   "BCL2",    # ~15-20%; t(11;14), venetoclax target
   "IKZF1",   # ~5%; transcription regulation
   "IKZF3",   # ~5%; transcription regulation
@@ -363,8 +478,15 @@ myeloma_genes <- c(
   "NFKB2",   # ~5%; NF-κB activator
   "PRDM1",   # ~5%; plasma cell differentiation
   "EGR1",    # ~5%; early growth response
-  "LTB"      # <5%; rare but part of NF-κB signaling
+  "LTB",     # <5%; rare but part of NF-κB signaling
+  "HIST1H1E" # recurrent MM driver; includes current H1-4 annotations
 )
+
+# ATR was explicitly queried by the reviewer and was interrogated in the WGS
+# callsets, but it has no qualifying baseline coding call for the displayed
+# analysis. Keep it in the assessed catalogue while excluding it from the
+# observed-call heatmap rows.
+assessed_myeloma_genes <- unique(c(myeloma_genes, "ATR"))
 
 
 ### This script first does seperate heatmaps organized in the same order and then a combined heatmap
@@ -577,6 +699,7 @@ combined_data_heatmap_BM <- combined_data_heatmap_BM %>%
   filter(!.data$Patient %in% strict_cfdna_mrd_excluded_patients_for_heatmap) %>%
   filter(timepoint_info == "Baseline") %>%
   filter(Sample_type %in% c("BM_cells")) %>%
+  exclude_non_scoring_baseline_heatmap_rows("BM_cells") %>%
   deduplicate_spring2026_heatmap_baselines("BM_cells")
 
 # 1f. Replace NAs: for mutation columns use "No Mutation" and for CNA/translocation use 0
@@ -651,6 +774,7 @@ combined_data_heatmap_blood <- combined_data_heatmap_blood %>%
   filter(!.data$Patient %in% strict_cfdna_mrd_excluded_patients_for_heatmap) %>%
   filter(timepoint_info == "Baseline") %>%
   filter(Sample_type %in% c("Blood_plasma_cfDNA")) %>%
+  exclude_non_scoring_baseline_heatmap_rows("Blood_plasma_cfDNA") %>%
   deduplicate_spring2026_heatmap_baselines("Blood_plasma_cfDNA")
 
 # 2d. Replace NAs for mutation columns and for CNA/translocation columns
@@ -898,6 +1022,38 @@ heatmap_matrix_blood <- align_heatmap_feature_matrix(
   heatmap_matrix_blood,
   all_feature_rows_for_alignment
 )
+
+# Display only mutation genes with at least one qualifying call in the plotted
+# baseline cohort. The full assessed catalogue is exported separately (including
+# ATR and other genes without qualifying calls), so retaining all-zero mutation
+# rows here adds visual whitespace without conveying additional results.
+mutation_call_values <- c("Truncating", "Missense", "Splice_Site", "Other")
+aligned_mutation_rows <- intersect(myeloma_genes, all_feature_rows_for_alignment)
+mutation_rows_with_qualifying_call <- aligned_mutation_rows[vapply(
+  aligned_mutation_rows,
+  function(gene) {
+    any(heatmap_matrix_BM[gene, ] %in% mutation_call_values, na.rm = TRUE) ||
+      any(heatmap_matrix_blood[gene, ] %in% mutation_call_values, na.rm = TRUE)
+  },
+  logical(1)
+)]
+empty_mutation_rows_removed <- setdiff(
+  aligned_mutation_rows,
+  mutation_rows_with_qualifying_call
+)
+display_feature_rows <- all_feature_rows_for_alignment[
+  !all_feature_rows_for_alignment %in% aligned_mutation_rows |
+    all_feature_rows_for_alignment %in% mutation_rows_with_qualifying_call
+]
+heatmap_matrix_BM <- heatmap_matrix_BM[display_feature_rows, , drop = FALSE]
+heatmap_matrix_blood <- heatmap_matrix_blood[display_feature_rows, , drop = FALSE]
+
+if (length(empty_mutation_rows_removed)) {
+  message(
+    "Omitting mutation rows without qualifying displayed-cohort calls: ",
+    paste(empty_mutation_rows_removed, collapse = ", ")
+  )
+}
 
 # 2h. Create top annotation for blood
 top_annotation_blood <- HeatmapAnnotation(
@@ -1221,6 +1377,62 @@ col_cohort_ord <- factor(
 bm_mat    <- bm_mat   [, col_order, drop=FALSE]
 cfDNA_mat <- cfDNA_mat[, col_order, drop=FALSE]
 all_cols  <- col_order
+
+# Regression guard for Reviewer Comment 3.8. ATM and RB1 have qualifying
+# cfDNA-only baseline calls and must remain visible after cohort/sample
+# filtering. The earlier BM-row alignment silently removed these rows even
+# though the calls were retained in the per-variant supplementary table.
+required_cfdna_only_genes <- c("ATM", "RB1")
+missing_required_rows <- setdiff(required_cfdna_only_genes, rownames(cfDNA_mat))
+if (length(missing_required_rows)) {
+  stop(
+    "Extended Data Figure 1 is missing required mutation rows: ",
+    paste(missing_required_rows, collapse = ", "),
+    call. = FALSE
+  )
+}
+
+required_gene_retention_audit <- tibble(
+  Gene = required_cfdna_only_genes,
+  Row_present = Gene %in% rownames(cfDNA_mat),
+  BM_positive_calls = vapply(
+    Gene,
+    function(gene) sum(!is.na(bm_mat[gene, ]) & bm_mat[gene, ] != "No Mutation"),
+    integer(1)
+  ),
+  cfDNA_positive_calls = vapply(
+    Gene,
+    function(gene) sum(!is.na(cfDNA_mat[gene, ]) & cfDNA_mat[gene, ] != "No Mutation"),
+    integer(1)
+  )
+)
+
+missing_required_calls <- required_gene_retention_audit %>%
+  filter(.data$cfDNA_positive_calls < 1L) %>%
+  pull(.data$Gene)
+if (length(missing_required_calls)) {
+  stop(
+    "Extended Data Figure 1 lost qualifying cfDNA calls for: ",
+    paste(missing_required_calls, collapse = ", "),
+    call. = FALSE
+  )
+}
+
+required_alias_recovery_genes <- c("TENT5C", "HIST1H1E")
+missing_alias_recovery_rows <- setdiff(required_alias_recovery_genes, rownames(bm_mat))
+if (length(missing_alias_recovery_rows)) {
+  stop(
+    "Extended Data Figure 1 lost qualifying calls after gene-symbol harmonization for: ",
+    paste(missing_alias_recovery_rows, collapse = ", "),
+    call. = FALSE
+  )
+}
+
+dir.create("Output_tables_2025_updated", recursive = TRUE, showWarnings = FALSE)
+write_csv(
+  required_gene_retention_audit,
+  "Output_tables_2025_updated/extended_data_figure_1_required_gene_retention_audit.csv"
+)
 
 # 4) make a short label vector for the bottom
 patient_labels <- extract_pid(all_cols)
@@ -1589,6 +1801,73 @@ mutation_counts_table <- tibble(
   Blood_Mutation_Count_Source = blood_count_map$mutation_count_source[match(all_cols, blood_count_map$Patient_Timepoint)]
 ) %>%
   arrange(factor(Patient_Timepoint, levels = all_cols))
+
+# For patients with an evaluable baseline BM-cfDNA pair, use the exact mutation
+# catalogues used by the mutation-overlap analysis. This keeps the heatmap's
+# broad no-rsID mutation-count annotations numerically consistent with ED2G and
+# avoids propagating mislabeled historical count-file rows (for example,
+# IMG-181 cfDNA was recorded as the unfiltered 1,720-row MAF count even though
+# its canonical no-rsID catalogue contains 888 unique variants).
+overlap_count_path <- file.path(
+  "Final Tables and Figures", "mutation_overlap_support",
+  "mutation_overlap_with_cohort.csv"
+)
+if (!file.exists(overlap_count_path)) {
+  stop(
+    "Missing baseline mutation-overlap audit required for heatmap count consistency: ",
+    overlap_count_path,
+    ". Run 1_2_Part2_Get_Mutation_Overlap.R first.",
+    call. = FALSE
+  )
+}
+overlap_counts <- readr::read_csv(overlap_count_path, show_col_types = FALSE) %>%
+  select(
+    .data$Patient,
+    overlap_BM_Mutation_Count = .data$BM_Mutation_Count,
+    overlap_Blood_Mutation_Count = .data$cfDNA_Mutation_Count
+  ) %>%
+  distinct()
+duplicate_overlap_counts <- overlap_counts %>%
+  count(.data$Patient) %>%
+  filter(.data$n > 1L)
+if (nrow(duplicate_overlap_counts)) {
+  stop(
+    "Baseline mutation-overlap count audit is not unique by patient: ",
+    paste(duplicate_overlap_counts$Patient, collapse = ", "),
+    call. = FALSE
+  )
+}
+mutation_counts_table <- mutation_counts_table %>%
+  left_join(overlap_counts, by = "Patient") %>%
+  mutate(
+    BM_Mutation_Count = coalesce(
+      as.integer(.data$overlap_BM_Mutation_Count),
+      as.integer(.data$BM_Mutation_Count)
+    ),
+    Blood_Mutation_Count = coalesce(
+      as.integer(.data$overlap_Blood_Mutation_Count),
+      as.integer(.data$Blood_Mutation_Count)
+    ),
+    BM_Mutation_Count_Source = if_else(
+      !is.na(.data$overlap_BM_Mutation_Count),
+      "baseline_overlap_canonical_no_rsid_unique_variants",
+      .data$BM_Mutation_Count_Source
+    ),
+    Blood_Mutation_Count_Source = if_else(
+      !is.na(.data$overlap_Blood_Mutation_Count),
+      "baseline_overlap_canonical_no_rsid_unique_variants",
+      .data$Blood_Mutation_Count_Source
+    )
+  ) %>%
+  select(-.data$overlap_BM_Mutation_Count, -.data$overlap_Blood_Mutation_Count)
+
+# Reassign the plotting vectors after the consistency override.
+bm_counts <- mutation_counts_table$BM_Mutation_Count[
+  match(all_cols, mutation_counts_table$Patient_Timepoint)
+]
+blood_counts <- mutation_counts_table$Blood_Mutation_Count[
+  match(all_cols, mutation_counts_table$Patient_Timepoint)
+]
 
 zero_or_negative_counts <- mutation_counts_table %>%
   filter(
@@ -2027,9 +2306,8 @@ if (any(miss)) {
   anon_labels[miss] <- patient_labels[miss]
 }
 
-## Italicize gene names 
-row_font <- ifelse(all_rows %in% c("NRAS","KRAS","TP53","DIS3","BRAF","MAX","IRF4","PRDM1","TRAF3","EGR1","LTB","SP140","NFKBIA","FGFR3","KDM6A","CCND1"),
-                   "italic", "plain")
+## Italicize every mutation-gene row, including cfDNA-only retained rows.
+row_font <- ifelse(all_rows %in% myeloma_genes, "italic", "plain")
 
 ### Redraw heatmap
 overlay_ht_2 <- Heatmap(
@@ -2046,6 +2324,10 @@ overlay_ht_2 <- Heatmap(
   ## row split, fonts, annotation … (unchanged) ----------------
   row_split           = row_group,
   row_title           = c("Mutations","CNAs","Translocations"),
+  # Horizontal slice titles remain legible when the retained cfDNA-only genes
+  # increase the number of mutation rows and compress the shorter CNA/SV slices.
+  row_title_rot       = 0,
+  row_title_gp        = gpar(fontsize = 9),
   row_gap             = unit(c(2, 2), "mm"),
 #  row_names_gp        = gpar(fontsize = 8),
   row_names_gp = gpar(fontsize = 8, fontface = row_font),
@@ -2113,7 +2395,7 @@ lgd_sampletype2 <- Legend(
 # save
 png(
   "Final Tables and Figures/Figure_1B_overlay_heatmap_BM_vs_cfDNA_updated_with_FISH_15.png",
-  width = 14, height = 8, units = "in", res = 450, bg = "white"
+  width = 14, height = 8, units = "in", res = 600, bg = "white"
 )
 draw(
   overlay_ht_2,
@@ -2230,10 +2512,11 @@ combined_data_heatmap_BM_subset <- combined_data_heatmap_BM_subset %>%
   ###############################################################################
   ##  0.  HELPERS  --------------------------------------------------------------
   ###############################################################################
-  myeloma_genes  <- c("TP53","KRAS","NRAS","BRAF","FAM46C","DIS3","CYLD","ATM",
-                      "CCND1","MYC","RB1","TRAF3","IRF4","FGFR3","MMSET","BCL2",
+  myeloma_genes  <- c("TP53","KRAS","NRAS","BRAF","TENT5C","DIS3","CYLD","ATM",
+                      "CCND1","MYC","RB1","TRAF3","IRF4","FGFR3","NSD2","BCL2",
                       "IKZF1","IKZF3","CDKN2C","KDM6A","SETD2","PTEN","XBP1",
-                      "MAX","SP140","NFKBIA","NFKB2","PRDM1","EGR1","LTB")
+                      "MAX","SP140","NFKBIA","NFKB2","PRDM1","EGR1","LTB",
+                      "HIST1H1E")
   
   cna_cols      <- c("del1p","amp1q","del13q","del17p","hyperdiploid")
   transloc_cols <- c("IGH_MAF","IGH_CCND1","IGH_MYC","IGH_FGFR3")
@@ -3635,10 +3918,66 @@ cna_cols      <- c("del1p","amp1q","del13q","del17p","hyperdiploid")
 transloc_cols <- c("IGH_MAF","IGH_CCND1","IGH_MYC","IGH_FGFR3")
 
 # Create a feature catalog
-feature_catalog <- data.frame(
+mutation_catalog <- tibble(
+  Feature_ID = paste0("MUT_", assessed_myeloma_genes),
+  Feature_Name = dplyr::recode(
+    assessed_myeloma_genes,
+    "TENT5C" = "TENT5C (formerly FAM46C)",
+    "NSD2" = "NSD2 (formerly MMSET)",
+    "HIST1H1E" = "HIST1H1E (includes H1-4 annotations)",
+    .default = assessed_myeloma_genes
+  ),
+  Canonical_Symbol = assessed_myeloma_genes,
+  Historical_Alias = dplyr::recode(
+    assessed_myeloma_genes,
+    "TENT5C" = "FAM46C",
+    "NSD2" = "MMSET",
+    "HIST1H1E" = "H1-4",
+    .default = NA_character_
+  ),
+  Feature_Category = "Mutation",
+  Assessed = "Yes",
+  Qualifying_Baseline_Call = if_else(
+    assessed_myeloma_genes %in% all_rows,
+    "Yes",
+    "No"
+  ),
+  Displayed_in_Extended_Data_Figure_1 = if_else(
+    assessed_myeloma_genes %in% all_rows,
+    "Yes",
+    "No"
+  ),
+  Interpretation = if_else(
+    assessed_myeloma_genes %in% all_rows,
+    "At least one qualifying baseline nonsynonymous call; displayed in the heatmap.",
+    "Assessed, but no qualifying baseline coding call; not displayed as an empty heatmap row."
+  )
+)
+
+nonmutation_catalog <- tibble(
+  Feature_ID = c(paste0("CNA_", cna_cols), paste0("TRANS_", transloc_cols)),
+  Feature_Name = c(
+    "Deletion 1p", "Amplification 1q", "Deletion 13q", "Deletion 17p", "Hyperdiploid",
+    "IGH-MAF", "IGH-CCND1", "IGH-MYC", "IGH-FGFR3"
+  ),
+  Canonical_Symbol = NA_character_,
+  Historical_Alias = NA_character_,
+  Feature_Category = c(
+    rep("Copy Number Alteration", length(cna_cols)),
+    rep("Translocation", length(transloc_cols))
+  ),
+  Assessed = "Yes",
+  Qualifying_Baseline_Call = "Not applicable",
+  Displayed_in_Extended_Data_Figure_1 = "Yes",
+  Interpretation = "Assessed binary disease-associated structural/copy-number feature."
+)
+
+feature_catalog <- bind_rows(mutation_catalog, nonmutation_catalog)
+
+feature_catalog_legacy_minimal <- data.frame(
   Feature_ID = c(
     # Myeloma genes
-    paste0("MUT_", myeloma_genes),
+    paste0("MUT_", assessed_myeloma_genes),
     # CNAs
     paste0("CNA_", cna_cols),
     # Translocations
@@ -3646,7 +3985,7 @@ feature_catalog <- data.frame(
   ),
   Feature_Name = c(
     # Myeloma genes
-    myeloma_genes,
+    assessed_myeloma_genes,
     # CNAs
     c("Deletion 1p", "Amplification 1q", "Deletion 13q", "Deletion 17p", "Hyperdiploid"),
     # Translocations
@@ -3654,7 +3993,7 @@ feature_catalog <- data.frame(
   ),
   Feature_Category = c(
     # Myeloma genes
-    rep("Mutation", length(myeloma_genes)),
+    rep("Mutation", length(assessed_myeloma_genes)),
     # CNAs
     rep("Copy Number Alteration", length(cna_cols)),
     # Translocations
@@ -3665,6 +4004,31 @@ feature_catalog <- data.frame(
 
 write_csv(feature_catalog, "Output_tables_2025_updated/MM_disease_associated_features_catalog.csv")
 saveRDS(feature_catalog,   "Output_tables_2025_updated/MM_disease_associated_features_catalog.rds")
+
+# Submission-facing Supplementary Table 2A export. Keep both CSV and XLSX in
+# the stable manuscript-object table directory so the assessed-vs-displayed
+# distinction and alias harmonization cannot be lost during final packaging.
+supplementary_table_2a_dir <- file.path(
+  "Scripts_2025", "Final_Scripts", "final_manuscript_objects",
+  "04_supplementary_tables"
+)
+dir.create(supplementary_table_2a_dir, recursive = TRUE, showWarnings = FALSE)
+supplementary_table_2a_csv <- file.path(
+  supplementary_table_2a_dir,
+  "Supplementary_Table_2A_MM_associated_feature_catalogue_CURRENT.csv"
+)
+supplementary_table_2a_xlsx <- file.path(
+  supplementary_table_2a_dir,
+  "Supplementary_Table_2A_MM_associated_feature_catalogue_CURRENT.xlsx"
+)
+write_csv(feature_catalog, supplementary_table_2a_csv)
+if (!requireNamespace("writexl", quietly = TRUE)) {
+  stop("Package 'writexl' is required to export Supplementary Table 2A.", call. = FALSE)
+}
+writexl::write_xlsx(
+  list(A_feature_catalogue = feature_catalog),
+  supplementary_table_2a_xlsx
+)
 
 # -------------------------------------------------------------------------
 # Manuscript output: Supplementary Table 1A

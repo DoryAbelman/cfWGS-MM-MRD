@@ -2747,6 +2747,71 @@ readr::write_csv(
 # interpretation.
 id_cols   <- c("Patient", "Date", "Sample_Code", "Timepoint", "timepoint_info")
 
+# Append the available clinical/proteomic MRD calls to every row of
+# Supplementary Table 8. These fields remain independent of the comparator
+# used to generate a row, so a reader can review all available assay results
+# for the same sample without reconstructing them from duplicated comparator
+# rows. Rapid_Novor_Binary is the qualitative EasyM any-detect call (>0
+# residual monoclonal protein), while EasyM_reference_threshold_binary applies
+# the prespecified isotype-specific reference threshold.
+supp_table8_assay_call_cols <- c(
+  "Rapid_Novor_Binary",
+  "EasyM_reference_threshold_binary",
+  "Flow_Binary",
+  "Adaptive_Binary"
+)
+missing_supp_table8_assay_calls <- setdiff(
+  supp_table8_assay_call_cols,
+  names(dat)
+)
+if (length(missing_supp_table8_assay_calls) > 0L) {
+  stop(
+    "Supplementary Table 8 is missing required assay-call columns: ",
+    paste(missing_supp_table8_assay_calls, collapse = ", "),
+    call. = FALSE
+  )
+}
+
+format_binary_mrd_status <- function(x, assay_name) {
+  invalid <- sort(unique(x[!is.na(x) & !x %in% c(0, 1)]))
+  if (length(invalid) > 0L) {
+    stop(
+      "Unexpected non-binary ", assay_name, " values in Supplementary Table 8 input: ",
+      paste(invalid, collapse = ", "),
+      call. = FALSE
+    )
+  }
+  case_when(
+    x == 1 ~ "Positive",
+    x == 0 ~ "Negative",
+    TRUE ~ NA_character_
+  )
+}
+
+dat <- dat %>%
+  mutate(
+    EasyM_any_detect_MRD_status = format_binary_mrd_status(
+      Rapid_Novor_Binary,
+      "EasyM any-detect"
+    ),
+    EasyM_isotype_specific_MRD_status = format_binary_mrd_status(
+      EasyM_reference_threshold_binary,
+      "EasyM isotype-specific reference-threshold"
+    ),
+    MFC_MRD_status = format_binary_mrd_status(Flow_Binary, "MFC"),
+    clonoSEQ_MRD_status = format_binary_mrd_status(
+      Adaptive_Binary,
+      "clonoSEQ"
+    )
+  )
+
+supp_table8_status_cols <- c(
+  "EasyM_any_detect_MRD_status",
+  "EasyM_isotype_specific_MRD_status",
+  "MFC_MRD_status",
+  "clonoSEQ_MRD_status"
+)
+
 # Columns that help explain why cfWGS and clinical calls differ.
 aux_cols  <- c("Adaptive_Frequency",              # clonoSEQ cumulative VAF
                "Flow_pct_cells", grep("^BM.*(_prob|_call)$", names(dat), value = TRUE),
@@ -2794,7 +2859,8 @@ combined_discord_tbl <- dat %>%
     category,
     Relapsed,
     Num_days_to_closest_relapse,
-    all_of(aux_cols)
+    all_of(aux_cols),
+    all_of(supp_table8_status_cols)
   ) %>%
   arrange(landmark, Patient, Comparator)
 
@@ -2846,7 +2912,8 @@ combined_discord_tbl_non_frontline <- dat %>%
     category,
     Relapsed,
     Num_days_to_closest_relapse,
-    all_of(aux_cols)
+    all_of(aux_cols),
+    all_of(supp_table8_status_cols)
   ) %>%
   arrange(Patient, Comparator)
 
@@ -3045,7 +3112,8 @@ combined_discord_tbl2 <- dat %>%
     category,
     Relapsed,
     Num_days_to_closest_relapse,
-    all_of(aux_cols)
+    all_of(aux_cols),
+    all_of(supp_table8_status_cols)
   ) %>%
   arrange(landmark, Patient, Comparator)
 
@@ -3097,7 +3165,8 @@ combined_discord_tbl_non_frontline2 <- dat %>%
     category,
     Relapsed,
     Num_days_to_closest_relapse,
-    all_of(aux_cols)
+    all_of(aux_cols),
+    all_of(supp_table8_status_cols)
   ) %>%
   arrange(Patient, Comparator)
 
@@ -3194,6 +3263,71 @@ supp_table8_tables <- relabel_publication_workbook_tables(
   supp_table8_tables,
   "Supplementary Table 8"
 )
+
+validate_supp_table8_assay_statuses <- function(tbl, context) {
+  if (!identical(tail(names(tbl), length(supp_table8_status_cols)), supp_table8_status_cols)) {
+    stop(
+      "Supplementary Table 8 assay-status columns are not the right-most columns in ",
+      context, ". Expected: ", paste(supp_table8_status_cols, collapse = ", "),
+      call. = FALSE
+    )
+  }
+
+  invalid_statuses <- setdiff(
+    unique(unlist(tbl[supp_table8_status_cols], use.names = FALSE)),
+    c("Positive", "Negative", NA_character_)
+  )
+  if (length(invalid_statuses) > 0L) {
+    stop(
+      "Supplementary Table 8 contains invalid MRD status labels in ", context,
+      ": ", paste(invalid_statuses, collapse = ", "),
+      call. = FALSE
+    )
+  }
+
+  comparator_status_col <- case_when(
+    tbl$Comparator == "MFC" ~ "MFC_MRD_status",
+    tbl$Comparator == "clonoSEQ" ~ "clonoSEQ_MRD_status",
+    TRUE ~ NA_character_
+  )
+  comparator_status <- vapply(
+    seq_len(nrow(tbl)),
+    function(index) tbl[[comparator_status_col[[index]]]][[index]],
+    character(1)
+  )
+  primary_cfwgs_call_col <- if (
+    "BM_zscore_only_detection_rate_call" %in% names(tbl)
+  ) {
+    "BM_zscore_only_detection_rate_call"
+  } else if ("Blood_zscore_only_sites_call" %in% names(tbl)) {
+    "Blood_zscore_only_sites_call"
+  } else {
+    stop(
+      "Supplementary Table 8 lacks a primary cfWGS call column in ", context,
+      ".",
+      call. = FALSE
+    )
+  }
+  primary_cfwgs_status <- ifelse(
+    tbl[[primary_cfwgs_call_col]] == 1,
+    "Positive",
+    "Negative"
+  )
+  expected_status <- case_when(
+    tbl$category == "concordant" ~ primary_cfwgs_status,
+    stringr::str_detect(tbl$category, "_pos$") ~ "Positive",
+    stringr::str_detect(tbl$category, "_neg$") ~ "Negative",
+    TRUE ~ NA_character_
+  )
+  if (any(is.na(comparator_status) | comparator_status != expected_status)) {
+    stop(
+      "Supplementary Table 8 comparator MRD status does not match the row category in ",
+      context, ".",
+      call. = FALSE
+    )
+  }
+}
+
 purrr::pwalk(supp_table8_expected, function(sheet, n_rows, n_patients) {
   observed <- supp_table8_tables[[sheet]]
   observed_patients <- dplyr::n_distinct(observed$Patient)
@@ -3206,6 +3340,7 @@ purrr::pwalk(supp_table8_expected, function(sheet, n_rows, n_patients) {
       call. = FALSE
     )
   }
+  validate_supp_table8_assay_statuses(observed, paste0("in-memory sheet ", sheet))
 })
 
 # Write the final workbook with writexl.  openxlsx 4.2.8.1 can emit dangling
@@ -3266,6 +3401,12 @@ if (!identical(
     call. = FALSE
   )
 }
+for (sheet in saved_sheet_names) {
+  validate_supp_table8_assay_statuses(
+    readxl::read_xlsx(supp_table8_path, sheet = sheet),
+    paste0("serialized sheet ", sheet)
+  )
+}
 
 # -------------------------------------------------------------------------
 # Manuscript output: Supplementary Table 8
@@ -3289,13 +3430,28 @@ supp_table8_current_final_destination <- ms_copy_current_final_artifact(
   artifact_id = "STABLE8"
 )
 
+# Supplementary Table 8 is already a final workbook and does not require a
+# separate assembly step. Keep the manuscript-export final artifact synchronized
+# with the validated canonical generator output so the submission-facing copy
+# cannot remain stale after a table-only refresh.
+supp_table8_manuscript_export_final <- file.path(
+  "Manuscript_Exports", "04_supplementary_tables", "Supplementary_Table_8",
+  "final_artifacts", "Supplementary_Table_8_model_comparisons_to_clinical_metrics.xlsx"
+)
+supp_table8_manuscript_export_final <- ms_copy_file_quietly(
+  supp_table8_path,
+  supp_table8_manuscript_export_final,
+  overwrite = TRUE
+)
+
 # Validate the canonical workbook, its traceability copy, and the current-final
 # manuscript mirror so serialization or propagation failures stop this original
 # workflow without requiring a separate repair script.
 supp_table8_validation_targets <- unique(c(
   supp_table8_path,
   supp_table8_destination,
-  supp_table8_current_final_destination
+  supp_table8_current_final_destination,
+  supp_table8_manuscript_export_final
 ))
 for (target in supp_table8_validation_targets) {
   target_sheets <- readxl::excel_sheets(target)
@@ -3316,6 +3472,12 @@ for (target in supp_table8_validation_targets) {
       "Supplementary Table 8 staged artifact has incorrect row counts: ",
       target,
       call. = FALSE
+    )
+  }
+  for (sheet in target_sheets) {
+    validate_supp_table8_assay_statuses(
+      readxl::read_xlsx(target, sheet = sheet),
+      paste0("staged workbook ", basename(target), " sheet ", sheet)
     )
   }
 }
@@ -4090,6 +4252,14 @@ readr::write_csv(
   plot_df_with_easym %>% mutate(Figure = "Fig4K_cfWGS_vs_clinical_assays_EasyM_BM"),
   fig3e_source_data_path
 )
+# Keep the annotation statistics beside the exact point data used for the
+# panel.  The prior sidecar was generated from an older 70-row subset, whereas
+# this panel uses the current 95-row source (including all three comparators).
+fig3e_correlations_path <- file.path(
+  outdir_source_data,
+  "Fig4K_cfWGS_vs_clinical_assays_EasyM_BM_correlations.csv"
+)
+readr::write_csv(corr_df_with_easym, fig3e_correlations_path)
 ms_copy_artifact(
   source_path = fig3e_source_data_path,
   artifact_id = "FIG3E",

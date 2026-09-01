@@ -1043,7 +1043,7 @@ if (length(supp_table7_missing)) {
 }
 if (nrow(dilution_df) != 45L) {
   stop(
-    "Supplementary Table 7 release check expected 45 scored dilution rows; observed ",
+    "Release-only dilution core expected 45 scored non-zero/new plus historical rows; observed ",
     nrow(dilution_df), ".",
     call. = FALSE
   )
@@ -1060,8 +1060,54 @@ if (any(is.na(dilution_df$mrdetect_status)) ||
 # n_healthy_reference column is the fragmentomics reference size; the three
 # mrdetect_* columns below prevent readers from confusing it with the MRDetect
 # mutation reference.
-supp_table7_scored <- dilution_df |>
+# Supplementary Table 7 is the publication-facing record of every uniquely
+# sequenced dilution library. Use the complete object here: 9 historical
+# libraries, 36 non-zero PWGVAL libraries, and 3 same-platform patient-matched
+# 0% references. The figure/correlation analysis defines the historical
+# MRD-negative endpoint as 0% and back-calculates the other historical points
+# relative to that endpoint. Preserve the older residual-adjusted estimate in
+# a separate provenance column so the two definitions cannot be confused.
+supp_table7_scored <- dilution_df_with_xplus_zero_controls |>
   dplyr::mutate(
+    patient_series = dplyr::recode(
+      .data$Patient,
+      "VA-02" = "M4-28",
+      "VA-09" = "M4-34",
+      "VA-12" = "M4-37",
+      "VA-13" = "M4-38",
+      .default = NA_character_
+    ),
+    analysis_library_id = stringr::str_replace_all(
+      .data$Sample_ID,
+      c(
+        "^VA-02" = "M4-28",
+        "^VA-09" = "M4-34",
+        "^VA-12" = "M4-37",
+        "^VA-13" = "M4-38"
+      )
+    ),
+    replicate = dplyr::case_when(
+      .data$is_pwgval_dilution & .data$LOD == 0 ~ "shared 0% reference",
+      !.data$is_pwgval_dilution ~ "single",
+      TRUE ~ stringr::str_extract(.data$Sample_ID, "rep[0-9]+$")
+    ),
+    analysis_tumour_fraction_percent = dplyr::if_else(
+      .data$is_pwgval_dilution,
+      .data$LOD,
+      (.data$LOD_original / orig_full) * baseline_vaf
+    ),
+    legacy_adjusted_tumour_fraction_percent = .data$LOD,
+    tumour_fraction_definition = dplyr::case_when(
+      .data$is_pwgval_dilution & .data$LOD == 0 ~
+        "Patient-matched MRD-negative plasma; physical 0% reference",
+      .data$is_pwgval_dilution ~
+        "Known tumour fraction from the physical plasma-dilution design",
+      .data$LOD_original == 0 ~
+        "Historical MRD-negative endpoint defined as 0% for analysis",
+      TRUE ~
+        "Baseline-positive-library contribution relative to the historical MRD-negative 0% endpoint"
+    ),
+    zero_reference_library = .data$analysis_tumour_fraction_percent == 0,
     mrdetect_reference_platform = dplyr::case_when(
       grepl("X Plus", .data$sequencing_platform_context, fixed = TRUE) ~
         "NovaSeq X Plus",
@@ -1086,6 +1132,12 @@ supp_table7_scored <- dilution_df |>
 # columns. Do not mix a positive LOD selection with negative selections in one
 # select() call: tidyselect interprets that expression as retaining only LOD.
 dilution_df_clean <- supp_table7_scored |>
+  dplyr::arrange(
+    .data$patient_series,
+    .data$analysis_tumour_fraction_percent,
+    .data$replicate,
+    .data$analysis_library_id
+  ) |>
   dplyr::select(
     -dplyr::any_of(c(
       "Patient",
@@ -1094,11 +1146,18 @@ dilution_df_clean <- supp_table7_scored |>
       "Bam",
       "Sample_ID",
       "LOD_updated",
-      "LOD_original"
+      "LOD_original",
+      "LOD"
     ))
   ) |>
   dplyr::relocate(
-    LOD,
+    patient_series,
+    analysis_library_id,
+    replicate,
+    analysis_tumour_fraction_percent,
+    legacy_adjusted_tumour_fraction_percent,
+    tumour_fraction_definition,
+    zero_reference_library,
     dilution_series,
     sequencing_platform_context,
     mrdetect_reference_platform,
@@ -1106,12 +1165,17 @@ dilution_df_clean <- supp_table7_scored |>
     mrdetect_healthy_reference_identities
   )
 
-if (ncol(dilution_df_clean) != 82L) {
+if (nrow(dilution_df_clean) != 48L || ncol(dilution_df_clean) != 88L) {
   stop(
-    "Supplementary Table 7 release check expected 82 de-identified scored fields; observed ",
-    ncol(dilution_df_clean), ".",
+    "Supplementary Table 7 release check expected 48 libraries and 88 de-identified scored fields; observed ",
+    nrow(dilution_df_clean), " x ", ncol(dilution_df_clean), ".",
     call. = FALSE
   )
+}
+if (sum(dilution_df_clean$zero_reference_library, na.rm = TRUE) != 4L ||
+    sum(dilution_df_clean$patient_series == "M4-28" &
+          dilution_df_clean$analysis_tumour_fraction_percent == 0, na.rm = TRUE) != 1L) {
+  stop("Supplementary Table 7 must contain four unique 0% reference libraries, including the historical endpoint.", call. = FALSE)
 }
 if (anyNA(dilution_df_clean$mrdetect_healthy_reference_libraries) ||
     !identical(
@@ -1124,9 +1188,85 @@ if (anyNA(dilution_df_clean$mrdetect_healthy_reference_libraries) ||
   )
 }
 
+# The correlation sheet is calculated directly from the same 48 publication-
+# facing library rows exported below. This keeps all four 0% references in the
+# analysis, including the historical MRD-negative endpoint at 0% rather than
+# its legacy residual-adjusted value of 0.0087%. P-values are the nominal
+# library-level Spearman tests requested for the supplementary table; technical
+# replicates are therefore represented as individual scored libraries.
+supp_table7_corr_feature_cols <- intersect(
+  feature_cols,
+  names(dilution_df_clean)
+)
+supp_table7_corr_internal <- dilution_df_clean |>
+  dplyr::select(
+    analysis_tumour_fraction_percent,
+    dplyr::all_of(supp_table7_corr_feature_cols)
+  ) |>
+  tidyr::pivot_longer(
+    -analysis_tumour_fraction_percent,
+    names_to = "feature",
+    values_to = "value"
+  ) |>
+  dplyr::filter(
+    !is.na(.data$analysis_tumour_fraction_percent),
+    !is.na(.data$value)
+  ) |>
+  dplyr::group_by(.data$feature) |>
+  dplyr::summarise(
+    n_complete = dplyr::n(),
+    r = stats::cor(
+      .data$value,
+      .data$analysis_tumour_fraction_percent,
+      method = "spearman"
+    ),
+    p = stats::cor.test(
+      .data$value,
+      .data$analysis_tumour_fraction_percent,
+      method = "spearman",
+      exact = FALSE
+    )$p.value,
+    r2 = r ^ 2,
+    .groups = "drop"
+  )
+
+corr_tbl_export <- supp_table7_corr_internal |>
+  dplyr::mutate(Feature = dplyr::recode(.data$feature, !!!custom_labels2)) |>
+  dplyr::arrange(dplyr::desc(.data$r2)) |>
+  dplyr::transmute(
+    Feature,
+    `ρ (Spearman)` = .data$r,
+    `p-value` = .data$p,
+    `ρ²` = .data$r2
+  )
+if (nrow(corr_tbl_export) != 24L ||
+    !identical(names(corr_tbl_export), c("Feature", "ρ (Spearman)", "p-value", "ρ²"))) {
+  stop(
+    "Supplementary Table 7 correlation sheet must contain 24 features and the four requested columns.",
+    call. = FALSE
+  )
+}
+
+# Store logical results as explicit text so spreadsheet applications display
+# TRUE/FALSE rather than interactive checkbox controls.
+dilution_df_export <- dilution_df_clean |>
+  dplyr::mutate(
+    dplyr::across(
+      where(is.logical),
+      ~ dplyr::case_when(
+        is.na(.x) ~ NA_character_,
+        .x ~ "TRUE",
+        TRUE ~ "FALSE"
+      )
+    )
+  )
+if (any(vapply(dilution_df_export, is.logical, logical(1)))) {
+  stop("Supplementary Table 7 export still contains logical columns.", call. = FALSE)
+}
+
 supp_table7_tables <- list(
   "Correlations" = corr_tbl_export,
-  "Scored Data" = dilution_df_clean
+  "Scored Data" = dilution_df_export
 )
 supp_table7_path <- file.path(
   OUTPUT_DIR_TABLES,
@@ -1155,8 +1295,8 @@ supp_table7_serialized <- readxl::read_xlsx(
   supp_table7_temporary,
   sheet = "Scored Data"
 )
-if (nrow(supp_table7_serialized) != 45L ||
-    ncol(supp_table7_serialized) != 82L) {
+if (nrow(supp_table7_serialized) != 48L ||
+    ncol(supp_table7_serialized) != 88L) {
   unlink(supp_table7_temporary)
   stop(
     "Supplementary Table 7 serialization changed the scored-data dimensions.",
@@ -1184,11 +1324,11 @@ supp_table7_scored_csv <- file.path(
   "Supplementary_Table_7_Scored_Data_full22.csv"
 )
 readr::write_csv(corr_tbl_export, supp_table7_correlations_csv, na = "")
-readr::write_csv(dilution_df_clean, supp_table7_scored_csv, na = "")
+readr::write_csv(dilution_df_export, supp_table7_scored_csv, na = "")
 if (nrow(readr::read_csv(
   supp_table7_scored_csv,
   show_col_types = FALSE
-)) != 45L) {
+)) != 48L) {
   stop("Supplementary Table 7 scored-data CSV failed its row-count check.", call. = FALSE)
 }
 
@@ -1229,7 +1369,8 @@ supp_table7_validation_targets <- unique(c(
 ))
 for (target in supp_table7_validation_targets) {
   observed <- readxl::read_xlsx(target, sheet = "Scored Data")
-  if (nrow(observed) != 45L || ncol(observed) != 82L) {
+  if (nrow(observed) != 48L || ncol(observed) != 88L ||
+      sum(as.character(observed$zero_reference_library) == "TRUE", na.rm = TRUE) != 4L) {
     stop(
       "Supplementary Table 7 staged-artifact validation failed: ",
       target,
@@ -1244,8 +1385,8 @@ supp_table7_audit <- data.frame(
     winslash = "/",
     mustWork = TRUE
   ),
-  scored_rows = 45L,
-  scored_columns = 82L,
+  scored_rows = 48L,
+  scored_columns = 88L,
   bytes = file.info(supp_table7_validation_targets)$size,
   md5 = unname(tools::md5sum(supp_table7_validation_targets)),
   status = "PASS",
@@ -1732,7 +1873,7 @@ custom_labels <- c(
 )
 
 # pick & sort
-plot_df2 <- corr_tbl %>%
+plot_df2 <- supp_table7_corr_internal %>%
   filter(feature %in% names(custom_labels)) %>%
   arrange(desc(r)) %>%
   mutate(feature = factor(feature, levels = rev(feature))) 
@@ -1780,9 +1921,53 @@ p_corr_nice <- ggplot(plot_df2, aes(x = r, y = feature)) +
 
 # print or save
 print(p_corr_nice)
-ggsave(filename = file.path(OUTPUT_DIR_FIGURES, "Fig4H_feature_corr_lollipop_nice2_updated2.png"), 
-       p_corr_nice, 
-       width = 3.55, height = 3.75, dpi = 600)
+figure3c_pooled_png <- file.path(
+  OUTPUT_DIR_FIGURES,
+  "Fig4H_feature_corr_lollipop_nice2_updated2.png"
+)
+figure3c_pooled_pdf <- file.path(
+  OUTPUT_DIR_FIGURES,
+  "Fig4H_feature_corr_lollipop_nice2_updated2.pdf"
+)
+ggsave(
+  filename = figure3c_pooled_png,
+  plot = p_corr_nice,
+  width = 3.55,
+  height = 3.75,
+  dpi = 600,
+  bg = "white"
+)
+ggsave(
+  filename = figure3c_pooled_pdf,
+  plot = p_corr_nice,
+  width = 3.55,
+  height = 3.75,
+  device = cairo_pdf,
+  bg = "white"
+)
+
+figure3c_source_dir <- file.path(OUTPUT_DIR_TABLES, "Source_Data_Extended_Data")
+dir.create(figure3c_source_dir, recursive = TRUE, showWarnings = FALSE)
+figure3c_pooled_source <- supp_table7_corr_internal %>%
+  filter(.data$feature %in% names(custom_labels)) %>%
+  arrange(desc(.data$r)) %>%
+  transmute(
+    feature,
+    plot_label = unname(custom_labels[.data$feature]),
+    n_complete,
+    `rho (Spearman)` = .data$r,
+    `p-value` = .data$p,
+    `rho squared` = .data$r2,
+    correlation_definition = paste(
+      "Pooled library-level Spearman correlation across all evaluable rows from 48 scored libraries;",
+      "four MRD-negative references are 0% and technical replicates are individual libraries."
+    )
+  )
+figure3c_pooled_source_path <- file.path(
+  figure3c_source_dir,
+  "SourceData_Figure3C_dilution_feature_correlations_pooled_48_libraries.csv"
+)
+write_csv(figure3c_pooled_source, figure3c_pooled_source_path, na = "")
 
 # -------------------------------------------------------------------------
 # Manuscript output: Main Figure 3C
@@ -1795,10 +1980,30 @@ ggsave(filename = file.path(OUTPUT_DIR_FIGURES, "Fig4H_feature_corr_lollipop_nic
 #   manuscript map identifies this PNG as final Main Figure 3C.
 # -------------------------------------------------------------------------
 ms_copy_artifact(
-  source_path = file.path(OUTPUT_DIR_FIGURES, "Fig4H_feature_corr_lollipop_nice2_updated2.png"),
+  source_path = figure3c_pooled_png,
   artifact_id = "FIG3C",
   role = "figure_panel_png",
-  description = "Dilution-series feature correlation lollipop plot used as Main Figure 3C.",
+  description = paste(
+    "Dilution-series feature correlation lollipop plot used as Main Figure 3C;",
+    "pooled across 48 scored libraries with all four MRD-negative references at 0%."
+  ),
+  script_name = "3_1_part2_Apply_cfWGS_thresholds_to_dilution_series.R"
+)
+ms_copy_artifact(
+  source_path = figure3c_pooled_pdf,
+  artifact_id = "FIG3C",
+  role = "figure_panel_pdf",
+  description = "Vector PDF companion to the pooled 48-library Figure 3C panel.",
+  script_name = "3_1_part2_Apply_cfWGS_thresholds_to_dilution_series.R"
+)
+ms_copy_artifact(
+  source_path = figure3c_pooled_source_path,
+  artifact_id = "FIG3C",
+  role = "source_data_csv_all_four_patients",
+  description = paste(
+    "Exact pooled 48-library Spearman rho, nominal p-value, and rho-squared values",
+    "used by Figure 3C and Supplementary Table 7."
+  ),
   script_name = "3_1_part2_Apply_cfWGS_thresholds_to_dilution_series.R"
 )
 
@@ -1843,7 +2048,7 @@ custom_labels <- c(
 )
 
 # pick & sort
-plot_df2 <- corr_tbl %>%
+plot_df2 <- supp_table7_corr_internal %>%
   filter(feature %in% names(custom_labels)) %>%
   arrange(desc(r)) %>%
   mutate(feature = factor(feature, levels = rev(feature))) 
@@ -2412,7 +2617,7 @@ custom_labels <- c(
 )
 
 # pick & sort
-plot_df2 <- corr_tbl %>%
+plot_df2 <- supp_table7_corr_internal %>%
   filter(feature %in% names(custom_labels)) %>%
   arrange(desc(r)) %>%
   mutate(feature = factor(feature, levels = rev(feature))) 
@@ -2658,16 +2863,39 @@ all_patient_corr_labels <- c(
   WGS_Tumor_Fraction_Blood_plasma_cfDNA = "CNA tumour fraction\n(ichorCNA)"
 )
 all_patient_corr_long <- dilution_df %>%
-  dplyr::select(LOD, all_of(intersect(all_patient_corr_features, names(dilution_df)))) %>%
-  pivot_longer(-LOD, names_to = "feature", values_to = "value") %>%
+  mutate(
+    correlation_tumour_fraction_percent = if_else(
+      .data$is_pwgval_dilution,
+      .data$LOD,
+      (.data$LOD_original / orig_full) * baseline_vaf
+    )
+  ) %>%
+  dplyr::select(
+    correlation_tumour_fraction_percent,
+    all_of(intersect(all_patient_corr_features, names(dilution_df)))
+  ) %>%
+  pivot_longer(
+    -correlation_tumour_fraction_percent,
+    names_to = "feature",
+    values_to = "value"
+  ) %>%
   filter(!is.na(.data$value))
 
 all_patient_corr_tbl <- all_patient_corr_long %>%
   group_by(.data$feature) %>%
   summarise(
     n = dplyr::n(),
-    rho = suppressWarnings(cor(.data$value, .data$LOD, method = "spearman")),
-    p = suppressWarnings(cor.test(.data$value, .data$LOD, method = "spearman", exact = FALSE)$p.value),
+    rho = suppressWarnings(cor(
+      .data$value,
+      .data$correlation_tumour_fraction_percent,
+      method = "spearman"
+    )),
+    p = suppressWarnings(cor.test(
+      .data$value,
+      .data$correlation_tumour_fraction_percent,
+      method = "spearman",
+      exact = FALSE
+    )$p.value),
     .groups = "drop"
   ) %>%
   filter(.data$feature %in% names(all_patient_corr_labels)) %>%
@@ -2877,16 +3105,32 @@ facet_labels_bm_hc <- c(
 bm_feat_names <- c("detect_rate_BM", "zscore_BM", "z_score_detection_rate_BM")
 
 bm_dil_long <- dilution_df %>%
-  select(LOD, all_of(bm_feat_names)) %>%
-  pivot_longer(-LOD, names_to = "feature", values_to = "value") %>%
+  mutate(
+    correlation_tumour_fraction_percent = if_else(
+      .data$is_pwgval_dilution,
+      .data$LOD,
+      (.data$LOD_original / orig_full) * baseline_vaf
+    )
+  ) %>%
+  select(LOD, correlation_tumour_fraction_percent, all_of(bm_feat_names)) %>%
+  pivot_longer(
+    -c(LOD, correlation_tumour_fraction_percent),
+    names_to = "feature",
+    values_to = "value"
+  ) %>%
   mutate(group = "Dilution")
 
 # Spearman on dilution data only
 corr_bm_sp_hc <- bm_dil_long %>%
   group_by(feature) %>%
   summarise(
-    rho = cor(value, LOD, method = "spearman"),
-    p   = cor.test(value, LOD, method = "spearman")$p.value,
+    rho = cor(value, correlation_tumour_fraction_percent, method = "spearman"),
+    p   = cor.test(
+      value,
+      correlation_tumour_fraction_percent,
+      method = "spearman",
+      exact = FALSE
+    )$p.value,
     .groups = "drop"
   ) %>%
   mutate(
@@ -3118,16 +3362,32 @@ blood_feat_names <- c("detect_rate_blood", "zscore_blood",
                       "z_score_detection_rate_blood")
 
 blood_dil_long <- dilution_df %>%
-  select(LOD, all_of(blood_feat_names)) %>%
-  pivot_longer(-LOD, names_to = "feature", values_to = "value") %>%
+  mutate(
+    correlation_tumour_fraction_percent = if_else(
+      .data$is_pwgval_dilution,
+      .data$LOD,
+      (.data$LOD_original / orig_full) * baseline_vaf
+    )
+  ) %>%
+  select(LOD, correlation_tumour_fraction_percent, all_of(blood_feat_names)) %>%
+  pivot_longer(
+    -c(LOD, correlation_tumour_fraction_percent),
+    names_to = "feature",
+    values_to = "value"
+  ) %>%
   mutate(group = "Dilution")
 
 # Spearman on dilution data only
 corr_blood_sp_hc <- blood_dil_long %>%
   group_by(feature) %>%
   summarise(
-    rho = cor(value, LOD, method = "spearman"),
-    p   = cor.test(value, LOD, method = "spearman")$p.value,
+    rho = cor(value, correlation_tumour_fraction_percent, method = "spearman"),
+    p   = cor.test(
+      value,
+      correlation_tumour_fraction_percent,
+      method = "spearman",
+      exact = FALSE
+    )$p.value,
     .groups = "drop"
   ) %>%
   mutate(

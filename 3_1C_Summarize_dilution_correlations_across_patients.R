@@ -901,33 +901,64 @@ ggsave(
   bg = "white"
 )
 
-# This all-four-patient panel replaces the previous Figure 3C manuscript
-# object. The shared helper also refreshes the generated component mirror and
-# records the copy in the direct-output manifest.
+# The patient-weighted panels above are retained as sensitivity/diagnostic
+# outputs. The canonical Figure 3C manuscript object must remain identical to
+# Supplementary Table 7: pooled library-level Spearman correlations across the
+# 48 scored libraries, with all four MRD-negative references at 0%. The pooled
+# panel and source table are generated upstream by 3_1_part2.
+canonical_pooled_png_path <- file.path(
+  figure_dir,
+  "Fig4H_feature_corr_lollipop_nice2_updated2.png"
+)
+canonical_pooled_pdf_path <- file.path(
+  figure_dir,
+  "Fig4H_feature_corr_lollipop_nice2_updated2.pdf"
+)
+canonical_pooled_source_path <- file.path(
+  input_dir,
+  "SourceData_Figure3C_dilution_feature_correlations_pooled_48_libraries.csv"
+)
+missing_canonical_pooled <- c(
+  canonical_pooled_png_path,
+  canonical_pooled_pdf_path,
+  canonical_pooled_source_path
+)[!file.exists(c(
+  canonical_pooled_png_path,
+  canonical_pooled_pdf_path,
+  canonical_pooled_source_path
+))]
+if (length(missing_canonical_pooled) > 0L) {
+  stop(
+    "Run 3_1_part2 before 3_1C; missing canonical pooled Figure 3C artifact(s): ",
+    paste(missing_canonical_pooled, collapse = ", "),
+    call. = FALSE
+  )
+}
+
 final_panel_path <- ms_copy_artifact(
-  source_path = all_four_png_path,
+  source_path = canonical_pooled_png_path,
   artifact_id = "FIG3C",
   role = "figure_panel_png",
   description = paste(
-    "Replacement Figure 3C dilution-series feature correlations across all four patients;",
-    "three Spring 2026 patients contribute means of two technical replicates and the historical patient contributes one series."
+    "Canonical Figure 3C pooled library-level dilution correlations across 48 scored libraries;",
+    "all four MRD-negative references are 0%, matching Supplementary Table 7."
   ),
   script_name = "3_1C_Summarize_dilution_correlations_across_patients.R"
 )
 ms_copy_artifact(
-  source_path = all_four_pdf_path,
+  source_path = canonical_pooled_pdf_path,
   artifact_id = "FIG3C",
   role = "figure_panel_pdf",
-  description = "Vector PDF companion to the replacement all-four-patient Figure 3C panel.",
+  description = "Vector PDF companion to the canonical pooled 48-library Figure 3C panel.",
   script_name = "3_1C_Summarize_dilution_correlations_across_patients.R"
 )
 ms_copy_artifact(
-  source_path = all_four_source_path,
+  source_path = canonical_pooled_source_path,
   artifact_id = "FIG3C",
   role = "source_data_csv_all_four_patients",
   description = paste(
-    "Patient-series, patient-mean, and equal-four-patient Spearman rho values",
-    "for the replacement Figure 3C panel."
+    "Exact pooled 48-library Spearman rho, nominal p-value, and rho-squared values",
+    "used by canonical Figure 3C and Supplementary Table 7."
   ),
   script_name = "3_1C_Summarize_dilution_correlations_across_patients.R"
 )

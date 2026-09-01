@@ -245,16 +245,123 @@ df_wide <- pivot_wider(
   values_fn = {max}
 )
 
-## Filter for only pairs
-patients_with_required_samples <- metada_df_mutation_comparison %>%
-  filter(timepoint_info %in% c("Baseline", "Diagnosis")) %>%
+## Select baseline BM-cfDNA pairs without discarding the historical exact-
+## timepoint cohort. The original implementation required identical Timepoint
+## labels. That retained valid historical pairs but excluded IMG-142 and
+## IMG-235 even though their baseline BM and cfDNA specimens were collected
+## only 5 and 7 days apart, respectively. We therefore use a union rule:
+##
+##   1. retain every patient with an existing exact Patient + Timepoint pair;
+##   2. for patients without an exact pair, add the nearest dated
+##      baseline/diagnosis BM-cfDNA pair when it is within 30 days.
+##
+## This is intentionally additive: no historically evaluable patient is
+## removed by the date rule. Patients with no callable mutation set remain in
+## the downstream audit with Percent_Overlap = NA.
+baseline_pair_metadata <- metada_df_mutation_comparison %>%
+  filter(
+    timepoint_info %in% c("Baseline", "Diagnosis"),
+    Sample_type %in% c("BM_cells", "Blood_plasma_cfDNA")
+  ) %>%
+  mutate(Date_of_sample_collection = as.Date(Date_of_sample_collection))
+
+exact_timepoint_pairs <- baseline_pair_metadata %>%
   group_by(Patient, Timepoint) %>%
-  filter(any(Sample_type == "Blood_plasma_cfDNA") & any(Sample_type %in% c("BM_cells"))) %>%
-  distinct(Patient, Timepoint)
+  summarise(
+    has_BM = any(Sample_type == "BM_cells"),
+    has_cfDNA = any(Sample_type == "Blood_plasma_cfDNA"),
+    .groups = "drop"
+  ) %>%
+  filter(has_BM, has_cfDNA) %>%
+  transmute(
+    Patient,
+    pairing_rule = "exact_timepoint_label",
+    BM_Timepoint = as.character(Timepoint),
+    cfDNA_Timepoint = as.character(Timepoint),
+    BM_date = as.Date(NA),
+    cfDNA_date = as.Date(NA),
+    abs_days = NA_integer_
+  )
+
+nearest_dated_pairs <- baseline_pair_metadata %>%
+  filter(!is.na(Date_of_sample_collection)) %>%
+  select(
+    Patient,
+    Sample_type,
+    Timepoint,
+    Date_of_sample_collection,
+    Tumor_Sample_Barcode
+  ) %>%
+  {
+    inner_join(
+      filter(., Sample_type == "BM_cells") %>%
+        transmute(
+          Patient,
+          BM_Timepoint = as.character(Timepoint),
+          BM_date = Date_of_sample_collection,
+          BM_Tumor_Sample_Barcode = Tumor_Sample_Barcode
+        ),
+      filter(., Sample_type == "Blood_plasma_cfDNA") %>%
+        transmute(
+          Patient,
+          cfDNA_Timepoint = as.character(Timepoint),
+          cfDNA_date = Date_of_sample_collection,
+          cfDNA_Tumor_Sample_Barcode = Tumor_Sample_Barcode
+        ),
+      by = "Patient"
+    )
+  } %>%
+  mutate(abs_days = abs(as.integer(BM_date - cfDNA_date))) %>%
+  filter(abs_days <= 30L) %>%
+  anti_join(exact_timepoint_pairs %>% distinct(Patient), by = "Patient") %>%
+  arrange(Patient, abs_days, BM_date, cfDNA_date, BM_Timepoint, cfDNA_Timepoint) %>%
+  group_by(Patient) %>%
+  slice_head(n = 1L) %>%
+  ungroup() %>%
+  mutate(pairing_rule = "nearest_baseline_pair_within_30_days")
+
+pairing_union_audit <- bind_rows(
+  exact_timepoint_pairs,
+  nearest_dated_pairs %>%
+    select(
+      Patient,
+      pairing_rule,
+      BM_Timepoint,
+      cfDNA_Timepoint,
+      BM_date,
+      cfDNA_date,
+      abs_days
+    )
+) %>%
+  arrange(Patient, pairing_rule)
+
+expected_date_added_patients <- c("IMG-142", "IMG-235")
+missing_expected_date_additions <- setdiff(
+  expected_date_added_patients,
+  nearest_dated_pairs$Patient
+)
+if (length(missing_expected_date_additions)) {
+  stop(
+    "Expected <=30-day baseline pair(s) were not recovered: ",
+    paste(missing_expected_date_additions, collapse = ", "),
+    call. = FALSE
+  )
+}
+
+readr::write_csv(
+  pairing_union_audit,
+  file.path(
+    mutation_overlap_support_dir,
+    "baseline_bm_cfdna_pairing_union_exact_or_within_30d_audit.csv"
+  )
+)
+
+patients_with_required_samples <- pairing_union_audit %>%
+  distinct(Patient)
 
 # Join the filtered patients with the original df_wide to get the final filtered dataframe
 df_wide <- df_wide %>%
-  inner_join(patients_with_required_samples)
+  inner_join(patients_with_required_samples, by = "Patient")
 
 
 ## Make plot
@@ -318,7 +425,15 @@ for (i in 1:length(patients)) {
 ## Make barplot showing percent overlap 
 
 # Create a dataframe to store the overlap percentages
-overlap_data <- data.frame(Patient = character(), Percent_Overlap = numeric(), stringsAsFactors = FALSE)
+overlap_data <- data.frame(
+  Patient = character(),
+  BM_Mutation_Count = integer(),
+  cfDNA_Mutation_Count = integer(),
+  Shared_Mutation_Count = integer(),
+  Union_Mutation_Count = integer(),
+  Percent_Overlap = numeric(),
+  stringsAsFactors = FALSE
+)
 
 # Loop through each patient
 for (i in 1:length(patients)) {
@@ -346,7 +461,17 @@ for (i in 1:length(patients)) {
   }
   
   # Store the results in the dataframe
-  overlap_data <- rbind(overlap_data, data.frame(Patient = patients[i], Percent_Overlap = percent_overlap))
+  overlap_data <- rbind(
+    overlap_data,
+    data.frame(
+      Patient = patients[i],
+      BM_Mutation_Count = length(unique(bm_mutations)),
+      cfDNA_Mutation_Count = length(unique(cf_mutations)),
+      Shared_Mutation_Count = overlap_count,
+      Union_Mutation_Count = total_unique_mutations,
+      Percent_Overlap = percent_overlap
+    )
+  )
 }
 
 # Reorder the Patient factor levels based on Percent_Overlap in descending order

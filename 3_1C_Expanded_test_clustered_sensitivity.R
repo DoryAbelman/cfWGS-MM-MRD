@@ -45,6 +45,7 @@ suppressPackageStartupMessages({
   library(tidyr)
   library(tibble)
   library(openxlsx)
+  library(pROC)
 })
 
 script_arg <- grep("^--file=", commandArgs(trailingOnly = FALSE), value = TRUE)
@@ -445,6 +446,70 @@ bootstrap_summary <- map_dfr(analysis_results, "bootstrap_summary")
 one_sample_summary <- map_dfr(analysis_results, "one_sample_summary")
 sample_manifest <- map_dfr(analysis_results, "manifest")
 
+# Deidentify every patient- and sample-level label before exporting the
+# submission workbook. The sample manifest is intentionally auditable, but it
+# must never expose the original study identifiers used by the analysis.
+id_map_path <- "id_map.rds"
+if (!file.exists(id_map_path)) {
+  stop("Required deidentification map not found: ", id_map_path, call. = FALSE)
+}
+supp6_id_map <- readRDS(id_map_path) %>%
+  transmute(
+    Patient_raw = as.character(.data$Patient),
+    Patient = as.character(.data$New_ID)
+  )
+if (
+  anyNA(supp6_id_map) ||
+    anyDuplicated(supp6_id_map$Patient_raw) ||
+    anyDuplicated(supp6_id_map$Patient)
+) {
+  stop(
+    "Supplementary Table 6 deidentification map must be complete and one-to-one.",
+    call. = FALSE
+  )
+}
+
+sample_manifest <- sample_manifest %>%
+  rename(Patient_raw = Patient) %>%
+  left_join(supp6_id_map, by = "Patient_raw")
+if (anyNA(sample_manifest$Patient)) {
+  missing_ids <- sample_manifest %>%
+    filter(is.na(.data$Patient)) %>%
+    distinct(.data$Patient_raw) %>%
+    pull(.data$Patient_raw)
+  stop(
+    "Unmapped patient identifier(s) in Supplementary Table 6 manifest: ",
+    paste(missing_ids, collapse = ", "),
+    call. = FALSE
+  )
+}
+sample_code_has_expected_prefix <- mapply(
+  startsWith,
+  as.character(sample_manifest$Sample_Code),
+  sample_manifest$Patient_raw
+)
+if (anyNA(sample_code_has_expected_prefix) || any(!sample_code_has_expected_prefix)) {
+  stop(
+    "Supplementary Table 6 sample codes are not consistently prefixed by the raw patient ID.",
+    call. = FALSE
+  )
+}
+sample_manifest <- sample_manifest %>%
+  mutate(
+    Sample_Code = paste0(
+      .data$Patient,
+      str_sub(
+        as.character(.data$Sample_Code),
+        str_length(.data$Patient_raw) + 1L
+      )
+    )
+  ) %>%
+  select(-Patient_raw) %>%
+  relocate(Patient, .before = Timepoint)
+if (any(sample_manifest$Patient %in% supp6_id_map$Patient_raw)) {
+  stop("Raw patient identifiers remain in Supplementary Table 6.", call. = FALSE)
+}
+
 # Same-sample comparison requested during peer review. Every model below is
 # evaluated on the identical 28-sample/19-patient BM-informed expanded-test
 # stratum. Fragmentomics probabilities are evaluated at the fixed thresholds
@@ -718,6 +783,121 @@ if (nrow(performance) != 32L) {
   )
 }
 
+# Refresh the full-cohort fragmentomics-only test rows from the current masked
+# scored table. This ensures revision dropouts (including IMG-111 and IMG-203)
+# cannot re-enter Supplementary Table 6 through the preserved February export.
+full_fragmentomics_keys <- c(
+  "Fragmentomics_full_Full",
+  "Fragmentomics_min_Full",
+  "Fragmentomics_FS_only_Full",
+  "Fragmentomics_mean_coverage_only_Full",
+  "Fragmentomics_prop_short_only_Full",
+  "Fragmentomics_tumor_fraction_only_Full"
+)
+
+refresh_fragmentomics_test_row <- function(model_key) {
+  probability_column <- paste0(model_key, "_prob")
+  if (!probability_column %in% names(scored) || !model_key %in% names(fixed_thresholds)) {
+    stop("Cannot refresh fragmentomics test row for ", model_key, ".", call. = FALSE)
+  }
+  eval_data <- scored %>%
+    filter(
+      .data$Cohort == "Non-frontline",
+      !.data$timepoint_info %in% c("Baseline", "Diagnosis"),
+      !is.na(.data$MRD_truth),
+      !is.na(.data[[probability_column]])
+    ) %>%
+    transmute(
+      Patient = as.character(.data$Patient),
+      Sample_Code = as.character(.data$Sample_Code),
+      truth = as.integer(.data$MRD_truth),
+      probability = as.numeric(.data[[probability_column]])
+    )
+
+  if (nrow(eval_data) != 37L || n_distinct(eval_data$Patient) != 26L ||
+      sum(eval_data$truth == 1L) != 13L || sum(eval_data$truth == 0L) != 24L) {
+    stop(
+      "Current fragmentomics expanded-test cohort drift for ", model_key,
+      ": expected 37 samples from 26 patients (13 positive, 24 negative).",
+      call. = FALSE
+    )
+  }
+  if (any(grepl("IMG[-_](111|203)", eval_data$Patient)) ||
+      any(grepl("IMG[-_](111|203)", eval_data$Sample_Code))) {
+    stop("Excluded IMG-111/IMG-203 rows re-entered fragmentomics evaluation.", call. = FALSE)
+  }
+
+  roc_object <- pROC::roc(
+    response = eval_data$truth,
+    predictor = eval_data$probability,
+    levels = c(0, 1),
+    direction = "<",
+    quiet = TRUE
+  )
+  fixed_metrics <- calculate_metrics(
+    eval_data$truth,
+    eval_data$probability,
+    unname(fixed_thresholds[[model_key]])
+  )
+  roc_coordinates <- pROC::coords(
+    roc_object,
+    x = "all",
+    ret = c("threshold", "sensitivity", "specificity"),
+    transpose = FALSE
+  ) %>%
+    as_tibble()
+  high_specificity_point <- roc_coordinates %>%
+    filter(.data$specificity >= 0.95) %>%
+    arrange(desc(.data$sensitivity), desc(.data$specificity)) %>%
+    slice(1L)
+  if (!nrow(high_specificity_point)) {
+    high_specificity_point <- roc_coordinates %>%
+      arrange(desc(.data$specificity), desc(.data$sensitivity)) %>%
+      slice(1L)
+  }
+
+  tibble(
+    combo = model_key,
+    auc_mean = as.numeric(pROC::auc(roc_object)),
+    sens_mean = unname(fixed_metrics[["sensitivity"]]),
+    spec_mean = unname(fixed_metrics[["specificity"]]),
+    sens95_mean = high_specificity_point$sensitivity[[1]],
+    spec95_mean = high_specificity_point$specificity[[1]],
+    balacc_mean = unname(fixed_metrics[["balanced_accuracy"]]),
+    ppv_mean = unname(fixed_metrics[["ppv"]]),
+    npv_mean = unname(fixed_metrics[["npv"]]),
+    f1_mean = ifelse(
+      is.na(fixed_metrics[["ppv"]]) || is.na(fixed_metrics[["sensitivity"]]) ||
+        fixed_metrics[["ppv"]] + fixed_metrics[["sensitivity"]] == 0,
+      NA_real_,
+      2 * fixed_metrics[["ppv"]] * fixed_metrics[["sensitivity"]] /
+        (fixed_metrics[["ppv"]] + fixed_metrics[["sensitivity"]])
+    ),
+    brier_mean = mean((eval_data$probability - eval_data$truth)^2),
+    pAUC90_mean = as.numeric(pROC::auc(
+      roc_object,
+      partial.auc = c(0.9, 1),
+      partial.auc.correct = TRUE
+    )),
+    acc_mean = unname(fixed_metrics[["accuracy"]]),
+    sample_group = "Full",
+    eval_cohort = "Testing"
+  ) %>%
+    mutate(across(where(is.numeric), ~ round(.x, 3)))
+}
+
+refreshed_full_fragmentomics <- map_dfr(
+  full_fragmentomics_keys,
+  refresh_fragmentomics_test_row
+)
+performance <- performance %>%
+  filter(!.data$combo %in% full_fragmentomics_keys) %>%
+  bind_rows(refreshed_full_fragmentomics)
+
+if (nrow(performance) != 32L) {
+  stop("Fragmentomics refresh changed the expected 32-row performance table.", call. = FALSE)
+}
+
 expected_primary <- tribble(
   ~model_key, ~sensitivity, ~specificity, ~accuracy,
   # Frozen-model metrics after routing XPlus MRDetect queries to the complete
@@ -798,12 +978,10 @@ walk(seq_len(nrow(expected_family_counts)), function(i) {
 
 workbook <- createWorkbook(creator = "Abelman et al.")
 sheet_names <- c(
-  "README",
-  "Classifier performance",
-  "Clustered bootstrap",
-  "One sample per patient",
-  "Matched workflow comparison",
-  "Sample manifest"
+  "A_classifier_performance",
+  "B_clustered_bootstrap",
+  "C_one_sample_per_patient",
+  "D_matched_workflow_comparison"
 )
 walk(sheet_names, ~ addWorksheet(workbook, .x, gridLines = FALSE))
 
@@ -815,77 +993,22 @@ header_style <- createStyle(
 body_style <- createStyle(
   fontName = "Arial", fontSize = 9, fontColour = "#222222", valign = "center"
 )
-label_style <- createStyle(
-  fontName = "Arial", fontSize = 9, fontColour = "#22333B",
-  fgFill = "#EAF0F2", textDecoration = "bold", valign = "top"
-)
-title_style <- createStyle(
-  fontName = "Arial", fontSize = 15, fontColour = "#FFFFFF",
-  fgFill = "#335C67", textDecoration = "bold", valign = "center"
-)
 rate_style <- createStyle(numFmt = "0.0000")
 count_style <- createStyle(numFmt = "0")
 
-readme <- tibble(
-  Section = c(
-    "Scope", "Classifier performance", "Clustered bootstrap",
-    "One sample per patient", "Matched workflow comparison", "Sample manifest", "BM-informed denominator",
-    "Baseline-plasma denominator", "Fixed random seeds", "Canonical analysis scripts"
-  ),
-  Description = c(
-    "Revision-inclusive expanded independent test cohort; frozen training model thresholds.",
-    "All model performance metrics in the current expanded test cohort.",
-    paste0(
-      "Patient-clustered nonparametric bootstrap; 10,000 replicates; all evaluable ",
-      "samples from each resampled patient retained; percentile 95% confidence intervals."
-    ),
-    paste0(
-      "Deterministic sensitivity analysis using the earliest evaluable post-baseline ",
-      "sample per patient, selected without reference to truth or prediction."
-    ),
-    paste0(
-      "Mutation-informed and fragmentomics-only models evaluated on the identical ",
-      "28-sample/19-patient BM-informed expanded-test stratum using frozen thresholds."
-    ),
-    "Exact evaluable sample/patient rows used by the repeated-measures sensitivity analyses.",
-    "28 samples from 19 patients.",
-    "25 samples from 16 patients (including revision sample IMG-257-T2).",
-    "BM-informed: 202607231; baseline-plasma-informed: 202607232.",
-    paste(
-      "Scripts_2025/Final_Scripts/3_1_Optimize_cfWGS_thresholds.R",
-      "Scripts_2025/Final_Scripts/3_1C_Expanded_test_clustered_sensitivity.R",
-      sep = "\n"
-    )
-  )
-)
-
-mergeCells(workbook, "README", cols = 1:2, rows = 1)
-writeData(
-  workbook, "README",
-  "Supplementary Table 6 — Expanded-test classifier performance",
-  startCol = 1, startRow = 1
-)
-addStyle(workbook, "README", title_style, rows = 1, cols = 1:2, gridExpand = TRUE)
-writeData(workbook, "README", readme, startRow = 3, headerStyle = header_style)
-addStyle(workbook, "README", label_style, rows = 4:(nrow(readme) + 3), cols = 1, gridExpand = TRUE)
-addStyle(workbook, "README", body_style, rows = 4:(nrow(readme) + 3), cols = 2, gridExpand = TRUE)
-setColWidths(workbook, "README", cols = 1, widths = 28)
-setColWidths(workbook, "README", cols = 2, widths = 58)
-setRowHeights(workbook, "README", rows = 1, heights = 28)
-setRowHeights(workbook, "README", rows = 4:(nrow(readme) + 3), heights = 38)
-freezePane(workbook, "README", firstActiveRow = 4)
-pageSetup(
-  workbook, "README", orientation = "landscape",
-  paperSize = 9, fitToWidth = 1, fitToHeight = 1
-)
-
 data_sheets <- list(
-  "Classifier performance" = performance,
-  "Clustered bootstrap" = bootstrap_output,
-  "One sample per patient" = one_sample_output,
-  "Matched workflow comparison" = round_numeric(matched_workflow_comparison),
-  "Sample manifest" = sample_manifest
+  "A_classifier_performance" = performance,
+  "B_clustered_bootstrap" = bootstrap_output,
+  "C_one_sample_per_patient" = one_sample_output,
+  "D_matched_workflow_comparison" = round_numeric(matched_workflow_comparison)
 )
+if (any(vapply(
+  data_sheets,
+  function(data) any(grepl("(^|[._ -])date($|[._ -])", names(data), ignore.case = TRUE)),
+  logical(1)
+))) {
+  stop("Calendar-date columns are prohibited in Supplementary Table 6.", call. = FALSE)
+}
 rate_columns <- c(
   "auc_mean", "sens_mean", "spec_mean", "sens95_mean", "spec95_mean",
   "balacc_mean", "ppv_mean", "npv_mean", "f1_mean", "brier_mean",
@@ -954,7 +1077,7 @@ destination <- ms_copy_artifact(
   description = paste0(
     "Revision-inclusive expanded-test classifier performance with patient-clustered ",
     "bootstrap confidence intervals, one-sample-per-patient sensitivity analysis, ",
-    "and exact sample manifest."
+    "and matched-workflow comparisons. Calendar dates and the sample manifest are excluded."
   ),
   script_name = basename(script_path),
   project_root = project_root,

@@ -15,7 +15,8 @@
 #      revision-inclusive Supplementary Table 6 submission workbook.
 #   5. Builds the manuscript-writing number workbook from current outputs and
 #      the working manuscript DOCX drafts.
-#   6. Optionally runs the separate reproducible_workflow generation/validation
+#   6. Assembles a checksum-verified current main/supplementary table package.
+#   7. Optionally runs the separate reproducible_workflow generation/validation
 #      harness when --run-reference-workflow is supplied.
 #
 # Guardrails:
@@ -29,6 +30,7 @@
 #   Rscript Scripts_2025/Final_Scripts/run_manuscript_workflow.R
 #   Rscript Scripts_2025/Final_Scripts/run_manuscript_workflow.R --execute
 #   Rscript Scripts_2025/Final_Scripts/run_manuscript_workflow.R --execute --skip-source
+#   Rscript Scripts_2025/Final_Scripts/run_manuscript_workflow.R --execute --skip-source --table-package-dir "Final manuscript versions/Revision_1/FINAL_TABLE_PACKAGE_CURRENT"
 #   Rscript Scripts_2025/Final_Scripts/run_manuscript_workflow.R --execute --run-reference-workflow
 #
 # Manuscript outputs created/updated:
@@ -78,6 +80,8 @@ parse_args <- function(args = commandArgs(trailingOnly = TRUE)) {
       "  --only ID                  Run one numbered script ID, e.g. --only 4_1.\n",
       "  --check-packages           Check package availability before stage execution.\n",
       "  --keep-going               Continue after a numbered-script failure where possible.\n",
+      "  --skip-table-package       Do not assemble the final table package.\n",
+      "  --table-package-dir PATH   Override the dated final table-package destination.\n",
       "  --help, -h                 Show this help text.\n",
       sep = ""
     )
@@ -91,9 +95,11 @@ parse_args <- function(args = commandArgs(trailingOnly = TRUE)) {
     include_cache_sensitive = "--include-cache-sensitive" %in% args,
     keep_going = "--keep-going" %in% args,
     check_packages = "--check-packages" %in% args,
+    skip_table_package = "--skip-table-package" %in% args,
     from = parse_flag_value(args, "--from"),
     to = parse_flag_value(args, "--to"),
-    only = parse_flag_value(args, "--only")
+    only = parse_flag_value(args, "--only"),
+    table_package_dir = parse_flag_value(args, "--table-package-dir")
   )
 }
 
@@ -242,6 +248,32 @@ main <- function() {
     log_file = log_file
   )
 
+  if (isTRUE(args$execute) && !isTRUE(args$skip_table_package)) {
+    package_args <- "--overwrite"
+    package_args <- add_optional_value_arg(
+      package_args, "--output-dir", args$table_package_dir
+    )
+    run_rscript(
+      project_root = project_root,
+      script_path = file.path(
+        "Scripts_2025", "Final_Scripts", "build_current_final_table_package.R"
+      ),
+      args = package_args,
+      label = "current final table-package assembly",
+      log_file = log_file
+    )
+  } else if (isTRUE(args$execute)) {
+    message_log(
+      "Skipping final table-package assembly because --skip-table-package was supplied.",
+      log_file = log_file
+    )
+  } else {
+    message_log(
+      "Dry-run: final table package was not assembled. Add --execute to build it.",
+      log_file = log_file
+    )
+  }
+
   message_log(
     "Direct manuscript outputs are in Scripts_2025/Final_Scripts/final_manuscript_objects/.",
     log_file = log_file
@@ -250,6 +282,12 @@ main <- function() {
     "Manuscript-writing number exports are in Scripts_2025/Final_Scripts/manuscript_writing/.",
     log_file = log_file
   )
+  if (isTRUE(args$execute) && !isTRUE(args$skip_table_package)) {
+    message_log(
+      "The checksum-verified current table package is under Final manuscript versions/Revision_1/.",
+      log_file = log_file
+    )
+  }
 
   stage_paths <- fs_write_stage_artifact_map(project_root)
   message_log("Stage-ordered map: ", stage_paths$md, log_file = log_file)

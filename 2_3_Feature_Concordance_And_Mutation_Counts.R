@@ -190,11 +190,145 @@ dat_tb4 <- dat_tb3 %>%
 dat_tb_final <- bind_rows(dat_tb4, resp_CA02) %>%
   arrange(Patient)
 
+# Preserve the baseline/diagnosis cfDNA feature row independently of the row
+# later selected for BM-informed patient-level concordance. A patient can have
+# modality-specific baseline sources at different visits. In particular,
+# SPORE_0012 contributes its baseline cfDNA mutation catalogue, ichorCNA tumour
+# fraction, and fragment-size score at T1, whereas T4 is the manually selected
+# BM baseline. Collapsing to the T4 row before retaining these cfDNA features
+# previously paired the T1 mutation count with missing T4 cfDNA covariates.
+baseline_cfDNA_feature_catalogue <- dat_tb_final %>%
+  filter(!is.na(.data$Blood_Mutation_Count)) %>%
+  transmute(
+    Patient = .data$Patient,
+    cfDNA_feature_Sample_Code = as.character(.data$Sample_Code),
+    cfDNA_feature_Timepoint = as.character(.data$Timepoint),
+    cfDNA_feature_Date = as.Date(.data$Date),
+    cfDNA_feature_mutation_count_original = as.integer(.data$Blood_Mutation_Count),
+    cfDNA_feature_tumour_fraction = as.numeric(
+      .data$WGS_Tumor_Fraction_Blood_plasma_cfDNA
+    ),
+    cfDNA_feature_FS = as.numeric(.data$FS)
+  )
+
+duplicate_cfDNA_feature_sources <- baseline_cfDNA_feature_catalogue %>%
+  count(.data$Patient, name = "n_cfDNA_feature_sources") %>%
+  filter(.data$n_cfDNA_feature_sources != 1L)
+if (nrow(duplicate_cfDNA_feature_sources)) {
+  stop(
+    "Baseline cfDNA feature source is not unique by patient: ",
+    paste(duplicate_cfDNA_feature_sources$Patient, collapse = ", "),
+    call. = FALSE
+  )
+}
+
 dat_base <- dat_tb_final 
 
 ## Remove dup
 dat_base <- dat_base %>%
   filter(!(Patient == "CA-03" & Timepoint == "02"))
+
+# Preserve all existing one-row baseline patients and add complementary BM and
+# cfDNA fields from a second baseline/diagnosis row only when the two specimen
+# dates are within 30 days. This resolves T0/T1 label mismatches for IMG-142
+# (5 days) and IMG-235 (7 days) without removing or redefining any patient that
+# was already represented by a complete single baseline row.
+baseline_rows_for_date_pairing <- dat_base %>%
+  mutate(
+    .baseline_row_id = row_number(),
+    Date = as.Date(Date)
+  )
+
+additive_baseline_date_pairs <- inner_join(
+  baseline_rows_for_date_pairing %>%
+    filter(!is.na(BM_Mutation_Count), !is.na(Date)) %>%
+    transmute(
+      Patient,
+      BM_row_id = .baseline_row_id,
+      BM_Sample_Code = as.character(Sample_Code),
+      BM_Timepoint = as.character(Timepoint),
+      BM_date = Date
+    ),
+  baseline_rows_for_date_pairing %>%
+    filter(!is.na(Blood_Mutation_Count), !is.na(Date)) %>%
+    transmute(
+      Patient,
+      cfDNA_row_id = .baseline_row_id,
+      cfDNA_Sample_Code = as.character(Sample_Code),
+      cfDNA_Timepoint = as.character(Timepoint),
+      cfDNA_date = Date
+    ),
+  by = "Patient"
+) %>%
+  filter(BM_row_id != cfDNA_row_id) %>%
+  mutate(abs_days = abs(as.integer(BM_date - cfDNA_date))) %>%
+  filter(abs_days <= 30L) %>%
+  arrange(Patient, abs_days, BM_date, cfDNA_date, BM_row_id, cfDNA_row_id) %>%
+  group_by(Patient) %>%
+  slice_head(n = 1L) %>%
+  ungroup()
+
+expected_date_added_patients <- c("IMG-142", "IMG-235")
+missing_expected_date_additions <- setdiff(
+  expected_date_added_patients,
+  additive_baseline_date_pairs$Patient
+)
+if (length(missing_expected_date_additions)) {
+  stop(
+    "Expected <=30-day complementary baseline pair(s) were not recovered: ",
+    paste(missing_expected_date_additions, collapse = ", "),
+    call. = FALSE
+  )
+}
+
+if (nrow(additive_baseline_date_pairs)) {
+  collapse_pair_fill_missing <- function(pair_row) {
+    pair_row <- as.list(pair_row)
+    pair_ids <- c(pair_row$BM_row_id, pair_row$cfDNA_row_id)
+    pair_data <- baseline_rows_for_date_pairing %>%
+      filter(.baseline_row_id %in% pair_ids) %>%
+      arrange(Date, .baseline_row_id)
+    primary <- pair_data[1, , drop = FALSE]
+    secondary <- pair_data[2, , drop = FALSE]
+
+    for (column_name in setdiff(names(primary), ".baseline_row_id")) {
+      primary_value <- primary[[column_name]]
+      secondary_value <- secondary[[column_name]]
+      primary_missing <- is.na(primary_value)
+      if (is.character(primary_value)) {
+        primary_missing <- primary_missing | !nzchar(primary_value)
+      }
+      primary[[column_name]][primary_missing] <- secondary_value[primary_missing]
+    }
+    primary
+  }
+
+  collapsed_date_pair_rows <- purrr::map_dfr(
+    seq_len(nrow(additive_baseline_date_pairs)),
+    ~ collapse_pair_fill_missing(additive_baseline_date_pairs[.x, , drop = FALSE])
+  )
+
+  dat_base <- bind_rows(
+    baseline_rows_for_date_pairing %>%
+      filter(!Patient %in% additive_baseline_date_pairs$Patient),
+    collapsed_date_pair_rows
+  ) %>%
+    select(-.baseline_row_id) %>%
+    arrange(Patient, Date, Timepoint, Sample_Code)
+} else {
+  dat_base <- baseline_rows_for_date_pairing %>% select(-.baseline_row_id)
+}
+
+dir.create(file.path("Output_tables_2025", "clinical_support"), showWarnings = FALSE, recursive = TRUE)
+readr::write_csv(
+  additive_baseline_date_pairs %>%
+    mutate(pairing_rule = "add_to_existing_patient_set_if_within_30_days"),
+  file.path(
+    "Output_tables_2025",
+    "clinical_support",
+    "feature_concordance_additive_baseline_pairs_within_30d_audit.csv"
+  )
+)
 
 baseline_duplicate_audit <- dat_base %>%
   group_by(Patient) %>%
@@ -288,6 +422,151 @@ dat_base <- dat_base %>%
   ))
 
 dat_base$cohort <- dat_base$Cohort ## for consistency 
+
+# Keep mutation-burden summaries and ED2E/F consistent with the regenerated
+# heatmap and ED2G catalogues. The integrated aggregate contains legacy count
+# fields, including several cfDNA values counted before rsID removal. The
+# heatmap export is the canonical patient-level no-rsID count table and uses the
+# exact ED2G catalogue for evaluable paired baseline patients.
+mutation_count_path <- file.path(
+  "Output_tables_2025_updated", "patient_mutation_counts.csv"
+)
+if (!file.exists(mutation_count_path)) {
+  stop(
+    "Missing canonical baseline mutation-count table: ", mutation_count_path,
+    ". Run 2_2_Baseline_demographics_by_WGS_heatmap_updated.R first.",
+    call. = FALSE
+  )
+}
+canonical_baseline_mutation_counts <- readr::read_csv(
+  mutation_count_path,
+  show_col_types = FALSE
+) %>%
+  select(
+    .data$Patient,
+    canonical_BM_Mutation_Count = .data$BM_Mutation_Count,
+    canonical_Blood_Mutation_Count = .data$Blood_Mutation_Count,
+    .data$BM_Mutation_Count_Source,
+    .data$Blood_Mutation_Count_Source
+  ) %>%
+  distinct()
+duplicate_canonical_mutation_counts <- canonical_baseline_mutation_counts %>%
+  count(.data$Patient) %>%
+  filter(.data$n > 1L)
+if (nrow(duplicate_canonical_mutation_counts)) {
+  stop(
+    "Canonical baseline mutation-count table is not unique by patient: ",
+    paste(duplicate_canonical_mutation_counts$Patient, collapse = ", "),
+    call. = FALSE
+  )
+}
+dat_base <- dat_base %>%
+  left_join(canonical_baseline_mutation_counts, by = "Patient") %>%
+  mutate(
+    BM_Mutation_Count = coalesce(
+      as.integer(.data$canonical_BM_Mutation_Count),
+      as.integer(.data$BM_Mutation_Count)
+    ),
+    Blood_Mutation_Count = coalesce(
+      as.integer(.data$canonical_Blood_Mutation_Count),
+      as.integer(.data$Blood_Mutation_Count)
+    )
+  ) %>%
+  select(
+    -.data$canonical_BM_Mutation_Count,
+    -.data$canonical_Blood_Mutation_Count
+  )
+
+# Align cfDNA-specific covariates to the same baseline/diagnosis cfDNA source
+# that supplied the mutation catalogue, even when a different row is retained
+# as the patient's BM baseline. Prefer the modality-specific source values;
+# fall back to the selected patient-level row only when no cfDNA source row is
+# available in the baseline candidate table.
+dat_base <- dat_base %>%
+  rename(
+    selected_row_cfDNA_tumour_fraction =
+      .data$WGS_Tumor_Fraction_Blood_plasma_cfDNA,
+    selected_row_cfDNA_FS = .data$FS
+  ) %>%
+  left_join(baseline_cfDNA_feature_catalogue, by = "Patient") %>%
+  mutate(
+    WGS_Tumor_Fraction_Blood_plasma_cfDNA = coalesce(
+      .data$cfDNA_feature_tumour_fraction,
+      .data$selected_row_cfDNA_tumour_fraction
+    ),
+    FS = coalesce(
+      .data$cfDNA_feature_FS,
+      .data$selected_row_cfDNA_FS
+    )
+  )
+
+cfDNA_feature_alignment_audit <- dat_base %>%
+  select(
+    .data$Patient,
+    selected_patient_row_Sample_Code = .data$Sample_Code,
+    selected_patient_row_Date = .data$Date,
+    .data$cfDNA_feature_Sample_Code,
+    .data$cfDNA_feature_Timepoint,
+    .data$cfDNA_feature_Date,
+    .data$cfDNA_feature_mutation_count_original,
+    canonical_cfDNA_mutation_count = .data$Blood_Mutation_Count,
+    .data$selected_row_cfDNA_tumour_fraction,
+    aligned_cfDNA_tumour_fraction =
+      .data$WGS_Tumor_Fraction_Blood_plasma_cfDNA,
+    .data$selected_row_cfDNA_FS,
+    aligned_cfDNA_FS = .data$FS
+  )
+
+readr::write_csv(
+  cfDNA_feature_alignment_audit,
+  file.path(
+    "Output_tables_2025", "clinical_support",
+    "feature_concordance_cfDNA_baseline_feature_alignment_audit.csv"
+  )
+)
+
+spore0012_cfDNA_alignment <- cfDNA_feature_alignment_audit %>%
+  filter(.data$Patient == "SPORE_0012")
+if (
+  nrow(spore0012_cfDNA_alignment) != 1L ||
+    spore0012_cfDNA_alignment$cfDNA_feature_Sample_Code != "SPORE_0012_T1" ||
+    spore0012_cfDNA_alignment$canonical_cfDNA_mutation_count != 3793L ||
+    spore0012_cfDNA_alignment$aligned_cfDNA_tumour_fraction != 0
+) {
+  stop(
+    "SPORE_0012 cfDNA baseline alignment failed; expected T1, ",
+    "3,793 mutations, and ichorCNA tumour fraction 0.",
+    call. = FALSE
+  )
+}
+
+cfDNA_mutation_tf_missing <- dat_base %>%
+  filter(
+    !is.na(.data$Blood_Mutation_Count),
+    is.na(.data$WGS_Tumor_Fraction_Blood_plasma_cfDNA)
+  ) %>%
+  pull(.data$Patient)
+if (length(cfDNA_mutation_tf_missing)) {
+  stop(
+    "Baseline cfDNA mutation count lacks a matched ichorCNA tumour fraction for: ",
+    paste(cfDNA_mutation_tf_missing, collapse = ", "),
+    call. = FALSE
+  )
+}
+
+img181_count_check <- dat_base %>%
+  filter(.data$Patient == "IMG-181") %>%
+  select(.data$Patient, .data$BM_Mutation_Count, .data$Blood_Mutation_Count)
+if (
+  nrow(img181_count_check) != 1L ||
+    img181_count_check$BM_Mutation_Count != 2505L ||
+    img181_count_check$Blood_Mutation_Count != 888L
+) {
+  stop(
+    "IMG-181 canonical baseline mutation-count check failed; expected BM=2505 and cfDNA=888.",
+    call. = FALSE
+  )
+}
 
 # Recover baseline FISH calls that can be lost when the integrated aggregate is
 # rebuilt from clinical metadata without assay-specific FISH columns.  Calls in
@@ -470,14 +749,27 @@ conc_cohort_overall <- long %>%
 conc_tf_overall <- long %>%
   group_by(event, type, wgs_source, tf_group) %>% 
   summarise_concord() %>% 
-  mutate(cohort = NA) %>%                 # keep same column set
+  mutate(cohort = "All evaluable") %>%    # pooled across cohorts, stratified by TF
   ungroup()
 
-# D)  bind them all and order nicely
+# D) pooled across both cohort and tumour-fraction strata.  This explicit row
+# prevents the all-evaluable overall estimate from being confused with the
+# all-evaluable `tf_unknown` subset in publication-facing tables.
+conc_all_overall <- long %>%
+  group_by(event, type, wgs_source) %>%
+  summarise_concord() %>%
+  mutate(
+    cohort = "All evaluable",
+    tf_group = "all"
+  ) %>%
+  ungroup()
+
+# E)  bind them all and order nicely
 concordance_tbl <- bind_rows(
   conc_cohort_overall,
   conc_cohort_tf,
-  conc_tf_overall
+  conc_tf_overall,
+  conc_all_overall
 ) %>% 
   arrange(type, event, wgs_source, cohort, tf_group)
 
@@ -698,14 +990,26 @@ conc_cohort_overall2 <- long %>%
 conc_tf_overall2 <- long %>%
   group_by(event, type, wgs_source, tf_group) %>% 
   summarise_concord() %>% 
-  mutate(cohort = NA) %>%                 # keep same column set
+  mutate(cohort = "All evaluable") %>%    # pooled across cohorts, stratified by TF
   ungroup()
 
-# D)  bind them all and order nicely
+# D) pooled across both cohort and tumour-fraction strata, matching the
+# arm-level table above and preserving the true all-evaluable overall result.
+conc_all_overall2 <- long %>%
+  group_by(event, type, wgs_source) %>%
+  summarise_concord() %>%
+  mutate(
+    cohort = "All evaluable",
+    tf_group = "all"
+  ) %>%
+  ungroup()
+
+# E)  bind them all and order nicely
 concordance_tbl_at_FISH_probe <- bind_rows(
   conc_cohort_overall2,
   conc_cohort_tf2,
-  conc_tf_overall2
+  conc_tf_overall2,
+  conc_all_overall2
 ) %>% 
   arrange(type, event, wgs_source, cohort, tf_group)
 
@@ -1273,8 +1577,16 @@ pvals
 #–––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––  
 # 1) Correlation matrix (Spearman) + p‐values across all numeric vars  
 #–––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––  
-# Select only numeric columns
-num_df <- dat_base %>% select(where(is.numeric))
+# Select only publication-facing numeric columns. The selected_row_* fields are
+# temporary patient-row helpers used before modality-specific cfDNA alignment;
+# retaining them would duplicate the authoritative cfDNA TF/FS variables and
+# expose the obsolete n = 61 association in Supplementary Table 3.
+num_df <- dat_base %>%
+  select(where(is.numeric)) %>%
+  select(-any_of(c(
+    "selected_row_cfDNA_tumour_fraction",
+    "selected_row_cfDNA_FS"
+  )))
 
 # rcorr returns:
 #  • r : correlation matrix
@@ -1595,7 +1907,29 @@ ms_copy_artifact(
 #### Now redo but percent high tumor fraction instead 
 ### This is 2B
 plot_df <- dat_base %>%
-  select(cohort, WGS_Tumor_Fraction_Blood_plasma_cfDNA) 
+  select(Patient, cohort, WGS_Tumor_Fraction_Blood_plasma_cfDNA) 
+
+edfig2a_source_path <- file.path(
+  outdir,
+  "Extended_Data_Figure_2A_tumor_fraction_by_cohort_source_data.csv"
+)
+readr::write_csv(
+  plot_df %>% filter(!is.na(WGS_Tumor_Fraction_Blood_plasma_cfDNA)),
+  edfig2a_source_path
+)
+
+edfig2a_component_dir <- file.path(
+  "Scripts_2025", "Final_Scripts", "final_manuscript_objects",
+  "generated", "figure_components", "Extended_Data_Figure_2", "panel_A"
+)
+dir.create(edfig2a_component_dir, recursive = TRUE, showWarnings = FALSE)
+readr::write_csv(
+  plot_df %>% filter(!is.na(WGS_Tumor_Fraction_Blood_plasma_cfDNA)),
+  file.path(
+    edfig2a_component_dir,
+    "Extended_Data_Figure_2A_tumor_fraction_by_cohort_source_data.csv"
+  )
+)
 
 p2 <- ggplot(plot_df, aes(cohort, WGS_Tumor_Fraction_Blood_plasma_cfDNA, fill = cohort)) +
   geom_boxplot(outlier.shape = NA, colour = "black", size = 0.6) +
@@ -1649,6 +1983,13 @@ ms_copy_artifact(
   artifact_id = "EDFIG2A",
   role = "figure_panel_png",
   description = "cfDNA tumor-fraction by cohort boxplot used as Extended Data Figure 2A.",
+  script_name = "2_3_Feature_Concordance_And_Mutation_Counts.R"
+)
+ms_copy_artifact(
+  source_path = edfig2a_source_path,
+  artifact_id = "EDFIG2A",
+  role = "source_data_csv",
+  description = "Patient-level cfDNA tumor fractions plotted in Extended Data Figure 2A.",
   script_name = "2_3_Feature_Concordance_And_Mutation_Counts.R"
 )
 
@@ -2191,7 +2532,7 @@ ms_copy_artifact(
 # duplicate-resolution, and cohort-assignment filters used upstream.
 # -------------------------------------------------------------------------
 event_tf_conc_all_evaluable <- concordance_tbl %>%
-  filter(is.na(cohort), tf_group %in% c("high_tf", "low_tf")) %>%
+  filter(cohort == "All evaluable", tf_group %in% c("high_tf", "low_tf")) %>%
   transmute(
     event = event,
     TF_group = factor(
@@ -2309,6 +2650,27 @@ all_evaluable_ed2c_path <- file.path(
   "Fig2B_event_concordance_with_sensitivity_all_evaluable_baseline.png"
 )
 ggsave(all_evaluable_ed2c_path, p_tf_sens2_all_evaluable, width = 5.5, height = 4, dpi = 600)
+
+# Preserve the narrower training-cohort-only panel under an explicit filename,
+# then make the long-standing manuscript filename point to the revision-
+# inclusive all-evaluable panel. This prevents downstream assemblers or users
+# from silently selecting a scientifically different denominator based only on
+# the historical filename.
+training_only_ed2c_path <- file.path(
+  outdir,
+  "Fig2B_event_concordance_with_sensitivity_training_cohort.png"
+)
+file.copy(
+  file.path(outdir, "Fig2B_event_concordance_with_sensitivity_updated5.png"),
+  training_only_ed2c_path,
+  overwrite = TRUE
+)
+file.copy(
+  all_evaluable_ed2c_path,
+  file.path(outdir, "Fig2B_event_concordance_with_sensitivity_updated5.png"),
+  overwrite = TRUE
+)
+tf_plot_df <- tf_plot_df_all_evaluable
 
 ms_copy_artifact(
   source_path = all_evaluable_ed2c_path,
@@ -2837,6 +3199,16 @@ event_order <- perf_long %>%
 
 perf_long <- perf_long %>%
   mutate(event = factor(event, levels = event_order))
+
+# Canonical source data for manuscript-facing Extended Data Figure 2B. The
+# primary performance object is revision-inclusive (all evaluable baseline
+# training and test pairs), so export that exact object under the historical
+# source-data filename consumed by the locked-source workbook builder.
+edfig2b_primary_source_path <- file.path(
+  outdir,
+  "Extended_Data_Figure_2B_BM_cfDNA_performance_byTF_plot_source_data.csv"
+)
+readr::write_csv(perf_long, edfig2b_primary_source_path)
 
 # 4.  Plot
 p_3panel <- ggplot(perf_long,
@@ -3446,16 +3818,51 @@ dat_small <- dat_small %>%
   left_join(id_map, by = c("Patient" = "Patient")) %>%
   mutate(Patient = coalesce(New_ID, Patient)) 
 
+# Export arm-level CNA calls as explicit binary integers for Supplementary
+# Table 2F. Preserve unevaluable/missing compartments as NA rather than
+# converting them to 0, because 0 means an evaluated negative call.
+supp_table_2f_binary_arm_columns <- c(
+  "WGS_arm_del1p_BM_cells",
+  "WGS_arm_del1p_Blood_plasma_cfDNA",
+  "WGS_arm_amp1q_BM_cells",
+  "WGS_arm_amp1q_Blood_plasma_cfDNA",
+  "WGS_arm_del17p_BM_cells",
+  "WGS_arm_del17p_Blood_plasma_cfDNA"
+)
+missing_supp_table_2f_binary_columns <- setdiff(
+  supp_table_2f_binary_arm_columns,
+  names(dat_small)
+)
+if (length(missing_supp_table_2f_binary_columns)) {
+  stop(
+    "Supplementary Table 2F is missing expected arm-level WGS columns: ",
+    paste(missing_supp_table_2f_binary_columns, collapse = ", "),
+    call. = FALSE
+  )
+}
+dat_small <- dat_small %>%
+  mutate(
+    across(
+      all_of(supp_table_2f_binary_arm_columns),
+      ~ if_else(is.na(.x), NA_integer_, as.integer(.x))
+    )
+  )
+
 
 ## 3. One XLSX workbook with the key performance tables ----------------
 ## Keep the analysis output and the source consumed by the submission-package
 ## assembler synchronized. Previously the assembler read an older workbook in
 ## Output_tables_2025, allowing the frontline-only table to persist even after
 ## the revision-inclusive analysis had been generated elsewhere.
+fish_concordance_for_publication <- concordance_tbl %>%
+  mutate(cohort = dplyr::coalesce(cohort, "All evaluable"))
+fish_probe_concordance_for_publication <- concordance_tbl_at_FISH_probe %>%
+  mutate(cohort = dplyr::coalesce(cohort, "All evaluable"))
+
 supplementary_table_2_sheets <- list(
   A_BM_cfDNA_perf_byTF = perf_combined,
-  B_FISH_vs_Sample_Concordance = concordance_tbl %>% filter(!is.na(cohort)),
-  C_FISH_vs_Sample_At_Probe = concordance_tbl_at_FISH_probe %>% filter(!is.na(cohort)),
+  B_FISH_vs_Sample_Concordance = fish_concordance_for_publication,
+  C_FISH_vs_Sample_At_Probe = fish_probe_concordance_for_publication,
   D_Individual_Calls = dat_small %>% select(-New_ID)
 )
 supplementary_table_2_sheets <- relabel_publication_workbook_tables(
