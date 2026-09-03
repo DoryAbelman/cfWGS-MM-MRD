@@ -12,13 +12,44 @@
 #        – Run all pairwise t‐tests (or Wilcoxon) and save results to CSV.
 #   • For fragment‐score (“FS”):
 #        – Merge Fragment Score to clinical data
-#        – Deduplicate, save “combined_data_fragmentomics_cfWGS.csv”
+#        – Deduplicate by sample and sequencing platform
 #   • Load MM‐DARs chromatin activation metrics (MM_DARs_chromatin_activation_data.csv),
-#     join into the fragment‐score data frame, and export “Key_fragmentomics_data_updated.csv”
+#     join into the fragment‐score data frame, and export the unified
+#     `Key_fragmentomics_data_updated2` table.
 #
-# Outputs (to working directory):
+# Inputs:
+#   • Historical and revision insert_size_summary.tsv / fragment_scores.tsv
+#     tables resolved under Fragmentomics_data and the revision data root
+#   • Platform-specific healthy-control summaries
+#   • combined_clinical_data_updated_April2025.csv
+#   • Results_Fragmentomics/MM_DARs_chromatin_activation_data.rds or .csv
+#   • Required legacy recovery file (read unconditionally by the current code):
+#     Results_Fragmentomics/MM_Griffin_all_relevant_sites_data_updated_SPORE.csv
+#   • patients_with_either_cfDNA_at_baseline_and_monitoring.csv and
+#     patients_with_cfDNA_at_baseline_and_monitoring.csv are read for historical
+#     compatibility but are not referenced by the active calculations.
+#   • session.functions.R and Scripts_2025/Final_Scripts/helpers.R
+#
+# Outputs:
 #   • Pairwise_t_Test_Results_fragment_scores.csv
-#   • Key_fragmentomics_data_updated.csv
+#   • Results_Fragmentomics/Insert_size/FS_cutoffs_table_healthy_controls.csv
+#   • Results_Fragmentomics/Insert_size/HC_Ranges_Selected_MM_DARs_Metrics.csv
+#   • Results_Fragmentomics/fragmentomics_platform_harmonization_reference_parameters.csv
+#   • Results_Fragmentomics/fragmentomics_platform_harmonization_sample_audit.csv
+#   • Results_Fragmentomics/fragmentomics_duplicate_sample_key_audit.csv
+#   • Results_Fragmentomics/fragmentomics_MyP060_identity_audit.csv
+#   • Results_Fragmentomics/Key_fragmentomics_data_updated2.csv
+#   • Results_Fragmentomics/Key_fragmentomics_data_updated2.rds
+#
+# Analysis units and limitations:
+#   The intended integrated-output key is fragmentomics sample + platform +
+#   sample role. The final metadata reattachment can retain more than one row for
+#   that key when the FS/clinical and MM-DAR source dates disagree; downstream
+#   consumers must audit key uniqueness before treating rows as samples.
+#   Group-comparison tests operate on sample rows, not independent patients;
+#   repeated longitudinal samples can therefore contribute more than once.
+#   The adaptive Shapiro/test-selection results and unadjusted pairwise p-values
+#   are exploratory.
 #
 # Notes:
 #   – Plotting will happen later in a separate script.
@@ -35,6 +66,10 @@
 #   Active upstream dependency. This script does not directly create a named
 #   final manuscript figure/table, but downstream scripts depend on its cleaned
 #   outputs for figure, table, or model generation.
+#
+# Dependencies:
+#   BoutrosLab.plotting.general, ggplot2, conflicted, survival, survminer,
+#   dplyr, readr, stringr, rstatix, and tidyr.
 #
 
 ### PREPARE SESSION ################################################################################
@@ -448,8 +483,9 @@ combined_fs_dedup <- combined_fs %>%
 # The upper cutoff anchors "normal" FS variation from a CHARM healthy-donor
 # panel (TGL49 samples). Samples above this cutoff are flagged as having
 # an elevated tumour-like fragment signature. If the healthy FS distribution
-# is Gaussian, use mean ± 1.96·SD (≈95th-percentile reference interval);
-# otherwise use the empirical 97.5th percentile.
+# is Gaussian, use mean ± 1.96·SD (a central 95% reference interval, whose
+# upper boundary is approximately the 97.5th percentile); otherwise use the
+# empirical 2.5th and 97.5th percentiles.
 
 safe_platform_cutoffs <- function(values) {
   values <- values[is.finite(values)]
@@ -739,6 +775,25 @@ merged_final_metrics <- merged_final_metrics %>%
     by = c("Sample", "fragmentomics_sequencing_platform", "fragmentomics_sample_role")
   )
 
+# The metadata reattachment above can create two rows for one sample/platform
+# when the FS/clinical date and MM-DAR date disagree. Retain both historical
+# rows because choosing either date could change which Patient/Date row receives
+# the continuous fragmentomics values in 2_0. Export the conflict for review;
+# this audit does not alter the active fragmentomics table.
+fragmentomics_duplicate_key_audit <- merged_final_metrics %>%
+  group_by(Sample, fragmentomics_sequencing_platform, fragmentomics_sample_role) %>%
+  filter(dplyr::n() > 1L) %>%
+  mutate(
+    duplicate_key_n = dplyr::n(),
+    site_bearing_candidate_n = sum(!is.na(Site))
+  ) %>%
+  ungroup()
+
+readr::write_csv(
+  fragmentomics_duplicate_key_audit,
+  "Results_Fragmentomics/fragmentomics_duplicate_sample_key_audit.csv"
+)
+
 # Remove healthy duplicates
 # columns to blank for TGL* samples
 threshold_cols <- c(
@@ -879,6 +934,43 @@ write_csv(
       Zscore.Coverage, Zscore.Midpoint, Zscore.Amplitude
     ),
   "Results_Fragmentomics/fragmentomics_platform_harmonization_sample_audit.csv"
+)
+
+# Patient-level identity audit for the confirmed MyP-060/IMG-060 alias.
+# Do not overwrite the active Patient field here: T9 and T11 share the same
+# recorded date but retain distinct historical fragmentomics values. Assigning
+# both to IMG-060 before the Patient/Date collapse in 2_0 would average those
+# values and change manuscript inputs. The submitted IMG-060-T11 row is restored
+# later by 2_0 from its frozen legacy aggregate, so it must not be reconstructed
+# here from the current raw-feature rows. `Resolved_Patient` records the
+# confirmed identity for review without changing the submitted data flow.
+myp060_identity_audit <- merged_final_metrics_clean %>%
+  filter(str_starts(Sample, "MyP-060-")) %>%
+  mutate(
+    Current_Patient = Patient,
+    Resolved_Patient = "IMG-060",
+    active_patient_field_changed = FALSE
+  ) %>%
+  select(
+    Sample, Current_Patient, Resolved_Patient,
+    active_patient_field_changed, Date_of_sample_collection,
+    fragmentomics_sequencing_platform, fragmentomics_sample_role,
+    FS, Proportion.Short, Mean.Coverage
+  ) %>%
+  arrange(Date_of_sample_collection, Sample)
+
+if (nrow(myp060_identity_audit) == 0L ||
+    any(myp060_identity_audit$Resolved_Patient != "IMG-060") ||
+    any(myp060_identity_audit$active_patient_field_changed)) {
+  stop(
+    "MyP-060 identity audit must preserve active values and resolve to IMG-060.",
+    call. = FALSE
+  )
+}
+
+write_csv(
+  myp060_identity_audit,
+  "Results_Fragmentomics/fragmentomics_MyP060_identity_audit.csv"
 )
 
 

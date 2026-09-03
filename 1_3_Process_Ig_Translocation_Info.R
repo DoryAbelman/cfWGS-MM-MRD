@@ -25,10 +25,34 @@
 # 
 # Inputs:
 #   • cfWGS_res_dir      = "Oct 2024 data/Ig_caller/"      # Ig_caller “*_filtered.tsv” files
-#   • source("GENIUSVariantAnalysis_Functions.R")           # shared helper functions
 #   • Cytoband table     = "Oct 2024 data/cytoBand.txt"
 #   • ENCODE blacklist   = "hg38-blacklist.v2.bed"
 #   • Clinical metadata  = combined_clinical_data_updated_Feb5_2025.csv
+#     This is the historical base table used literally by the script, not the
+#     April 2025 table written by 1_0. helpers.R may append revision metadata.
+#   • Cohort assignments = cohort_assignment_table_updated.rds
+#   • IGV BAM inventory  = IG_Mini_Bams.csv
+#   • Shared helpers      = Scripts_2025/Final_Scripts/helpers.R and
+#       GENIUSVariantAnalysis_Functions.R
+#   • Reviewed calls     = Jan2025_exported_data/
+#       Ig_caller_df_cfWGS_filtered_aggressive2_iGV_check.xlsm
+#   • Optional Spring 2026 metadata and IgCaller outputs under
+#       Data_Spring_2026_Revisions/
+#
+# Analysis units:
+#   Automated tables contain one candidate breakpoint pair per sample. The final
+#   downstream matrix contains one row per sample with at least one manually
+#   confirmed canonical call; absence of a row is not independently proof of a
+#   negative call unless downstream code joins to the full sample inventory and
+#   explicitly replaces missing feature values with zero.
+#   If a BAM has multiple confirmed canonical calls, the current matrix-building
+#   step retains only its highest-IGCaller-score row.
+#
+# Manual checkpoint:
+#   This is not a fully unattended workflow. Candidate calls are exported for
+#   IGV review, and only rows marked `Looks_real == 1` in the reviewed workbook
+#   enter the final feature matrix. New samples therefore require review before
+#   rerunning the final export block.
 # 
 # Active downstream outputs:
 #   • Jan2025_exported_data/translocation_data_cytoband_updated.rds
@@ -39,7 +63,13 @@
 #
 # Support-only outputs:
 #   • Output_tables_2025/translocation_processing_support/*.rds
+#   • Output_tables_2025/translocation_processing_support/
+#       pre_igv_feature_matrices/*.{rds,txt}
+#   • Output_tables_2025/translocation_processing_support/
+#       spring2026_IgCaller_common_MM_translocation_candidates_for_IGV_review.csv
 #   • Output_figures_2025/translocation_processing_support/*.png
+#   • IGV_screenshotter/Bed_files_translocations_cytoband/*.bed
+#   • IGV_screenshotter/Bed_files_translocations_cytoband_breakpoint_2/*.bed
 #     These are parsing caches, pre-IGV automated feature matrices, and QC plots.
 #     They are not final manuscript figures or tables.
 #
@@ -49,10 +79,10 @@
 #     feature matrix is built from the reviewed workbook with Looks_real == 1.
 # 
 # Dependencies:
-#   library(ChromHeatMap); data("cytobands")
-#   library(tidyverse); library(stringr); library(reshape2)
-#   library(ComplexHeatmap); library(RColorBrewer); library(circlize)
-#   library(pbapply); library(GenomicRanges)
+#   ChromHeatMap, tidyverse, stringr, readxl, reshape2, ComplexHeatmap,
+#   RColorBrewer, circlize, GenomicRanges, pbapply, and stringdist. All packages
+#   loaded below must be installed, including those used only in legacy/support
+#   sections.
 # 
 # How to run:
 #   Rscript Scripts_2025/Final_Scripts/1_3_Process_Ig_Translocation_Info.R
@@ -882,7 +912,9 @@ screenshotter_df <- Ig_caller_df_cfWGS_filtered_aggressive2 %>%
 current_bams <- read_csv("IG_Mini_Bams.csv")$Name %>%
   str_remove("\\.bam$")
 
-# detect any missing & auto‐map them
+# Detect missing BAM names. The historical code maps every missing name to its
+# nearest Levenshtein match without a maximum-distance cutoff; inspect the
+# printed `result` before using the generated BED files for manual review.
 screenshot_bams <- str_remove(screenshotter_df$Bam, "\\.bam$")
 missing_bams    <- setdiff(screenshot_bams, current_bams)
 
@@ -902,7 +934,9 @@ result <- data.frame(
 )
 print(result)
 
-keep <- c( # after manual check to ensure accurate 
+# Historical manually inspected names. This `keep` vector is not referenced by
+# the mapping statements below and therefore does not restrict replacements.
+keep <- c(
   "TFRIM4_0060_Bm_P_WG_FZ-09.filter.deduped.recalibrated",
   "TFRIM4_0178_Bm_P_WG_FZ-07.filter.deduped.recalibrated",
   "TFRIM4_0184_Bm_P_WG_VA-10-01-O-DNA.filter.deduped.recalibrated",
@@ -963,7 +997,8 @@ screenshotter_df <- Ig_caller_df_cfWGS_filtered_aggressive2 %>%
 current_bams <- read_csv("IG_Mini_Bams.csv")$Name %>%
   str_remove("\\.bam$")
 
-# detect any missing & auto‐map them
+# Detect missing BAM names. As above, mapping uses the nearest inventory string
+# without a maximum-distance cutoff and prints the proposed replacements.
 screenshot_bams <- str_remove(screenshotter_df$Bam, "\\.bam$")
 missing_bams    <- setdiff(screenshot_bams, current_bams)
 
@@ -981,7 +1016,8 @@ result <- data.frame(
 )
 print(result)
 
-keep <- c( # after manual check to ensure accurate 
+# Historical manually inspected names; this vector is not used downstream.
+keep <- c(
   "TFRIM4_0060_Bm_P_WG_FZ-09.filter.deduped.recalibrated",
   "TFRIM4_0178_Bm_P_WG_FZ-07.filter.deduped.recalibrated",
   "TFRIM4_0184_Bm_P_WG_VA-10-01-O-DNA.filter.deduped.recalibrated",
@@ -1057,11 +1093,13 @@ for (col in cyto_cols) {
 }
 
 translocation_data_cytoband <- translocation_matrix_cytoband %>%
-  # first, create IGH_CCND1 by coalescing the two possible 11q13 bands
+  # A t(11;14) call may be assigned to either adjacent 11q13 cytoband.
+  # Combine the two binary indicators with OR rather than coalesce(): absent
+  # calls are encoded as 0, so coalesce(0, 1) would incorrectly return 0.
   mutate(
-    IGH_CCND1 = coalesce(
-      .data[["chr11q13.2_chr14q32.33"]],
-      .data[["chr11q13.3_chr14q32.33"]]
+    IGH_CCND1 = pmax(
+      coalesce(.data[["chr11q13.2_chr14q32.33"]], 0L),
+      coalesce(.data[["chr11q13.3_chr14q32.33"]], 0L)
     )
   ) %>%
   # now pick off and rename all four
@@ -1166,11 +1204,12 @@ for (col in cyto_cols) {
 
 
 translocation_data_cytoband <- translocation_matrix_cytoband %>%
-  # first, create IGH_CCND1 by coalescing the two possible 11q13 bands
+  # Treat either adjacent 11q13 cytoband as evidence of t(11;14). Explicitly
+  # replace missing values with 0 before applying the binary OR via pmax().
   mutate(
-    IGH_CCND1 = coalesce(
-      .data[["chr11q13.2_chr14q32.33"]],
-      .data[["chr11q13.3_chr14q32.33"]]
+    IGH_CCND1 = pmax(
+      coalesce(.data[["chr11q13.2_chr14q32.33"]], 0L),
+      coalesce(.data[["chr11q13.3_chr14q32.33"]], 0L)
     )
   ) %>%
   # now pick off and rename all four

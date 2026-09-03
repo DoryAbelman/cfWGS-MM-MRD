@@ -11,10 +11,8 @@
 #
 #   ../../.gitignore
 #
-# Use this nested repo only if you are uploading the cleaned numbered source
-# pipeline by itself. For the full reviewer capsule, build a clean staging repo
-# from the project root so it can also include `reproducible_workflow/`, `docs/`,
-# frozen final figures/tables, and the root `./run` entry point.
+# This repository now includes a self-contained deidentified release under
+# `public_reproducibility/`; its generated `results/` directory is ignored.
 # ==============================================================================
 
 # ------------------------------------------------------------------------------
@@ -77,6 +75,11 @@ local_input_check_report.tsv
 /outputs
 /final_manuscript_objects
 /manuscript_writing
+/Output_figures_2025
+
+# Public capsule results are generated locally. Keep the empty directory marker.
+/public_reproducibility/results/*
+!/public_reproducibility/results/.gitkeep
 
 # ------------------------------------------------------------------------------
 # Archive policy.

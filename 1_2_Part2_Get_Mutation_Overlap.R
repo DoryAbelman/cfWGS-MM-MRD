@@ -5,15 +5,16 @@
 # Date        : 2025-06-30  
 #  
 # Description :  
-#   1. Reads in bone-marrow and blood cfDNA MAFs (maftools::read.maf)  
+#   1. Reads the annotated bone-marrow and blood cfDNA mutation RDS tables
+#      produced by 1_2_Process_Mutation_Data.R
 #   2. Merges variant calls, creates per-mutation unique IDs  
 #   3. Builds wide table for presence/absence by sample type  
-#   4. For each patient:  
+#   4. For each eligible patient:
 #        • draws a Venn diagram of BM vs. cfDNA calls  
-#        • computes % overlap and plots barplot  
+#        • computes the Jaccard overlap percentage and plots a summary
 #  
 # Usage       :  
-#   Rscript 1_2_Part2_Get_Mutation_Overlap.R  
+#   Rscript Scripts_2025/Final_Scripts/1_2_Part2_Get_Mutation_Overlap.R
 #   - or -  
 #   source("1_2_Part2_Get_Mutation_Overlap.R")  
 #  
@@ -39,30 +40,50 @@
 #   - Final Tables and Figures/Fig3C_mutation_overlap_lollipop2_updated.png
 #   - Final Tables and Figures/Extended_Data_Figure_2G_mutation_overlap_source_data.csv
 #   - Final Tables and Figures/Extended_Data_Figure_2G_mutation_overlap_summary.csv
+#   - Alternate all-evaluable panel and source/summary tables:
+#     Final Tables and Figures/Fig3C_mutation_overlap_lollipop_all_evaluable_baseline.png
+#     Final Tables and Figures/Extended_Data_Figure_2G_all_evaluable_baseline_mutation_overlap_*.csv
 #
 #   Support-only QA/review:
 #   - Final Tables and Figures/mutation_overlap_support/patient_venn_diagrams/
 #     VennDiagram_<Patient>_Sep2025_updatedcolors.png
 #   - Final Tables and Figures/mutation_overlap_support/percent_overlap_barplot_Sep2025.png
 #   - Final Tables and Figures/mutation_overlap_support/*summary*.csv
+#   - Final Tables and Figures/mutation_overlap_support/
+#     baseline_bm_cfdna_pairing_union_exact_or_within_30d_audit.csv
 #  
 # Notes:
 #   - The script is command-line runnable from the project root. Clinical
 #     metadata are read from disk; no preloaded RStudio workspace object is
 #     required.
+#   - Analysis unit: patient. Within each eligible patient, unique variant
+#     coordinates are compared between BM and cfDNA.
+#   - `Percent_Overlap` is 100 * |BM intersection cfDNA| / |BM union cfDNA|.
+#     It is a symmetric Jaccard overlap, not the percentage of BM variants
+#     recovered in cfDNA (which would instead use the BM count as denominator).
+#   - No `t_depth` threshold is applied here. The depth column is carried into
+#     the wide table with `max`, but overlap uses mutation presence only.
+#   - The mapped Extended Data Figure 2G panel contains the Frontline cohort.
+#     The separately named all-evaluable panel includes both assigned cohorts.
+#   - `All_feature_data_Sep2025_updated2.rds`, produced later by 1_5, is loaded
+#     only for a printed high-quality-subset summary. Because the file is still
+#     an unconditional input, a clean run must have it available already or
+#     rerun this script after 1_5.
 #  
 # How to run:
 #   Rscript Scripts_2025/Final_Scripts/1_2_Part2_Get_Mutation_Overlap.R
 #
 # Manuscript outputs created/updated:
-#   - Extended Data Figure 2G: patient-level lollipop plot showing the
-#     percentage of baseline BM mutations recovered in matched cfDNA.
+#   - Extended Data Figure 2G: Frontline-cohort patient-level lollipop plot
+#     showing the Jaccard percentage overlap between baseline/diagnosis BM and
+#     cfDNA mutation sets. An alternate all-evaluable version is also exported.
 #
 # Pipeline role:
 #   This analysis asks whether baseline tumour mutations seen in diagnostic
-#   bone marrow are also detectable in plasma cfDNA. Likely germline dbSNP
-#   rsID calls are removed before overlap calculations so the plotted values
-#   reflect somatic tumour mutation recovery rather than common polymorphisms.
+#   bone marrow overlap calls in plasma cfDNA. As a conservative filtering rule,
+#   calls carrying a dbSNP rsID are removed before overlap calculations. An rsID
+#   is not itself proof that a variant is common or germline, so this exclusion
+#   should be reported as an operational filter rather than germline adjudication.
 # ──────────────────────────────────────────────────────────────────────────────
 # Pipeline status:
 #   Active in the command-line pipeline. This script creates or stages the
@@ -105,11 +126,10 @@ df_bm <- readRDS("combined_maf_bm_dx.rds")
 df_blood <- readRDS("combined_maf_blood_all_muts_updated.rds")
 
 ## Remove rsids to match new filtering 
-# Variants with an rsID ("rs...") in the dbSNP column are registered polymorphisms
-# (common germline variants). These should not be in somatic MAF files, but low-depth
-# WGS or aggressive variant callers occasionally include them as false positives.
-# Removing them here ensures the BM/cfDNA overlap analysis reflects only somatic
-# tumour mutations and stays consistent with the filtered VCFs used by MRDetect.
+# Conservatively exclude variants with an rsID ("rs...") in the dbSNP column to
+# match the VCF filtering used by MRDetect. dbSNP also contains rare and
+# disease-associated variants, so this rule reduces likely polymorphism carryover
+# but does not, by itself, establish somatic or germline status.
 # filter out all rows with an RSID
 df_blood <- df_blood %>%
   filter(is.na(dbSNP_RS) | dbSNP_RS == "" | dbSNP_RS == "." |
@@ -258,6 +278,13 @@ df_wide <- pivot_wider(
 ## This is intentionally additive: no historically evaluable patient is
 ## removed by the date rule. Patients with no callable mutation set remain in
 ## the downstream audit with Percent_Overlap = NA.
+##
+## Important scope detail: this block selects eligible patients, not a single
+## barcode pair for the mutation calculation. After eligibility is established,
+## `df_wide` below contains the union of all Diagnosis/Baseline BM calls and all
+## Diagnosis/Baseline cfDNA calls for that patient. The selected nearest dates
+## are retained only in the pairing audit; the selected barcode columns are not
+## carried into the current audit export.
 baseline_pair_metadata <- metada_df_mutation_comparison %>%
   filter(
     timepoint_info %in% c("Baseline", "Diagnosis"),
@@ -451,7 +478,11 @@ for (i in 1:length(patients)) {
   # Calculate the total number of unique mutations
   total_unique_mutations <- length(unique(c(bm_mutations, cf_mutations)))
   
-  # Calculate the percent overlap. If both mutation sets are empty, retain the
+# Calculate the Jaccard overlap percentage:
+#   100 * number of variants called in both compartments /
+#         number of variants called in either compartment.
+# This is symmetric and is not a BM-recovery/sensitivity denominator.
+# If both mutation sets are empty, retain the
   # patient in the audit table but mark the overlap as missing rather than
   # creating NaN/Inf summary statistics.
   percent_overlap <- if (total_unique_mutations > 0) {
@@ -732,7 +763,7 @@ ggsave(
 )
 
 # MANUSCRIPT OUTPUT: Extended Data Figure 2G
-# Patient-level lollipop plot summarizing baseline BM/cfDNA mutation overlap.
+# Patient-level lollipop plot summarizing baseline BM/cfDNA Jaccard overlap.
 ms_copy_artifact(
   source_path = edfig2g_path,
   artifact_id = "EDFIG2G",

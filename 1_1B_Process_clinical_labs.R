@@ -9,16 +9,19 @@
 #   clinical-feature summaries.
 #
 # Inputs:
-#   • "M4_COHORT_DEMO.xlsx"               - patient demographics
-#   • "M4_COHORT_CHEMOTHERAPY.xlsx"        - treatment history
-#   • "M4_COHORT_BONE_MARROW_BIOPSY.xlsx" - BM biopsy data
-#   • "M4_COHORT_STAGING.xlsx"             - ISS/R-ISS staging
-#   (all under M4_CMRG_Data/)
+#   M4 demographics, chemotherapy, marrow-biopsy, staging, and laboratory
+#   workbooks; the sample-level clinical table from 1_0; curated IMMAGINE and
+#   SPORE baseline clinical workbooks; and the cohort FISH helper tables from
+#   1_1A. The complete executable list is validated in `input_files` below.
 #
 # Active downstream output:
 #   • Clinical data/Master_clinical_data_table_all_projects_May2025_updated2.csv
 #     This is not a final manuscript table. It is an intermediate clinical
 #     helper table consumed by script 2_0.
+# Support/QC output:
+#   • Output_tables_2025/clinical_support/lab_value_plausibility_audit.csv
+#     Lists parsed laboratory values excluded by the explicit plausibility
+#     ranges below; it is a review aid, not a manuscript table.
 #
 # How to run:
 #   Rscript Scripts_2025/Final_Scripts/1_1B_Process_clinical_labs.R
@@ -34,6 +37,17 @@
 #   Active upstream dependency. This script does not directly create a named
 #   final manuscript figure/table. It creates the cross-cohort clinical/lab
 #   helper table consumed by 2_0, which then feeds manuscript figures/tables.
+#
+# Reader roadmap and analysis unit:
+#   1. Build M4 demographic and cytogenetic fields.
+#   2. Match M4 biopsy/FISH and laboratory records to clinical timepoints.
+#   3. Parse laboratory values, quarantine implausible values, and reshape the
+#      selected measurements to patient-timepoint rows.
+#   4. Derive a heuristic immunoglobulin/light-chain subtype.
+#   5. Harmonize curated SPORE and IMMAGINE baseline clinical/FISH fields.
+#   6. Export the cross-cohort clinical/lab helper table used by script 2_0.
+#   The intended unit is one patient-timepoint, although distinct relapse
+#   events may remain as separate rows and are reported by the duplicate QC.
 #
 
 # Load only the packages actually used below
@@ -285,7 +299,7 @@ ccu_small <- combined_clinical_data_updated %>%
   ) %>%
   mutate(Date = as.Date(Date)) %>% unique()
 
-# 3) Fuzzy‐join: match Patient exactly, and dates within ±30 days
+# 3) Fuzzy join: match Patient exactly and dates within +/-60 days.
 joined2 <- fuzzy_left_join(
   ct2, ccu_small,
   by = c(
@@ -294,11 +308,15 @@ joined2 <- fuzzy_left_join(
   ),
   match_fun = list(
     `==`,                                # exact match on Patient
-    function(d1, d2) abs(as.numeric(d1 - d2)) <= 60 # 45 day difference in dates permitted in case test done later
+    function(d1, d2) abs(as.numeric(d1 - d2)) <= 60 # 60-day window permits delayed clinical testing
   )
 )
 
-# 4) Of the (possibly multiple) matches, pick the one with smallest date‐difference
+# 4) Preserve the historical consolidation order. The next block first
+# collapses candidate matches by Patient + INTENT using the first available
+# date/value. Consequently, this section does not guarantee that the closest
+# clinical sample is chosen when one INTENT record has multiple +/-60-day
+# candidates; `best_match` below only resolves rows remaining after collapse.
 joined2 <- joined2 %>%
   rename(Patient = Patient.x) %>%
   select(-Patient.y)
@@ -626,7 +644,7 @@ ct2 <- labs_transformed %>%
   rename(Patient = M4_id) %>%
   mutate(PROCEDURE_DATE = as.Date(LAB_DATE))
 
-# 3) Fuzzy‐join: match Patient exactly, and dates within ±30 days
+# 3) Fuzzy join: match Patient exactly and dates within +/-60 days.
 joined2 <- fuzzy_left_join(
   ct2, ccu_small,
   by = c(
@@ -732,8 +750,9 @@ patient_data <- filtered_data_summary %>%
     values_fill = NA  # Fill missing values with NA
   )
 
-# Step 3: Classify Subtypes for Each Patient
-## Using this can also do correlates with cfWGS
+# Step 3: Derive exploratory subtypes from the available quantitative values.
+# These are deterministic helper annotations, not adjudicated clinical subtype
+# labels; missing/discordant values remain subtype-unknown or Other.
 
 ## update to also score if Kappa or Lambda
 classified_subtypes <- patient_data %>%
@@ -1298,7 +1317,10 @@ clinical_filled <- clinical_filled %>%
 
 ### Final export: cross-cohort master clinical/lab table
 # Downstream scripts use this table for clinical demographics, baseline
-# covariates, cytogenetic/FISH comparisons, and clinical-feature summaries.
+# covariates, cytogenetic/FISH comparisons, and clinical-feature summaries. The
+# intended key is Patient + Timepoint. The duplicate warning above evaluates the
+# consolidated M4 table before the later SPORE/IMMAGINE full joins, so a refreshed
+# final export also requires a downstream key check in script 2_0.
 write_active_csv(
   clinical_filled,
   "Clinical data/Master_clinical_data_table_all_projects_May2025_updated2.csv"

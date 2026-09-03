@@ -1,5 +1,5 @@
 # =============================================================================
-# MRDetect_processing.R
+# 1_8_Process_Cumulative_VAFs_MRDetect.R
 # Project:  cfWGS MRDetect (Winter 2025)
 # How to run:
 #   Rscript Scripts_2025/Final_Scripts/1_8_Process_Cumulative_VAFs_MRDetect.R
@@ -11,22 +11,33 @@
 #
 # Author:   Dory Abelman
 # Date:     January 2025
-# Last Updated: May 2025
+# Last Updated: September 2026
 #
 # Purpose:
-#   1. Read all MRDetect CSV outputs.
-#   2. Annotate each record with source file, sample metadata, and z-scores
-#      based on CHARM_healthy controls.
-#   3. Filter to cfDNA timepoints and export
-#      both raw and z-scored tables for downstream plotting.
+#   1. Combine historical and Spring 2026 MRDetect result files.
+#   2. Correct the preserved Winter 2025 parser column order and apply audited
+#      rerun replacements.
+#   3. Attach mutation-panel and queried-sample metadata, then calculate
+#      mutation-panel-specific healthy-control z-scores.
+#   4. Export row-level MRDetect results and longitudinal BM- and blood-informed
+#      summaries used by downstream integration and figure scripts.
+#
+# Unit of analysis:
+#   One MRDetect result row is one queried BAM evaluated against one personalized
+#   mutation-list VCF under one mutation-source/filter-source combination.
 #
 # Dependencies:
 #   • readr, data.table, tidyverse (dplyr, tidyr, stringr), openxlsx
 #   • ggplot2, ggbreak, patchwork, scales, conflicted
 #
-# Input Files:
-#   • ../MRDetect_output_winter_2025/MRDetect_outputs/*.csv
-#   • ../combined_clinical_data_updated_April2025.csv
+# Principal input files:
+#   • MRDetect_output_winter_2025/MRDetect_outputs/*.csv
+#   • Spring 2026 revision MRDetect exports returned by
+#     spring2026_revision_files()
+#   • combined_clinical_data_updated_April2025.csv plus the revision metadata
+#     incorporated by read_combined_clinical_metadata_with_revision()
+#   • Jan2025_exported_data/All_feature_data_Sep2025_updated2.rds
+#   • cohort_assignment_table_updated.rds
 #
 # Output Directory (created if necessary):
 #   • MRDetect_output_winter_2025/Processed_R_outputs/
@@ -35,11 +46,15 @@
 #       - cfWGS_Winter2025All_MRDetect_Sep2025.rds
 #       - cfWGS_Winter2025All_MRDetect_with_Zscore_Sep2025.txt
 #       - cfWGS_Winter2025All_MRDetect_with_Zscore_Sep2025.rds
-#       - cfWGS MRDetect BM data updated May.csv
-#       - cfWGS MRDetect Blood data updated May.csv
+#       - All_detection_rates_baseline_and_controls_Feb2026.csv/.rds
+#         (legacy filename; contains the historical CHARM control reference rows)
+#       - BM_muts_plots_baseline/cfWGS_MRDetect_BM_data_updated_Sep.csv
+#       - Blood_muts_plots_baseline/cfWGS MRDetect Blood data updated Sep.csv
+#       - Blood_muts_plots_baseline/
+#         cfWGS MRDetect Blood data updated Sep with all patients.csv
 #
 # Usage:
-#   Rscript MRDetect_processing.R
+#   Run from the project root with the command shown above.
 # =============================================================================
 # Pipeline status:
 #   Active upstream dependency. This script does not directly create a named
@@ -696,6 +711,46 @@ if (file.exists(mrdetect_override_file)) {
   message("Applied ", nrow(mrdetect_overrides), " audited MRDetect rerun replacements.")
 }
 
+# Validate every active row, not only the optional rerun replacements. These
+# checks document the corrected column meanings and stop a future parser/input
+# change from silently altering the MRDetect rates. They do not modify values.
+mrdetect_rate_cols <- c(
+  "sites_checked", "reads_checked", "sites_detected", "reads_detected",
+  "total_reads", "detection_rate",
+  "detection_rate_as_reads_detected_over_reads_checked",
+  "detection_rate_as_reads_detected_over_total_reads", "sites_detection_rate"
+)
+if (any(!vapply(all_files[mrdetect_rate_cols], is.numeric, logical(1)))) {
+  stop("MRDetect count and rate columns must all be numeric.", call. = FALSE)
+}
+if (any(!is.finite(as.matrix(all_files[mrdetect_rate_cols]))) ||
+    any(as.matrix(all_files[mrdetect_rate_cols]) < 0)) {
+  stop("MRDetect count and rate columns must be finite and non-negative.", call. = FALSE)
+}
+if (any(all_files$sites_checked == 0 | all_files$reads_checked == 0 |
+        all_files$total_reads == 0)) {
+  stop("MRDetect rate denominators must be greater than zero.", call. = FALSE)
+}
+if (any(
+  all_files$sites_detected > all_files$sites_checked |
+    all_files$reads_detected > all_files$reads_checked |
+    all_files$reads_checked > all_files$total_reads
+)) {
+  stop("MRDetect counts violate their denominator constraints.", call. = FALSE)
+}
+mrdetect_rate_tolerance <- 1e-10
+if (any(
+  abs(all_files$detection_rate - all_files$sites_detected / all_files$reads_checked) > mrdetect_rate_tolerance |
+    abs(all_files$detection_rate_as_reads_detected_over_reads_checked -
+          all_files$reads_detected / all_files$reads_checked) > mrdetect_rate_tolerance |
+    abs(all_files$detection_rate_as_reads_detected_over_total_reads -
+          all_files$reads_detected / all_files$total_reads) > mrdetect_rate_tolerance |
+    abs(all_files$sites_detection_rate - all_files$sites_detected / all_files$sites_checked) > mrdetect_rate_tolerance
+)) {
+  stop("MRDetect stored rates do not agree with their corrected count columns.", call. = FALSE)
+}
+rm(mrdetect_rate_cols, mrdetect_rate_tolerance)
+
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -1087,12 +1142,14 @@ message("→ MRDetect tables (raw & z-scored) written to: ", outdir)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# 14a) Export individual detection rates for baseline/diagnosis + healthy controls
+# 14a) Export the historical CHARM healthy-control reference rows
 # ──────────────────────────────────────────────────────────────────────────────
-# Extract all baseline/diagnosis samples from MM cohort + all CHARM_healthy samples
+# Despite its retained legacy filename, this table contains CHARM_healthy rows
+# only. It is the historical control input used by scripts 1_10 and 3_1_part2;
+# changing its membership here would change downstream calibration analyses.
 detection_rates_all_samples <- Merged_MRDetect_zscore %>%
   filter(
-    # Include MM baseline/diagnosis samples
+    # Historical CHARM controls use the baseline-family labels 01/T0.
     (Timepoint %in% c("01", "T0") & Study == "CHARM_healthy")
   ) %>%
   select(
@@ -1116,7 +1173,7 @@ write_csv(detection_rates_all_samples,
 saveRDS(detection_rates_all_samples,
         file = file.path(outdir, "All_detection_rates_baseline_and_controls_Feb2026.rds"))
 
-message("→ Individual detection rates (baseline + healthy controls) written to: ", outdir)
+message("→ Historical CHARM healthy-control detection rates written to: ", outdir)
 message("  Total samples exported: ", nrow(detection_rates_all_samples))
 
 
@@ -1289,6 +1346,8 @@ combined_data_plot <- combined_data_plot %>%
   )
 
 # 7) Calculate START_DATE and percent_change from baseline
+# Percent change is undefined when the reference rate is zero. R therefore
+# records 0/0 as NA/NaN; retain that missing value rather than calling it 0%.
 combined_data_plot <- combined_data_plot %>%
   rename(START_DATE = num_days) %>%
   filter(Good_baseline_marrow == "Yes",
@@ -1305,7 +1364,8 @@ combined_data_plot <- combined_data_plot %>%
   ) %>%
   ungroup() 
 
-## Get the change since the first treatment timepoint 
+## Get the change since the first treatment timepoint
+# The same zero-reference rule applies to treatment-relative percent change.
 # Define the treatment sample categories
 treatment_samples <- c("Post_induction", "Post_transplant", "Maintenance", "1.5yr maintenance")
 
@@ -1534,6 +1594,7 @@ filtered_good_pts %>%
   pull(Patient) %>% unique()
 
 # 7) Calculate START_DATE and percent_change from baseline
+# A zero reference rate yields an undefined percent change and remains missing.
 combined_data_plot <- combined_data_plot %>%
   rename(START_DATE = num_days) %>%
   filter(Good_baseline_sample == "Yes",
@@ -1554,7 +1615,8 @@ combined_data_plot <- combined_data_plot %>%
 ## Now edit this to show the time difference since the second timepoint 
 ## First calculate the percent change in detection rate and put dates
 
-## Get the change since the first treatment timepoint 
+## Get the change since the first treatment timepoint
+# A zero first-treatment rate likewise yields a missing relative change.
 # Define the treatment sample categories
 treatment_samples <- c("Post_induction", "Post_transplant", "Maintenance", "1.5yr maintenance")
 
@@ -1637,6 +1699,7 @@ combined_data_plot <- combined_data_plot %>%
   )
 
 # 7) Calculate START_DATE and percent_change from baseline
+# A zero reference rate yields an undefined percent change and remains missing.
 combined_data_plot <- combined_data_plot %>%
   rename(START_DATE = num_days) %>%
   filter(#Good_baseline_sample == "Yes",
@@ -1657,7 +1720,8 @@ combined_data_plot <- combined_data_plot %>%
 ## Now edit this to show the time difference since the second timepoint 
 ## First calculate the percent change in detection rate and put dates
 
-## Get the change since the first treatment timepoint 
+## Get the change since the first treatment timepoint
+# A zero first-treatment rate likewise yields a missing relative change.
 # Define the treatment sample categories
 treatment_samples <- c("Post_induction", "Post_transplant", "Maintenance", "1.5yr maintenance")
 

@@ -1,5 +1,6 @@
 #!/usr/bin/env Rscript
 
+# 1_8E_Build_ED3FG_Fragmentomics_Platform_Calibration.R
 # Build Extended Data Figure 3F-G: fragmentomics platform shift and
 # cross-validated harmonization in identity-matched healthy-control cfDNA.
 #
@@ -10,6 +11,19 @@
 # 18 matched identities, and the held-out XPlus value is mapped to the NovaSeq
 # 6000 scale. This leave-one-control-out display is validation only; production
 # scoring continues to use the prespecified all-19-control transform.
+#
+# Inputs:
+#   Results_Fragmentomics/CHARM_Xplus_HC_comparison/
+#     sample_level_feature_values.csv
+#   Results_Fragmentomics/MM_DARs_chromatin_activation_data.rds
+# Outputs:
+#   ED3F/ED3G figures, source data, statistics, manifests, and captions in the
+#   generated-component and manuscript-object trees.
+# Unit of inference:
+#   One paired healthy-control identity (n = 19); three features are tested and
+#   their P values are adjusted together by Benjamini-Hochberg.
+# How to run:
+#   Rscript Scripts_2025/Final_Scripts/1_8E_Build_ED3FG_Fragmentomics_Platform_Calibration.R
 
 suppressPackageStartupMessages({
   library(dplyr)

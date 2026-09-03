@@ -1,5 +1,5 @@
 # =============================================================================
-# Create_dilution_series_eligibility_table.R
+# 1_9_Create_dilution_series_eligibility_table.R
 # Project: cfWGS MRDetect (Winter 2025)
 # How to run:
 #   Rscript Scripts_2025/Final_Scripts/1_9_Create_dilution_series_eligibility_table.R
@@ -17,11 +17,15 @@
 #     • One “tumor-low” timepoint (near-background signal)
 #   so we can use those paired samples to build a dilution series.
 #
+# Unit of analysis:
+#   One high/low physical-sample pair per patient, selected within one identical
+#   personalized mutation-source sample and VCF.
+#
 # Key definitions 
 #   • detection_rate_as_reads_detected_over_reads_checked is a decimal.
 #       - 0.01  = 1%
 #       - 1e-4 = 0.01%
-#   • “tumor-high”  timepoint: detection_rate >= 0.05  (>=0.5%)
+#   • “tumor-high”  timepoint: detection_rate >= 0.005 (>=0.5%)
 #   • “tumor-low”   timepoint: detection_rate <= 5e-4 (<=0.05%)
 #
 # Outputs:
@@ -68,13 +72,32 @@ if (!dir.exists(output_dir)) {
 #       healthy-control detection rate at those same sites. This removes the
 #       background "noise floor" that exists even in true negatives.
 #
-#     • not_sig_above_hc: a Boolean flag. TRUE means this sample's signal is
-#       NOT significantly elevated above healthy controls - i.e., it looks like
-#       background. We use z-score < 2 as the criterion when available;
+#     • not_sig_above_hc: a Boolean screening flag. TRUE means this sample's
+#       signal is below the prespecified z = 2 background cutoff. This is not a
+#       formal significance test. We use z-score < 2 when available;
 #       otherwise fall back to raw_rate <= mean_hc + 2*SD.
 #       This flag is key for identifying genuine MRD-negative timepoints.
 # ──────────────────────────────────────────────────────────────────────────────
+if (!file.exists(input_file)) {
+  stop("BM-informed MRDetect eligibility input not found: ", input_file, call. = FALSE)
+}
 raw_df <- read_csv(input_file, show_col_types = FALSE)
+
+required_cols <- c(
+  "Patient", "Mut_source", "Filter_source", "Sample_ID", "Sample_ID_Bam",
+  "VCF", "detection_rate_as_reads_detected_over_reads_checked",
+  "mean_detection_rate_reads_checked_charm",
+  "sd_detection_rate_reads_checked_charm",
+  "detection_rate_zscore_reads_checked_charm"
+)
+missing_cols <- setdiff(required_cols, names(raw_df))
+if (length(missing_cols)) {
+  stop(
+    "Eligibility input is missing required columns: ",
+    paste(missing_cols, collapse = ", "),
+    call. = FALSE
+  )
+}
 
 # Extract HC mean/SD and per-sample rate/z-score as vectors for clarity
 mean_hc <- raw_df$mean_detection_rate_reads_checked_charm
@@ -88,8 +111,8 @@ working_df <- raw_df %>%
     sd_detection_rate_reads_checked_charm   = sd_hc,
     # Background-corrected signal: how far above HC noise floor is this sample?
     detection_rate_diff_vs_hc = rate - mean_hc,
-    # Is this sample statistically indistinguishable from healthy controls?
-    # Preferred: use pre-computed z-score (z < 2 = not significantly elevated).
+    # Is this sample below the healthy-control screening cutoff?
+    # Preferred: use the pre-computed z-score (z < 2).
     # Fallback: raw rate within mean + 2*SD of HC distribution.
     not_sig_above_hc = dplyr::case_when(
       !is.na(zscore) ~ zscore < 2,
@@ -124,16 +147,16 @@ working_df <- raw_df %>%
 high_threshold <- 0.005  # 0.5% in decimal (loosened from 1%)
 low_threshold  <- 5e-4   # 0.05% in decimal (loosened from 0.01%)
 
-# join_vars defines the grouping level for "per patient" selection.
-# Includes Mut_source and Filter_source so that pairs are matched on the
-# same mutation set and filtering strategy (apples-to-apples comparison).
-join_vars <- intersect(c("Patient", "Mut_source", "Filter_source"), names(working_df))
+# Panel keys keep high and low candidates within the same personalized mutation
+# source. Patient/source keys then enforce the stated one-pair-per-patient rule.
+panel_vars <- c("Patient", "Mut_source", "Filter_source", "Sample_ID", "VCF")
+patient_source_vars <- c("Patient", "Mut_source", "Filter_source")
 
 # Tumor-high candidates: all timepoints above the high threshold
 high_df <- working_df %>%
   filter(detection_rate_as_reads_detected_over_reads_checked >= high_threshold) %>%
   transmute(
-    across(all_of(join_vars)),
+    across(all_of(panel_vars)),
     high_sample_id   = Sample_ID_Bam,
     high_timepoint   = timepoint_info_Bam,
     high_detection_rate = detection_rate_as_reads_detected_over_reads_checked,
@@ -149,10 +172,10 @@ high_df <- working_df %>%
 low_df <- working_df %>%
   filter(
     detection_rate_as_reads_detected_over_reads_checked <= low_threshold,
-    not_sig_above_hc == TRUE  # z-score < 2: statistically at HC background level
+    not_sig_above_hc == TRUE  # z-score < 2: below the HC screening cutoff
   ) %>%
   transmute(
-    across(all_of(join_vars)),
+    across(all_of(panel_vars)),
     low_sample_id   = Sample_ID_Bam,
     low_timepoint   = timepoint_info_Bam,
     low_detection_rate = detection_rate_as_reads_detected_over_reads_checked,
@@ -170,13 +193,15 @@ low_df <- working_df %>%
 #     • tumor-high: HIGHEST detection rate (strongest signal = best spike-in)
 #     • tumor-low:  LOWEST detection rate (cleanest background = best matrix)
 high_df_top <- high_df %>%
-  group_by(across(all_of(join_vars))) %>%
-  slice_max(order_by = high_detection_rate, n = 1, with_ties = FALSE) %>%
+  group_by(across(all_of(panel_vars))) %>%
+  arrange(desc(.data$high_detection_rate), .data$high_sample_id, .by_group = TRUE) %>%
+  slice_head(n = 1) %>%
   ungroup()
 
 low_df_top <- low_df %>%
-  group_by(across(all_of(join_vars))) %>%
-  slice_min(order_by = low_detection_rate, n = 1, with_ties = FALSE) %>%
+  group_by(across(all_of(panel_vars))) %>%
+  arrange(.data$low_detection_rate, .data$low_sample_id, .by_group = TRUE) %>%
+  slice_head(n = 1) %>%
   ungroup()
 
 # STEP 4: Eligibility gate -- patients must have BOTH a high AND a low sample
@@ -185,8 +210,27 @@ low_df_top <- low_df %>%
 #   always MRD-positive (no qualifying low sample) or who have no high-signal
 #   timepoints (no qualifying high sample) are excluded.
 eligible_pairs <- high_df_top %>%
-  inner_join(low_df_top, by = join_vars) %>%
-  distinct()
+  inner_join(low_df_top, by = panel_vars) %>%
+  # A physical sample cannot be both the spike-in source and background matrix.
+  filter(.data$high_sample_id != .data$low_sample_id) %>%
+  mutate(raw_dynamic_range = .data$high_detection_rate - .data$low_detection_rate) %>%
+  group_by(across(all_of(patient_source_vars))) %>%
+  # When more than one mutation panel yields a valid pair, retain the panel with
+  # the widest raw dynamic range; remaining keys provide deterministic ties.
+  arrange(
+    desc(.data$raw_dynamic_range),
+    .data$Sample_ID,
+    .data$VCF,
+    .data$high_sample_id,
+    .data$low_sample_id,
+    .by_group = TRUE
+  ) %>%
+  slice_head(n = 1) %>%
+  ungroup()
+
+if (anyDuplicated(eligible_pairs[patient_source_vars])) {
+  stop("Eligibility selection did not produce one pair per patient/source group.", call. = FALSE)
+}
 
 # ──────────────────────────────────────────────────────────────────────────────
 # STEP 5: Compute the dilution plan (using raw detection rates)
@@ -311,7 +355,7 @@ patients_reaching_1e6 <- dilution_plan_diff_vs_hc %>%
 # Extract just the sample IDs for patients reaching 1e-6
 patients_reaching_1e6_samples <- patients_reaching_1e6 %>%
   select(
-    all_of(join_vars),
+    all_of(panel_vars),
     high_sample_id,
     high_timepoint,
     low_sample_id,
@@ -332,11 +376,11 @@ patients_with_feasible_1e6 <- dilution_plan_diff_vs_hc %>%
     target_fraction == 1e-6,
     feasible == TRUE
   ) %>%
-  select(all_of(join_vars)) %>%
+  select(all_of(panel_vars)) %>%
   distinct()
 
 dilution_plan_diff_vs_hc_for_1e6_patients <- dilution_plan_diff_vs_hc %>%
-  semi_join(patients_with_feasible_1e6, by = join_vars)
+  semi_join(patients_with_feasible_1e6, by = panel_vars)
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Write outputs

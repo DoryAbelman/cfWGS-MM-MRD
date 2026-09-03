@@ -10,6 +10,10 @@
 # interpretability, and manuscript-supporting sensitivity analyses; it does not
 # re-run MRDetect and it does not change detection calls.
 #
+# Unit of analysis
+# One input MRDetect row. No rows are pooled: each proxy is calculated from that
+# row's informative-read denominator.
+#
 # ## Scientific rationale
 # MRDetect tracks a fixed set of patient-specific mutation sites. For a sample
 # with `N` informative reads checked at those sites, the smallest observable
@@ -67,7 +71,8 @@
 # - informative_reads_source
 # - lod_fraction_one_read and lod_ppm_one_read
 # - lod95_fraction_one_read and lod95_ppm_one_read
-# - poisson_reads_required_for_lod95_one_read
+# - poisson_reads_required_for_lod95_one_read (legacy name; this is the expected
+#   mutant-read count, -log(0.05) = 2.9957, corresponding to 95% detection)
 # - mean_reads_per_checked_site
 # - observed_mutant_fraction_over_informative_reads
 # - observed_mutant_fraction_over_total_reads
@@ -172,7 +177,18 @@ if (!options$ir_column %in% names(df)) {
   stop(sprintf("Column '%s' was not found in %s", options$ir_column, options$input))
 }
 
-informative_reads <- as_numeric_or_na(df[[options$ir_column]])
+informative_reads_raw <- df[[options$ir_column]]
+informative_reads <- as_numeric_or_na(informative_reads_raw)
+nonempty_informative_reads <- !is.na(informative_reads_raw) &
+  nzchar(trimws(as.character(informative_reads_raw)))
+if (any(nonempty_informative_reads & is.na(informative_reads))) {
+  stop(
+    sprintf(
+      "Column '%s' contains non-empty values that cannot be parsed as numeric.",
+      options$ir_column
+    )
+  )
+}
 sites_checked <- if ("sites_checked" %in% names(df)) as_numeric_or_na(df[["sites_checked"]]) else rep(NA_real_, nrow(df))
 reads_detected <- if ("reads_detected" %in% names(df)) as_numeric_or_na(df[["reads_detected"]]) else rep(NA_real_, nrow(df))
 total_reads <- if ("total_reads" %in% names(df)) as_numeric_or_na(df[["total_reads"]]) else rep(NA_real_, nrow(df))
@@ -192,7 +208,7 @@ df$observed_mutant_fraction_over_total_reads <- ifelse(!is.na(reads_detected) & 
 df$lod_interpretation <- if (identical(options$ir_column, "reads_checked")) {
   paste(
     "Theoretical Poisson LOD using MRDetect reads_checked as the informative-read denominator.",
-    "This is exact under the MRDetect read-based counting scheme when reads_checked is defined as the number of reads checked at tracked mutation sites."
+    "The value is calculated directly from reads_checked under an idealized independent Poisson sampling model; it is not an exact or clinically validated MRDetect LOD."
   )
 } else {
   sprintf("Theoretical Poisson LOD using %s as the informative-read denominator", options$ir_column)

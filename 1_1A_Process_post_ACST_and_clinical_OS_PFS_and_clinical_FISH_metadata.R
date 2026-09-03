@@ -13,16 +13,24 @@
 #      downstream clinical, concordance, and survival analyses.
 #
 #  Usage:
-#    1. Place this script in your project root.
+#    1. Run from the project root; the script itself remains in
+#       Scripts_2025/Final_Scripts/.
 #    2. Make sure the following source files exist (paths relative to project root):
 #         • Clinical data/SPORE/cfDNA project and clinical data just clinical dates treatment and progression.xlsx
 #         • M4_CMRG_Data/June update/M4_COHORT_STEM_CELL_TRANSPLANT.xlsx
 #         • Clinical data/IMMAGINE/IMG_request_20241009 (2).xlsx
 #         • Clinical data/IMMAGINE/Cleaned transplant dates just dates.xlsx
-#         • Clinical data/IMMAGINE/Extracted clinical MRD data.xlsx (sheet 1)
+#         • Clinical data/IMMAGINE/Extracted_clinical_MRD_data.xlsx (sheet 1)
 #         • Clinical data/IMMAGINE/Cleaned_Patient_Follow-Up_Table_IMMAGINE.csv
 #         • Clinical data/SPORE/SPORE_OS_info.xlsx
 #         • M4_CMRG_Data/M4_COHORT_DEMO.xlsx
+#         • combined_clinical_data_updated_April2025.csv (from 1_0)
+#         • Exported_data_tables_clinical/latest_dates_per_patient_updated.csv
+#           (from 1_0)
+#         • Exported_data_tables_clinical/Relapse_dates_full_updated.rds
+#           (from 1_0)
+#       If present, M4_CMRG_Data/March 2026/M4_COHORT_DEMO.csv supplements the
+#       historical M4 follow-up and vital-status workbook; it is optional.
 #
 #  Execution note:
 #   Rscript Scripts_2025/Final_Scripts/1_1A_Process_post_ACST_and_clinical_OS_PFS_and_clinical_FISH_metadata.R
@@ -53,6 +61,7 @@
 #   - Output_tables_2025/clinical_followup_support/relapse_flags_table.csv/rds
 #   - Output_tables_2025/clinical_followup_support/SPORE_Patient_Timeline_ClinicalInfo.csv
 #   - Output_tables_2025/clinical_followup_support/combined_clinical_MRD_OS_table_updated_May2025.csv/rds
+#   - Output_tables_2025/clinical_followup_support/m4_demo_march2026_os_followup_comparison.csv
 #   - Output_tables_2025/clinical_followup_support/plots/*.png
 #
 #  Author:        Dory Abelman
@@ -67,6 +76,18 @@
 #   by downstream scripts that generate Figure 1A, Table 1, clinical
 #   concordance panels, and survival/relapse analyses. Support-only review
 #   tables and QC plots are separated from active manuscript inputs.
+#
+# Reader roadmap and analysis units:
+#   1. Build patient/timepoint, treatment, progression, and FISH tables for
+#      SPORE.
+#   2. Parse M4 transplant records and IMMAGINE treatment/FISH records.
+#   3. Combine patient-transplant dates and calculate the first subsequent
+#      progression per transplant.
+#   4. Re-score IMMAGINE free-text FISH calls and export cohort helper tables.
+#   5. Integrate patient-level last-follow-up, vital status, and death dates for
+#      the OS/PFS support table.
+#   Timepoint/treatment/FISH tables may contain multiple records per patient;
+#   transplant-relapse outputs use one row per patient-transplant pair.
 #
 
 
@@ -340,6 +361,10 @@ fish <- core |>
   distinct()
 
 fish <- fish %>% filter(!is.na(fish_abnormalities))
+
+# Preserve the SPORE FISH table before the later IMMAGINE section reuses the
+# historical object name `fish`.
+spore_fish <- fish
 
 # ──────────────────────────────────────────────────────────────────────────────
 #  8.  Active SPORE tidy outputs ----------------------------------------------
@@ -709,7 +734,7 @@ dir.create(export_dir, showWarnings = FALSE, recursive = TRUE)
 write_csv(timepoints, file.path(export_dir, "SPORE_timepoints.csv"))
 write_csv(treat_long,  file.path(export_dir, "SPORE_treatments.csv"))
 write_csv(progression,  file.path(export_dir, "SPORE_progression.csv"))
-write_csv(fish,         file.path(export_dir, "SPORE_fish_flags.csv"))
+write_csv(spore_fish,   file.path(export_dir, "SPORE_fish_flags.csv"))
 
 # M4
 write_csv(df_clean,     file.path(export_dir, "M4_cohort_df_clean.csv"))

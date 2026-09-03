@@ -19,7 +19,7 @@
 #        length-weighted autosomal CNt-mode fallback when confints ploidy is
 #        unavailable; saves ploidy/purity audit tables
 #     3) Converts each segment to a **baseline-aware categorical call**
-#        (LOSS / GAIN / HLAMP; plus HOMD/HETD; optional CNLOH at baseline with B=0)
+#        (LOSS / GAIN / AMP / HLAMP; plus HOMD/HETD and CNLOH at baseline with B=0)
 #     4) Merges all samples on (chr, start, end) into `combined_seg_data`
 #     5) Maps segments to chromosomal **arms** (1p/1q, …) via cytobands using
 #        GRanges and assigns the arm with **maximum bp overlap**
@@ -53,13 +53,21 @@
 #     Supplementary Table 2, and downstream subclonal-evolution support.
 #
 # Inputs:
-#   • seg_dir   = directory with Sequenza segment files (e.g., “…/All_Segments_400/”)
-#   • cb_frame  = hg19/hg38 cytobands data.frame with columns: chr, start, end, band
-#                 (chr names like “chr1”, “chr2”, …; script harmonizes to 1..22,X,Y)
+#   • Scripts_2025/Final_Scripts/helpers.R
+#   • Oct 2024 data/Sequenza/All_Segments_400/*_segments.txt(.gz)
+#   • cytoband.txt = hg38 cytobands with columns chr, start, end, band, stain;
+#                     hg38 is required because the FISH probe coordinates are hg38
 #   • Oct 2024 data/Sequenza/All_confints_400/*_confints_CP.txt
 #   • combined_clinical_data_updated_April2025.csv
 #   • Clinical data/FISH probe locations.xlsx
-#   • cytoband.txt / cytoBand.txt-compatible cytoband reference
+#   • Optional Spring 2026 Sequenza_segments.tsv and
+#       Sequenza_ploidy_purity.tsv inputs under Data_Spring_2026_Revisions/
+#
+# Analysis units:
+#   The segment layer contains one genomic segment per row and one sample per
+#   call column. Final CNA, probe, and ploidy tables contain one row per sample.
+#   Arm/chromosome fractions are base-pair weighted against fixed hg38 lengths;
+#   they are not proportions of abnormal cells.
 #
 # Active downstream outputs (gamma = 400 run):
 #   • Jan2025_exported_data/cna_data_from_sequenza_400_updated.rds/.txt
@@ -67,7 +75,8 @@
 #   • Jan2025_exported_data/FISH_data_from_sequenza_400_updated.rds/.txt
 #       - consumed by 1_5_Integrate_WGS_Feature_Data.R
 #   • Jan2025_exported_data/Sample_ploidy_from_sequenza_400.rds
-#       - consumed by 2_3_Feature_Concordance_And_Mutation_Counts.R
+#       - chosen ploidy baseline/source joined to patient metadata; consumed by
+#         2_3_Feature_Concordance_And_Mutation_Counts.R
 #   • Jan2025_exported_data/Sample_ploidy_from_sequenza.txt
 #       - readable companion for the active ploidy RDS
 #
@@ -81,23 +90,28 @@
 #   • Console:  one-row tibble with cohort proportions for each feature
 #
 # Key parameters (tunable):
-#   • Arm binary threshold:        > 1/3 of arm length (per-arm override optional)
-#   • Hyperdiploid per-chr gain:   gain_thresh_chr = 0.65 (0.60–0.70 typical)
-#   • Hyperdiploid sample rule:    k_trisomies = 5 (≥ 4–5 common in MM)
+#   • Arm binary threshold:        > 1/3 of fixed hg38 arm length
+#   • Hyperdiploid per-chr gain:   gain_thresh_chr = 0.65
+#   • Hyperdiploid sample rule:    k_trisomies = 5 of 8 chromosomes
 #
 # Assumptions & notes:
 #   • Calls are **baseline-aware** per sample (neutral ≈ round(ploidy)).
-#     Use `gain_labels = {GAIN, HLAMP}`; `loss_labels = {LOSS, HETD, HOMD}`.
+#     Arm/probe binning uses `gain_labels = {GAIN, AMP, HLAMP}` and
+#     `loss_labels = {LOSS, HETD, HOMD, CNLOH}`.
 #   • Denominators are **fixed** (full arm/chrom lengths) to avoid NA inflation.
+#     The current arm and chromosome joins replace a wholly missing proportion
+#     with 0, so an unevaluable arm/chromosome is represented as not altered.
+#   • At FISH probes, an unavailable categorical call remains NA but `%in%`
+#     converts the corresponding binary alteration indicator to 0.
 #   • Genome build of `cb_frame` must match BAM/Sequenza build.
-#   • Recommended Sequenza segmentation for MM: γ ≈ 300–500; this run uses γ=400.
+#   • This run uses Sequenza gamma = 400, encoded in its input/output paths.
 #
 # Dependencies:
 #   library(tidyverse)  # dplyr, tidyr, readr, purrr
-#   library(GenomicRanges)
+#   library(GenomicRanges); library(IRanges); library(S4Vectors); library(readxl)
 #
 # Usage:
-#   source("1_4A_Process_sequenza_CNA_Data.R")
+#   source("Scripts_2025/Final_Scripts/1_4A_Process_sequenza_CNA_Data.R")
 #   # Produces: combined_seg_data, sample_ploidy, results, cna_data, and exports
 #
 # Author: Dory Abelman
@@ -188,7 +202,9 @@ call_from_CNt_AB <- function(CNt, A, B) {
   )
 }
 
-# per-sample baseline ploidy-aware caller
+# Reference helper for a simplified baseline-aware caller. The executed segment
+# loops below use their own inline case_when(), which additionally distinguishes
+# AMP from GAIN; this function is currently not called.
 call_from_CNt_baseline <- function(CNt, A, B, baseline) {
   case_when(
     is.na(CNt)               ~ NA_character_,
@@ -236,7 +252,9 @@ if (length(confints) == 0L) {
   stop("No *_confints_CP.txt files found in: ", confints_dir)
 }
 
-# Safe reader: grab the 2nd row if present; return NA otherwise
+# Sequenza confints tables contain lower, central, and upper candidate solutions;
+# row 2 is the central estimate used here. Files with fewer than two data rows
+# cannot supply that estimate and remain explicitly missing.
 read_pp_safe <- function(path) {
   df <- suppressMessages(read_tsv(path, show_col_types = FALSE, progress = FALSE))
   if (nrow(df) < 2L) {
@@ -256,7 +274,7 @@ read_pp_safe <- function(path) {
     str_replace("^cellularity$", "cellularity") |>
     str_replace("^ploidy\\.estimate$", "ploidy.estimate")
   names(df) <- nm
-  
+
   row2 <- df |> dplyr::slice(2)
   
   # Extract clean sample ID from filename
@@ -1112,9 +1130,9 @@ for (i in seq_len(nrow(myeloma_arms_df))) {
 # ---- Hyperdiploidy: length-weighted full-gain on 3,5,7,9,11,15,19,21
 hyperdiploid_chrs <- c("3","5","7","9","11","15","19","21")
 
-# Adjustable for caller 
-gain_thresh_chr <- 0.65   # was 0.80. 0.60–0.70 is typical for "whole chr gain"
-k_trisomies     <- 5      # call hyperdiploid if at least k of 5 are gained
+# Implemented hyperdiploidy parameters.
+gain_thresh_chr <- 0.65   # chromosome is gained when >65% of its fixed length is gained
+k_trisomies     <- 5      # hyperdiploid when at least 5 of the 8 chromosomes are gained
 
 # compute PropGained per chr
 gain_prop_tbl <- purrr::map_dfr(hyperdiploid_chrs, function(chr_value){

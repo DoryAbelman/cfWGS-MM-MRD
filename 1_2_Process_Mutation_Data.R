@@ -25,14 +25,38 @@
 #     8. Generate support-only VAF density-ridge plots and read-depth histograms
 #        for mutation-calling QC. These plots are not final manuscript panels.
 #
+# Analysis unit:
+#   One called variant per tumour sample. Patient and timepoint annotations are
+#   joined afterward; downstream summaries may aggregate variants by sample or
+#   patient, but this script does not collapse the variant-level rows.
+#   This script computes and plots read depth but does not impose a `t_depth`
+#   mutation filter. Any minimum-depth eligibility rule is applied explicitly
+#   by the downstream analysis that owns that rule.
+#
 # Inputs:
-#   • maf_directory: path to “*.maf” BM and PB directories
+#   • Scripts_2025/Final_Scripts/helpers.R
+#   • BM MAF directory: set `CFWGS_BM_MAF_DIR`, or stage files in one of the
+#     candidate project directories resolved below.
+#   • Blood/cfDNA MAF directory: set `CFWGS_BLOOD_MAF_DIR`, or stage files in
+#     one of the candidate project directories resolved below.
 #   • combined_clinical_data_updated_April2025.csv
+#   • Preserved recovery snapshots:
+#       combined_maf_bm_dx_original.rds
+#       combined_maf_blood_all_muts.rds
+#   • Optional Spring 2026 revision metadata and MAFs under
+#       Data_Spring_2026_Revisions/; helpers.R appends these when present.
 #
 # Outputs:
 #   • RDS: combined_maf_bm_all_muts.rds
+#       Includes all currently staged BM MAFs plus the historical diagnosis/
+#       baseline/relapse snapshot; it cannot recover historical non-disease-
+#       defining BM timepoints that are absent from both sources.
 #   • RDS: combined_maf_bm_dx.rds
 #   • RDS: combined_maf_blood_all_muts_updated.rds
+#   • Temporary downstream MAF inputs:
+#       combined_maf_temp_bm_Jan2025.maf
+#       combined_maf_temp_blood_Jan2025.maf
+#   • Recovery audits: Output_tables_2025/mutation_recovery_qc_*.csv
 #   • Support-only QC figures:
 #       Final Tables and Figures/mutation_processing_support/
 #
@@ -53,14 +77,16 @@
 #   library(scales)
 #   library(stringr)
 #   library(purrr)
-#   library(ComplexHeatmap)  # if downstream heatmaps are created
-#   library(circlize)        # if downstream heatmaps are created
 #
 # Usage:
 #   Rscript Scripts_2025/Final_Scripts/1_2_Process_Mutation_Data.R
 #
-# How to run:
-#   Rscript Scripts_2025/Final_Scripts/1_2_Process_Mutation_Data.R
+# Failure behaviour:
+#   The script stops if no BM/blood MAFs or required recovery snapshots are
+#   found. Unmatched metadata barcodes are printed for review but do not
+#   currently stop execution; resolve them before downstream analyses.
+#   The current implementation requires both recovery snapshots even when a
+#   complete raw MAF directory has been staged.
 #
 # Author: Dory Abelman
 # Date:   2025-05-26
@@ -453,9 +479,10 @@ combined_maf <- combined_maf %>%
 # conflict because metada_df_mutation_comparison also carries a Bam column.
 combined_maf <- left_join(combined_maf %>% select(-Bam), metada_df_mutation_comparison, by = "Tumor_Sample_Barcode")
 
-# Preserve the fully annotated BM mutation table before filtering. The object is
-# saved below as combined_maf_bm_all_muts.rds and is useful when downstream
-# analyses need all BM timepoints, not only diagnosis/baseline/relapse.
+# Preserve the fully annotated currently staged BM mutation table before
+# filtering. The recovery merge below adds the historical diagnosis/baseline/
+# relapse/progression snapshot. It does not reconstruct historical maintenance
+# or other non-disease-defining timepoints that are absent from the staged MAFs.
 combined_maf_bm_all_muts <- combined_maf
 
 
@@ -857,25 +884,32 @@ rm(blood_dx_maf)
 rm(vaf_plot)
 
 
-# Write combined_maf to a temporary MAF file 
+# Write the post-QC in-memory objects to temporary MAF files. These are active
+# inputs to 1_5_Integrate_WGS_Feature_Data.R, but they are not exact copies of
+# the RDS files saved above: the intervening QC section restricts BM rows to
+# Diagnosis/Baseline/Progression and blood rows to plasma samples at
+# Diagnosis/Baseline/Progression/Relapse. Preserve this distinction when
+# interpreting or regenerating downstream mutation features.
 write.table(as.data.frame(combined_maf_blood), "combined_maf_temp_blood_Jan2025.maf", sep = "\t", quote = FALSE, row.names = FALSE)
 write.table(as.data.frame(combined_maf_bm_dx), "combined_maf_temp_bm_Jan2025.maf", sep = "\t", quote = FALSE, row.names = FALSE)
 #write.table(as.data.frame(combined_maf_bm_dx), "combined_maf_temp_bm_May2025.maf", sep = "\t", quote = FALSE, row.names = FALSE)
 
 
-#### Below here is optional
+#### Build maftools objects used by later scripts
 
 # Read the MAF file using read.maf
 # maftools::read.maf() requires a standard MAF on disk; the round-trip via
 # write.table() above serialises the annotated combined_maf_blood/bm_dx to the
 # correct tab-separated format.  maf_object_* enables maftools visualisation
-# functions (oncoplot, mafSummary, etc.) used in script 2_2_ and optional
-# downstream plots. subsetMaf() below draws on maf_object_bm to extract only
-# variants in myeloma_genes for heatmap construction.
+# functions (oncoplot, mafSummary, etc.) used in script 2_2_. This block executes
+# during a normal run; it is not optional unless the script is deliberately
+# refactored. subsetMaf() below extracts myeloma_genes for heatmap construction.
 maf_object_blood <- read.maf(maf = "combined_maf_temp_blood_Jan2025.maf")
 maf_object_bm <- read.maf(maf = "combined_maf_temp_bm_Jan2025.maf")
 
-#### Transform for heatmaps (optional, redone in heatmap script)
+#### Prepare an in-memory heatmap matrix (supporting transformation)
+# The matrix is not written by this script and is rebuilt in the heatmap script;
+# the canonical mutation RDS files were already saved before this support block.
 maf_subset <- subsetMaf(maf = maf_object_bm, genes = myeloma_genes, includeSyn = FALSE)
 mutation_data <- maf_subset@data %>%
   select(Tumor_Sample_Barcode, Hugo_Symbol, Variant_Classification) %>%

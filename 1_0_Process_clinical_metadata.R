@@ -27,12 +27,32 @@
 #   `Output_tables_2025/clinical_metadata_support/` so they are not confused
 #   with manuscript figure/table outputs.
 #
+# Reader orientation:
+#   The primary working unit is one sequenced or inventoried sample nested
+#   within a patient. Patient-level progression, censoring, baseline, and
+#   follow-up tables are derived later in the script. The major phases are:
+#   source ingestion; sample/timepoint harmonization; curated corrections;
+#   progression and follow-up integration; PFS endpoint construction; final
+#   sample-level relapse annotation; and availability/QC exports.
+#
+# Primary downstream authorities:
+#   - combined_clinical_data_updated_April2025.csv: sample-level clinical table.
+#   - Exported_data_tables_clinical/Censor_dates_per_patient_for_PFS_updated.rds:
+#     current patient-level baseline/event/censor table.
+#   - Exported_data_tables_clinical/Relapse_dates_full_updated.rds: retained
+#     inventory of distinct progression dates, including later events.
+#   - Exported_data_tables_clinical/patient_followup_dates_updated.rds:
+#     patient-level last-known follow-up for prospective evaluability windows.
+#   Earlier similarly named files are intermediate or compatibility exports;
+#   comments beside each write identify their role.
+#
 #  Author:        Dory Abelman
 #  Last updated:  2025-06-06
 #
 #  Notes:
 #    • All file paths are assumed relative to your project root.
-#    • Before running, ensure these inputs exist under “Clinical data” and “M4_CMRG_Data” directories:
+#    • Before running, ensure these inputs exist at the project-relative paths
+#      used below:
 #         – cfWGS_MS_Integrated_Metadata.xlsx
 #         – SPORE: Spore_bams_with_collected_dates.txt,
 #                  Extracted_clinical_data_cfDNA_project.xlsx,
@@ -44,14 +64,22 @@
 #               Relapse_dates.xlsx,
 #               M4 Status and best response update Dec 2 24 just dates.xlsx,
 #               M4_COHORT_DEMO.xlsx,
-#               M4_COHORT_CHEMOTHERAPY.xlsx,
-#               TFRIM4_Processing Log_Nov2024.xlsx
+#               M4_COHORT_DIAGNOSTIC_BIOPSY.xlsx,
+#               M4_COHORT_CHEMOTHERAPY.xlsx
+#         – Root-level processing log: TFRIM4_Processing Log_Nov2024.xlsx
 #         – IMMAGINE: IMG_request_20241009 (2).xlsx,
 #                     Cleaned transplant dates just dates.xlsx,
 #                     Extracted_clinical_MRD_data.xlsx,
 #                     Cleaned_Patient_Follow-Up_Table_IMMAGINE.csv,
 #                     Additional_relapse_dates_IMG_from_Esther.xlsx,
 #                     NAs in timepoint info - IMMAGINE additional timepoint info.csv
+#         – Curated project inputs: cohort_assignment_table_updated.rds and
+#                   Clinical data/manual_clinical_metadata_overrides.csv
+#         – Optional endpoint refreshes, used only when present:
+#                   M4_CMRG_Data/March 2026/M4_COHORT_CHEMOTHERAPY.csv,
+#                   M4_CMRG_Data/March 2026/M4_COHORT_DEMO.csv, and
+#                   New OICR Submissions/derived_metadata/
+#                     oicr_revision_repo_style_metadata.csv
 #
 #    • Outputs:
 #         – “combined_clinical_data_updated_April2025.csv” (master metadata table)
@@ -59,7 +87,9 @@
 #         – Support/QC summaries and BAM review lists under
 #           “Output_tables_2025/clinical_metadata_support”
 #
-#   *This script is intended to be a one‐shot cleanup for downstream analysis.*
+#   This is a controlled upstream rebuild. Review source versions, manual
+#   override tables, and endpoint audit outputs before refreshing downstream
+#   manuscript analyses.
 # ──────────────────────────────────────────────────────────────────────────────
 # Pipeline status:
 #   Active upstream dependency. This script does not directly create a named
@@ -1010,6 +1040,11 @@ spore_progression <- combined_spore_timepoint_info %>%
 # Step 1: Modify spore_OS_info
 tmp <- spore_OS_info %>%
   mutate(
+# Legacy fallback retained from the historical workflow: a deceased patient's
+# status-last-follow-up date is appended as a candidate progression date. This
+# is not an independently adjudicated progression event. Readers interpreting
+# PFS should review this source alongside the later curated endpoint layers and
+# patient-level endpoint audit outputs.
     timepoint_info = ifelse(`Current status` == "Deceased", "Progression", NA),
     Progression_date = `Status last follow up`
   ) %>%
@@ -1220,7 +1255,9 @@ Time_to_relapse2 <- test %>%
   ) %>%
   group_by(Patient, Date_of_sample_collection) %>%
   mutate(
-    # Calculate non-absolute days to relapse only for valid dates
+    # Historical sign convention: future progression is stored as
+    # sample_date - progression_date and is therefore negative. The primary
+    # Num_days_to_closest_relapse value exported below uses its absolute value.
     days_to_relapse_non_absolute = case_when(
       Progression_date > Date_of_sample_collection ~ as.numeric(Date_of_sample_collection - Progression_date), 
       Progression_date <= Date_of_sample_collection & Progression_date >= Date_of_sample_collection - 35 ~ 0,
@@ -1790,7 +1827,8 @@ more_recent_in_demo <- M4_DEMO %>%
   left_join(other_dates, by = "Patient") %>%
   filter(!is.na(latest_other_date), Date > latest_other_date)
 
-# View result
+# Print patients whose demographic-table follow-up is later than all other M4
+# date sources. This is console QC; no endpoint is changed in this statement.
 more_recent_in_demo
 
 
@@ -2625,8 +2663,9 @@ cat("Number of patients with baseline cfDNA samples:", num_baseline_patients, "\
 cat("Number of patients with monitoring cfDNA samples:", num_monitoring_patients, "\n")
 cat("Number of patients with both baseline and monitoring cfDNA samples:", num_patients_with_both, "\n")
 
-# Should I also keep only ones that were high in baseline to begin with? 
-# I think best to keep ones with both 
+# Availability summary only: retain patients with both baseline and monitoring
+# cfDNA regardless of baseline signal. Evidence-of-disease filtering belongs in
+# downstream scientific analyses, not in this clinical inventory step.
 
 # Number of cfDNA samples for patients with both baseline and monitoring cfDNA types
 num_samples_with_both <- combined_clinical_data_updated %>%
@@ -2792,4 +2831,5 @@ write_csv(
 )
 
 
-### Now edit the baseline dates to second draw to account for this in BM and re-check against processing log
+# This block is audit-only: baseline mismatches are exported for manual review.
+# It does not automatically replace an official baseline date with a second draw.

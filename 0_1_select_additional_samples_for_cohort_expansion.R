@@ -26,6 +26,21 @@
 #   because no final manuscript panel or table is currently mapped to this
 #   script.
 #
+# Required inputs:
+#   - IMMAGINE/LIBERATE study-name to patient-ID mapping workbook.
+#   - Sample-inventory workbook; the first two worksheets are treated as the
+#     inventory sources and combined.
+#   - Clinical workbook containing diagnosis, sample, MRD, and treatment-line
+#     worksheets.
+#
+# Analysis unit and classification rules:
+#   The working unit is a sample collection nested within a patient. Baseline is
+#   defined as collection within +/-30 days of diagnosis. MRD is defined as
+#   collection within +/-14 days of the nearest recorded bone-marrow MRD date.
+#   Classification precedence is Baseline, then MRD, then Treatment, then Other.
+#   Eligible-patient exports retain all available samples from patients meeting
+#   the baseline-plus-MRD criterion, rather than only the qualifying pair.
+#
 # Outputs:
 #   Primary cohort-expansion review tables:
 #   - Output_tables_2025/cohort_expansion/eligible_samples_ANY_MRD.csv
@@ -39,6 +54,11 @@
 #   - Output_tables_2025/cohort_expansion/support_qc/patient_sample_summary.csv
 #   - Output_tables_2025/cohort_expansion/support_qc/removed_duplicate_samples.csv
 #   - Output_tables_2025/cohort_expansion/support_qc/blood_MRD_patient_analysis.csv
+#
+# Expected failure conditions:
+#   The script stops when a required workbook is absent. Unmatched inventory
+#   labels and duplicate sample records are exported for review; they are not
+#   silently treated as eligible cases.
 #
 # Author: Dory Abelman
 # Date: 2026-02-05
@@ -94,11 +114,13 @@ if (!file.exists(sample_inventory_file)) {
   stop("ERROR: Sample inventory file not found at: ", sample_inventory_file)
 }
 
-# Get sheet names and load both sheets
+# Get sheet names and load the first two inventory sheets. The workbook layout
+# is therefore an explicit input assumption and should be reviewed if the
+# source workbook changes.
 sheet_names <- excel_sheets(sample_inventory_file)
 cat("✓ Found", length(sheet_names), "sheets in sample inventory:", paste(sheet_names, collapse = ", "), "\n")
 
-# Load both sheets
+# Load the first two sheets
 sheet1 <- read_excel(sample_inventory_file, sheet = sheet_names[1]) %>%
   mutate(source_sheet = sheet_names[1])
 

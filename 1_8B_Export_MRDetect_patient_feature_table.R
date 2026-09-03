@@ -1,15 +1,25 @@
 # =============================================================================
-# Export combined MRDetect patient feature table
+# 1_8B_Export_MRDetect_patient_feature_table.R
 # Project: cfWGS MRDetect
 #
 # Purpose:
 #   Create a non-destructive, analysis-ready table of matched-patient MRDetect
 #   values using both tumor/BM-derived mutations and cfDNA-derived mutations as
-#   the patient-specific baseline mutation source.
+#   the patient-specific baseline/diagnosis mutation source.
+#
+# Unit of analysis:
+#   One row is one queried cfDNA sample evaluated against one matched-patient
+#   baseline/diagnosis mutation-list VCF and one mutation-source compartment.
+#
+# Interpretation boundary:
+#   This is a retrospective feature export. Mutation-source and queried-sample
+#   dates are retained so temporal ordering can be audited; it is not itself a
+#   prospective-validation table.
 #
 # Input:
 #   MRDetect_output_winter_2025/Processed_R_outputs/
 #     cfWGS_Winter2025All_MRDetect_with_Zscore_Sep2025.rds
+#   Output_tables_2025/clinical_support/cfwgs_sample_identity_map.csv
 #
 # Output:
 #   MRDetect_output_winter_2025/Processed_R_outputs/Derived_exports/
@@ -106,16 +116,21 @@ if (nrow(duplicate_clinical_sample_dates) > 0L) {
 }
 
 required_cols <- c(
-  "Patient", "Patient_Bam", "Sample_ID", "Sample_ID_Bam", "BAM", "VCF",
+  "Study", "Patient", "Patient_Bam", "Sample_ID", "Sample_ID_Bam", "BAM", "VCF",
   "VCF_clean", "Sample_type", "Sample_type_Bam", "timepoint_info",
   "timepoint_info_Bam", "Mut_source", "Filter_source", "plotting_type",
+  "Date_of_sample_collection",
   "sites_checked", "reads_checked", "sites_detected", "reads_detected",
   "total_reads", "detection_rate",
   "detection_rate_as_reads_detected_over_reads_checked",
   "detection_rate_as_reads_detected_over_total_reads",
   "sites_detection_rate", "detection_rate_zscore_charm",
   "detection_rate_zscore_reads_checked_charm",
-  "detection_rate_zscore_total_reads_charm", "sites_rate_zscore_charm"
+  "detection_rate_zscore_total_reads_charm", "sites_rate_zscore_charm",
+  "mean_det_charm", "sd_det_charm", "mean_det_checked_charm",
+  "sd_det_checked_charm", "mean_det_total_charm", "sd_det_total_charm",
+  "mean_sites_charm", "sd_sites_charm", "Relapsed",
+  "Num_days_to_closest_relapse"
 )
 
 missing_cols <- setdiff(required_cols, names(mrdetect))
@@ -145,6 +160,37 @@ patient_feature_candidates <- mrdetect %>%
     clinical_sample_dates,
     by = c("Patient", "sample_id_tested")
   )
+
+# The public-facing table is explicitly a baseline/diagnosis mutation-source
+# export. Preserve excluded later-source rows in an audit rather than silently
+# including maintenance, relapse, or progression mutation lists.
+nonbaseline_mutation_source_rows <- patient_feature_candidates %>%
+  filter(is.na(.data$timepoint_info) |
+           !.data$timepoint_info %in% c("Baseline", "Diagnosis")) %>%
+  transmute(
+    Study,
+    Patient,
+    mutation_source_sample_id = Sample_ID,
+    mutation_source_timepoint = timepoint_info,
+    mutation_source_date,
+    sample_id_tested,
+    timepoint_tested = timepoint_info_Bam,
+    tested_sample_date,
+    Mut_source,
+    VCF,
+    exclusion_reason = "mutation source is not labelled Baseline or Diagnosis"
+  ) %>%
+  distinct() %>%
+  arrange(Patient, mutation_source_date, tested_sample_date)
+
+write_csv(
+  nonbaseline_mutation_source_rows,
+  file.path(output_dir, "MRDetect_excluded_nonbaseline_mutation_sources.csv"),
+  na = ""
+)
+
+patient_feature_candidates <- patient_feature_candidates %>%
+  filter(.data$timepoint_info %in% c("Baseline", "Diagnosis"))
 
 temporally_invalid_pairs <- patient_feature_candidates %>%
   filter(

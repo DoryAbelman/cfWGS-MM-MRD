@@ -5,12 +5,12 @@
 #   Rscript Scripts_2025/Final_Scripts/1_8A_Process_Cumulative_VAFs_for_dilution_series.R
 #
 # Manuscript outputs created/updated:
-#   - None directly. This upstream script processes MRDetect outputs for
-#     dilution-series samples used by 3_1_part2 limit-of-detection analyses.
+#   - None directly. Its z-scored output is consumed by 3_1_part2 for Figure 3C,
+#     Extended Data Figures 5D and 7D, and Supplementary Table 7.
 #
 # Author:   Dory Abelman
 # Date:     January 2025
-# Last Updated: May 2025
+# Last Updated: September 2026
 #
 # Purpose:
 #   Identical MRDetect processing pipeline to 1_8_Process_Cumulative_VAFs_MRDetect.R
@@ -20,22 +20,34 @@
 #   controls, and exports processed tables for use in the LOD (limit-of-detection)
 #   analysis (script 3_1_part2).
 #
+# Unit of analysis:
+#   One row is one dilution-series queried BAM evaluated against one personalized
+#   mutation-list VCF under one mutation-source/filter-source combination.
+#
 # Dependencies:
 #   • readr, data.table, tidyverse (dplyr, tidyr, stringr), openxlsx
 #   • ggplot2, ggbreak, patchwork, scales, conflicted
 #
-# Input Files:
+# Principal input files:
 #   • MRDetect_output_winter_2025/MRDetect_outputs/Dilution_series/*.csv
-#   • combined_clinical_data_updated_April2025.csv
+#   • Spring 2026 revision dilution, combined, and X Plus control MRDetect files
+#     returned by spring2026_revision_files()
+#   • combined_clinical_data_updated_April2025.csv plus revision metadata
+#   • Fragmentomics_data/Dilution_series/Metadata_dilution_series.csv plus
+#     Spring 2026 PWGVAL and physical-zero dilution metadata
+#   • MRDetect_output_winter_2025/Processed_R_outputs/
+#     cfWGS_Winter2025All_MRDetect_May2025.rds (preserved 26-control reference)
 #
 # Output Directory (created if necessary):
 #   • MRDetect_output_winter_2025/Processed_R_outputs/
 #   • Writes:
-#       - cfWGS_Winter2025Dilution_series_May2025.rds
-#       - cfWGS_Winter2025Dilution_series_May2025_with_zscore.rds
+#       - cfWGS_Winter2025Dilution_series_May2025.txt/.rds
+#       - cfWGS_Winter2025Dilution_series_May2025_with_zscore.txt/.rds
+#       - spring2026_* dilution availability, mutation-list, and healthy-reference
+#         audit CSVs
 #
 # Usage:
-#   Rscript 1_8A_Process_Cumulative_VAFs_for_dilution_series.R
+#   Run from the project root with the command shown above.
 # =============================================================================
 # Pipeline status:
 #   Active upstream dependency. This script does not directly create a named
@@ -543,6 +555,46 @@ if (isTRUE(apply_mrdetect_parser_column_correction)) {
   rm(temp_sites, temp_reads, temp_total)
 }
 
+# Validate the corrected count meanings and the rate columns before any
+# normalization. These checks stop incompatible future parser output; they do
+# not modify the current dilution measurements.
+mrdetect_rate_cols <- c(
+  "sites_checked", "reads_checked", "sites_detected", "reads_detected",
+  "total_reads", "detection_rate",
+  "detection_rate_as_reads_detected_over_reads_checked",
+  "detection_rate_as_reads_detected_over_total_reads", "sites_detection_rate"
+)
+if (any(!vapply(all_files[mrdetect_rate_cols], is.numeric, logical(1)))) {
+  stop("MRDetect count and rate columns must all be numeric.", call. = FALSE)
+}
+if (any(!is.finite(as.matrix(all_files[mrdetect_rate_cols]))) ||
+    any(as.matrix(all_files[mrdetect_rate_cols]) < 0)) {
+  stop("MRDetect count and rate columns must be finite and non-negative.", call. = FALSE)
+}
+if (any(all_files$sites_checked == 0 | all_files$reads_checked == 0 |
+        all_files$total_reads == 0)) {
+  stop("MRDetect rate denominators must be greater than zero.", call. = FALSE)
+}
+if (any(
+  all_files$sites_detected > all_files$sites_checked |
+    all_files$reads_detected > all_files$reads_checked |
+    all_files$reads_checked > all_files$total_reads
+)) {
+  stop("MRDetect counts violate their denominator constraints.", call. = FALSE)
+}
+mrdetect_rate_tolerance <- 1e-10
+if (any(
+  abs(all_files$detection_rate - all_files$sites_detected / all_files$reads_checked) > mrdetect_rate_tolerance |
+    abs(all_files$detection_rate_as_reads_detected_over_reads_checked -
+          all_files$reads_detected / all_files$reads_checked) > mrdetect_rate_tolerance |
+    abs(all_files$detection_rate_as_reads_detected_over_total_reads -
+          all_files$reads_detected / all_files$total_reads) > mrdetect_rate_tolerance |
+    abs(all_files$sites_detection_rate - all_files$sites_detected / all_files$sites_checked) > mrdetect_rate_tolerance
+)) {
+  stop("MRDetect stored rates do not agree with their corrected count columns.", call. = FALSE)
+}
+rm(mrdetect_rate_cols, mrdetect_rate_tolerance)
+
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -667,6 +719,13 @@ if (!is.null(xplus_zero_metadata_for_mrdetect)) {
     xplus_zero_metadata_for_mrdetect[, shared_cols, drop = FALSE]
   ) %>%
     distinct(.data$BAM, .keep_all = TRUE)
+}
+
+if (anyNA(bam_info$BAM) || any(!nzchar(bam_info$BAM))) {
+  stop("Every dilution metadata row must have a non-empty BAM key.", call. = FALSE)
+}
+if (anyDuplicated(bam_info$BAM)) {
+  stop("Dilution metadata must contain exactly one row per BAM key.", call. = FALSE)
 }
 
 # 3. Join back into the main Merged_MRDetect_dilution table
@@ -842,6 +901,60 @@ readr::write_csv(
   xplus_control_coverage_audit,
   file.path(outdir, "spring2026_dilution_mrdetect_xplus_control_coverage_audit.csv")
 )
+
+# Every M4 dilution row must use the complete platform-specific reference panel:
+# 26 historical CHARM libraries or the exact X Plus allowlist. A partial panel
+# would change z-scores and therefore downstream model probabilities.
+required_dilution_reference_groups <- Merged_MRDetect_dilution_joined %>%
+  filter(.data$Study == "M4") %>%
+  distinct(
+    .data$VCF_factor,
+    .data$Mut_source,
+    .data$Filter_source,
+    .data$healthy_reference_requested
+  )
+
+healthy_reference_bam_counts <- healthy_reference_candidates %>%
+  group_by(
+    .data$VCF_factor,
+    .data$Mut_source,
+    .data$Filter_source,
+    .data$healthy_reference_tier
+  ) %>%
+  summarise(n_healthy_reference_bams = n_distinct(.data$BAM), .groups = "drop")
+
+dilution_reference_completeness <- required_dilution_reference_groups %>%
+  left_join(
+    healthy_reference_bam_counts,
+    by = c(
+      "VCF_factor",
+      "Mut_source",
+      "Filter_source",
+      "healthy_reference_requested" = "healthy_reference_tier"
+    )
+  ) %>%
+  mutate(
+    expected_healthy_reference_bams = if_else(
+      .data$healthy_reference_requested == "XPLUS_CHARM_healthy",
+      length(xplus_mrdetect_reference_bams()),
+      26L
+    ),
+    reference_complete =
+      .data$n_healthy_reference_bams == .data$expected_healthy_reference_bams
+  )
+
+readr::write_csv(
+  dilution_reference_completeness,
+  file.path(outdir, "dilution_mrdetect_reference_completeness_audit.csv")
+)
+if (any(is.na(dilution_reference_completeness$reference_complete)) ||
+    any(!dilution_reference_completeness$reference_complete)) {
+  stop(
+    "At least one M4 dilution group lacks its complete platform-specific healthy-control reference panel.",
+    call. = FALSE
+  )
+}
+rm(required_dilution_reference_groups, healthy_reference_bam_counts)
 
 missing_xplus_reference <- healthy_reference_choice %>%
   filter(

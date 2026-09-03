@@ -35,11 +35,23 @@
 #   Rscript Scripts_2025/Final_Scripts/1_4_Process_CNA_Data.R
 #
 # Inputs:
+#   • Scripts_2025/Final_Scripts/helpers.R
 #   • seg_dir          = "Oct 2024 data/Ichor_CNA"          # ichorCNA *.seg files
-#   • cb_frame         = data frame of hg38 cytobands
+#   • Output_tables_2025/ichor_cna_processing_support/
+#       Oct_2024_combined_corrected_calls.rds                 # fallback cache
 #   • combined_clinical_data_updated_April2025.csv
+#     This table is currently loaded to construct metadata sample keys, but
+#     those keys are not subsequently joined into the exported CNA tables.
 #   • Clinical data/FISH probe locations.xlsx
-#   • cytoband.txt
+#   • cytoband.txt      = UCSC-style hg38 cytoband reference
+#   • Optional Spring 2026 ichorCNA SEG files and metadata under
+#       Data_Spring_2026_Revisions/
+#
+# Analysis units:
+#   The raw/cache layer contains one genomic segment per row and one sample per
+#   call column. Final feature tables contain one row per sample. Arm and whole-
+#   chromosome proportions are fractions of evaluated ichorCNA segments; they
+#   are not fractions of genomic base pairs or abnormal cells.
 #
 # Active downstream outputs:
 #   • Jan2025_exported_data/FISH_probe_calls_bin_cytoband_ichorCNA.rds
@@ -52,25 +64,32 @@
 #   • Output_tables_2025/ichor_cna_processing_support/Oct_2024_combined_corrected_calls.csv
 #   • Output_tables_2025/ichor_cna_processing_support/cna_data_compact_backup.txt
 #   • Output_tables_2025/ichor_cna_processing_support/cna_data_hyperdiploid_chromosome_qc.txt
+#   • Output_tables_2025/ichor_cna_processing_support/cna_arm_call_qc.tsv
 #   • R object: myeloma_CNA_matrix_with_HRD (binary arm-level matrix)
 #
 # Key assumptions and audit notes:
-#   • Arm-level del/gain calls use >1/3 of segments altered for del1p, amp1q,
+#   • Arm-level del/gain calls use >1/3 of evaluated segments altered for del1p, amp1q,
 #     del13q, and del17p.
 #   • Hyperdiploidy uses >65% gained segments per canonical chromosome and
 #     calls a sample hyperdiploid when >=5/8 canonical chromosomes are gained.
 #   • FISH-probe calls use cytoband-derived probe windows with +/-150 kb padding
 #     and a nearest-segment fallback up to 10 Mb when no segment overlaps.
+#     Only loci present in the workbook are exported; the current workbook has
+#     1p, 1q, and 17p probes, while del13q is available only in the arm-level
+#     CNA table.
+#   • Arm-level calls preserve samples with no evaluated segments as NA. In
+#     contrast, the current probe-level `%in%` binning and hyperdiploidy logic
+#     treat missing segment calls as not altered/not gained (binary 0).
 #   • These thresholds are manuscript logic. Do not change them without
 #     explicit scientific review.
 #
 # Dependencies:
 #   library(tidyverse); library(purrr)
-#   library(GenomicRanges)
+#   library(GenomicRanges); library(IRanges); library(S4Vectors); library(readxl)
 #
 # Usage:
-#   source("1_4_Process_CNA_Data.R")
-#   # creates combined_seg_data and myeloma_CNA_matrix_with_HRD in working dir
+#   source("Scripts_2025/Final_Scripts/1_4_Process_CNA_Data.R")
+#   # creates combined_seg_data and myeloma_CNA_matrix_with_HRD in memory
 #
 # Manuscript outputs created/updated:
 #   - None directly. This upstream script processes ichorCNA CNA calls for WGS
@@ -244,9 +263,9 @@ if (length(seg_files) > 0L) {
   })
   
   # A full_join retains every unique genomic segment present in any sample.
-  # Samples without a segment receive NA for that genomic interval; downstream
-  # binary summaries treat those values as unaltered for the specific feature
-  # being summarized.
+  # Samples without an exactly matching segment receive NA for that genomic
+  # interval. Arm-level summaries preserve those NAs; the probe-level and
+  # hyperdiploidy sections below currently convert them to binary 0.
   combined_seg_data <- purrr::reduce(seg_data_list, full_join, by = c("chr", "start", "end"))
   
   ## Add the arm info to the directory
@@ -377,7 +396,8 @@ cytoband_txt       <- "cytoband.txt"  # fallback if cb_frame_rds is NULL
 # max_nearest_bp: ichorCNA may leave gaps (e.g. centromere, low-mappability
 #   regions). If no segment overlaps a FISH probe window, the nearest
 #   segment within 10 Mb is used as a fallback; beyond that distance the
-#   probe is left uncalled (NA).
+#   raw probe_call is left uncalled (NA). Under the implemented `%in%` binning
+#   below, however, its binary is_altered_at_probe flag becomes 0.
 pad_bp  <- 150000L  # ±150 kb padding around band windows
 min_bp  <- 1000L    # require >= 1 kb overlap to count
 max_nearest_bp  <- 10e6L     # allow nearest-segment fallback within 10 Mb 
@@ -769,11 +789,9 @@ for (i in 1:nrow(myeloma_arms_df)) {
   
   # Merge with results and assign 1 if proportion > 1/3
   # The 33% threshold (>1/3 of arm segments altered) was chosen to
-  # balance sensitivity with specificity for WGS-based arm-level calls:
-  # ichorCNA segments the whole arm so even a partial arm alteration
-  # is biologically relevant, but >33% avoids calling small focal events
-  # as arm-level. This mirrors common cytogenetic reporting practice
-  # where >30% of interphase cells positive defines an abnormality.
+  # implement the project-specific manuscript rule for WGS-based arm calls.
+  # The denominator is the number of evaluated ichorCNA segments on the arm;
+  # it must not be interpreted as genomic coverage or percent abnormal cells.
   results <- left_join(results, sample_proportions, by = "Sample")
   results[[arm_name]] <- ifelse(
     is.na(results$ProportionAltered),
@@ -824,7 +842,9 @@ for (i in 1:nrow(hyperdiploid_arms_df)) {
   data_chr <- long_data %>%
     filter(chr == chr_value)
   
-  # Mark segments as gained if they match the gain labels
+  # Mark segments as gained if they match the gain labels. `%in%` returns FALSE
+  # for NA here, so cross-sample missing segment calls enter the chromosome
+  # denominator as 0 (not gained) rather than remaining unevaluable.
   data_chr <- data_chr %>%
     mutate(IsGain = ifelse(Value %in% gain_labels, 1, 0))
   
@@ -858,10 +878,8 @@ for (i in 1:nrow(hyperdiploid_arms_df)) {
 # Hyperdiploid MM (HRD) is defined by gains of odd-numbered chromosomes
 # 3,5,7,9,11,15,19,21. Requiring >=5/8 (rather than all 8) reflects that
 # WGS may miss gains on individual chromosomes at low tumor fractions,
-# and matches the clinical definition used by Hanamura et al. (2006) and
-# the IMWG (gains of >=3 of the 8 canonical chromosomes, with >=5 here
-# chosen for cfDNA specificity). Intermediate values (3-4) are treated
-# as not HRD to reduce false positives in cfDNA samples.
+# with >=5 chosen here as the project-specific specificity threshold.
+# Intermediate values (3-4) are treated as not HRD.
 results <- results %>%
   mutate(
     hyperdiploid = if_else(

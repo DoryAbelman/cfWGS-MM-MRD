@@ -22,8 +22,9 @@
 #   1. Load raw BM sample list and processing log; clean and compute DNA availability per sample.
 #   2. Merge with clinical metadata and feature‐level “Evidence_of_Disease” to flag
 #      baseline (Diagnosis/Baseline) and progression (Progression/Relapse) BM or cfDNA samples.
-#   3. Build a patient‐level summary of sample availability, quality flags, study membership, and eligibility
-#      for MRDetect (requires ≥2 cfDNA timepoints or ≥1 BM timepoint).
+#   3. Build a patient‐level summary of sample availability, quality flags, study
+#      membership, and historical MRDetect eligibility (a baseline/progression BM
+#      or cfDNA record plus at least two cfDNA metadata rows).
 #   4. Export the Figure 1B source table to `Final Tables and Figures/`, and
 #      copy the same source table into the manuscript-labeled
 #      `final_manuscript_objects/Figure_1B/` folder.
@@ -34,7 +35,8 @@
 #   7. Print console summaries of overall counts and per-study breakdowns.
 #
 # Dependencies:
-#   • readxl, dplyr, readr, stringr, glue
+#   • readxl, dplyr, readr, stringr, glue, tidyr
+#   • helpers.R and manuscript_output_helpers.R
 #
 # Input Files:
 #   • Clinical data/M4/M4 V1 BM processed at baseline.xlsx
@@ -42,6 +44,18 @@
 #   • combined_clinical_data_updated_April2025.csv
 #   • Jan2025_exported_data/All_feature_data_Sep2025_updated2.rds
 #   • summary_table_of_samples_and_patient_availability_cfWGS - for making the flow chart of samples.xlsx
+#   • Clinical data/manual_clinical_metadata_overrides.csv
+#   • cohort_assignment_table_updated.rds
+#   • Optional revision-aware scoring manifest:
+#     Output_tables_2025/clinical_support/sample_scoring_status_manifest.csv
+#
+# Analysis units and terminology:
+#   `summary_table` has one row per patient. "Qualifying" or "high quality" in
+#   this script means at least one baseline/diagnosis sample has the integrated
+#   `Evidence_of_Disease == 1` flag; it is not an independent sequencing-QC
+#   assessment. Figure 1B exports mix patient counts and biological-sample row
+#   counts. In the historical eligibility rule, `total_cfDNA_samples` is a row
+#   count in the clinical metadata; repeated rows are not deduplicated here.
 #
 # Output Files:
 #   Manuscript-facing:
@@ -51,8 +65,16 @@
 #   Pipeline intermediates:
 #   - Output_tables_2025/high_quality_patients_list_for_baseline_mut_calling2.csv
 #   - Output_tables_2025/high_quality_patients_list_for_baseline_mut_calling2.rds
+#   - Output_tables_2025/high_quality_patients_list_for_longitudinal_mrdetect_baseline_cfDNA2.csv
+#   - Output_tables_2025/high_quality_patients_list_for_longitudinal_mrdetect_baseline_cfDNA2.rds
 #   - Output_tables_2025/patient_cohort_assignment.csv
 #   - Output_tables_2025/patient_cohort_assignment.rds
+#   - Output_tables_2025/final_cohort_assignment.csv
+#   - Output_tables_2025/final_cohort_assignment.rds
+#   - Output_tables_2025/baseline_vs_longitudinal_high_quality_patient_audit.csv
+#   - Final Tables and Figures/Figure_1B_flowchart_box_counts_current.csv
+#   - Final Tables and Figures/Figure_1B_test_cohort_patient_count_audit.csv
+#     (only when the optional scoring manifest has usable test-cohort rows)
 #
 #   Support-only QC:
 #   - Output_tables_2025/sample_qc_support/Filtered_TFRIM4_Processing_Log.csv
@@ -111,6 +133,9 @@ if (!dir.exists(support_dir)) dir.create(support_dir, recursive = TRUE)
 # ──────────────────────────────────────────────────────────────────────────────
 
 # 2.1 Read raw files
+# `bm_data` preserves the historical BM-list input read, but the current script
+# does not reference that object again; the active calculations below use the
+# processing log, clinical metadata, integrated features, and flowchart workbook.
 bm_data  <- read_excel(bm_list_path, .name_repair = "unique_quiet")
 log_data <- read_excel(processing_log_path, sheet = 6, .name_repair = "unique_quiet")
 

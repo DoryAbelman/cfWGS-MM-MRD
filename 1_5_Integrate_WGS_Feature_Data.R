@@ -13,8 +13,9 @@
 #     6. Subset MAF objects to `myeloma_genes`, classify VAF and mutation types,
 #        and summarize per sample.
 #     7. Join mutation summary into the feature table, fill missing values.
-#     8. Define two levels of `Evidence_of_Disease` flags (high/low stringency).
-#     9. Save `mutation_export` and `All_feature_data` as RDS and TSV.
+#     8. Apply the final rule-based `Evidence_of_Disease` definition, followed
+#        by the retained manual IGV-review override.
+#     9. Save the mutation helpers and integrated feature tables as RDS and TSV.
 #
 # Inputs:
 #   • combined_clinical_data_updated_April2025.csv
@@ -23,25 +24,48 @@
 #   • Jan2025_exported_data/translocation_data_cytoband_updated.rds
 #   • Oct 2024 data/tumor_fraction_cfWGS.txt
 #   • combined_maf_temp_blood_Jan2025.maf
-#   • combined_maf_temp_bm_May2025.maf
+#   • combined_maf_temp_bm_Jan2025.maf (preferred) or
+#     combined_maf_temp_bm_May2025.maf (legacy fallback)
 #   • Jan2025_exported_data/FISH_data_from_sequenza_400_updated.rds
 #   • Jan2025_exported_data/FISH_probe_calls_bin_cytoband_ichorCNA.rds
+#   • Jan2025_exported_data/Ig_caller_df_cfWGS_filtered_aggressive2_iGV_check.xlsm
+#   • Optional historical mutation recovery source:
+#     Jan2025_exported_data/mutation_export_updated_more_info.rds
+#
+# Analysis unit:
+#   The final table contains one retained row per biological sample, keyed by
+#   Patient + Sample_ID + Sample_type + Timepoint + timepoint_info. When multiple
+#   BAM rows map to that key, the deterministic ranking near the end keeps the
+#   row with the strongest disease signal and exports the removed rows for audit.
 #
 # Active downstream outputs:
-#   • Jan2025_exported_data/All_feature_data_Sep2025_updated2.rds/.txt
+#   • Jan2025_exported_data/All_feature_data_Sep2025_updated2.rds
+#   • Jan2025_exported_data/All_feature_data_Sep2025_updated2.txt
 #       - primary integrated WGS feature table consumed by 2_0, 2_2, 2_3,
 #         2_4, 3_1, and downstream manuscript analyses.
-#   • Jan2025_exported_data/CNA_translocation_Sep2025_updated2.rds/.txt
+#   • Jan2025_exported_data/CNA_translocation_Sep2025_updated2.rds
+#   • Jan2025_exported_data/CNA_translocation_Sep2025_updated2.txt
 #       - CNA/translocation-only helper consumed by baseline heatmap scripts.
-#   • Jan2025_exported_data/CNA_at_FISH_sites_combined.rds/.txt
+#   • Jan2025_exported_data/CNA_at_FISH_sites_combined.rds
+#   • Jan2025_exported_data/CNA_at_FISH_sites_combined.txt
 #       - FISH-probe CNA helper consumed by 2_3 concordance analyses.
-#   • Jan2025_exported_data/mutation_export_updated2.rds/.txt
+#   • Jan2025_exported_data/mutation_export_updated2.rds
+#   • Jan2025_exported_data/mutation_export_updated.txt
 #       - compact myeloma-panel mutation helper table.
-#   • Jan2025_exported_data/mutation_export_updated_more_info2.rds/.txt
+#   • Jan2025_exported_data/mutation_export_updated_more_info2.rds
+#   • Jan2025_exported_data/mutation_export_updated_more_info.txt
 #       - expanded mutation/QC helper consumed by 2_3.
 #
 # Support/QC outputs:
 #   • Output_tables_2025/feature_integration_support/samples_missing_metadata_after_cna_translocation_join.csv
+#   • Output_tables_2025/feature_integration_support/excluded_bm_ichor_cna_rows.csv
+#   • Output_tables_2025/feature_integration_support/excluded_bm_ichor_fish_cna_rows.csv
+#   • Output_tables_2025/feature_integration_support/cna_translocation_identity_column_reconciliation_audit.csv
+#   • Output_tables_2025/feature_integration_support/pre_dedup_exact_cna_translocation_rows.csv
+#   • Output_tables_2025/feature_integration_support/active_cna_translocation_duplicate_sample_rows.csv
+#   • Output_tables_2025/feature_integration_support/verified_baseline_mutation_rows_preserved_from_previous_helper.csv
+#   • Output_tables_2025/feature_integration_support/mutation_samples_missing_cna_translocation_rows.csv
+#   • Output_tables_2025/feature_integration_support/all_feature_data_biological_replicates_removed.csv
 #   • Output_tables_2025/feature_integration_support/evidence_rule_del13q_sensitivity_check.csv
 #
 # Dependencies:
@@ -49,7 +73,9 @@
 #   library(tidyr)
 #   library(readr)
 #   library(stringr)
+#   library(readxl)
 #   library(maftools)
+#   library(purrr)
 #
 # Usage:
 #   source("1_5_Integrate_WGS_Feature_Data.R")
@@ -361,7 +387,10 @@ CNA_translocation <- reconcile_joined_identity_columns(
 # molecules derived from tumor. A single BAM may appear multiple times
 # in tumor_fraction if it was run with different ichorCNA parameter sets
 # (e.g. centromere-masked vs full-genome). Taking the maximum recovers
-# the most sensitive purity estimate and avoids under-calling disease.
+# the largest reported estimate under the historical project rule. This choice
+# favors sensitivity and can be optimistic when rows represent alternative
+# parameter fits rather than true replicates; the source rows should be retained
+# for audit.
 # Tumor_Fraction drives Evidence_of_Disease Tier 3 and is used as a
 # continuous predictor in 4_1_Survival_Analysis.R.
 # Keep only the max Tumor_Fraction for each Bam in tumor_fraction
@@ -430,11 +459,12 @@ FISH_CNA_combined <- left_join(FISH_CNA_combined,
                                tumor_fraction_max, 
                                by = c("Sample" = "Bam"))
 
-# Recalculate binary probe-level alteration labels.
+# Recalculate binary probe-level WGS alteration labels.
 # Extended loss_labels includes LOSS and CNLOH (vs. only HETD/HOMD in
-# 1_4_Process_CNA_Data.R) to capture copy-neutral LOH events reported
-# by Sequenza. CNLOH at del1p/del17p is clinically equivalent to a
-# heterozygous deletion for MM high-risk stratification.
+# 1_4_Process_CNA_Data.R) under the historical project rule. CNLOH is a
+# copy-neutral allelic imbalance, not a deletion, and may be negative by FISH;
+# downstream concordance must therefore interpret this flag as a WGS abnormality
+# at the locus rather than literal agreement with a deletion probe.
 gain_labels <- c("GAIN","AMP","HLAMP")
 loss_labels <- c("HOMD","HETD","LOSS","CNLOH")
 
@@ -573,10 +603,9 @@ maf_subset_blood <- subsetMaf(maf = maf_object_blood, genes = myeloma_genes, inc
 
 # Bone-marrow
 # filter(t_depth > 10): removes variant calls backed by fewer than 10
-# total reads at the locus. At 1x WGS coverage many loci have shallow
-# support; this threshold ensures only robustly supported calls are
-# retained, reducing false positives while preserving sensitivity
-# across tumor-enriched BM samples (median depth ~30x post-dedup).
+# total reads at the locus. This threshold is an operational support filter;
+# it does not establish analytical sensitivity and should be interpreted with
+# the sample's assay depth and caller QC.
 temp_bm <- maf_subset@data %>%
   filter(t_depth > 10) %>%                           # only well-supported calls
   mutate(
@@ -745,8 +774,12 @@ message("Active compact mutation helper written: ",
         file.path(export_dir, "mutation_export_updated2.rds"))
 
 ## Build an expanded mutation/QC companion table.
-# This keeps the same retained myeloma-panel mutations but carries additional
+# This parallels the compact myeloma-panel table while carrying additional
 # caller, depth, and annotation fields for manual review and troubleshooting.
+# Preserve the historical depth rules exactly: blood uses t_depth > 10, whereas
+# BM in this expanded QC-only table uses t_depth >= 10. Consequently, a BM call
+# at exactly depth 10 can appear here even though it is excluded from the compact
+# mutation table and from the downstream mutation summary above/below.
 temp_qc_blood <- maf_subset_blood@data %>%
   # 1) only well‐supported tumour calls
   filter(t_depth > 10) %>%
@@ -949,7 +982,12 @@ if (nrow(mutation_samples_missing_cna_translocation) > 0L) {
 All_feature_data <- CNA_translocation %>%
   left_join(mutation_summary, by = "Tumor_Sample_Barcode")
 
-# Step 3: Fill in missing values for new columns as "N" or NA, as appropriate
+# Step 3: Encode absence from the retained mutation-call table as "N".
+# Important limitation: a call-only MAF does not distinguish a successfully
+# evaluated sample with no retained panel mutation from an unprocessed or
+# insufficiently callable sample. `Mut_identified == "N"` is therefore an
+# operational "no retained call" value unless a separate callability manifest
+# confirms successful processing.
 All_feature_data <- All_feature_data %>%
   mutate(
     Mut_identified = ifelse(is.na(Mut_identified), "N", Mut_identified),
@@ -964,9 +1002,8 @@ All_feature_data <- All_feature_data %>% select(-Bam_File)
 # Original Evidence_of_Disease definition (pre-Sep 2025):
 #   BM:    TF > 10% OR canonical Ig translocation OR mutation VAF > 10%
 #   cfDNA: TF > 5%  OR canonical Ig translocation OR mutation VAF > 10%
-# Superseded by Version 2 (below) which adds a lower-VAF cfDNA tier
-# and a moderate-TF + cytogenetics tier. Preserved here for reference
-# and used in compute_old_evidence() comparison function further below.
+# Superseded by the authoritative normalized rule below. Preserved here for
+# historical comparison; this intermediate value is not exported.
 # Add the Evidence_of_Disease column based on the specified conditions
 All_feature_data <- All_feature_data %>%
   mutate(
@@ -985,8 +1022,11 @@ All_feature_data <- All_feature_data %>%
     )
   )
 
-## Version 2 - less stringency on the cfDNA cases, used in final version
-# Four-tier Evidence_of_Disease classifier (final version for manuscript):
+## Version 2 candidate rule retained for historical comparison
+# This block is overwritten by `All_feature_data_logical` below and is not the
+# exported final classifier. It remains only so the historical rule evolution is
+# inspectable; the later normalized block is authoritative.
+# Four-tier candidate Evidence_of_Disease classifier:
 #   Tier 1: Canonical Ig translocation OR high-VAF mutation (>=10%) --
 #     tissue-independent; strong evidence regardless of tumor fraction.
 #   Tier 2: cfDNA-specific; detects disease via somatic SNV even when
@@ -1034,6 +1074,13 @@ to_logical_bin <- function(x) {
   replace_na(as.logical(x), FALSE)
 }
 
+# Authoritative final Evidence_of_Disease rule used in the exported table:
+#   1. any canonical IG translocation or panel mutation VAF >=10%;
+#   2. plasma cfDNA panel mutation VAF >=5%;
+#   3. tumour fraction >=10% in BM or >=5% in plasma cfDNA;
+#   4. plasma cfDNA tumour fraction >=3% plus del1p, amp1q, del17p, or del13q.
+# Missing genomic flags and continuous evidence values are treated as absence of
+# evidence for this composite, as recorded in the missingness audit above.
 All_feature_data_logical <- All_feature_data %>%
   mutate(
     # 1) Normalize flags used in rules
@@ -1082,7 +1129,7 @@ All_feature_data_logical <- All_feature_data %>%
 # iGV_verified is a manually curated spreadsheet where IGV screenshots
 # of borderline Ig translocation calls (low read support, single-end
 # evidence, etc.) were reviewed by a second reader (Suzanne Trudel).
-# Samples with Looks_real > 0.7 (reviewer confidence >70%) are promoted
+# Samples with Looks_real > 0.7 on the project's review scale are promoted
 # to Evidence_of_Disease = 1 even if they failed all automated thresholds.
 # This manual override resolves ~5-10 ambiguous cfDNA cases at the
 # detection limit and is documented in the supplementary methods.

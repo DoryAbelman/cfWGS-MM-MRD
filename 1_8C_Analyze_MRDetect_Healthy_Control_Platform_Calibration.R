@@ -1,6 +1,7 @@
 #!/usr/bin/env Rscript
 
-# Reviewer-only MRDetect platform audit.
+# 1_8C_Analyze_MRDetect_Healthy_Control_Platform_Calibration.R
+# MRDetect healthy-control sequencing-platform calibration analysis.
 #
 # Goal
 # ----
@@ -16,6 +17,21 @@
 # clinical timepoint, and VCF complexity.
 # A separate sensitivity analysis compares the 19-control and 22-library XPlus
 # reference parameters; it is not used to estimate the platform effect.
+#
+# Unit of inference
+# -----------------
+# The independent unit is the paired healthy-control identity (n = 19). VCFs
+# are repeated technical/assay contexts within each identity, not independent
+# subjects. Figures and row-level exports retain all control-by-VCF observations.
+#
+# How to run
+# ----------
+# Rscript Scripts_2025/Final_Scripts/1_8C_Analyze_MRDetect_Healthy_Control_Platform_Calibration.R
+#
+# Manuscript role
+# ---------------
+# Platform-calibration evidence used by Extended Data Figure 3D-E. This script
+# does not train a model, select a threshold, or modify a feature table.
 
 suppressPackageStartupMessages({
   library(dplyr)
@@ -40,7 +56,7 @@ xplus_path <- file.path(
   "Data_Spring_2026_Revisions", "MRDetect_outputs",
   "MRDetect_all_RESULTS_combined_with_source_final_healthy_control_Xplus.csv"
 )
-output_dir <- file.path("Results_MRDetect", "Reviewer_platform_shift")
+output_dir <- file.path("Results_MRDetect", "Healthy_control_platform_calibration")
 dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
 
 for (path in c(historical_path, xplus_path)) {
@@ -160,12 +176,12 @@ common_vcf_manifest <- historical_all %>%
     mutation_source = .data$Mut_source
   ) %>%
   mutate(
-    reviewer_timepoint_group = case_when(
+    platform_timepoint_group = case_when(
       str_to_lower(.data$timepoint_info) %in% c("baseline", "diagnosis") ~ "Baseline",
       str_to_lower(.data$timepoint_info) == "relapse" ~ "Relapse",
       TRUE ~ "Intermediate"
     ),
-    included_in_primary_platform_audit = .data$reviewer_timepoint_group == "Baseline"
+    included_in_primary_platform_audit = .data$platform_timepoint_group == "Baseline"
   ) %>%
   arrange(.data$patient, .data$timepoint, .data$sample_type)
 
@@ -190,7 +206,11 @@ if (anyDuplicated(historical_paired[paired_key]) || anyDuplicated(xplus_paired[p
 }
 expected_pairs <- length(shared_ids) * length(common_vcfs)
 if (nrow(historical_paired) != expected_pairs || nrow(xplus_paired) != expected_pairs) {
-  stop("Incomplete 19-control by 17-VCF platform matrix.", call. = FALSE)
+  stop(
+    "Incomplete 19-control by ", length(common_vcfs),
+    "-VCF primary platform matrix.",
+    call. = FALSE
+  )
 }
 
 paired_control_manifest <- historical_paired %>%
@@ -313,21 +333,27 @@ loo_calibration_summary <- loo_z %>%
     .groups = "drop"
   )
 
-loo_platform_comparison <- loo_z %>%
-  select(all_of(c("platform", "control_id", "vcf_clean", "metric", "metric_label", "loo_z"))) %>%
-  pivot_wider(names_from = "platform", values_from = "loo_z") %>%
+# For the platform comparison, reduce the repeated VCF measurements to one
+# median absolute LOO z-score per control identity before inference. Testing all
+# 19 x 8 control-VCF rows as independent pairs would be pseudoreplication.
+loo_control_medians <- loo_z %>%
+  group_by(.data$platform, .data$control_id, .data$metric, .data$metric_label) %>%
+  summarise(median_abs_loo_z = median(abs(.data$loo_z)), .groups = "drop")
+
+loo_platform_comparison <- loo_control_medians %>%
+  pivot_wider(names_from = "platform", values_from = "median_abs_loo_z") %>%
   group_by(.data$metric, .data$metric_label) %>%
   group_modify(~ {
     test <- wilcox.test(
-      abs(.x[["NovaSeq XPlus"]]),
-      abs(.x[["NovaSeq 6000"]]),
+      .x[["NovaSeq XPlus"]],
+      .x[["NovaSeq 6000"]],
       paired = TRUE,
       exact = FALSE
     )
     tibble(
-      n_paired_control_vcf_observations = nrow(.x),
-      median_abs_z_6000 = median(abs(.x[["NovaSeq 6000"]])),
-      median_abs_z_xplus = median(abs(.x[["NovaSeq XPlus"]])),
+      n_paired_control_ids = nrow(.x),
+      median_abs_z_6000 = median(.x[["NovaSeq 6000"]]),
+      median_abs_z_xplus = median(.x[["NovaSeq XPlus"]]),
       paired_wilcoxon_abs_z_p = test$p.value
     )
   }) %>%
@@ -443,7 +469,7 @@ control_manifest <- bind_rows(
   ) %>%
   arrange(.data$platform, .data$control_id, .data$bam)
 
-# Reviewer figure -------------------------------------------------------------
+# Calibration overview figure -------------------------------------------------
 platform_colors <- c("NovaSeq 6000" = "#4C78A8", "NovaSeq XPlus" = "#E45756")
 normalization_colors <- c(
   "XPlus using 6000 reference" = "#D55E00",
@@ -565,7 +591,7 @@ panel_d <- ggplot(
   ) +
   base_theme
 
-reviewer_figure <- (panel_a | panel_b) / (panel_c | panel_d) +
+calibration_figure <- (panel_a | panel_b) / (panel_c | panel_d) +
   plot_annotation(
     title = "MRDetect healthy-control platform shift and platform-matched calibration",
     subtitle = paste(
@@ -578,27 +604,28 @@ reviewer_figure <- (panel_a | panel_b) / (panel_c | panel_d) +
     )
   )
 
-figure_png <- file.path(output_dir, "Reviewer_Figure_MRDetect_platform_shift_and_zscore_calibration.png")
-figure_pdf <- file.path(output_dir, "Reviewer_Figure_MRDetect_platform_shift_and_zscore_calibration.pdf")
-ggsave(figure_png, reviewer_figure, width = 15, height = 11.5, dpi = 600, bg = "white")
-ggsave(figure_pdf, reviewer_figure, width = 15, height = 11.5, device = cairo_pdf, bg = "white")
+figure_png <- file.path(output_dir, "MRDetect_healthy_control_platform_calibration.png")
+figure_pdf <- file.path(output_dir, "MRDetect_healthy_control_platform_calibration.pdf")
+ggsave(figure_png, calibration_figure, width = 15, height = 11.5, dpi = 600, bg = "white")
+ggsave(figure_pdf, calibration_figure, width = 15, height = 11.5, device = cairo_pdf, bg = "white")
 
 # Source-data and audit exports ------------------------------------------------
-write_csv(control_manifest, file.path(output_dir, "Reviewer_MRDetect_control_manifest.csv"))
-write_csv(paired_control_manifest, file.path(output_dir, "Reviewer_MRDetect_paired_control_manifest.csv"))
-write_csv(common_vcf_manifest, file.path(output_dir, "Reviewer_MRDetect_common_VCF_timepoint_manifest.csv"))
-write_csv(paired_long, file.path(output_dir, "Reviewer_MRDetect_paired_raw_detection_rates.csv"))
-write_csv(control_medians, file.path(output_dir, "Reviewer_MRDetect_control_level_medians.csv"))
-write_csv(paired_test_summary, file.path(output_dir, "Reviewer_MRDetect_paired_platform_tests.csv"))
-write_csv(vcf_reference_summary, file.path(output_dir, "Reviewer_MRDetect_VCF_reference_summary.csv"))
-write_csv(vcf_concordance_summary, file.path(output_dir, "Reviewer_MRDetect_VCF_concordance_summary.csv"))
-write_csv(loo_z, file.path(output_dir, "Reviewer_MRDetect_leave_one_out_zscores.csv"))
-write_csv(loo_calibration_summary, file.path(output_dir, "Reviewer_MRDetect_leave_one_out_calibration_summary.csv"))
-write_csv(loo_platform_comparison, file.path(output_dir, "Reviewer_MRDetect_leave_one_out_platform_comparison.csv"))
-write_csv(xplus_normalization_long, file.path(output_dir, "Reviewer_MRDetect_matched_vs_mismatched_zscores.csv"))
-write_csv(normalization_summary, file.path(output_dir, "Reviewer_MRDetect_matched_vs_mismatched_summary.csv"))
-write_csv(reference_19_vs_22, file.path(output_dir, "Reviewer_MRDetect_XPlus_reference_19_vs_22.csv"))
-write_csv(reference_19_vs_22_summary, file.path(output_dir, "Reviewer_MRDetect_XPlus_reference_19_vs_22_summary.csv"))
+write_csv(control_manifest, file.path(output_dir, "MRDetect_control_manifest.csv"))
+write_csv(paired_control_manifest, file.path(output_dir, "MRDetect_paired_control_manifest.csv"))
+write_csv(common_vcf_manifest, file.path(output_dir, "MRDetect_common_VCF_timepoint_manifest.csv"))
+write_csv(paired_long, file.path(output_dir, "MRDetect_paired_raw_detection_rates.csv"))
+write_csv(control_medians, file.path(output_dir, "MRDetect_control_level_medians.csv"))
+write_csv(paired_test_summary, file.path(output_dir, "MRDetect_paired_platform_tests.csv"))
+write_csv(vcf_reference_summary, file.path(output_dir, "MRDetect_VCF_reference_summary.csv"))
+write_csv(vcf_concordance_summary, file.path(output_dir, "MRDetect_VCF_concordance_summary.csv"))
+write_csv(loo_z, file.path(output_dir, "MRDetect_leave_one_out_zscores.csv"))
+write_csv(loo_calibration_summary, file.path(output_dir, "MRDetect_leave_one_out_calibration_summary.csv"))
+write_csv(loo_control_medians, file.path(output_dir, "MRDetect_leave_one_out_control_level_medians.csv"))
+write_csv(loo_platform_comparison, file.path(output_dir, "MRDetect_leave_one_out_platform_comparison.csv"))
+write_csv(xplus_normalization_long, file.path(output_dir, "MRDetect_matched_vs_mismatched_zscores.csv"))
+write_csv(normalization_summary, file.path(output_dir, "MRDetect_matched_vs_mismatched_summary.csv"))
+write_csv(reference_19_vs_22, file.path(output_dir, "MRDetect_XPlus_reference_19_vs_22.csv"))
+write_csv(reference_19_vs_22_summary, file.path(output_dir, "MRDetect_XPlus_reference_19_vs_22_summary.csv"))
 
 metric_order <- metric_dictionary$metric
 paired_report <- paired_test_summary %>%
@@ -717,9 +744,9 @@ report_lines <- c(
   "",
   "The data demonstrate a reproducible absolute platform shift, not loss of VCF-specific MRDetect structure. Platform-specific healthy-control normalization corrects the shift: healthy XPlus controls recover a null z-score distribution comparable to that of NovaSeq 6000 controls. Therefore, the defensible correction is to use platform-matched healthy-control references while retaining the prespecified locked decision thresholds. Re-estimating a threshold from these healthy controls would be post hoc and is not supported by this audit.",
   "",
-  "The primary claim should be distribution-level cross-platform calibration, not exact control-by-control z-score reproducibility. The 22-library XPlus reference uses all available negative libraries; the 19-identity analysis supplies a paired, material-matched sensitivity analysis. The site-detection metric is more sensitive to the three additional libraries than the read-based metrics, so its 19-versus-22 sensitivity should remain in the reviewer source data.",
+  "The primary claim is distribution-level cross-platform calibration, not exact control-by-control z-score reproducibility. The 22-library XPlus reference uses all available negative libraries; the 19-identity analysis supplies a paired, material-matched sensitivity analysis. The site-detection metric is more sensitive to the three additional libraries than the read-based metrics, so its 19-versus-22 sensitivity is retained in the source data.",
   "",
-  "## Proposed reviewer-figure caption",
+  "## Figure caption",
   "",
   paste0(
     "MRDetect healthy-control platform shift and platform-matched calibration. ",
@@ -732,14 +759,14 @@ report_lines <- c(
     "Paired platform tests use each control identity as the inferential unit."
   ),
   "",
-  "## Proposed response-to-reviewer text",
+  "## Manuscript-ready interpretation",
   "",
-  "We evaluated whether MRDetect background measurements differed between sequencing platforms using 19 healthy-control identities with matched specimen material and results available for the same eight baseline/diagnosis VCF panels on both platforms. Although raw detection rates were systematically higher on NovaSeq XPlus, VCF-specific reference means remained highly concordant across platforms. Applying the NovaSeq 6000 reference to XPlus controls produced strongly positive z-scores, whereas platform-matched leave-one-control-out normalization restored distributions centered near zero with tail rates comparable to those observed on NovaSeq 6000. We therefore used platform-specific healthy-control references while retaining the prespecified locked decision thresholds. We added a reviewer-only figure and complete source data documenting the platform shift, normalization correction, and sensitivity to use of 19 versus all 22 available XPlus control libraries."
+  "MRDetect background measurements were compared between sequencing platforms using 19 healthy-control identities with matched specimen material and results available for the same eight baseline/diagnosis VCF panels on both platforms. Although raw detection rates were systematically higher on NovaSeq XPlus, VCF-specific reference means remained highly concordant across platforms. Applying the NovaSeq 6000 reference to XPlus controls produced strongly positive z-scores, whereas platform-matched leave-one-control-out normalization restored distributions centered near zero with tail rates comparable to those observed on NovaSeq 6000. Platform-specific healthy-control references were therefore used while retaining the prespecified locked decision thresholds. The figure and source data document the platform shift, normalization correction, and sensitivity to use of 19 versus all 22 available XPlus control libraries."
 )
 
 writeLines(
   report_lines,
-  file.path(output_dir, "Reviewer_MRDetect_platform_shift_report.md")
+  file.path(output_dir, "MRDetect_healthy_control_platform_calibration_report.md")
 )
 
 summary_lines <- c(
@@ -769,8 +796,8 @@ summary_lines <- c(
     )
   })
 )
-writeLines(summary_lines, file.path(output_dir, "Reviewer_MRDetect_platform_shift_summary.txt"))
+writeLines(summary_lines, file.path(output_dir, "MRDetect_healthy_control_platform_calibration_summary.txt"))
 
-message("Reviewer figure written: ", figure_png)
-message("Reviewer PDF written: ", figure_pdf)
+message("Calibration figure written: ", figure_png)
+message("Calibration PDF written: ", figure_pdf)
 message("Source-data directory: ", output_dir)
