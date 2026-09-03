@@ -11,12 +11,12 @@
 #     directly to this script in docs/manuscript_artifact_source_map.tsv.
 #
 # Required downstream role:
-#   - 3_2_Plot_optimal_cutoff_and_clinical_concordance.R uses the optimized
-#     EasyM calls and thresholds for Figure 3E, Figure 4C, Figure 4D, and
-#     Supplementary Table 8.
-#   - 4_1_Survival_Analysis.R uses the optimized EasyM calls for the survival
-#     and relapse-detection panels in Figure 3F/Figure 4E and Extended Data
-#     Figures 6/8.
+#   - 3_2_Plot_optimal_cutoff_and_clinical_concordance.R uses the prespecified
+#     isotype-specific EasyM reference-threshold calls for Figure 3E, Figure 4C,
+#     Figure 4D, and Supplementary Table 8.
+#   - 4_1_Survival_Analysis.R uses the same isotype-specific EasyM calls for the
+#     survival and relapse-detection panels in Figure 3F/Figure 4E and Extended
+#     Data Figures 6/8.
 #
 # Key outputs consumed downstream:
 #   - Output_EasyM_MRD_analysis_2025/EasyM_all_samples_with_optimized_calls.csv
@@ -36,8 +36,9 @@
 #   3. Generate EasyM-only descriptive support plots.
 #   4. Merge EasyM with cfWGS calls/probabilities.
 #   5. Run descriptive landmark survival/comparison analyses.
-#   6. Derive EasyM optimized thresholds and agreement summaries.
-#   7. Export the downstream EasyM call table and threshold reference table.
+#   6. Derive exploratory optimized thresholds and the prespecified
+#      isotype-specific reference-threshold calls.
+#   7. Export the downstream EasyM call table and threshold reference tables.
 #
 # How to run:
 #   Rscript Scripts_2025/Final_Scripts/3_1_A_Process_and_optimize_EasyM.R
@@ -2640,7 +2641,7 @@ cat("━━━━━━━━━━━━━━━━━━━━━━━━━
 
 # Main export table
 main_export <- file.path(out_dir, "EasyM_all_samples_with_optimized_calls.csv")
-cat(sprintf("1. Comprehensive EasyM table with optimized calls:\n   ├─ Path: %s\n\n", main_export))
+cat(sprintf("1. Comprehensive EasyM table with reference, any-detect, and optimized calls:\n   ├─ Path: %s\n\n", main_export))
 
 # Threshold reference
 threshold_export <- file.path(out_dir, "EasyM_threshold_values_by_timepoint.csv")
@@ -2660,6 +2661,7 @@ cat("NEXT STEPS:\n")
 cat("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
 cat("→ 3_2 loads EasyM_all_samples_with_optimized_calls.csv for EasyM panels in Figure 3E, Figure 4C, and Figure 4D\n")
 cat("→ 4_1 loads EasyM_all_samples_with_optimized_calls.csv for EasyM survival and relapse-detection summaries\n")
-cat("→ Use EasyM_optimized_binary for manuscript-facing EasyM binary comparisons\n\n")
+cat("→ Use EasyM_reference_threshold_binary for EasyM binary comparisons reported in the manuscript\n")
+cat("→ EasyM_optimized_binary is retained as an exploratory timepoint-specific analysis\n\n")
 
 ## End of script

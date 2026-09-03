@@ -532,7 +532,7 @@ writeLines(
 message("Extended Data Figure 3D-E candidate written: ", paste0(combined_stub, ".png"))
 message("Panel D component: ", paste0(panel_d_stub, ".png"))
 message("Panel E component: ", paste0(panel_e_stub, ".png"))
-message("Manuscript-facing ED3D-E directory: ", manuscript_root)
+message("Extended Data Figure 3D-E output directory: ", manuscript_root)
 message(
   "Panel manifest: ",
   file.path(component_root, "Extended_Data_Figure_3_panel_manifest.csv")

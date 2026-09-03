@@ -5,7 +5,7 @@
 #
 # Goal
 #   Assemble independently executed blocks from the complete 32-model grouped
-#   nested-CV sensitivity analysis into one publication-facing result set.
+#   nested-CV sensitivity analysis into one result set used for the manuscript.
 #
 # Why this is separate
 #   The full model library was run in smaller BM, blood, and fragmentomics
@@ -13,7 +13,30 @@
 #   tables: every model must be present once, source QC must pass, probabilities
 #   must be finite, and patient-fold assignments must remain consistent.
 #
-# Script roadmap
+# Manuscript role
+#   This script combines the three 50-repeat source runs used for Figure 3A,
+#   Figure 4A, Extended Data Figure 5A, Extended Data Figure 7A, Extended Data
+#   Figure 9A-B, and Supplementary Table 4. It writes the 32-model result set
+#   read by the downstream grouped-CV plotting and table scripts.
+#
+# Inputs
+#   Three completed output directories from
+#   6_12_Patient_Grouped_Repeated_Nested_CV.R. Each directory must contain its
+#   RUN_COMPLETE marker, QC table, summaries, held-out predictions, patient-fold
+#   assignments, and captured model-fitting warnings. The preserved legacy
+#   validation RDS files are read only to report the grouped-versus-row-level
+#   AUC differences.
+#
+# Outputs
+#   A new combined directory under
+#   Output_tables_2025/patient_grouped_repeated_nested_cv/. It contains the
+#   merged detail tables, the 32-model summary, source-run manifest, combined QC
+#   table, warning summary, and RUN_COMPLETE marker.
+#
+# R packages
+#   dplyr, purrr, readr, tibble, and tidyr.
+#
+# Analysis steps
 #   1. Resolve the explicitly named completed source runs.
 #   2. Reject missing files or incomplete source runs.
 #   3. Merge detailed folds, predictions, tuning results, and bootstraps.
@@ -52,15 +75,18 @@ results_root <- file.path(
 )
 
 default_source_run_ids <- c(
-  "2026-07-31_all_models_bm_block_v2",
-  "2026-07-31_all_models_blood_block_v2",
-  "2026-07-31_all_models_fullfrag_block_v1"
+  "2026-08-05_all_models_50repeats_bm_v4",
+  "2026-08-05_all_models_50repeats_blood_v4",
+  "2026-08-05_all_models_50repeats_fullfrag_v4"
 )
 source_run_ids <- trimws(strsplit(
   get_arg("--source-runs", paste(default_source_run_ids, collapse = ",")),
   ",", fixed = TRUE
 )[[1]])
-output_run_id <- get_arg("--output-run-id", "2026-07-31_all_models_combined_v4")
+output_run_id <- get_arg(
+  "--output-run-id",
+  "2026-08-05_all_models_50repeats_combined_v3"
+)
 if (length(source_run_ids) != 3L || any(!nzchar(source_run_ids))) {
   stop("--source-runs must contain exactly three comma-separated run IDs.",
        call. = FALSE)
@@ -121,7 +147,7 @@ if (dir.exists(output_dir)) {
 dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
 
 # ----------------------------------------------------------------------------
-# 3. Merge row-level provenance without modifying source runs
+# 3. Merge row-level records without modifying source runs
 # ----------------------------------------------------------------------------
 read_blocks <- function(filename) {
   map2_dfr(source_dirs, source_run_ids, function(path, run_id) {
@@ -336,7 +362,7 @@ publication_summary <- summary_tbl |>
 write_csv(publication_summary, file.path(output_dir, "publication_model_performance_and_legacy_comparison.csv"), na = "")
 
 # ----------------------------------------------------------------------------
-# 6. Write combined provenance and mark the run complete
+# 6. Record the source runs and mark the combined run complete
 # ----------------------------------------------------------------------------
 
 run_manifest <- tibble(

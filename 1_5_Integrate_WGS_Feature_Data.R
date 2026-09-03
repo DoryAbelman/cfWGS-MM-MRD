@@ -301,7 +301,7 @@ maf_object_bm    <- read.maf(bm_maf_path)
 #saveRDS(CNA_translocation, "CNA_translocation_original_Feb2025.rds")
 
 # Define caller-source rules by sample matrix before merging CNA calls.
-# Publication-facing analyses use Sequenza for BM-cell CNA calls when available
+# Analyses reported in the manuscript use Sequenza for BM-cell CNA calls when available
 # and ichorCNA for cfDNA/non-BM CNA calls. BM rows found only in ichorCNA are
 # retained as fallback CNA evidence rather than being forced missing. Only
 # ichorCNA rows for BAMs that also have Sequenza calls are dropped, so Sequenza
@@ -1002,7 +1002,7 @@ All_feature_data <- All_feature_data %>% select(-Bam_File)
 # Original Evidence_of_Disease definition (pre-Sep 2025):
 #   BM:    TF > 10% OR canonical Ig translocation OR mutation VAF > 10%
 #   cfDNA: TF > 5%  OR canonical Ig translocation OR mutation VAF > 10%
-# Superseded by the authoritative normalized rule below. Preserved here for
+# Superseded by the normalized rule used below. Preserved here for
 # historical comparison; this intermediate value is not exported.
 # Add the Evidence_of_Disease column based on the specified conditions
 All_feature_data <- All_feature_data %>%
@@ -1025,7 +1025,7 @@ All_feature_data <- All_feature_data %>%
 ## Version 2 candidate rule retained for historical comparison
 # This block is overwritten by `All_feature_data_logical` below and is not the
 # exported final classifier. It remains only so the historical rule evolution is
-# inspectable; the later normalized block is authoritative.
+# inspectable; the later normalized block supplies the exported value.
 # Four-tier candidate Evidence_of_Disease classifier:
 #   Tier 1: Canonical Ig translocation OR high-VAF mutation (>=10%) --
 #     tissue-independent; strong evidence regardless of tumor fraction.
@@ -1074,7 +1074,7 @@ to_logical_bin <- function(x) {
   replace_na(as.logical(x), FALSE)
 }
 
-# Authoritative final Evidence_of_Disease rule used in the exported table:
+# Final Evidence_of_Disease rule used in the exported table:
 #   1. any canonical IG translocation or panel mutation VAF >=10%;
 #   2. plasma cfDNA panel mutation VAF >=5%;
 #   3. tumour fraction >=10% in BM or >=5% in plasma cfDNA;

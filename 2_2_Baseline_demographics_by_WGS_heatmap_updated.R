@@ -1507,7 +1507,7 @@ if (!length(all_rows) || !nrow(bm_mat) || !nrow(cfDNA_mat)) {
 # 7a) Calculate broad mutation burdens from the genome-wide no-rsID callsets.
 # Historical samples use the original VCF-derived count files after rsID removal.
 # Spring 2026 revision samples use Revision_cfWGS_remove_rsIDs_counts.tsv
-# kept_no_rsID values, parsed through the authoritative mutect2_pair_id metadata.
+# kept_no_rsID values, parsed through the mutect2_pair_id metadata used here.
 patient_ids <- extract_pid(all_cols)
 
 clean_mutation_count_key <- function(x) {

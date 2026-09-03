@@ -6,7 +6,7 @@
 #   Compare the historical CHARM/TGL49 healthy-control fragmentomics reference
 #   set against the Spring 2026 CHARM_Xplus_HC healthy controls. This is an
 #   isolated support analysis: it does not feed into the main 1_7A/1_7B
-#   fragmentomics pipeline and does not change manuscript-facing outputs.
+#   fragmentomics pipeline and does not change any manuscript results.
 #
 # Rationale:
 #   The Spring 2026 test-cohort samples were sequenced on NovaSeq X Plus,

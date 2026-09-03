@@ -23,7 +23,7 @@
 # ------
 # - Current masked scored table from 3_1_Optimize_cfWGS_thresholds.R
 # - Current Figure 3B and Figure 4B test-confusion source tables, which provide
-#   the frozen model thresholds and manuscript-facing model labels
+#   the frozen model thresholds and the model labels shown in the manuscript
 #
 # Outputs
 # -------
@@ -510,7 +510,7 @@ if (any(sample_manifest$Patient %in% supp6_id_map$Patient_raw)) {
   stop("Raw patient identifiers remain in Supplementary Table 6.", call. = FALSE)
 }
 
-# Same-sample comparison requested during peer review. Every model below is
+# Same-sample comparison across analysis workflows. Every model below is
 # evaluated on the identical 28-sample/19-patient BM-informed expanded-test
 # stratum. Fragmentomics probabilities are evaluated at the fixed thresholds
 # selected by the original training workflow; no test-set refitting or
@@ -1093,9 +1093,9 @@ writeLines(
     "SUBMISSION FILE",
     basename(destination),
     "",
-    "This XLSX is the authoritative revision-inclusive Supplementary Table 6.",
-    "Older CSV files in this provenance folder are retained only to preserve analysis history.",
-    "Do not submit an older CSV in place of this workbook.",
+    "This XLSX is the current revision-inclusive Supplementary Table 6.",
+    "Older CSV files in this folder preserve earlier analysis outputs.",
+    "The XLSX contains the current table used for the manuscript.",
     "",
     "Rebuild:",
     "Rscript Scripts_2025/Final_Scripts/3_1C_Expanded_test_clustered_sensitivity.R"

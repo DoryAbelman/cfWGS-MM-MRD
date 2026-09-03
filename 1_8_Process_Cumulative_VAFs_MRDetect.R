@@ -347,7 +347,7 @@ spring2026_incremental_xplus_control_files <- spring2026_revision_files(
   "MRDetect_outputs",
   "^MRDetect_all_RESULTS_combined_with_source_healthy_control_rerun[0-9]+[.]csv$"
 )
-# The complete final export is authoritative when present. Incremental reruns
+# Use the complete final export when it is present. Incremental reruns
 # remain a supported fallback so the script is still reproducible before final
 # aggregation is available.
 spring2026_xplus_control_files <- if (length(spring2026_final_xplus_control_files)) {
@@ -397,7 +397,7 @@ read_and_label <- function(file) {
 all_files <- bind_rows(lapply(csv_files, read_and_label))
 
 if (length(spring2026_final_xplus_control_files)) {
-  # Do not mix partial legacy control rows with the authoritative all-by-all
+  # Do not mix partial legacy control rows with the complete all-by-all
   # final export. Patient/query rows from the other files remain unchanged.
   all_files <- all_files %>%
     filter(

@@ -15,8 +15,12 @@
 #     5. Exports source-data CSVs for each LOD figure.
 #
 # Inputs:
-#   - Output_tables_2025/selected_combo_models_<date>.rds   (trained glmnet models)
-#   - Output_tables_2025/selected_combo_thresholds_<date>.rds
+#   - Output_tables_2025/selected_combo_models_2025-09-17.rds and
+#     selected_combo_thresholds_2025-09-17.rds for the historical BM/blood
+#     dilution analysis.
+#   - Output_tables_2025/selected_combo_models_2026-02-16.rds and
+#     selected_combo_thresholds_2026-02-16.rds for the current fragmentomics
+#     dilution models.
 #   - Results_Fragmentomics/Dilution_series/
 #       key_fragmentomics_info_dilution_series.rds
 #   - MRDetect_output_winter_2025/Processed_R_outputs/
@@ -25,9 +29,9 @@
 #   - Fragmentomics_data/Dilution_series/tumor_fraction_dilution_series.txt
 #
 # Outputs:
-#   - Dilution_Series_Scoring_2025/  (scored tables per dilution level)
-#   - Output_figures_2025/FigX_LOD_*.png
-#   - Output_tables_2025/Source_data_LOD_*.csv
+#   - Dilution_Series_Scoring_2025/ (intermediate scored dilution tables)
+#   - Final Tables and Figures/ (Figure 3C and dilution-panel image files)
+#   - Output_tables_2025/ (Supplementary Table 7 and source-data CSVs)
 #
 # Dependencies:
 #   dplyr, tidyr, Matrix, readr, glmnet, pROC, stringr, broom,
@@ -38,9 +42,11 @@
 #   Rscript Scripts_2025/Final_Scripts/3_1_part2_Apply_cfWGS_thresholds_to_dilution_series.R
 #
 # Manuscript outputs created/updated:
-#   - Figure 3C: BM-model dilution-series limit-of-detection panel.
+#   - Figure 3C: pooled feature/model correlations across 48 dilution-series
+#     libraries, including four MRD-negative 0% references.
 #   - Extended Data Figure 5D: BM dilution-series source/diagnostic panel.
 #   - Extended Data Figure 7D: blood-model dilution-series panel.
+#   - Extended Data Figure 9D: fragmentomics-model dilution-series panel.
 #   - Supplementary Table 7: dilution-series correlations and scored data.
 #
 # Pipeline role:
@@ -75,7 +81,7 @@ library(writexl)    # standards-compliant supplementary workbooks
 
 # Shared helper for final manuscript-organized outputs.
 # This script keeps its historical dilution-series filenames. The helper copies
-# the final manuscript-facing dilution-series figure/table components into
+# the final dilution-series figure and table components into
 # Scripts_2025/Final_Scripts/final_manuscript_objects with final labels such as
 # Figure_3C, Extended_Data_Figure_5D, and Supplementary_Table_7.
 .manuscript_helper <- file.path("Scripts_2025", "Final_Scripts", "manuscript_output_helpers.R")
@@ -1060,7 +1066,7 @@ if (any(is.na(dilution_df$mrdetect_status)) ||
 # n_healthy_reference column is the fragmentomics reference size; the three
 # mrdetect_* columns below prevent readers from confusing it with the MRDetect
 # mutation reference.
-# Supplementary Table 7 is the publication-facing record of every uniquely
+# Supplementary Table 7 lists every uniquely
 # sequenced dilution library. Use the complete object here: 9 historical
 # libraries, 36 non-zero PWGVAL libraries, and 3 same-platform patient-matched
 # 0% references. The figure/correlation analysis defines the historical
@@ -1128,7 +1134,7 @@ supp_table7_scored <- dilution_df_with_xplus_zero_controls |>
   )
 
 # Remove direct identifiers and internal LOD bookkeeping, then move the
-# manuscript-facing dilution label and platform provenance to the first
+# dilution label used in the manuscript and the sequencing platform to the first
 # columns. Do not mix a positive LOD selection with negative selections in one
 # select() call: tidyselect interprets that expression as retaining only LOD.
 dilution_df_clean <- supp_table7_scored |>
@@ -1282,7 +1288,7 @@ writexl::write_xlsx(
   path = supp_table7_temporary
 )
 
-# Round-trip the temporary workbook before replacing the canonical file. This
+# Round-trip the temporary workbook before replacing the current output file. This
 # prevents an incomplete or unreadable workbook from being propagated.
 if (!identical(
   readxl::excel_sheets(supp_table7_temporary),
@@ -1340,7 +1346,7 @@ if (nrow(readr::read_csv(
 #   Scored Data sheet.
 #
 # Why it is here:
-#   This validated workbook is the canonical source for Supplementary Table 7
+#   This validated workbook is the current source for Supplementary Table 7
 #   and for every manuscript-object mirror of that table.
 # -------------------------------------------------------------------------
 supp_table7_corr_destination <- ms_copy_artifact(
@@ -3332,7 +3338,7 @@ message("Saved: Fig4G_LOD_combined_HCaxis_v2_20260225.png")
 #   exported source-data CSVs.
 #
 # Why it is here:
-#   This later reviewer-response export is the current final Extended Data
+#   This later export is the current Extended Data
 #   Figure 5D component.
 # -------------------------------------------------------------------------
 ms_copy_artifact(
@@ -3606,7 +3612,7 @@ message("Saved: Fig5G_LOD_combined_HCaxis_v2_20260225.png")
 #   and exported source-data CSVs.
 #
 # Why it is here:
-#   This later reviewer-response export is the current final Extended Data
+#   This later export is the current Extended Data
 #   Figure 7D component.
 # -------------------------------------------------------------------------
 ms_copy_artifact(
@@ -3618,7 +3624,7 @@ ms_copy_artifact(
 )
 
 # -------------------------------------------------------------------------
-# Reviewer-facing diagnostics: Fig5G blood dilution-series patient lines
+# Additional diagnostics: Fig5G blood dilution-series patient lines
 #
 # What this is:
 #   Two exploratory-but-reproducible versions of the blood/cfDNA dilution panel:

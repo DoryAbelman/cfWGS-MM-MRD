@@ -20,19 +20,28 @@
 #     Output_tables_2025/temporal_validation_subset/<run-id>/
 #   Existing expanded-test outputs and manuscript packages are never modified.
 #
+# Manuscript role
+#   This is a supporting validation audit. It is not used to generate a main or
+#   extended-data figure or a manuscript table. It checks how the fixed test-set
+#   models perform in the original seven-patient hold-out and in the patients
+#   accrued later, which helps document the interpretation of the test cohort.
+#
+# R packages
+#   dplyr, purrr, readr, tibble, and tidyr.
+#
 # Inference
 #   Point estimates remain sample-level because the clinical comparison is
 #   sample-level. Percentile intervals resample patients and retain all samples
 #   belonging to every sampled patient. Earliest-evaluable-sample-per-patient
 #   results are reported separately as a deterministic sensitivity analysis.
 #
-# Script roadmap
+# Analysis steps
 #   1. Lock the scored-manifest and pre-expansion cohort-assignment inputs.
 #   2. Identify the original seven selection-informed hold-out patients.
 #   3. Assign every current evaluable sample to original or later-accrued phase.
 #   4. Compute fixed-model point estimates separately for each phase.
 #   5. Bootstrap patients within phase and retain earliest-sample sensitivity.
-#   6. Export exact membership, denominators, QC, and completion provenance.
+#   6. Export exact membership, denominators, QC, and the input record.
 #
 # Why this matters
 #   Results from the original hold-out influenced which feature specifications
@@ -52,8 +61,8 @@ suppressPackageStartupMessages({
 # ----------------------------------------------------------------------------
 # 1. Versioned settings and explicit input selection
 # ----------------------------------------------------------------------------
-# For a release run, pass --scored-manifest explicitly. Automatic latest-file
-# discovery is convenient for local review but is weaker release provenance.
+# Pass --scored-manifest explicitly to reproduce a named analysis. If it is not
+# supplied, the script selects the most recently modified matching manifest.
 args <- commandArgs(trailingOnly = TRUE)
 get_arg <- function(flag, default = NULL) {
   hit <- which(args == flag)

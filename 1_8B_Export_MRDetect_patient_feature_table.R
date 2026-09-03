@@ -161,8 +161,8 @@ patient_feature_candidates <- mrdetect %>%
     by = c("Patient", "sample_id_tested")
   )
 
-# The public-facing table is explicitly a baseline/diagnosis mutation-source
-# export. Preserve excluded later-source rows in an audit rather than silently
+# The table included with the manuscript source data is limited to mutations
+# measured at baseline/diagnosis. Preserve excluded later-source rows in an audit rather than silently
 # including maintenance, relapse, or progression mutation lists.
 nonbaseline_mutation_source_rows <- patient_feature_candidates %>%
   filter(is.na(.data$timepoint_info) |

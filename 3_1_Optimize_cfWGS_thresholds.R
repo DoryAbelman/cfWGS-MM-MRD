@@ -5,30 +5,33 @@
 # How to run:
 #   Rscript Scripts_2025/Final_Scripts/3_1_Optimize_cfWGS_thresholds.R
 #
-# Manuscript outputs created/updated:
-#   - Figure 3A-B: BM cfWGS model performance and selected-threshold panels.
-#   - Figure 4A-B: blood cfWGS model performance and selected-threshold panels.
-#   - Extended Data Figure 5A-C: BM supplementary model-performance panels.
-#   - Extended Data Figure 7A-C and 7E: blood supplementary model-performance
-#     and threshold panels.
-#   - Extended Data Figure 9A-F: fragmentomics nested-CV performance panels.
-#   - Supplementary Table 4: final BM model metrics/source workbook.
+# Current manuscript outputs created/updated by the default preserved-model path:
+#   - Figure 3B: BM model confusion matrices.
+#   - Figure 4B: blood/cfDNA model confusion matrices.
+#   - Extended Data Figure 5B-C: BM training- and test-cohort performance.
+#   - Extended Data Figure 7B-C and 7E: blood/cfDNA performance and ROC panels.
+#   - Extended Data Figure 9C-F: fragmentomics performance and confusion panels.
 #   - Supplementary Table 5: final all-model metrics workbook. Note that the
 #     historical source file is named Supplementary_Table_4_All_Model_Metrics_*
 #     because of a manuscript-numbering correction; the artifact map records it
 #     as Supplementary Table 5.
 #   - Supplementary Table 6: final blood model metrics/source workbook.
 #
+# Current grouped-CV outputs made elsewhere:
+#   Figure 3A, Figure 4A, Extended Data Figure 5A, Extended Data Figure 7A,
+#   and Extended Data Figure 9A-B come from the patient-grouped repeated
+#   nested-CV workflow in scripts 6_12 through 6_18. Final Supplementary Table
+#   4 is also assembled from that workflow. This script retains the older
+#   sample-row CV panels and tables only as analysis history.
+#
 # Pipeline role and reproducibility note:
-#   This script contains the model-training, nested cross-validation, performance
-#   summarization, and downstream scoring logic used for the cfWGS and
-#   fragmentomics outputs listed above. The manuscript workflow treats this as a
-#   cache-sensitive step: by default, the command-line pipeline reuses preserved
-#   model/metric outputs from the original analysis so that manuscript values
-#   remain stable. Full recomputation can be requested with
-#   --include-cache-sensitive, but regenerated artifacts may differ unless the
-#   exact same inputs, seeds, package versions, and execution environment are
-#   preserved.
+#   The default path reads the February 2026 models and thresholds, applies them
+#   to the current cohort, and updates the outputs listed above without fitting
+#   the models again. Setting CFWGS_RETRAIN_MODELS=1 enters the older development
+#   and refitting code below the preserved-model exit. That older branch is not
+#   the current patient-grouped repeated nested-CV analysis and should not be
+#   used to recreate final Supplementary Table 4 or the six grouped-CV figure
+#   panels listed above.
 #
 # Author:   Dory Abelman
 # Date:     May 28, 2025 (updated through Feb 2026)
@@ -50,10 +53,12 @@
 #      Evaluate univariate and simple ridge-regression thresholds
 #      NOTE: These are exploratory; final results use nested CV models
 #
-#   4. NESTED CROSS-VALIDATION (Section 7) ◄── MAIN ANALYSIS
-#      Train elastic-net models using nested 5×5 CV strategy:
-#        • Outer fold: 5-fold stratified split for unbiased evaluation
-#        • Inner fold: 5×5 repeated CV for hyperparameter tuning
+#   4. HISTORICAL NESTED CROSS-VALIDATION (Section 7)
+#      Earlier elastic-net analysis using sample-row resampling:
+#        • Outer fold: one stratified five-fold split
+#        • Inner fold: five-fold CV repeated five times for tuning
+#      This does not keep repeated samples from one patient in the same fold.
+#      The current patient-grouped repeated analysis is in script 6_12.
 #      Three model "families":
 #        - BM models: Trained on bone-marrow-derived WGS features
 #        - Blood models: Trained on blood cfDNA WGS features  
@@ -80,8 +85,9 @@
 #
 # KEY DESIGN DECISIONS:
 # ────────────────────────────────────────────────────────────────────────────────────────────────────────────
-# • NESTED CV: Ensures unbiased performance estimates (outer fold independent of tuning inner fold).
-#   Results in multiple metrics per combo (one per fold).
+# • HISTORICAL NESTED CV: The outer fold is independent of inner tuning, but
+#   splitting is by sample row rather than patient. Use script 6_12 for the
+#   current patient-grouped repeated estimate.
 # • FOLD REUSE: Fragmentomics models on restricted cohorts use exact same folds as original
 #   BM/blood models to ensure fair comparison.
 # • MODEL NAMING: Fragmentomics models include cohort suffix (_Full, _BM_restricted, _Blood_restricted)
@@ -102,9 +108,9 @@
 #
 # =============================================================================
 # Pipeline status:
-#   Active but cache-sensitive. The command-line runner skips this script by
-#   default during routine regeneration and test-cohort expansion. Use
-#   --include-cache-sensitive only for deliberate model recomputation.
+#   Active but cache-sensitive. Routine runs use the preserved-model path.
+#   Deliberate model validation is performed by script 6_12 rather than by the
+#   historical refitting branch below.
 #
 
 # -----------------------------------------------------------------------------
@@ -148,7 +154,7 @@ library(readxl)         # Excel file reading
 
 # Shared helper for final manuscript-organized outputs.
 # The model script retains its historical filenames and cached model artifacts,
-# while these helper calls copy final manuscript-facing figures/tables into
+# while these helper calls copy the final figures and tables into
 # Scripts_2025/Final_Scripts/final_manuscript_objects with final labels such as
 # Figure_3A, Extended_Data_Figure_5A, and Supplementary_Table_5.
 .manuscript_helper <- file.path("Scripts_2025", "Final_Scripts", "manuscript_output_helpers.R")
@@ -2545,13 +2551,13 @@ for(i in seq_len(nrow(selected_rows))) {
 
 
 
-### This is main model used in manuscript
+### Historical model-development and full-training refit section
 # -----------------------------------------------------------------------------
-# 7. Elastic-Net Classifier Training & Nested CV - main model
+# 7. Elastic-Net Classifier Training & Historical Nested CV
 # -----------------------------------------------------------------------------
 
-### Next do a full nested cross validation 5x5 with hyperparameter tuning 
-### Even more robust with less data leakage
+### One five-fold outer split with five-fold CV repeated five times inside.
+### The current 50-repeat patient-grouped analysis is in script 6_12.
 positive_class <- "pos"
 
 ### Since doing hyperparameter tuning, can use less features 
@@ -2744,15 +2750,15 @@ hold_fragmentomics  <- hold_df %>%
   drop_na(all_of(c("MRD_truth", frag_preds)))
 
 # =============================================================================
-# SECTION 7: NESTED CROSS-VALIDATION FOR MODEL TRAINING & EVALUATION
+# SECTION 7: HISTORICAL SAMPLE-ROW NESTED CROSS-VALIDATION
 # =============================================================================
 # 
-# WHAT:    Core nested CV function that trains elastic-net models and evaluates
-#          them on held-out folds for unbiased performance estimation.
+# WHAT:    Earlier nested-CV function that trains elastic-net models and
+#          evaluates them on held-out sample rows.
 #
 # HOW IT WORKS:
-#   1. Outer loop: Split training data into 5 folds (stratified by MRD_truth).
-#      Each fold is left out for testing; others used for model training.
+#   1. Outer loop: Split training rows once into five folds, stratified by
+#      MRD_truth. Repeated samples from one patient are not grouped here.
 #   2. Inner loop: For each outer fold, use caret::train() with 5x5 repeated CV
 #      to optimize elastic-net hyperparameters (alpha, lambda).
 #   3. Final model: Train on entire train_data with optimized parameters,
@@ -2773,7 +2779,11 @@ hold_fragmentomics  <- hold_df %>%
 #       previously claimed these came from OOF predictions.
 #   - fold_indices: The outer fold structure (useful for reusing folds across models)
 #
-# KEY DESIGN: Outer folds are stratified to maintain class balance in train/test.
+# CURRENT MANUSCRIPT ANALYSIS:
+#   Script 6_12 repeats the outer five-fold split 50 times and groups both outer
+#   and inner folds by patient. Scripts 6_13 through 6_20 assemble its 32-model
+#   table and current figure panels. The code below remains for the original
+#   model-development record and preserved full-training model objects.
 #
 # =============================================================================
 
@@ -3889,16 +3899,17 @@ write_csv(
 )
 
 # -------------------------------------------------------------------------
-# Manuscript output: Supplementary Table 4
+# Historical nested-CV table (superseded as Supplementary Table 4)
 #
 # What this is:
-#   Nested cross-validation model-performance table across BM, blood/cfDNA, and
-#   fragmentomics model families.
+#   The earlier sample-row nested-CV model-performance table across BM,
+#   blood/cfDNA, and fragmentomics model families.
 #
 # Why it is here:
-#   The historical filename says Supplementary Table 3, but the audited
-#   manuscript map identifies this export as final Supplementary Table 4.
-#   Cached model-performance objects are preserved to avoid stochastic drift.
+#   This export was previously registered as Supplementary Table 4 and is kept
+#   so the original analysis can be traced. The current final Supplementary
+#   Table 4 is the 32-model, 50-repeat patient-grouped result assembled from
+#   script 6_12 outputs. Do not use this older file in place of that table.
 # -------------------------------------------------------------------------
 ms_copy_artifact(
   source_path = "Final Tables and Figures/Supplementary_Table_3_All_Model_performance_nested_CV_v3_Feb2026_with_restricted_fragmentomics.csv",

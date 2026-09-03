@@ -96,7 +96,7 @@ suppressPackageStartupMessages({
   library(viridis)
 })
 
-# Build manuscript-facing facet headers from the patients actually represented
+# Build the figure facet headers from the patients actually represented
 # in a panel. Counting distinct patients here (rather than rows/timepoints)
 # prevents longitudinally sampled patients from inflating the displayed n.
 make_relapse_facet_labels <- function(plot_data) {
@@ -136,7 +136,7 @@ make_relapse_facet_labels <- function(plot_data) {
 
 # Shared helper for final manuscript-organized outputs.
 # This script retains its historical Output_tables_2025 filenames, while the
-# helper copies the manuscript-facing components into
+# helper copies the components used in the manuscript into
 # Scripts_2025/Final_Scripts/final_manuscript_objects with final labels such
 # as Figure_2B and Extended_Data_Figure_3A.
 .manuscript_helper <- file.path("Scripts_2025", "Final_Scripts", "manuscript_output_helpers.R")
@@ -168,7 +168,7 @@ if (!dir.exists(outdir)) dir.create(outdir, recursive = TRUE)
 ### Load data
 file <- readRDS("Final_aggregate_table_cfWGS_features_with_clinical_and_demographics_updated9.rds")
 
-# The current aggregate table is authoritative for the longitudinal cohort and
+# The current aggregate table supplies the longitudinal cohort and
 # MRD features, but some historical rows lost `Mean.Coverage` during the
 # updated9 rebuild. Restore only missing regulatory-coverage values by exact
 # Patient-Date match from the immediately prior aggregate table, without
@@ -2338,7 +2338,7 @@ ms_copy_artifact(
 # panels mapped by `ms_copy_artifact()` to Figure 2C and Extended Data Figure
 # 3B-C. Some historical filenames still contain older draft labels; the
 # manuscript artifact map and `ms_copy_artifact()` calls below are the
-# authoritative final labels.
+# final labels used in the figure.
 
 ## Now work on blood muts
 # 1. Pivot to long form

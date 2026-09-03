@@ -242,7 +242,7 @@ all_files <- bind_rows(lapply(csv_files, read_and_label))
 
 if (length(spring2026_final_xplus_control_files)) {
   # The final file supersedes partial XPlus-control rows in earlier combined
-  # exports. This guarantees one authoritative result per BAM/VCF pair.
+  # exports. This retains one result per BAM/VCF pair.
   all_files <- all_files %>%
     filter(
       !is_xplus_charm_healthy_bam(.data$BAM) |

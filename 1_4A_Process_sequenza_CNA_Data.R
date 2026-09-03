@@ -1057,7 +1057,7 @@ probe_calls_bin_cytoband <- probe_calls_long_cyto %>%
 # combined_seg_data %>% filter(is.na(arm)) %>% count(chr, sort = TRUE)
 
 # ---- Save combined Sequenza segment and probe-call intermediates ----
-# These files support audit/reuse of the Sequenza layer; final manuscript-facing
+# These files support checks and reuse of the Sequenza layer; the final
 # feature integration consumes the cleaned exports written near the end.
 write.csv(combined_seg_data, support_file("Sep_2025_combined_sequenza_calls_400_updated.csv"), row.names = FALSE)
 saveRDS(combined_seg_data, support_file("Sep_2025_combined_sequenza_calls_400_updated.rds"))

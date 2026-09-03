@@ -36,7 +36,7 @@
 #   - Jan2025_exported_data/All_feature_data_Sep2025_updated2.rds
 #  
 # Output files:
-#   Manuscript-facing:
+#   Used in the manuscript:
 #   - Final Tables and Figures/Fig3C_mutation_overlap_lollipop2_updated.png
 #   - Final Tables and Figures/Extended_Data_Figure_2G_mutation_overlap_source_data.csv
 #   - Final Tables and Figures/Extended_Data_Figure_2G_mutation_overlap_summary.csv
@@ -147,7 +147,7 @@ rm(df_blood)
 
 # Support-only QA: per-patient Venn diagrams between diagnostic BM and cfDNA
 # mutations. These help inspect individual overlap patterns but are not mapped
-# to a final manuscript panel; the manuscript-facing output is the lollipop
+# to a final manuscript panel; the lollipop summary used in the manuscript is
 # summary saved later as Extended Data Figure 2G.
 # Create a column to indicate presence (1) of the mutation
 combined_maf <- combined_maf %>%
@@ -208,7 +208,7 @@ combined_maf <- left_join(combined_maf %>% select(-Bam), metada_df_mutation_comp
 combined_maf <- combined_maf %>% filter(timepoint_info %in% c("Diagnosis", "Baseline"))
 
 # Create mutation identifiers only after the metadata join has supplied the
-# authoritative patient ID. Some legacy MAF rows (including baseline cfDNA for
+# patient ID used in the analysis. Some legacy MAF rows (including baseline cfDNA for
 # IMG-159/IMG-05) have a missing raw Patient field. Building a patient-aware key
 # before this join incorrectly makes matched BM/cfDNA variants non-identical.
 if (any(is.na(combined_maf$Patient) | !nzchar(combined_maf$Patient))) {

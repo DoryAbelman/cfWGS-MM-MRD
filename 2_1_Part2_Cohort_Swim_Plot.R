@@ -1435,7 +1435,7 @@ write_csv(all_events_indexed,
 #
 # Current provenance note:
 #   docs/manuscript_artifact_source_map.tsv records that the retained renamed
-#   manuscript CSV is currently authoritative until the exact protected-input
+#   manuscript CSV is used until the exact protected-input
 #   version of this old-name export is fully reconciled. We still copy the table
 #   generated here so this script is visibly responsible for the regenerated
 #   Supplementary Table 1 candidate.
@@ -3213,8 +3213,8 @@ ggsave(file.path(swim_support_dir, "Figure1A_draft_swim_plot_without_annotations
 
 ### Add back cohort and paired status 
 # The source cohort table uses Frontline/Non-frontline, whereas older ordering
-# tables used Training/Test. Normalize this annotation to the manuscript-facing
-# labels before applying the scale so Frontline rows cannot fall through to the
+# tables used Training/Test. Normalize this annotation to the labels shown in
+# the manuscript before applying the scale so Frontline rows cannot fall through to the
 # default missing-value grey.
 cohort_cols <- c(
   "Train" = "#1f77b4",

@@ -51,7 +51,7 @@ spring2026_revision_data_dir <- function() {
 }
 
 spring2026_revision_metadata_path <- function() {
-  # ## Authoritative Spring 2026 metadata table
+  # ## Spring 2026 metadata table used by the final scripts
   # This CSV is the repo-shaped OICR revision table, not a filename-derived
   # reconstruction. It is the source of truth for patient IDs, sample IDs,
   # sample types, dates, timepoint labels, study labels, BAM names, and whether a
@@ -825,7 +825,7 @@ augment_cohort_assignment_with_spring2026_revision <- function(cohort_df) {
 }
 
 final_cohort_assignment_path <- function(extension = c("rds", "csv")) {
-  # ## Durable revision-aware cohort assignment
+  # ## Saved revision-aware cohort assignment
   # This is the manuscript-era cohort table: the reviewed historical assignment
   # plus eligible Spring 2026 revision patients. The historical
   # cohort_assignment_table_updated.rds remains the auditable base input.
@@ -837,7 +837,7 @@ final_cohort_assignment_path <- function(extension = c("rds", "csv")) {
 }
 
 load_final_cohort_assignment <- function(required = TRUE, validate_current = TRUE) {
-  # Read the single durable cohort artifact used by downstream final scripts.
+  # Read the saved cohort table used by downstream final scripts.
   # When validation is enabled, fail if it no longer agrees with the historical
   # base table plus the current revision metadata and exclusion rules.
   path <- final_cohort_assignment_path("rds")
@@ -1595,7 +1595,7 @@ spring2026_revision_mutation_counts <- function(
   # no-rsID count files. Revision samples instead arrive as post-filter MAFs:
   # PASS_AFgt10pct for BM and PASS_altADge2 for plasma. To preserve the original
   # no-rsID definition, rows whose dbSNP_RS value begins with "rs" are excluded.
-  # Counts are matched through the authoritative metadata mutect2_pair_id rather
+  # Counts are matched through the metadata mutect2_pair_id used in this analysis rather
   # than inferred from patient or timepoint substrings.
   metadata <- load_spring2026_revision_metadata(required = required)
   if (is.null(metadata)) return(tibble::tibble())

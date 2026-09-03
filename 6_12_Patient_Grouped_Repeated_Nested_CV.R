@@ -15,6 +15,35 @@
 #   script does not reselect the manuscript's feature combinations and does not
 #   refit or overwrite the frozen models used for test-cohort scoring.
 #
+# Manuscript role
+#   The final manuscript uses the 50-outer-repeat version of this analysis for
+#   Figure 3A, Figure 4A, Extended Data Figure 5A, Extended Data Figure 7A,
+#   Extended Data Figure 9A-B, and Supplementary Table 4. Downstream scripts
+#   assemble the completed model blocks, draw the panels, and format the table.
+#   The manuscript source runs are:
+#     2026-08-05_all_models_50repeats_bm_v4
+#     2026-08-05_all_models_50repeats_blood_v4
+#     2026-08-05_all_models_50repeats_fullfrag_v4
+#   Each used 50 outer repeats, five inner repeats, and 2,000 patient-clustered
+#   bootstrap replicates. These are also the script defaults so a new run uses
+#   the manuscript settings unless they are explicitly overridden.
+#
+# Inputs
+#   * Final_aggregate_table_cfWGS_features_with_clinical_and_demographics_updated9.rds
+#     supplies the sample-level MRD outcomes and cfWGS features.
+#   * baseline_high_quality_patients_updated.csv defines BM- and blood-informed
+#     eligibility for the corresponding model families.
+#   * helpers.R supplies load_final_cohort_assignment(), which identifies the
+#     Frontline training cohort.
+#   * The frozen model and validation RDS files listed in frozen_artifacts below
+#     preserve the historical training membership, predictors, and test-scoring
+#     boundary. They are read but never overwritten.
+#   * The optional nonbaseline-timepoint audit is used when present to exclude
+#     rows previously identified as mislabeled Baseline or Diagnosis samples.
+#
+# R packages
+#   caret, dplyr, glmnet, pROC, purrr, readr, tibble, and tidyr.
+#
 # Design
 #   * Repeated five-fold outer cross-validation grouped by patient.
 #   * Repeated five-fold inner cross-validation grouped by patient.
@@ -27,7 +56,7 @@
 #     resamples patients and retains all their samples and repeated-CV
 #     predictions.
 #
-# Script roadmap
+# Analysis steps
 #   1. Parse and validate run settings.
 #      Why: every result must record an explicit, reproducible resampling design.
 #   2. Protect and hash frozen artifacts.
@@ -43,7 +72,7 @@
 #   6. Score outer-held-out patients and pool predictions within each repeat.
 #      Why: the primary AUC uses all held-out predictions in a repeat rather
 #      than an average of potentially unstable fold-level AUCs.
-#   7. Bootstrap patients and export QC/provenance tables.
+#   7. Bootstrap patients and export QC and traceability tables.
 #      Why: uncertainty must preserve within-patient dependence and every
 #      estimate must remain traceable to its inputs, folds, and predictions.
 #
@@ -54,18 +83,20 @@
 #   row-level CV outputs, the July 29 grouped diagnostic, frozen models, and
 #   frozen thresholds are read-only inputs and remain unchanged.
 #
-# Example
-#   Rscript Scripts_2025/Final_Scripts/6_12_Patient_Grouped_Repeated_Nested_CV.R \
-#     --run-id 2026-07-31_v1 --outer-repeats 100 --inner-repeats 5 \
-#     --bootstrap-reps 2000
+# Manuscript settings
+#   The final manuscript results used --outer-repeats 50, --inner-repeats 5,
+#   --bootstrap-reps 2000, --model-library all, and the default seed. The full
+#   32-model library was run in three blocks (BM, blood, and full-cohort
+#   fragmentomics) and then combined by
+#   6_13_Assemble_All_Model_Grouped_CV_Results.R.
 #
-#   Complete original model library (32 model/cohort combinations):
-#     Rscript Scripts_2025/Final_Scripts/6_12_Patient_Grouped_Repeated_Nested_CV.R \
-#       --run-id 2026-07-31_all_models_v1 --model-library all \
-#       --outer-repeats 50 --inner-repeats 5 --bootstrap-reps 2000
+# Example for one complete 32-model run with the manuscript settings
+#   Rscript Scripts_2025/Final_Scripts/6_12_Patient_Grouped_Repeated_Nested_CV.R \
+#     --run-id <new-run-id> --model-library all \
+#     --outer-repeats 50 --inner-repeats 5 --bootstrap-reps 2000
 #
 # Expected failure modes
-#   The script stops if frozen artifacts are writable, canonical frame sizes
+#   The script stops if frozen artifacts are writable, expected frame sizes
 #   drift, a patient appears on both sides of a split, a fold lacks either MRD
 #   class, inner out-of-fold predictions are incomplete, or an output directory
 #   already exists.
@@ -103,7 +134,7 @@ as_positive_integer <- function(value, label) {
 }
 
 RUN_ID <- get_arg("--run-id", format(Sys.Date(), "%Y-%m-%d_v1"))
-OUTER_REPEATS <- as_positive_integer(get_arg("--outer-repeats", "100"),
+OUTER_REPEATS <- as_positive_integer(get_arg("--outer-repeats", "50"),
                                      "--outer-repeats")
 INNER_REPEATS <- as_positive_integer(get_arg("--inner-repeats", "5"),
                                      "--inner-repeats")
@@ -146,7 +177,7 @@ cleanup_incomplete_run <- function() {
 on.exit(cleanup_incomplete_run(), add = TRUE)
 
 # ----------------------------------------------------------------------------
-# 2. Frozen-artifact guardrail and input provenance
+# 2. Protect frozen artifacts and record the inputs
 # ----------------------------------------------------------------------------
 # These files define the historical model boundary. They are hashed and must be
 # read-only so validation cannot silently become retraining or change test calls.
@@ -209,7 +240,7 @@ write_csv(
 if (!file.exists(AGG_PATH)) stop("Missing aggregate input: ", AGG_PATH, call. = FALSE)
 
 # ----------------------------------------------------------------------------
-# 3. Reconstruct the canonical training population and model specifications
+# 3. Reconstruct the exact training population and model specifications
 # ----------------------------------------------------------------------------
 # The headline library contains preselected manuscript models. The optional
 # all-model library is a sensitivity expansion; it does not repeat feature
@@ -224,7 +255,7 @@ rm(.helpers_path)
 dat <- readRDS(AGG_PATH)
 cohort_df <- load_final_cohort_assignment()
 if (anyDuplicated(cohort_df$Patient)) {
-  stop("Canonical cohort assignment contains duplicate Patient values.", call. = FALSE)
+  stop("Cohort assignment contains duplicate Patient values.", call. = FALSE)
 }
 
 dat <- dat %>%

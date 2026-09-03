@@ -1,9 +1,10 @@
 #!/usr/bin/env Rscript
 
 # Purpose -----------------------------------------------------------------
-# Build an alternate dilution-series correlation panel from the Spring 2026
-# PWGVAL/M4CHIP release. Unlike the legacy Figure 3C lollipop, this version
-# preserves the patient and technical-replicate structure.
+# Build patient-weighted dilution-series sensitivity panels from the Spring
+# 2026 PWGVAL/M4CHIP release, then copy the pooled 48-library panel made by
+# 3_1_part2 into the Figure 3C manuscript folder. The sensitivity panels retain
+# the patient and technical-replicate structure.
 #
 # Statistical summary -----------------------------------------------------
 # 1. Calculate Spearman rho separately for every feature, patient, and
@@ -410,7 +411,7 @@ pdf_path <- file.path(
 ggsave(png_path, p, width = 7.1, height = 5.7, dpi = 600, bg = "white")
 ggsave(pdf_path, p, width = 7.1, height = 5.7, device = cairo_pdf, bg = "white")
 
-# Simplified manuscript-facing version ------------------------------------
+# Simplified version used in the manuscript -------------------------------
 # Technical-replicate rho values remain available in the source table and
 # detailed figure above. Here each coloured point is the within-patient mean
 # of two technical-replicate rho values, and the black diamond is the
@@ -902,7 +903,7 @@ ggsave(
 )
 
 # The patient-weighted panels above are retained as sensitivity/diagnostic
-# outputs. The canonical Figure 3C manuscript object must remain identical to
+# outputs. The current Figure 3C manuscript panel matches
 # Supplementary Table 7: pooled library-level Spearman correlations across the
 # 48 scored libraries, with all four MRD-negative references at 0%. The pooled
 # panel and source table are generated upstream by 3_1_part2.
@@ -940,7 +941,7 @@ final_panel_path <- ms_copy_artifact(
   artifact_id = "FIG3C",
   role = "figure_panel_png",
   description = paste(
-    "Canonical Figure 3C pooled library-level dilution correlations across 48 scored libraries;",
+    "Figure 3C pooled library-level dilution correlations across 48 scored libraries;",
     "all four MRD-negative references are 0%, matching Supplementary Table 7."
   ),
   script_name = "3_1C_Summarize_dilution_correlations_across_patients.R"
@@ -949,7 +950,7 @@ ms_copy_artifact(
   source_path = canonical_pooled_pdf_path,
   artifact_id = "FIG3C",
   role = "figure_panel_pdf",
-  description = "Vector PDF companion to the canonical pooled 48-library Figure 3C panel.",
+  description = "Vector PDF companion to the pooled 48-library Figure 3C panel.",
   script_name = "3_1C_Summarize_dilution_correlations_across_patients.R"
 )
 ms_copy_artifact(
@@ -958,7 +959,7 @@ ms_copy_artifact(
   role = "source_data_csv_all_four_patients",
   description = paste(
     "Exact pooled 48-library Spearman rho, nominal p-value, and rho-squared values",
-    "used by canonical Figure 3C and Supplementary Table 7."
+    "used by Figure 3C and Supplementary Table 7."
   ),
   script_name = "3_1C_Summarize_dilution_correlations_across_patients.R"
 )

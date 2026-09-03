@@ -17,6 +17,25 @@
 ##   post-baseline, non-progression-labeled MRD assessment, describe subsequent
 ##   PFS by MRD status at that assessment.
 ##
+## Pipeline role:
+##   This is a companion to 4_1_Survival_Analysis.R. It starts from the same
+##   frozen sample-level cfWGS calls but evaluates alternative patient-level
+##   anchors for broader longitudinal and maintenance analyses. It does not fit
+##   or select cfWGS classifiers and does not replace the primary landmark KM
+##   curves created by 4_1 unless its explicitly labelled companion file is
+##   selected during manuscript assembly.
+##
+## Required inputs:
+##   - Output_tables_2025/all_patients_with_BM_and_blood_calls_updated6.rds:
+##     sample-level frozen cfWGS calls and clinical-assay fields from 3_1.
+##   - Exported_data_tables_clinical/Censor_dates_per_patient_for_PFS_updated.rds
+##     and Relapse_dates_full_updated.rds: patient follow-up and progression
+##     dates used by next_event_endpoint_helpers.R.
+##   - Patient follow-up tables under Exported_data_tables_clinical/: used to
+##     assign censoring after each longitudinal sample.
+##   - M4, IMMAGINE, and SPORE treatment-course tables listed below: used only
+##     to establish documented maintenance intervals for the 12-18-month anchor.
+##
 ## Key safeguards:
 ##   - One row per patient per assay/anchor.
 ##   - Excludes baseline/diagnosis/germline-normal samples from the landmark.
@@ -51,7 +70,10 @@
 ##       all_evaluable_first_nonbaseline_method_note.md
 ##
 ## Manuscript outputs created/updated:
-##   - Additional all-evaluable first-nonbaseline KM review outputs under
+##   - Supporting versions associated with Figure 3F, Figure 4E, Extended Data
+##     Figure 6C, and Extended Data Figure 6D. These are copied with distinct
+##     companion roles and do not overwrite the primary role labels from 4_1.
+##   - Full anchor, model, denominator, and source-data outputs under
 ##     final_manuscript_objects/additional_all_evaluable_first_nonbaseline_km/.
 ##
 ## How to run:
@@ -2064,7 +2086,7 @@ if (
     script_name = "4_1B_Build_all_evaluable_first_nonbaseline_KM.R"
   )
 
-  # Preserve the legacy numbered filename referenced during manuscript review,
+  # Preserve the legacy numbered filename referenced during manuscript assembly,
   # but replace its former label-only contents with the clinically anchored
   # primary panel. This alias is regenerated on every run.
   legacy_review_alias <- file.path(
@@ -2347,9 +2369,9 @@ method_note <- c(
   "",
   "- `documented_maintenance_12_18_analysis_summary.csv`: primary frontline and exploratory all-line counts, events, and log-rank results.",
   "- `source_data/documented_maintenance_12_18_frontline_BM_cfWGS_cVAF_source_data.csv`: exact patient-level rows plotted in the primary replacement panel.",
-  "- `source_data/documented_maintenance_12_18_frontline_BM_cfWGS_cVAF_compact_source_data.csv`: reviewer-friendly subset of the exact plotted rows, including maintenance provenance, timing, MRD group, and endpoint.",
+  "- `source_data/documented_maintenance_12_18_frontline_BM_cfWGS_cVAF_compact_source_data.csv`: compact subset of the exact plotted rows, including maintenance provenance, timing, MRD group, and endpoint.",
   "- `source_data/documented_maintenance_intervals.csv`: treatment intervals and source provenance used to establish maintenance eligibility.",
-  "- `source_data/spring_review_maintenance_information_request.csv`: review-cohort patients for whom maintenance occurrence or dates remain undocumented in the available clinical files.",
+  "- `source_data/spring_review_maintenance_information_request.csv`: patients for whom maintenance occurrence or dates remain undocumented in the available clinical files; the historical filename is retained for compatibility.",
   "- `KM_BM_cfWGS_cVAF_documented_maintenance_12_18_frontline_primary.png`: clinically anchored primary replacement for the former Figure 3F alternate.",
   "- `KM_BM_cfWGS_cVAF_documented_maintenance_12_18_all_lines_exploratory.png`: all-treatment-line sensitivity analysis; not a validation figure.",
   "- `all_evaluable_first_nonbaseline_anchor_counts.csv`: patient counts, events, MRD status, and assessment timing by cohort.",

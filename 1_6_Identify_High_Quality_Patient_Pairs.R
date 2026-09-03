@@ -58,7 +58,7 @@
 #   count in the clinical metadata; repeated rows are not deduplicated here.
 #
 # Output Files:
-#   Manuscript-facing:
+#   Used in the manuscript:
 #   - Final Tables and Figures/Table for creating sample flowchart updated3.csv
 #     (Figure 1B source table copied into final_manuscript_objects/)
 #

@@ -32,7 +32,8 @@
 ##  
 ##  Scripts this Script Depends On:
 ##    1. 3_1_Optimize_cfWGS_thresholds.R - cfWGS model optimization/thresholds
-##    2. 3_1_A_Process_and_optimize_EasyM.R - EasyM model development
+##    2. 3_1_A_Process_and_optimize_EasyM.R - EasyM processing and
+##       isotype-specific reference-threshold calls
 ##    3. 2_0_Assemble_Table_With_All_Features.R - Feature integration
 ##
 ##  How to run:
@@ -43,15 +44,27 @@
 ##    - Figure 4E: blood cfWGS time-to-event/survival panel.
 ##    - Extended Data Figure 6A-K: BM cfWGS survival and relapse-detection
 ##      sensitivity panels.
-##    - Extended Data Figure 8A-D plus unlabeled bottom panels: blood cfWGS
-##      survival and relapse-detection sensitivity panels.
+##    - Extended Data Figure 8A-F: blood cfWGS survival,
+##      relapse-detection sensitivity, and longitudinal panels.
 ##    - Supplementary Table 9: BM/blood time-window detection results.
+##    - Paired cfWGS/EasyM landmark Cox-model source table used for the
+##      manuscript Results hazard ratios.
 ##
 ##  Pipeline role:
 ##    Survival analyses are downstream of frozen cfWGS calls. The script tests
 ##    whether MRD status at clinically meaningful landmarks is associated with
 ##    progression-free survival and estimates how often relapsing patients were
 ##    detected by each assay before progression.
+##
+##  Analysis populations and units:
+##    - Primary landmark KM curves: one earliest evaluable sample per frontline
+##      patient at each landmark and assay.
+##    - Landmark sensitivity summaries: one earliest evaluable sample per
+##      relapsing frontline patient; denominators are assay-specific.
+##    - Test-cohort time-window summaries: one row per evaluable sample and
+##      prediction window, with patient counts reported separately.
+##    - Longitudinal panels: one row per evaluable sample; a patient can
+##      contribute multiple timepoints.
 ##  
 ##  Author: Dory Abelman
 ##  Updated: February 2026
@@ -317,7 +330,7 @@ cat("  ✓ Data preparation complete\n\n")
 ## ── 1A. LOAD EasyM PROTEOMIC MRD DATA ─────────────────────────────────────────
 ##
 ##  This section:
-##    - Loads EasyM M-protein measurements and optimized binary calls
+##    - Loads EasyM M-protein measurements and prespecified isotype-specific calls
 ##    - Merges EasyM data by patient and timepoint
 ##    - Gracefully handles missing EasyM data with placeholder columns
 ##
@@ -1325,6 +1338,198 @@ cat(sprintf(
   "  ✓ Additive train+test KM summary written for %d timepoint-assay combinations\n\n",
   dplyr::n_distinct(paste(km_train_test_summary$timepoint_info, km_train_test_summary$assay_variable))
 ))
+
+
+## ── 4B. PAIRED cfWGS/EasyM LANDMARK HAZARD RATIOS ─────────────────────────────
+##
+## Goal:
+##   Summarize the patient-matched cfWGS and EasyM landmark cohorts used for
+##   the manuscript Results hazard ratios. The patient-level inputs are the
+##   EasyM source tables written immediately above by this script.
+##
+## Unit of analysis and models:
+##   - One patient per landmark (18 patients/8 events at one-year maintenance;
+##     16 patients/7 events post-ASCT).
+##   - Separate univariable Cox models for the binary cfWGS call, the
+##     isotype-specific EasyM call, cfWGS probability, and EasyM residual value.
+##   - Continuous predictors are standardized within landmark and reported per
+##     one standard-deviation increase; ties use the Efron approximation.
+##
+## Safeguards:
+##   Expected denominators, event counts, and the four manuscript binary-call
+##   hazard ratios are checked before the source table is written. These checks
+##   prevent an upstream cohort change from silently altering reported results.
+
+paired_easym_landmarks <- tibble::tribble(
+  ~landmark, ~source_file, ~expected_n, ~expected_events,
+  "One-year maintenance",
+  paste0(
+    "All_train_test_KM_source_data_1yr_maintenance_",
+    "EasyM_reference_threshold_binary_", date_tag, ".csv"
+  ),
+  18L, 8L,
+  "Post-ASCT",
+  paste0(
+    "All_train_test_KM_source_data_post_transplant_",
+    "EasyM_reference_threshold_binary_", date_tag, ".csv"
+  ),
+  16L, 7L
+)
+
+paired_easym_predictors <- tibble::tribble(
+  ~predictor, ~column, ~scale_continuous, ~definition,
+  "BM-informed cfWGS call",
+  "BM_zscore_only_detection_rate_call",
+  FALSE,
+  "Locked BM-informed cVAF-model call",
+  "EasyM reference-threshold call",
+  "EasyM_reference_threshold_binary",
+  FALSE,
+  paste(
+    "Isotype-specific Rapid Novor reference threshold:",
+    "negative if IgG <=1% or IgA/light-chain <=0.05% of baseline"
+  ),
+  "BM-informed cfWGS probability per 1 SD",
+  "BM_zscore_only_detection_rate_prob",
+  TRUE,
+  "Locked BM-informed cVAF-model probability, standardized within landmark",
+  "EasyM residual value per 1 SD",
+  "EasyM_value",
+  TRUE,
+  "Residual monoclonal-protein percentage, standardized within landmark"
+)
+
+fit_paired_easym_landmark_model <- function(data,
+                                            predictor_row,
+                                            landmark,
+                                            source_file) {
+  column <- predictor_row$column[[1]]
+  required <- c("Time_to_event", "Relapsed_Binary", column)
+  missing <- setdiff(required, names(data))
+  if (length(missing) > 0L) {
+    stop(
+      sprintf(
+        "%s is missing required columns: %s",
+        source_file,
+        paste(missing, collapse = ", ")
+      ),
+      call. = FALSE
+    )
+  }
+
+  analysis <- data %>%
+    dplyr::select(dplyr::all_of(required)) %>%
+    dplyr::filter(dplyr::if_all(dplyr::everything(), ~ !is.na(.x)))
+
+  if (nrow(analysis) < 5L || sum(analysis$Relapsed_Binary) < 2L) {
+    stop(
+      sprintf("Insufficient evaluable data for %s at %s", column, landmark),
+      call. = FALSE
+    )
+  }
+  if (dplyr::n_distinct(analysis[[column]]) < 2L) {
+    stop(
+      sprintf("No predictor variation for %s at %s", column, landmark),
+      call. = FALSE
+    )
+  }
+
+  model_column <- column
+  if (isTRUE(predictor_row$scale_continuous[[1]])) {
+    model_column <- paste0(column, "_z")
+    analysis[[model_column]] <- as.numeric(scale(analysis[[column]]))
+  }
+
+  fit <- survival::coxph(
+    stats::as.formula(
+      sprintf("survival::Surv(Time_to_event, Relapsed_Binary) ~ %s", model_column)
+    ),
+    data = analysis,
+    ties = "efron"
+  )
+  result <- summary(fit)
+
+  tibble::tibble(
+    Landmark = landmark,
+    Predictor = predictor_row$predictor[[1]],
+    Source_column = column,
+    N = nrow(analysis),
+    Events = sum(analysis$Relapsed_Binary),
+    HR = unname(exp(stats::coef(fit))[[1]]),
+    CI_low = unname(result$conf.int[1, "lower .95"]),
+    CI_high = unname(result$conf.int[1, "upper .95"]),
+    P_value = unname(result$coefficients[1, "Pr(>|z|)"]),
+    Definition = predictor_row$definition[[1]],
+    Source_file = source_file
+  )
+}
+
+paired_easym_results <- list()
+for (landmark_index in seq_len(nrow(paired_easym_landmarks))) {
+  landmark_row <- paired_easym_landmarks[landmark_index, ]
+  source_path <- file.path(outdir_source_data, landmark_row$source_file[[1]])
+  if (!file.exists(source_path)) {
+    stop(sprintf("Missing current EasyM landmark source: %s", source_path), call. = FALSE)
+  }
+
+  landmark_data <- readr::read_csv(source_path, show_col_types = FALSE)
+  if (
+    nrow(landmark_data) != landmark_row$expected_n[[1]] ||
+      sum(landmark_data$Relapsed_Binary, na.rm = TRUE) != landmark_row$expected_events[[1]]
+  ) {
+    stop(
+      sprintf(
+        "%s denominator drift: observed %d rows/%d events; expected %d/%d",
+        landmark_row$landmark[[1]],
+        nrow(landmark_data),
+        sum(landmark_data$Relapsed_Binary, na.rm = TRUE),
+        landmark_row$expected_n[[1]],
+        landmark_row$expected_events[[1]]
+      ),
+      call. = FALSE
+    )
+  }
+
+  for (predictor_index in seq_len(nrow(paired_easym_predictors))) {
+    paired_easym_results[[length(paired_easym_results) + 1L]] <-
+      fit_paired_easym_landmark_model(
+        landmark_data,
+        paired_easym_predictors[predictor_index, ],
+        landmark_row$landmark[[1]],
+        landmark_row$source_file[[1]]
+      )
+  }
+}
+
+paired_easym_hr_table <- dplyr::bind_rows(paired_easym_results)
+
+paired_easym_expected_rounded <- tibble::tribble(
+  ~Landmark, ~Predictor, ~HR_expected,
+  "One-year maintenance", "BM-informed cfWGS call", 6.08,
+  "One-year maintenance", "EasyM reference-threshold call", 4.63,
+  "Post-ASCT", "BM-informed cfWGS call", 3.51,
+  "Post-ASCT", "EasyM reference-threshold call", 1.29
+)
+paired_easym_verification <- paired_easym_hr_table %>%
+  dplyr::inner_join(
+    paired_easym_expected_rounded,
+    by = c("Landmark", "Predictor")
+  ) %>%
+  dplyr::mutate(matches = round(HR, 2) == HR_expected)
+
+if (
+  nrow(paired_easym_verification) != nrow(paired_easym_expected_rounded) ||
+    any(!paired_easym_verification$matches)
+) {
+  stop("Paired EasyM landmark hazard-ratio verification failed.", call. = FALSE)
+}
+
+paired_easym_hr_output_path <- file.path(
+  outdir_source_data,
+  paste0("Paired_EasyM_landmark_HR_source_data_", date_tag, ".csv")
+)
+readr::write_csv(paired_easym_hr_table, paired_easym_hr_output_path, na = "NA")
+message("Paired cfWGS/EasyM landmark HR source written to: ", paired_easym_hr_output_path)
 
 
 ## Optional KM confidence-interval sensitivity exports
@@ -3635,7 +3840,7 @@ ms_copy_artifact(
 
 
 ## Intermediate blood/cfDNA time-to-relapse scale check
-### This plot is retained as an intermediate check. The manuscript-facing
+### This plot is retained as an intermediate check. The version used in
 ### Extended Data Figure 8F is exported from the infinity-axis
 ### layout below.
 df_plot <- df %>%

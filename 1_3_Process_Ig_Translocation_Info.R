@@ -1134,7 +1134,7 @@ write.table(translocation_data_cytoband, file = file.path(pre_igv_dir, "transloc
 
 ## Export candidate calls for manual IGV checking
 # The resulting text file is the input to the IGV review workbook. The final
-# manuscript-facing cytoband translocation matrix is rebuilt only from calls
+# cytoband translocation matrix used in the manuscript is rebuilt only from calls
 # marked Looks_real == 1 in the reviewed workbook.
 filtered_df <- Ig_caller_df_cfWGS_filtered_aggressive2 %>%
   dplyr::filter(
@@ -1224,7 +1224,7 @@ translocation_data_cytoband <- translocation_matrix_cytoband %>%
 
 
 ## Final export consumed by downstream feature integration
-# This is the current manuscript-facing translocation feature object because it
+# This is the translocation feature object used in the manuscript because it
 # incorporates the manual IGV `Looks_real == 1` confirmation step.
 saveRDS(translocation_data_cytoband, file = file.path(export_dir, "translocation_data_cytoband_updated.rds"))
 

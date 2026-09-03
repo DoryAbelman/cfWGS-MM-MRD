@@ -7,8 +7,8 @@
 # Manuscript outputs created/updated:
 #   - Figure 3D-E: BM cfWGS clinical-concordance and probability panels.
 #   - Figure 4C-D: blood cfWGS clinical-concordance and probability panels.
-#   - Extended Data Figure 5E-G: BM supplementary concordance/diagnostic panels.
-#   - Extended Data Figure 7F-H: blood supplementary concordance/diagnostic panels.
+#   - Extended Data Figure 5E-H: BM supplementary concordance/diagnostic panels.
+#   - Extended Data Figure 7F-I: blood supplementary concordance/diagnostic panels.
 #   - Supplementary Table 8: BM model concordance/source-data workbook.
 #   - Supplementary Table 10: blood model concordance/source-data workbook.
 #
@@ -28,12 +28,13 @@
 #   2. Join EasyM MRD measurements where available.
 #   3. Compare BM-informed and blood/cfDNA-informed cfWGS calls with clinical
 #      MRD comparators (MFC, clonoSEQ, and EasyM).
-#   4. Generate the manuscript-facing concordance plots, confusion-matrix
+#   4. Generate the concordance plots, confusion-matrix
 #      panels, and supplementary concordance workbooks listed above.
 #
 # Execution note:
 #   The historical working filenames in this script do not always match final
-#   manuscript numbering. The authoritative mapping is the `ms_copy_artifact()`
+#   manuscript numbering. The final mapping is recorded by the
+#   `ms_copy_artifact()`
 #   block beside each final output. Those blocks copy the final figures/tables
 #   into final_manuscript_objects/ using names such as Figure_3D,
 #   Figure_4D, Extended_Data_Figure_7F, and Supplementary_Table_10.
@@ -52,6 +53,16 @@
 #   Historical working outputs are written to Output_figures_2025/,
 #   Output_tables_2025/, and Final Tables and Figures/. Final manuscript
 #   outputs are copied into final_manuscript_objects/ by artifact ID.
+#
+# Units of analysis and denominators:
+#   • Figure 3D and Figure 4C summarize each technology using the samples for
+#     which that comparator and the corresponding cfWGS call are both available;
+#     the technology-specific denominators can therefore differ.
+#   • Figure 3E and Figure 4D contain one row per evaluable sample-comparator
+#     pair. A sample can contribute one point for each available comparator.
+#   • Supplementary Table 8 records sample-comparator rows rather than one row
+#     per unique sample. Supplementary Table 10 records one performance summary
+#     per model/call, comparator, cohort, and timepoint stratum.
 #
 # =============================================================================
 # Pipeline status:
@@ -84,7 +95,7 @@ library(purrr)       # Functional iteration over model/list columns
 
 # Shared helper for final manuscript-organized outputs.
 # The script keeps its historical output filenames while copying final
-# manuscript-facing figure/table components into
+# figure and table components used in the manuscript into
 # Scripts_2025/Final_Scripts/final_manuscript_objects with final labels such as
 # Figure_3D, Figure_4D, Extended_Data_Figure_5E, and Supplementary_Table_10.
 .manuscript_helper <- file.path("Scripts_2025", "Final_Scripts", "manuscript_output_helpers.R")
@@ -141,19 +152,10 @@ cat(sprintf("✓ Loaded %d rows from cfWGS dataset\n", nrow(dat)))
 # Keep these paths project-relative for Code Ocean portability. The scored calls
 # and probabilities are read from all_patients_with_BM_and_blood_calls_updated6.rds;
 # this script does not retrain the models.
-# 2026-07-29 audit fix: pinned to the 2026-02-16 frozen objects.
-#
-# This script previously loaded the 2025-09-17 model/threshold objects while
-# 3_1_Optimize_cfWGS_thresholds.R and 3_1C_Expanded_test_clustered_sensitivity.R
-# use the 2026-02-16 objects. The two *model* files are md5-identical
-# (6b7112f8...), so there was no numeric divergence, but the two *threshold*
-# files differ in size (450 vs 643 bytes; the February object adds
-# cohort-qualified fragmentomics keys). Carrying two vintages of a "frozen"
-# object through one pipeline is exactly the kind of drift this revision claims
-# to have eliminated, so all three scripts now read the same file.
-#
-# Note also that the filename dates are not write dates: both "2025-09-17" files
-# have an mtime of 2026-02-16.
+# Use the same preserved 2026-02-16 model and threshold objects as
+# 3_1_Optimize_cfWGS_thresholds.R and 3_1C_Expanded_test_clustered_sensitivity.R.
+# The older 2025-09-17 model file is numerically identical, but the older
+# threshold file lacks the later cohort-qualified fragmentomics keys.
 PATH_MODEL_LIST <- file.path(outdir, "selected_combo_models_2026-02-16.rds")
 PATH_THRESHOLD_LIST <- file.path(outdir, "selected_combo_thresholds_2026-02-16.rds")
 
@@ -189,8 +191,8 @@ cat("✓ Loaded cfWGS threshold definitions (frozen 2026-02-16)\n")
 # ===========================================================================
 # 3_1_A produces the following key files:
 #   1. EasyM_all_samples_with_optimized_calls.csv
-#      Contains: Patient, Timepoint, EasyM_value, and the manuscript-facing
-#                EasyM_reference_threshold_binary call.
+#      Contains: Patient, Timepoint, EasyM_value, and the
+#                EasyM_reference_threshold_binary call used in the manuscript.
 
 cat("\nLoading EasyM data from script 3_1_A...\n")
 
@@ -280,7 +282,7 @@ front_tbl <- dat %>%
     !is.na(BM_zscore_only_detection_rate_call)
   ) %>%
   ## Use the isotype-specific Rapid Novor reference-threshold EasyM call as the
-  ## manuscript-facing EasyM binary comparator.
+  ## EasyM binary comparator used in the manuscript.
   pivot_longer(
     cols      = c(Flow_Binary, Adaptive_Binary, BM_zscore_only_detection_rate_call, 
                   EasyM_reference_threshold_binary),
@@ -3432,8 +3434,8 @@ supp_table8_current_final_destination <- ms_copy_current_final_artifact(
 
 # Supplementary Table 8 is already a final workbook and does not require a
 # separate assembly step. Keep the manuscript-export final artifact synchronized
-# with the validated canonical generator output so the submission-facing copy
-# cannot remain stale after a table-only refresh.
+# with the validated generator output so the manuscript copy remains current
+# after a table-only refresh.
 supp_table8_manuscript_export_final <- file.path(
   "Manuscript_Exports", "04_supplementary_tables", "Supplementary_Table_8",
   "final_artifacts", "Supplementary_Table_8_model_comparisons_to_clinical_metrics.xlsx"
@@ -3444,7 +3446,7 @@ supp_table8_manuscript_export_final <- ms_copy_file_quietly(
   overwrite = TRUE
 )
 
-# Validate the canonical workbook, its traceability copy, and the current-final
+# Validate the generated workbook, its traceability copy, and the current-final
 # manuscript mirror so serialization or propagation failures stop this original
 # workflow without requiring a separate repair script.
 supp_table8_validation_targets <- unique(c(
@@ -4071,9 +4073,12 @@ plot_df_with_easym <- bind_rows(
     ) %>%
     mutate(
       Comparator = "EasyM",
-      x_val = EasyM_value,
-      # Cap EasyM at 100% and set a minimum floor for log-scale plotting.
-      x_plot = pmin(pmax(EasyM_value, 1e-6), 1.0),
+      # EasyM_value is stored in percentage points relative to the baseline BM
+      # immunoglobulin (1 = 1%); convert to a 0-1 proportion for this shared
+      # percentage axis. The isotype-specific binary calls remain unchanged.
+      x_val = EasyM_value / 100,
+      # Cap residual values above 100% and set a floor for log-scale plotting.
+      x_plot = pmin(pmax(x_val, 1e-6), 1.0),
       y_plot = if_else(BM_zscore_only_detection_rate_prob <= 1e-5, 
                        1e-5, BM_zscore_only_detection_rate_prob),
       landmark_tp = str_replace_all(landmark_tp, hyphen_rx, "-") |> trimws(),
@@ -4115,7 +4120,7 @@ corr_df_with_easym <- plot_df_with_easym %>%
     Comparator = factor(Comparator, levels = c("clonoSEQ", "MFC", "EasyM"))
   )
 
-# EasyM reference-threshold lines. The manuscript-facing EasyM binary call is
+# EasyM reference-threshold lines. The EasyM binary call used in the manuscript is
 # isotype-specific, so the EasyM facet shows both reference thresholds rather
 # than the older timepoint-optimized cutoffs.
 easyM_threshold_lines <- tidyr::crossing(
@@ -4268,7 +4273,7 @@ ms_copy_artifact(
   script_name = "3_2_Plot_optimal_cutoff_and_clinical_concordance.R"
 )
 
-# Additive all-timepoint version requested for the training cohort, test cohort,
+# Additional all-timepoint version for the training cohort, test cohort,
 # and both cohorts combined. This version is MFC-only because the test cohort
 # has evaluable MFC comparator pairs in the current integrated source table.
 all_timepoint_mfc_bm <- write_all_timepoint_mfc_panel(
@@ -4289,7 +4294,7 @@ ms_copy_artifact(
   script_name = "3_2_Plot_optimal_cutoff_and_clinical_concordance.R"
 )
 
-# Standalone test-cohort panel requested for direct manuscript/slide use. It
+# Additional standalone test-cohort panel for manuscript or slide use. It
 # uses the same all-evaluable test-cohort rows and plotting conventions as the
 # middle facet of the three-cohort alternate above.
 test_cohort_mfc_bm <- write_all_timepoint_mfc_panel(
@@ -4721,7 +4726,7 @@ if (!exists("dat_with_easym")) {
 # Blood-specific comparator LOD floor used for plotting.
 lod_blood <- 1e-5
 
-# EasyM reference-threshold lines. The manuscript-facing EasyM binary call is
+# EasyM reference-threshold lines. The EasyM binary call used in the manuscript is
 # isotype-specific, so the EasyM facet shows both reference thresholds rather
 # than the older timepoint-optimized cutoffs.
 easyM_threshold_lines_blood <- tidyr::crossing(
@@ -4749,9 +4754,12 @@ plot_df_blood_with_easym <- bind_rows(
     ) %>%
     mutate(
       Comparator = "EasyM",
-      x_val = EasyM_value,
-      # Cap EasyM at 100% and set a minimum floor for log-scale plotting.
-      x_plot = pmin(pmax(EasyM_value, 1e-6), 1.0),
+      # EasyM_value is stored in percentage points relative to the baseline BM
+      # immunoglobulin (1 = 1%); convert to a 0-1 proportion for this shared
+      # percentage axis. The isotype-specific binary calls remain unchanged.
+      x_val = EasyM_value / 100,
+      # Cap residual values above 100% and set a floor for log-scale plotting.
+      x_plot = pmin(pmax(x_val, 1e-6), 1.0),
       y_plot = if_else(Blood_zscore_only_sites_prob <= 1e-5,
                        1e-5, Blood_zscore_only_sites_prob),
       landmark_tp = str_replace_all(landmark_tp, hyphen_rx, "-") |> trimws(),
@@ -4931,7 +4939,7 @@ ms_copy_artifact(
   script_name = "3_2_Plot_optimal_cutoff_and_clinical_concordance.R"
 )
 
-# Additive all-timepoint version requested for the training cohort, test cohort,
+# Additional all-timepoint version for the training cohort, test cohort,
 # and both cohorts combined. This version is MFC-only because the test cohort
 # has evaluable MFC comparator pairs in the current integrated source table.
 all_timepoint_mfc_blood <- write_all_timepoint_mfc_panel(
@@ -5080,7 +5088,7 @@ readr::write_csv(
 # COMPLETION SUMMARY AND OUTPUT DOCUMENTATION
 # ===========================================================================
 # Command-line completion summary. The historical working files remain in their
-# original output folders for traceability. Final manuscript-facing copies are
+# original output folders for traceability. Copies used in the manuscript are
 # staged by `ms_copy_artifact()` into final_manuscript_objects/.
 
 cat("\n", strrep("=", 80), "\n")

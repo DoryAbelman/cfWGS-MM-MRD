@@ -4,11 +4,11 @@ Analysis code for **Abelman et al. (2025)**: *"Cell-free DNA Whole Genome Sequen
 
 The pipeline is a series of numbered R scripts. Each script reads the outputs of the previous step and can be run from the command line through the included runner.
 
-This directory is the **primary GitHub/Code Ocean analysis pipeline**. The numbered scripts remain organized by analysis stage and scientific question, matching the original workflow: raw/clinical processing, WGS feature processing, dilution-series analyses, model training/application, concordance analyses, and survival analyses. The scripts directly create both the analysis outputs and organized manuscript-facing outputs.
+This directory contains the main analysis pipeline. The numbered scripts remain organized by analysis stage and scientific question, matching the original workflow: raw/clinical processing, WGS feature processing, dilution-series analyses, model training/application, concordance analyses, and survival analyses. The scripts create the analysis results and the figures and tables used in the manuscript.
 
 The normal user-facing workflow is `run_pipeline.R` or `run_manuscript_workflow.R`. Supporting provenance and validation files are included to make the script-to-manuscript mapping explicit, but the numbered scripts are the scientific source of truth.
 
-The workflow is intended to be end-to-end from staged raw/protected inputs through final tables, source-data files, and manuscript-facing figure components. The deliberate exception is routine test-cohort expansion: final training-derived model objects, nested-CV fold objects, metric summaries, and related cached intermediates are treated as preserved reproducibility artifacts unless `--include-cache-sensitive` is supplied. New test-cohort samples should be processed through the upstream feature scripts and then scored with preserved training-derived artifacts, so test-cohort metrics can update without unintentionally recomputing the training-stage model outputs.
+The workflow runs from staged input data through the final tables, source-data files, and figure panels used in the manuscript. The deliberate exception is routine test-cohort expansion: final training-derived model objects, nested-CV fold objects, metric summaries, and related cached intermediates are preserved unless `--include-cache-sensitive` is supplied. New test-cohort samples should be processed through the upstream feature scripts and then scored with the saved training-derived objects, so test-cohort metrics can update without unintentionally recomputing the training-stage model outputs.
 
 **Raw data files are not included in this repository** (see [Data availability](#data-availability) below).
 
@@ -125,7 +125,7 @@ For GitHub or Code Ocean packaging, use
 
 The numbered scripts are still organized by analysis question, not by final
 figure number. Each script header lists the same outputs shown below. When a
-script runs, the final manuscript-facing files are copied or saved into
+script runs, the files used in the manuscript are copied or saved into
 `final_manuscript_objects/` under the final figure/table label.
 
 | Script | Final manuscript outputs |
@@ -144,7 +144,7 @@ script runs, the final manuscript-facing files are copied or saved into
 | `3_1C_Expanded_test_clustered_sensitivity.R` | Patient-clustered bootstrap and deterministic one-sample-per-patient sensitivity outputs for the revision-inclusive Figure 3B/Figure 4B test analyses; final Supplementary Table 6 workbook combining those results with the preserved expanded-test classifier metrics and exact sample manifest |
 | `3_1_part2_Apply_cfWGS_thresholds_to_dilution_series.R` | Figure 3C; Extended Data Figure 5D; Extended Data Figure 7D; Supplementary Table 7 |
 | `3_2_Plot_optimal_cutoff_and_clinical_concordance.R` | Figure 3D-E; Figure 4C-D; Extended Data Figure 5E-G; Extended Data Figure 7F-H; Supplementary Tables 8 and 10 |
-| `4_1_Survival_Analysis.R` | Figure 3F; Figure 4E; Extended Data Figure 6A-K; Extended Data Figure 8A-D plus bottom panels; Supplementary Table 9. The manuscript-facing time-window outputs for Extended Data Figure 6I, Extended Data Figure 8D, and Supplementary Table 9 are regenerated from the current prospective `detection_progression_updated6` source CSVs, requiring progression on/after the sample date and adequate follow-up for non-event calls. |
+| `4_1_Survival_Analysis.R` | Figure 3F; Figure 4E; Extended Data Figure 6A-K; Extended Data Figure 8A-D plus bottom panels; Supplementary Table 9. The time-window results used in Extended Data Figure 6I, Extended Data Figure 8D, and Supplementary Table 9 are regenerated from the current prospective `detection_progression_updated6` source CSVs, requiring progression on/after the sample date and adequate follow-up for non-event calls. |
 | `4_2_Compare_subclonal_evolution.R` | Extended Data Figure 10A-B |
 
 The source of truth for exact source filenames, companion CSVs, and historical
@@ -338,13 +338,13 @@ Final_Scripts/
    Rscript Scripts_2025/Final_Scripts/run_pipeline.R --execute
    ```
 Each script runs in a fresh R process from the project root and writes its outputs to the historical analysis locations such as `Output_tables_2025/` and `Final Tables and Figures/`. Scripts under `Scripts_2025/Final_Scripts/archive/support_analysis/` are retained for audit/support review and are not selected by `run_pipeline.R`.
-5. Inspect direct manuscript-facing exports:
+5. Inspect the exported manuscript figures and tables:
    ```sh
    find Scripts_2025/Final_Scripts/final_manuscript_objects -maxdepth 4 -type f
    ```
    This folder contains manuscript-labeled figures, tables, source-data files,
    manifests, and validation reports produced by the numbered scripts.
-6. Validate that the manuscript-facing output tree is complete:
+6. Validate that the manuscript figure and table folders are complete:
    ```sh
    Rscript Scripts_2025/Final_Scripts/validate_manuscript_outputs.R
    ```

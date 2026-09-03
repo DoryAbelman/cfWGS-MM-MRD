@@ -38,7 +38,7 @@
 #   final manuscript figure/table. It creates the cross-cohort clinical/lab
 #   helper table consumed by 2_0, which then feeds manuscript figures/tables.
 #
-# Reader roadmap and analysis unit:
+# Script outline and analysis unit:
 #   1. Build M4 demographic and cytogenetic fields.
 #   2. Match M4 biopsy/FISH and laboratory records to clinical timepoints.
 #   3. Parse laboratory values, quarantine implausible values, and reshape the

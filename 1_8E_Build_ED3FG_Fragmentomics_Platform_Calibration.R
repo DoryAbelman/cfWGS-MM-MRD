@@ -661,7 +661,7 @@ write_csv(
 manuscript_manifest <- read_csv(manifest_paths[[2]], show_col_types = FALSE) %>%
   filter(!.data$panel %in% c("F", "G"))
 if (!identical(manuscript_manifest$panel, LETTERS[1:5])) {
-  stop("Expected the manuscript-facing ED3 manifest to contain panels A-E.", call. = FALSE)
+  stop("Expected the Extended Data Figure 3 manifest to contain panels A-E.", call. = FALSE)
 }
 manuscript_additions <- component_additions %>%
   mutate(

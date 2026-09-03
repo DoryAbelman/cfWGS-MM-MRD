@@ -77,7 +77,7 @@
 #   concordance panels, and survival/relapse analyses. Support-only review
 #   tables and QC plots are separated from active manuscript inputs.
 #
-# Reader roadmap and analysis units:
+# Script outline and analysis units:
 #   1. Build patient/timepoint, treatment, progression, and FISH tables for
 #      SPORE.
 #   2. Parse M4 transplant records and IMMAGINE treatment/FISH records.
@@ -681,7 +681,7 @@ write_support_rds(final_tbl, "relapse_flags_table.rds")
 # Audit note: this block is sensitive to wording changes in the IMMAGINE FISH
 # source workbook. If new FISH text patterns appear, update fish_patterns and
 # compare the resulting flags against manual review before using the export in a
-# manuscript-facing concordance analysis.
+# concordance analysis used in the manuscript.
 ## --- 1) Regex patterns -----------------------------------------------------
 fish_patterns <- list(
   del_13q   = c("monosomy 13",       "del\\s*13"),
@@ -748,7 +748,7 @@ write_csv(df_long,      file.path(export_dir, "IMMAGINE_dates_long.csv"))
 # Potential issue carried forward from the original script:
 # an older note said this IMMAGINE FISH export was "wrong". Preserve the export
 # for pipeline compatibility, but audit the free-text regex flags before treating
-# this file as an authoritative manuscript source.
+# this file as a source for the manuscript analysis.
 write_csv(fish_flags_corrected,   file.path(export_dir, "IMMAGINE_fish_flags.csv"))
 
 # Combined ASCT/relapse summary

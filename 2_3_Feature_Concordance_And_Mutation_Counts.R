@@ -589,7 +589,7 @@ if (
 
 # Recover baseline FISH calls that can be lost when the integrated aggregate is
 # rebuilt from clinical metadata without assay-specific FISH columns.  Calls in
-# the aggregate remain authoritative; the deeper IMMAGINE patient/master tables
+# the aggregate are used; the deeper IMMAGINE patient/master tables
 # only fill missing values.  The audit and hard checks prevent the known
 # IMG-060/IMG-098/IMG-181 positive events from silently disappearing again.
 fish_fields <- c("T_4_14", "T_11_14", "T_14_16", "DEL_17P", "DEL_1P", "AMP_1Q")
@@ -773,7 +773,7 @@ conc_tf_overall <- long %>%
 
 # D) pooled across both cohort and tumour-fraction strata.  This explicit row
 # prevents the all-evaluable overall estimate from being confused with the
-# all-evaluable `tf_unknown` subset in publication-facing tables.
+# all-evaluable `tf_unknown` subset in the reported tables.
 conc_all_overall <- long %>%
   group_by(event, type, wgs_source) %>%
   summarise_concord() %>%
@@ -1596,9 +1596,9 @@ pvals
 #–––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––  
 # 1) Correlation matrix (Spearman) + p‐values across all numeric vars  
 #–––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––  
-# Select only publication-facing numeric columns. The selected_row_* fields are
+# Select only the numeric columns included in the final table. The selected_row_* fields are
 # temporary patient-row helpers used before modality-specific cfDNA alignment;
-# retaining them would duplicate the authoritative cfDNA TF/FS variables and
+# retaining them would duplicate the cfDNA TF/FS variables used in the final table and
 # expose the obsolete n = 61 association in Supplementary Table 3.
 num_df <- dat_base %>%
   select(where(is.numeric)) %>%
@@ -1659,7 +1659,7 @@ write.csv(all_corrs %>% filter(!is.na(p_adj)), file = "Final Tables and Figures/
 #
 # Current provenance note:
 #   The revision-inclusive table regenerated from the current combined cohort is
-#   authoritative. Packaging workflows must use this regenerated artifact rather
+#   used for the final table. Packaging scripts must use this regenerated file rather
 #   than the older retained manuscript CSV.
 # -------------------------------------------------------------------------
 ms_copy_artifact(
@@ -2709,7 +2709,7 @@ ms_copy_artifact(
   script_name = "2_3_Feature_Concordance_And_Mutation_Counts.R"
 )
 
-# The revision-inclusive, training-plus-test panel is the manuscript-facing
+# The revision-inclusive, training-plus-test panel is used as
 # Extended Data Figure 2C.  Re-export it under the primary roles after retaining
 # the historical training-only companion above so downstream assemblers cannot
 # silently select the narrower panel.
@@ -3219,7 +3219,7 @@ event_order <- perf_long %>%
 perf_long <- perf_long %>%
   mutate(event = factor(event, levels = event_order))
 
-# Canonical source data for manuscript-facing Extended Data Figure 2B. The
+# Source data used for Extended Data Figure 2B. The
 # primary performance object is revision-inclusive (all evaluable baseline
 # training and test pairs), so export that exact object under the historical
 # source-data filename consumed by the locked-source workbook builder.
