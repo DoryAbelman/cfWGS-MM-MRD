@@ -2291,6 +2291,62 @@ fish_flags <- fish_flags[rownames(fish_flags) %in% patient_ids, , drop = FALSE]
 
 fish_flags <- fish_flags %>% as.matrix()
 
+# Export the complete, date-free plotting annotation layer used by the final
+# Extended Data Figure 1 ComplexHeatmap.  The public capsule previously
+# received only the BM/cfDNA cell matrices, which made the split-triangle cells
+# superficially redrawable but omitted the cohort, paired-sample, tumour-
+# fraction, mutation-count and FISH-star tracks that are part of the actual
+# manuscript panel.  This table is constructed from the exact in-memory
+# vectors supplied to `top_ha` and `cell_fun` below; no annotation is inferred
+# later by the Code Ocean adapter.
+ed1_fish_flags_export <- as.data.frame(fish_flags, stringsAsFactors = FALSE) %>%
+  tibble::rownames_to_column("Patient")
+
+ed1_plot_annotations <- tibble::tibble(
+  Patient_Timepoint = all_cols,
+  Patient = patient_ids,
+  column_order = seq_along(all_cols)
+) %>%
+  left_join(
+    ord_df %>%
+      transmute(
+        Patient_Timepoint = .data$Sample,
+        Cohort = as.character(.data$Cohort),
+        TumourFraction = as.numeric(.data$TumourFraction),
+        Paired = as.logical(.data$Paired),
+        sample_type = as.character(.data$sample_type)
+      ),
+    by = "Patient_Timepoint"
+  ) %>%
+  left_join(
+    mutation_counts_table %>%
+      select(
+        .data$Patient_Timepoint,
+        .data$BM_Mutation_Count,
+        .data$Blood_Mutation_Count
+      ),
+    by = "Patient_Timepoint"
+  ) %>%
+  left_join(ed1_fish_flags_export, by = "Patient")
+
+if (
+  nrow(ed1_plot_annotations) != length(all_cols) ||
+    anyDuplicated(ed1_plot_annotations$Patient_Timepoint) ||
+    anyNA(ed1_plot_annotations$Cohort) ||
+    anyNA(ed1_plot_annotations$sample_type)
+) {
+  stop(
+    "Extended Data Figure 1 plot-annotation export is incomplete or non-unique.",
+    call. = FALSE
+  )
+}
+
+readr::write_csv(
+  ed1_plot_annotations,
+  "Output_tables_2025_updated/extended_data_figure_1_plot_annotations.csv",
+  na = ""
+)
+
 id_map <- readRDS("id_map.rds") # from 2_1 pt 2 script
 
 # 1) make a simple lookup: Patient -> New_ID
