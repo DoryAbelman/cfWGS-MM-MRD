@@ -2,30 +2,38 @@
 # 2_3_Feature_Concordance_And_Mutation_Counts.R
 #
 # Purpose:
-#   1. Load baseline WGS + clinical/feature table.
-#   2. Compute FISH ↔ WGS concordance (overall & by ctDNA fraction) for CNAs & SVs.
-#   3. Summarise baseline mutation counts in BM and cfDNA by cohort (means, ranges, tests).
-#   4. Calculate Spearman correlations between mutation burden and clinical/fragmentomic features.
-#   5. Fit a simple multivariable linear model on BM mutation counts.
-#   6. Generate publication-ready figures:
+#   1. Select one diagnosis/baseline analysis record per patient, including the
+#      documented exceptions and modality-specific source rows used below.
+#   2. Compute FISH ↔ WGS concordance (overall and by ctDNA fraction) for
+#      copy-number alterations and IGH translocations.
+#   3. Compute matched BM ↔ cfDNA mutation-set concordance and summarise
+#      baseline mutation counts by cohort.
+#   4. Calculate Spearman correlations between mutation burden and
+#      clinical/fragmentomic features and fit the exploratory BM count model.
+#   5. Generate publication-ready figures:
 #        • Boxplots of mutation counts and cfDNA tumor fraction by cohort
 #        • Scatterplots of mutation burden vs. tumor fraction, fragment-size score, albumin
 #        • Dumbbell plots of event-level concordance, sensitivity & specificity by ctDNA fraction
 #
 # Inputs:
 #   - Final_aggregate_table_cfWGS_features_with_clinical_and_demographics_updated9.rds
-#   - cohort_assignment_table_updated.rds
+#   - Output_tables_2025_updated/patient_mutation_counts.csv (from script 2_2)
+#   - Jan2025_exported_data/CNA_at_FISH_sites_combined.rds
+#   - Jan2025_exported_data/Sample_ploidy_from_sequenza_400.rds
 #   - Jan2025_exported_data/mutation_export_updated_more_info2.rds
 #   - Jan2025_exported_data/All_feature_data_Sep2025_updated2.rds
 #   - combined_clinical_data_updated_April2025.csv
+#   - Output_tables_2025_updated/merged_mut.rds, merged_trans.rds, and
+#     merged_CNA.rds for the detailed BM-versus-cfDNA performance section
+#   - Cohort assignments loaded through load_final_cohort_assignment()
 #
 # Outputs:
 #   - FISH/WGS concordance tables in Output_tables_2025_updated/
-#   - Supplementary Table 2/3 source CSV/XLSX files in Final Tables and Figures/
+#   - Concordance components for Supplementary Table 2 and the feature-
+#     correlation CSV for Supplementary Table 3 in Final Tables and Figures/
 #   - Figures in Final Tables and Figures/Baseline_concordance/
 #   - R objects (RDS) for downstream concordance/source-data reuse
-#   - Source tables supporting Extended Data Figure 2 panels A-F and the
-#     Supplementary Table 2/3 concordance and mutation-count sheets.
+#   - Source tables supporting Extended Data Figure 2 panels A-F.
 #
 # Required packages:
 #   tidyverse, purrr, stringr, writexl, glue, Hmisc, broom,
@@ -36,10 +44,26 @@
 # Manuscript outputs created/updated:
 #   - Extended Data Figure 2A-F: baseline concordance, mutation burden, and
 #     feature-correlation panels.
-#   - Supplementary Table 2: FISH/WGS concordance summaries and related source
-#     sheets.
+#   - Supplementary Table 2: this script supplies the BM/cfDNA performance,
+#     FISH/WGS agreement, FISH-probe, and per-sample-call components. The
+#     delivered six-sheet workbook also contains the feature catalogue and
+#     per-variant VAF sheets assembled from upstream outputs.
 #   - Supplementary Table 3: baseline mutation-count and feature-correlation
 #     source table.
+#
+# Units of analysis:
+#   - Baseline clinical/mutation summaries: one selected row per patient.
+#   - FISH/WGS concordance: one evaluable patient × event × WGS source row.
+#   - Mutation-set concordance: one matched patient × baseline timepoint row;
+#     confusion counts are over unique mutation identities within that row.
+#   - Feature correlations: pairwise-complete selected baseline patient rows;
+#     n_pairs is therefore allowed to differ across variable pairs.
+#
+# Final-table authority:
+#   The submission-facing files are the cleanly numbered tables in
+#   Final docs/Final Tables and Supplementary Tables. Historical filenames in
+#   this script are retained as provenance and intermediate compatibility
+#   outputs; table status should not be inferred from those names alone.
 #
 # Pipeline role:
 #   This script quantifies how well cfDNA and BM WGS recover clinically reported
@@ -112,18 +136,13 @@ file <- readRDS("Final_aggregate_table_cfWGS_features_with_clinical_and_demograp
 ##### PART 1: See concordance to FISH 
 ## 1.  PARAMETERS  ---------------------------------------------------
 ## ------------------------------------------------------------------
-# tf_cut: ctDNA tumor-fraction threshold separating "high-TF" samples (where
-# signal is reliably above the assay noise floor) from "low-TF" samples.
-# 0.05 (5%) was chosen empirically; concordance statistics are stratified by
-# this cutoff because detection sensitivity differs substantially between groups.
-# Adjust this value to re-examine sensitivity/specificity at other TF levels.
-# tf_cut: minimum ctDNA fraction (from MRDetect z-score → tumor fraction, or
-# ichorCNA) used to split samples into high-TF vs low-TF subgroups before
-# comparing concordance with bone-marrow assays.  0.05 was chosen because it
-# separates cases where ctDNA signal is reliably above the noise floor from
-# near-zero readings; change this value to shift the sensitivity/specificity
-# trade-off in the concordance analysis.
-tf_cut    <- 0.05            # ≥ 0.05 → “high TF”; change if needed
+# tf_cut is the fixed 5% ctDNA-fraction boundary used for the stratified
+# concordance summaries. FISH/CNA sections classify exactly 0.05 as high TF
+# (`>= tf_cut`). The earlier mutation-set section retains its historical
+# `> tf_cut` comparison, so a sample exactly at 0.05 would be classified
+# differently between those sections. This script documents but does not alter
+# that established behavior.
+tf_cut    <- 0.05            # FISH/CNA high-TF stratum uses >= 0.05
 baseline  <- c("Diagnosis","Baseline")   # recognise baseline labels
 run_bam_archive_diagnostics <- tolower(Sys.getenv("CFWGS_RUN_BAM_ARCHIVE_DIAGNOSTICS", "false")) %in%
   c("true", "t", "1", "yes", "y")
@@ -1572,7 +1591,7 @@ pvals <- tibble(
 pvals
 
 
-#### Asses other correlations with number of mutations detected at baseline 
+#### Assess other correlations with number of mutations detected at baseline
 
 #–––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––  
 # 1) Correlation matrix (Spearman) + p‐values across all numeric vars  
@@ -1613,7 +1632,7 @@ flatten_corr <- function(r_mat, p_mat, n_mat) {
 
 all_corrs <- flatten_corr(r_mat, p_mat, n_mat)
 
-# Adjust p-value for multiple hypothesis test - although not needed since exploratory 
+# Apply Benjamini-Hochberg adjustment across the exploratory correlation matrix.
 all_corrs <- all_corrs %>%
   mutate(
     p_adj = p.adjust(p_val, method = "BH")
@@ -2312,7 +2331,7 @@ ms_copy_artifact(
 
 
 
-#### Now make a dumbell plot to show concordance between BM and cfDNA
+#### Now make a dumbbell plot to show concordance between BM and cfDNA
 # 1) reshape, keep only frontline + TF strata
 event_tf_conc <- concordance_tbl %>%
   filter(cohort == "Frontline induction-transplant",
@@ -3282,12 +3301,12 @@ ms_copy_artifact(
 )
 
 # -------------------------------------------------------------------------
-# Alternate ED2B-style panel: all evaluable diagnosis/baseline patients
+# Independent ED2B reconstruction: all evaluable diagnosis/baseline patients
 #
-# The mapped manuscript ED2B panel above is training-cohort-only. This alternate
-# panel recomputes BM-vs-cfDNA concordance, sensitivity, and specificity after
-# pooling all evaluable baseline/diagnosis rows that survived the same upstream
-# baseline selection and cohort-assignment gates.
+# The primary performance object above is already revision-inclusive. This
+# second construction independently recomputes the same all-evaluable scope
+# from the matched CNA, translocation, and mutation objects and writes an
+# explicitly named audit companion; it is not a separate training-only result.
 # -------------------------------------------------------------------------
 summarise_bm_cfdna_event_performance <- function(data, event_regex) {
   data %>%

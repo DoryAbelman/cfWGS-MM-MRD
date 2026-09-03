@@ -3,11 +3,37 @@
 # ===============================================================================
 #
 # Purpose:
-#   Build separate all-evaluable versions of the locked Figure 2B/2C/2D
-#   longitudinal panels. The original manuscript panels in
-#   2_4_Longitudinal_features_analysis.R intentionally filter to
-#   Cohort == "Frontline"; this companion keeps both Frontline/train and
-#   Non-frontline/test patients after the same evidence-of-disease masking.
+#   Build the all-evaluable longitudinal panels used in the current assembled
+#   Figure 2B-E and Extended Data Figure 3A-C. The earlier panels in
+#   2_4_Longitudinal_features_analysis.R filter to Cohort == "Frontline";
+#   this script includes both Frontline/training and Non-frontline/test patients
+#   after the same baseline evidence-of-disease masking.
+#
+# Manuscript mapping:
+#   - Figure 2B: BM-informed mutation z-scores (identity-scale capped version).
+#   - Figure 2C: cfDNA-informed mutation z-scores (300-display-cap version).
+#   - Figure 2D: fragment-size score and MM-regulatory-region coverage.
+#   - Figure 2E: six terminal-evaluable-sample comparisons by relapse status.
+#   - Extended Data Figure 3A-B: raw BM- and cfDNA-informed mutation metrics.
+#   - Extended Data Figure 3C: short-fragment proportion and ichorCNA fraction.
+#
+# Main inputs:
+#   - The updated9 integrated feature table, with updated8 used only to restore
+#     missing Mean.Coverage values by exact Patient-Date match.
+#   - The final cohort assignment and baseline WGS evidence table.
+#   - Clinical baseline, progression, censoring, and follow-up resources used by
+#     next_event_endpoint_helpers.R.
+#
+# Units and key rules:
+#   - Trajectory/source-data rows are patient-sample-metric observations.
+#   - Week zero is the mutation-source baseline date from
+#     baseline_high_quality_patients_updated.csv, not necessarily the clinical
+#     baseline date; both anchors and their difference are exported for audit.
+#   - A red follow-up point represents the next progression within 180 days, or
+#     a first observed nonbaseline row explicitly labelled relapse/progression.
+#     A true week-zero mutation-source baseline remains black.
+#   - Figure 2E uses one terminal evaluable sample per patient and metric. Its
+#     Wilcoxon comparisons are patient-level and BH-adjusted across 12 tests.
 #
 # Outputs:
 #   Scripts_2025/Final_Scripts/final_manuscript_objects/
@@ -24,7 +50,7 @@
 #       Extended_Data_Figure_3A_all_evaluable_BM_raw_longitudinal_pseudolog.png
 #       Extended_Data_Figure_3B_all_evaluable_blood_raw_longitudinal_pseudolog.png
 #       Extended_Data_Figure_3C_all_evaluable_fragmentomics_longitudinal_pseudolog.png
-#     reviewer_alternative_terminal_summary_v2/
+#     reviewer_alternative_terminal_summary_v2/  [historical directory name]
 #       Figure_2B_V2_trajectory_plus_terminal_summary.{png,pdf,tiff}
 #       Figure_2C_V2_trajectory_plus_terminal_summary.{png,pdf,tiff}
 #       Figure_2D_V2_trajectory_plus_terminal_summary.{png,pdf,tiff}
@@ -35,6 +61,11 @@
 #       terminal_sample_group_statistics.csv
 #       *_source_data.csv
 #       all_evaluable_longitudinal_panel_qc.csv
+#
+# The historical `reviewer_alternative_terminal_summary_v2` directory name is
+# retained because 5_1_Export_Locked_Figure_Source_Data.R consumes that exact
+# path. The contents are the current terminal-sample summary analysis and are
+# not evidence that the analysis originated from a reviewer request.
 #
 # How to run:
 #   Rscript Scripts_2025/Final_Scripts/2_4B_Build_all_evaluable_longitudinal_panels.R
@@ -1190,14 +1221,11 @@ ed3c_panel_pseudolog <- make_extended_fragmentomics_panel(
 )
 
 # ------------------------------------------------------------------------------
-# Reviewer-requested alternative: trajectories plus terminal patient summaries
+# Terminal patient summaries appended to the longitudinal trajectories
 # ------------------------------------------------------------------------------
 #
-# Referee 5 noted that the trajectory panels were visually dense and asked for
-# a display that made the between-group comparison more direct. This V2 keeps
-# the complete within-patient trajectories but adds, immediately to the right
-# of each metric, a narrow patient-level box-and-jitter summary of the terminal
-# evaluable observation.
+# This V2 keeps the complete within-patient trajectories and adds a narrow
+# patient-level box-and-jitter summary of the terminal evaluable observation.
 #
 # Each patient contributes at most once per metric to the statistical
 # comparison. The comparison is deliberately two-sided and exploratory:
@@ -1970,8 +1998,8 @@ walk2(
 )
 
 # Narrow summaries immediately to the right of each trajectory metric. These
-# retain the active all-evaluable trajectory display used in the submitted
-# PowerPoint while adding the reviewer-requested patient-level comparison.
+# retain the active all-evaluable trajectory display while adding the
+# patient-level terminal comparison.
 adjacent_output_dir <- file.path(v2_output_dir, "adjacent")
 dir.create(adjacent_output_dir, recursive = TRUE, showWarnings = FALSE)
 
@@ -2377,10 +2405,9 @@ walk2(
   }
 )
 
-# Stage the compact Figure 2 strip as an optional Figure 2E component in the
-# canonical final-manuscript object tree. The Extended Data strip remains only
-# in the reviewer-alternative directory until its final panel assignment is
-# confirmed.
+# Stage the compact Figure 2 strip as the current Figure 2E component in the
+# canonical final-manuscript object tree. The Extended Data strip remains a
+# separately exported support view and is not used in assembled ED Figure 3.
 figure2e_output_dir <- file.path(figure2_dir, "Figure_2E")
 dir.create(figure2e_output_dir, recursive = TRUE, showWarnings = FALSE)
 legacy_figure2e_paths <- file.path(

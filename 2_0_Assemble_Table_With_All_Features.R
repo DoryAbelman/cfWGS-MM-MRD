@@ -10,6 +10,12 @@
 #   codes), computes derived MRD flags, and merges everything into one
 #   comprehensive table. Writes CSV and RDS versions for downstream analyses.
 #
+# Unit of analysis:
+#   - Final aggregate (`updated9`): one assembled sample record, identified by
+#     Patient + Timepoint + Sample_Code + Date after source-specific cleanup.
+#   - Baseline high-quality helper: one patient; BM/cfDNA availability flags
+#     are collapsed across eligible baseline records.
+#
 # Inputs:
 #   - Jan2025_exported_data/All_feature_data_Sep2025_updated2.rds
 #   - M4_MRD_filtered.txt                           (lab MRD data)
@@ -33,8 +39,8 @@
 #   - baseline_high_quality_patients_updated.csv/.rds
 #
 # Dependencies:
-#   tidyverse, readxl, gridExtra
-#   Requires config.R paths (wgs_results_dir, output_tables_dir)
+#   tidyverse, readxl, gridExtra, fuzzyjoin, and helpers.R
+#   Run from the project root; source and output paths below are project-relative.
 #
 # How to run:
 #   Rscript Scripts_2025/Final_Scripts/2_0_Assemble_Table_With_All_Features.R
@@ -52,6 +58,14 @@
 #   final manuscript figure/table, but downstream scripts depend on its cleaned
 #   outputs for figure, table, or model generation.
 #
+
+# Workflow outline:
+#   1. Harmonize clinical MRD measurements and sample dates across cohorts.
+#   2. Attach BM and plasma MRDetect results and fragmentomics measurements.
+#   3. Join clinical/FISH variables, WGS features, and mutation-count summaries.
+#   4. Resolve duplicate source records while preserving sample identity.
+#   5. Recompute relapse fields, create scoring/eligibility audits, and export
+#      the final sample-level aggregate plus the patient-level baseline helper.
 
 
 
@@ -311,8 +325,14 @@ M4_MRD_clinical <- M4_MRD_clinical %>%
 
 cfWGS_Clinical_MRD <- bind_rows(M4_MRD_clinical, MRD_SPORE_IMMAGINE, oicr_revision_clinical_mrd)
 
-## Calculate MRD rates 
-# Create MRD_by_clinical_testing column based on the specified conditions
+## Calculate preliminary composite clinical MRD fields
+# These preliminary values are recalculated after the remaining Rapid Novor and
+# PET records are added. The later calculation is the one retained downstream.
+# These are legacy multi-assay composite helpers, not the prespecified
+# isotype-specific EasyM call used in the manuscript. Script 3_1_A constructs
+# that EasyM comparator using 1% for IgG and 0.05% for IgA/light-chain disease.
+# The historical rule labels every row not meeting a positive condition as
+# "Negative", including rows for which all component assays are missing.
 cfWGS_Clinical_MRD <- cfWGS_Clinical_MRD %>%
   mutate(
     MRD_by_clinical_testing = case_when(
@@ -325,7 +345,7 @@ cfWGS_Clinical_MRD <- cfWGS_Clinical_MRD %>%
       # Condition 3: Rapid_Novor is greater than 1
       Rapid_Novor > 1 ~ "Positive",
       
-      # If none of the conditions are met, set as Negative
+      # Historical fallback: all other rows, including all-missing rows, are Negative
       TRUE ~ "Negative"
     )
   )
@@ -337,7 +357,7 @@ cfWGS_Clinical_MRD <- cfWGS_Clinical_MRD %>%
       # Condition 1: MRD_Results_FLOW is Positive
       MRD_Results_FLOW == "Positive" ~ "Positive",
       
-      # Condition 2: Mrd1E5 is Positive
+      # Condition 2: Adaptive MRD is positive at either recorded sensitivity
       Mrd1E6 == "Positive" ~ "Positive",
       
       Mrd1E5 == "Positive" ~ "Positive",
@@ -345,7 +365,7 @@ cfWGS_Clinical_MRD <- cfWGS_Clinical_MRD %>%
       # Condition 3: Rapid_Novor is greater than 0.1
       Rapid_Novor > 0.1 ~ "Positive",
       
-      # If none of the conditions are met, set as Negative
+      # Historical fallback: all other rows, including all-missing rows, are Negative
       TRUE ~ "Negative"
     )
   )
@@ -983,8 +1003,13 @@ cfWGS_Clinical_MRD_filled <- cfWGS_Clinical_MRD_filled %>%
     )
   )
 
-## Recalculate rates
-# Create MRD_by_clinical_testing column based on the specified conditions
+## Recalculate final composite clinical MRD fields
+# These values replace the preliminary fields above and are retained in the
+# final aggregate as legacy multi-assay helper fields. They are not used as the
+# manuscript EasyM comparator; the isotype-specific EasyM call is generated in
+# 3_1_A_Process_and_optimize_EasyM.R. The historical fallback again labels all
+# rows not satisfying a positive condition as "Negative", including
+# all-component-missing rows.
 cfWGS_Clinical_MRD_filled <- cfWGS_Clinical_MRD_filled %>%
   mutate(
     MRD_by_clinical_testing = case_when(
@@ -997,27 +1022,29 @@ cfWGS_Clinical_MRD_filled <- cfWGS_Clinical_MRD_filled %>%
       # Condition 3: Rapid_Novor is greater than 1
       Rapid_Novor > 1 ~ "Positive",
       
-      # If none of the conditions are met, set as Negative
+      # Historical fallback: all other rows, including all-missing rows, are Negative
       TRUE ~ "Negative"
     )
   )
 
-# Create MRD_by_clinical_testing_stringent column based on the specified conditions
+# The retained legacy composite uses Rapid Novor >0.05 here. This differs from
+# the >0.1 preliminary block above and does not apply the manuscript's
+# isotype-specific EasyM rule. It remains unchanged for backward compatibility.
 cfWGS_Clinical_MRD_filled <- cfWGS_Clinical_MRD_filled %>%
   mutate(
     MRD_by_clinical_testing_stringent = case_when(
       # Condition 1: MRD_Results_FLOW is Positive
       MRD_Results_FLOW == "Positive" ~ "Positive",
       
-      # Condition 2: Mrd1E5 is Positive
+      # Condition 2: Adaptive MRD is positive at either recorded sensitivity
       Mrd1E6 == "Positive" ~ "Positive",
       
       Mrd1E5 == "Positive" ~ "Positive",
       
-      # Condition 3: Rapid_Novor is greater than 0.1
+      # Condition 3: Rapid_Novor is greater than 0.05 (implemented legacy rule)
       Rapid_Novor > 0.05 ~ "Positive",
       
-      # If none of the conditions are met, set as Negative
+      # Historical fallback: all other rows, including all-missing rows, are Negative
       TRUE ~ "Negative"
     )
   )

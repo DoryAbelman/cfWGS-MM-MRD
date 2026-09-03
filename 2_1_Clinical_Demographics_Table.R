@@ -3,28 +3,37 @@
 #
 # Description:
 #   This script processes the final aggregated cfWGS feature table (with clinical
-#   and demographic annotations), selects each patient’s earliest Baseline/Diagnosis
-#   sample, defines clinical cohorts (Newly diagnosed vs Pre-treated), and builds
-#   a “Table 1” of baseline characteristics.  It also exports a cohort assignment
-#   file for downstream merging.
+#   and demographic annotations), selects one Baseline/Diagnosis record per
+#   patient, attaches the existing Frontline/Non-frontline cohort assignment,
+#   and builds the categorical manuscript Table 1 of baseline characteristics.
+#
+# Unit of analysis:
+#   One patient. When multiple eligible baseline/diagnosis records exist, the
+#   documented selection rules below retain exactly one record for Table 1.
 #
 # Steps:
 #   1. Load the aggregated RDS of cfWGS features + clinical/demographics
-#   2. Identify patients with both BM and blood data
-#   3. Subset to Diagnosis/Baseline, resolve duplicates (CA-02, SPORE_0009, etc.)
-#   4. Define cohorts by patient ID patterns (Newly diagnosed vs Pre-treated)
-#   5. Clean and recode categorical and continuous variables
-#   6. Build categorical Table 1 with gtsummary + overall column
-#   7. (Optional) Build continuous Table 1
-#   8. Export tables to Word and save cohort assignment as TXT/RDS
+#   2. Attach the current patient-level cohort labels
+#   3. Subset to Diagnosis/Baseline and resolve duplicate baseline candidates
+#   4. Fill missing patient-level fields from curated clinical sources, with audit
+#   5. Clean and recode the categorical variables shown in Table 1
+#   6. Export deterministic count/denominator companions and the formatted table
+#   7. Stage the current DOCX/PDF manuscript artifacts
+#   8. Optionally build historical continuous-variable and cohort-review helpers
 #
 # Inputs:
 #   • RDS: Final_aggregate_table_cfWGS_features_with_clinical_and_demographics_updated9.rds
-#   • CSV: Output_tables_2025/patient_cohort_assignment.csv
-#   • RDS: cohort_assignment_table_updated.rds
+#   • RDS: baseline_high_quality_patients_updated.rds
+#   • CSV: Output_tables_2025/patient_cohort_assignment.csv (comparison audit)
+#   • Curated cohort-specific clinical workbooks listed in
+#     read_table1_patient_clinical_sources() (used only to fill missing fields)
 #
 # Outputs:
 #   • Word: table1_clinical_categorical_updated_final_3.docx
+#   • CSV: Output_tables_2025/Table_1_clinical_demographics_computed_source_counts.csv
+#   • TSV: Output_tables_2025/Table_1_clinical_demographics_computed_source_qc.tsv
+#   • DOCX/PDF: current Table 1 artifacts under Final Tables and Figures/ and
+#     Figures_Exported/Tables_exported/
 #   • Optional Word helper: baseline_characteristics_updated.docx
 #   • Optional exploratory cohort/fragmentomics audit output printed to console
 #
@@ -48,8 +57,8 @@
 # Pipeline role:
 #   Table 1 is built from the baseline/diagnosis sample per patient after
 #   resolving known duplicate baseline records. The cohort assignment exported
-#   here is reused by later scripts so clinical grouping is consistent across
-#   figures, supplementary tables, and survival analyses.
+#   by the upstream cohort workflow is consumed here so the Training/Testing
+#   display groups remain consistent with downstream analyses.
 #
 # Author: Dory Abelman
 # Date:   2025-05-26
@@ -737,8 +746,8 @@ dat_base <- dat_base %>%
 
 ### Export deterministic Table 1 source-data companions
 # These CSV/TSV files are not the formatted manuscript table. They are a
-# reviewer/developer-friendly audit trail for the categorical counts and
-# denominators that feed the gtsummary Table 1 object below. Keeping them in the
+# reproducibility audit trail for the categorical counts and denominators that
+# feed the gtsummary Table 1 object below. Keeping them in the
 # original Table 1 script makes the final_manuscript_objects source-data folder
 # reproducible without relying on the separate reproducible_workflow generator.
 format_table1_count_percent <- function(n, denominator, missing_level = FALSE) {
