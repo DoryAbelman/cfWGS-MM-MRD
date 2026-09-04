@@ -4,19 +4,21 @@
 # Author:   Dory Abelman
 #
 # Purpose:
-#   One-shot package installer and loader for the cfWGS-MM-MRD pipeline.
-#   Run this file once per R session (or whenever setting up a new environment)
-#   before executing any of the numbered analysis scripts.
+#   Optional loader for a commonly used subset of the packages in this project.
+#   The numbered scripts load their own dependencies and do not require this
+#   file to be sourced first.
 #
-#   The script checks whether each required package is installed and throws
-#   an informative error if any are missing, instead of failing silently mid-
-#   analysis. Install missing packages with install.packages() before re-running.
+#   The script checks its package list and stops at the first missing package.
+#   It is not a complete dependency installer: additional packages used by
+#   specific scripts are listed in config.R and in those scripts' headers.
 #
 # Usage:
 #   source("setup_packages.R")
 #
-# To install all dependencies at once:
-#   install.packages(packages)  # where `packages` is the vector defined below
+# Installation note:
+#   CRAN, Bioconductor, and non-CRAN dependencies require their corresponding
+#   installation methods; a single install.packages() call is not sufficient
+#   for every package used by the project.
 #
 # Manuscript outputs created/updated:
 #   - None directly. This support file standardizes package loading for

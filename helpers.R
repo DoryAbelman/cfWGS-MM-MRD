@@ -4,23 +4,44 @@
 # Author:   Dory Abelman
 #
 # Purpose:
-#   Shared utility functions used across the numbered analysis scripts.
-#   Source this file at the start of any script that calls these functions.
+#   Shared data-loading, validation, identity-matching, and cohort helper
+#   functions used across the numbered analysis scripts. Several functions
+#   encode study-specific decisions and should be reviewed as part of the
+#   corresponding analysis, rather than treated as generic software utilities.
 #
-# Functions defined here:
-#   clean_sample_id(x)  - strips whitespace and converts sample IDs to
-#                         uppercase for consistent joining across data sources.
-#   spring2026_*()      - revision-cohort helpers. These are deliberately kept
-#                         in one file so every downstream script uses the same
-#                         metadata authority, exclusion logic, alias rules, and
-#                         dilution-series parsing assumptions.
+# Main groups of functions:
+#   * Basic ID, path, required-column, and date helpers.
+#   * Manual baseline, clinical-date, longitudinal-feature, and swim-plot masks.
+#   * Spring 2026 revision metadata, exclusions, aliases, and cohort assignment.
+#   * Strict MRDetect CSV parsing and duplicate-result checks.
+#   * NovaSeq 6000/XPlus healthy-control definitions for MRDetect and
+#     fragmentomics platform calibration.
+#   * Historical/current clinical-metadata repair and sample identity mapping.
+#   * Revision mutation-count and baseline mutation-count plot preparation.
+#   * PWGVAL/M4CHIP dilution and XPlus 0% control metadata.
+#   * Revision-inclusive baseline FISH call recovery.
+#
+# Inputs:
+#   Most input paths are supplied to individual functions or resolved through
+#   project-relative defaults and CFWGS_* environment variables. Each loader
+#   checks the columns and identifiers it requires before returning data.
+#
+# Side effects:
+#   Most functions return an object without writing files. The clinical repair,
+#   identity-map, and overlap helpers can write CSV audit tables under
+#   Output_tables_2025 when they are called. No manuscript figure or table is
+#   generated directly by this file.
+#
+# R packages used by functions in this file:
+#   dplyr, magrittr, purrr, readr, readxl, stringr, tibble, and tidyr. Calling
+#   scripts load the packages needed for the functions they use.
 #
 # Usage:
-#   source("helpers.R")  # called at the top of each numbered script
+#   source("helpers.R")  # sourced by many, but not all, numbered scripts
 #
 # Manuscript outputs created/updated:
-#   - None directly. This support file centralizes reusable helper functions
-#     for consistent sample-ID handling.
+#   - None directly. Its returned data feed clinical, genomic, dilution,
+#     longitudinal, model-validation, figure, and table scripts.
 # =============================================================================
 
 # Collection of helper functions used across scripts
@@ -53,7 +74,7 @@ spring2026_revision_data_dir <- function() {
 spring2026_revision_metadata_path <- function() {
   # ## Spring 2026 metadata table used by the final scripts
   # This CSV is the repo-shaped OICR revision table, not a filename-derived
-  # reconstruction. It is the source of truth for patient IDs, sample IDs,
+  # reconstruction. It supplies patient IDs, sample IDs,
   # sample types, dates, timepoint labels, study labels, BAM names, and whether a
   # row is ready to append to the combined clinical metadata.
   Sys.getenv(
@@ -68,7 +89,7 @@ spring2026_revision_metadata_path <- function() {
 
 spring2026_revision_timepoint_override_path <- function() {
   # ## Manual timepoint overrides
-  # Overrides are separated from the main metadata table so reviewer/manual
+  # Overrides are separated from the main metadata table so manual
   # adjudications can be audited independently. They are matched by Sample_ID and
   # only replace timepoint_info after duplicate and unmatched IDs are rejected.
   Sys.getenv(

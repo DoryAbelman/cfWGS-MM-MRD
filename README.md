@@ -6,7 +6,9 @@ The pipeline is a series of numbered R scripts. Each script reads the outputs of
 
 This directory contains the main analysis pipeline. The numbered scripts remain organized by analysis stage and scientific question, matching the original workflow: raw/clinical processing, WGS feature processing, dilution-series analyses, model training/application, concordance analyses, and survival analyses. The scripts create the analysis results and the figures and tables used in the manuscript.
 
-The normal user-facing workflow is `run_pipeline.R` or `run_manuscript_workflow.R`. Supporting provenance and validation files are included to make the script-to-manuscript mapping explicit, but the numbered scripts are the scientific source of truth.
+The main workflow is described by `run_pipeline.R`. The numbered scripts contain
+the analyses, and the figure/table map identifies which script produces each
+manuscript result.
 
 The workflow runs from staged input data through the final tables, source-data files, and figure panels used in the manuscript. The deliberate exception is routine test-cohort expansion: final training-derived model objects, nested-CV fold objects, metric summaries, and related cached intermediates are preserved unless `--include-cache-sensitive` is supplied. New test-cohort samples should be processed through the upstream feature scripts and then scored with the saved training-derived objects, so test-cohort metrics can update without unintentionally recomputing the training-stage model outputs.
 
@@ -118,9 +120,6 @@ Scripts_2025/Final_Scripts/final_manuscript_objects/manuscript_output_index.tsv
 Scripts_2025/Final_Scripts/final_manuscript_objects/script_output_index.tsv
 ```
 
-For GitHub or Code Ocean packaging, use
-[`CODE_OCEAN_UPLOAD_CHECKLIST.md`](CODE_OCEAN_UPLOAD_CHECKLIST.md).
-
 ## Manuscript figure/table ownership
 
 The numbered scripts are still organized by analysis question, not by final
@@ -136,19 +135,23 @@ script runs, the files used in the manuscript are copied or saved into
 | `1_6_Identify_High_Quality_Patient_Pairs.R` | Figure 1B source table |
 | `2_1_Clinical_Demographics_Table.R` | Table 1 |
 | `2_1_Part2_Cohort_Swim_Plot.R` | Figure 1A; Supplementary Table 1 |
-| `2_2_Baseline_demographics_by_WGS_heatmap_updated.R` | Extended Data Figure 1; Supplementary Table 1A |
+| `2_2_Baseline_demographics_by_WGS_heatmap_updated.R` | Extended Data Figure 1; Supplementary Table 2 sheet A (feature catalogue) |
 | `2_3_Feature_Concordance_And_Mutation_Counts.R` | Extended Data Figure 2A-F; Supplementary Tables 2-3 |
 | `2_4_Longitudinal_features_analysis.R` | Figure 2A-D; Extended Data Figure 3A-C; Extended Data Figure 4 |
 | `2_4B_Build_all_evaluable_longitudinal_panels.R` | Figure 2E terminal-evaluable patient summaries and the all-evaluable Figure 2B-D / Extended Data Figure 3A-C longitudinal companion panels |
-| `3_1_Optimize_cfWGS_thresholds.R` | Figure 3A-B; Figure 4A-B; Extended Data Figure 5A-C; Extended Data Figure 7A-C and 7E; Extended Data Figure 9A-F; Supplementary Tables 4-6 base performance exports |
+| `3_1_Optimize_cfWGS_thresholds.R` | Historical model-library fitting, full-training refits and thresholds used by downstream scoring; Supplementary Table 5 and inputs to later figures/tables |
 | `3_1C_Expanded_test_clustered_sensitivity.R` | Patient-clustered bootstrap and deterministic one-sample-per-patient sensitivity outputs for the revision-inclusive Figure 3B/Figure 4B test analyses; final Supplementary Table 6 workbook combining those results with the preserved expanded-test classifier metrics and exact sample manifest |
 | `3_1_part2_Apply_cfWGS_thresholds_to_dilution_series.R` | Figure 3C; Extended Data Figure 5D; Extended Data Figure 7D; Supplementary Table 7 |
 | `3_2_Plot_optimal_cutoff_and_clinical_concordance.R` | Figure 3D-E; Figure 4C-D; Extended Data Figure 5E-G; Extended Data Figure 7F-H; Supplementary Tables 8 and 10 |
 | `4_1_Survival_Analysis.R` | Figure 3F; Figure 4E; Extended Data Figure 6A-K; Extended Data Figure 8A-D plus bottom panels; Supplementary Table 9. The time-window results used in Extended Data Figure 6I, Extended Data Figure 8D, and Supplementary Table 9 are regenerated from the current prospective `detection_progression_updated6` source CSVs, requiring progression on/after the sample date and adequate follow-up for non-event calls. |
 | `4_2_Compare_subclonal_evolution.R` | Extended Data Figure 10A-B |
+| `6_12_Patient_Grouped_Repeated_Nested_CV.R` | Final 50-repeat patient-grouped nested-CV fitting and held-out predictions used for Supplementary Table 4 |
+| `6_13_Assemble_All_Model_Grouped_CV_Results.R` | Combines the 32 model-specific grouped-CV runs and writes the final performance table |
+| `6_17_Generate_Compact_All_Model_Grouped_CV_ROC_Panels.R` | Figure 3A and Figure 4A |
+| `6_14_Generate_Grouped_CV_Manuscript_Replacement_Panels.R` | Extended Data Figures 5A, 7A, 9A and 9B |
 
-The source of truth for exact source filenames, companion CSVs, and historical
-name corrections is `docs/manuscript_artifact_source_map.tsv`. The validator
+Exact source filenames, companion CSVs, and historical name corrections are
+listed in `docs/manuscript_artifact_source_map.tsv`. The validator
 uses that file plus the direct-output manifest to confirm that every mapped
 artifact lands in the organized manuscript-output tree.
 
@@ -252,7 +255,7 @@ Scripts are numbered to indicate execution order. Run them sequentially from a w
 | `2_0_Assemble_Table_With_All_Features.R` | Merge MRD assay results (MFC, clonoSEQ, EasyM), cfWGS metrics, clinical data, and fragmentomics into a single master table. | Outputs from all Stage 1 scripts. | `Final_aggregate_table_cfWGS_features_with_clinical_and_demographics_updated*.rds` |
 | `2_1_Clinical_Demographics_Table.R` | Build Table 1 (patient demographics, disease characteristics by cohort). | Master feature table from `2_0`. | `table1_categorical_updated_final.docx`, `cohort_assignment_table.rds` |
 | `2_1_Part2_Cohort_Swim_Plot.R` | Generate the treatment-timeline swim plot and privacy-protected event table. Support-only cohort/legend QA exports are written under `Final Tables and Figures/swim_plot_support/`. | `tidy_treatments.csv`, M4 and IMMAGINE chemotherapy tables. | Figure 1A component; Supplementary Table 1 event table. Support QA exports are not copied to `final_manuscript_objects/`. |
-| `2_2_Baseline_demographics_by_WGS_heatmap_updated.R` | Create the baseline integrated alteration heatmap (BM overlaid with cfDNA; mutations, CNAs, translocations) and disease-feature catalog. | `Final_aggregate_table*.rds`, cohort assignment, CNA/translocation/mutation RDS files. | Extended Data Figure 1 component; Supplementary Table 1A. |
+| `2_2_Baseline_demographics_by_WGS_heatmap_updated.R` | Create the baseline integrated alteration heatmap (BM overlaid with cfDNA; mutations, CNAs, translocations) and disease-feature catalog. | `Final_aggregate_table*.rds`, cohort assignment, CNA/translocation/mutation RDS files. | Extended Data Figure 1 component; feature catalogue used as sheet A of Supplementary Table 2. |
 | `2_3_Feature_Concordance_And_Mutation_Counts.R` | Compute FISH-WGS concordance; summarise baseline mutation counts by cohort; build concordance and feature-correlation exports. BAM archive/unarchive helper tables are support-only and run only when `CFWGS_RUN_BAM_ARCHIVE_DIAGNOSTICS=true`. | Master feature table, cohort assignments, mutation export RDS. Optional BAM diagnostic mode also reads `All_bam_storage_locations.xlsx`. | Extended Data Figure 2 components; Supplementary Tables 2 and 3. Optional BAM diagnostic files are written under `Output_tables_2025_updated/support_only_bam_archive_diagnostics/` and are not copied to `final_manuscript_objects/`. |
 | `2_4_Longitudinal_features_analysis.R` | Summarise how cfWGS features change over time; generate longitudinal mutation, CNA, and fragmentomics panels. | Master feature table, cohort assignments. | Figure 2 components; Extended Data Figures 3 and 4 source panels. |
 
@@ -260,7 +263,7 @@ Scripts are numbered to indicate execution order. Run them sequentially from a w
 
 | Script | Purpose | Key inputs | Key outputs |
 |--------|---------|------------|-------------|
-| `3_1_Optimize_cfWGS_thresholds.R` | **Core model analysis.** Train or load elastic-net classifiers using 5x5 nested cross-validation on BM-derived, blood-derived, and fragmentomics features. Evaluate ROC/AUC, calibration, and sensitivity/specificity at fixed operating points. Skipped by default by the command-line runners because these artifacts are cache-sensitive preserved reproducibility outputs during routine test-cohort expansion. | Master feature table, clonoSEQ/MFC ground-truth labels. | Figure 3A-B and Figure 4A-B components; Extended Data Figures 5A-C, 7A-C/E, and 9A-F; Supplementary Tables 4-6; preserved model and metric RDS files. |
+| `3_1_Optimize_cfWGS_thresholds.R` | Fit or load the historical elastic-net model library, full-training refits, and thresholds used for downstream sample scoring. Its older nested-CV exports are not the final 50-repeat patient-grouped validation; that analysis is performed by `6_12` and assembled by `6_13`. | Master feature table, clonoSEQ/MFC ground-truth labels. | Preserved models and thresholds; full-training metrics used in Supplementary Table 5; inputs to downstream scoring and concordance analyses. |
 | `3_1_A_Process_and_optimize_EasyM.R` | Process EasyM (proteomic MRD) quantitative data and export the optimized EasyM call/threshold tables required by `3_2` and `4_1`. | EasyM CSV files from clinical collaborators; cfWGS call table from `3_1`. | Required intermediate CSVs: `EasyM_all_samples_with_optimized_calls.csv` and `EasyM_threshold_values_by_timepoint.csv`; support-only landmark-analysis tables/figures. |
 | `3_1_part2_Apply_cfWGS_thresholds_to_dilution_series.R` | Apply trained models and thresholds to the dilution-series samples to establish the LOD (limit of detection) for each feature and combined model. | Saved models/thresholds from `3_1`; fragmentomics and MRDetect dilution-series outputs. | Figure 3C component; Extended Data Figures 5D and 7D; Supplementary Table 7. |
 | `3_2_Plot_optimal_cutoff_and_clinical_concordance.R` | Generate tumour-informed cfWGS clinical-concordance figures: assay positivity, model-vs-clinical assay comparisons, calibration/decision-curve support, and contingency tables. | `all_patients_with_BM_and_blood_calls_updated*.rds`, threshold table. | Figure 3D-E and Figure 4C-D components; Extended Data Figures 5E-G and 7F-H; Supplementary Tables 8 and 10. |

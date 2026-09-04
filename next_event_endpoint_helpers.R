@@ -7,6 +7,33 @@
 ##   event happened before the sample, it is ignored and a later progression is
 ##   used when available; otherwise the row is censored at the latest known
 ##   follow-up/sample date after the sample.
+##
+## Workflow role:
+##   These functions are sourced by 2_4, 2_4B, 4_1, and 4_1B. They contribute
+##   the sample-relative progression/censor endpoints used in longitudinal and
+##   survival figures but do not generate a figure or table directly.
+##
+## Main inputs:
+##   * An RDS PFS table with Patient, Baseline_Date, Censor_date, and Relapsed.
+##   * An RDS table containing all known Patient/Progression_date pairs.
+##   * Optional patient follow-up tables, latest-date tables, and sample dates
+##     that can provide later censoring dates.
+##   * A sample-level data frame with patient and collection-date columns.
+##
+## Returned values:
+##   load_next_event_endpoint_resources() returns the cleaned PFS table, all
+##   progression dates, and censor-date candidates. add_next_event_endpoint()
+##   appends the selected event/censor date, status, time from sample, source,
+##   prior-event flags, and manual-override flag to the input rows.
+##
+## Key assumptions:
+##   A progression up to event_grace_days before a sample is assigned to that
+##   sample and its time is set to zero. Earlier progressions are ignored when a
+##   later event or censor date is available. The two default day-zero overrides
+##   are described at the add_next_event_endpoint() argument below.
+##
+## R packages used by these functions:
+##   dplyr, lubridate, purrr, readr, tibble, and tidyr.
 ################################################################################
 
 as_date_safe <- function(x) {
@@ -195,13 +222,10 @@ add_next_event_endpoint <- function(data,
                                     # sample to `endpoint_status = 1L` at day 0, i.e. they assert
                                     # that the listed draw was taken at clinical progression.
                                     #
-                                    # ACTION REQUIRED BEFORE SUBMISSION: the clinical rationale for
-                                    # each override must be stated in the Methods, and the landmark
-                                    # survival estimates must be reported with and without them.
-                                    # Two manual outcome assignments in an analysis with 9 events is
-                                    # a legitimate referee concern if left undocumented; pass
-                                    # `relapse_sample_day0_overrides = NULL` to obtain the
-                                    # un-overridden sensitivity analysis.
+                                    # These are explicit manual endpoint assignments rather than
+                                    # dates inferred by the general next-event rule. Pass
+                                    # `relapse_sample_day0_overrides = NULL` to run the existing
+                                    # sensitivity analysis without either assignment.
                                     #
                                     # Deliberately exposed as an argument (rather than hard-coded in
                                     # the body) so that the with/without comparison can be run

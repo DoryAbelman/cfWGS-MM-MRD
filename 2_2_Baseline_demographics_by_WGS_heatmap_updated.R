@@ -3,7 +3,7 @@
 #
 # Purpose:
 #   Generate the baseline integrated genomic alteration heatmaps and feature
-#   catalog mapped to Extended Data Figure 1 / Supplementary Table 1A:
+#   catalog used in Extended Data Figure 1 and Supplementary Table 2 sheet A:
 #   overlaying bone-marrow WGS (upper triangle) vs plasma cfDNA WGS (lower
 #   triangle) for eligible baseline samples. The script also produces supporting
 #   mutation, CNA, translocation, FISH, and tumour-fraction concordance summaries;
@@ -48,7 +48,7 @@
 #   - combined_data_heatmap_blood_Sep2025_updated.rds
 #   - ordering_df_for_Figure_1.csv
 #   - Output_tables_2025_updated/MM_disease_associated_features_catalog.csv
-#       (canonical Supplementary Table 1A source)
+#       (feature catalogue used in Supplementary Table 2 sheet A)
 #   - output_tables/ and Output_tables_2025_updated/ supporting feature catalogs,
 #     concordance summaries, discordant-sample tables, FISH-vs-WGS summaries,
 #     and VAF summary/source tables used downstream.
@@ -62,8 +62,8 @@
 #
 # Manuscript outputs created/updated:
 #   - Extended Data Figure 1: baseline BM/cfDNA WGS alteration heatmap.
-#   - Supplementary Table 1A: baseline feature catalog/source table for the
-#     heatmap and WGS alteration calls.
+#   - Supplementary Table 2 sheet A: baseline feature catalogue for the heatmap
+#     and WGS alteration calls.
 #
 # Pipeline role:
 #   The heatmap compares matched baseline bone-marrow and cfDNA WGS calls in
@@ -97,7 +97,8 @@ library(ggplot2)
 # This script still writes its historical output files. The helper additionally
 # copies the final heatmap/table components into
 # Scripts_2025/Final_Scripts/final_manuscript_objects with clear manuscript
-# labels such as Extended_Data_Figure_1 and Supplementary_Table_1A.
+# labels. The older `Supplementary_Table_1A` routing label is retained by the
+# output helper for compatibility but is not the current table number.
 .manuscript_helper <- file.path("Scripts_2025", "Final_Scripts", "manuscript_output_helpers.R")
 if (!file.exists(.manuscript_helper)) {
   .manuscript_helper <- "manuscript_output_helpers.R"
@@ -3318,14 +3319,15 @@ saveRDS(supp_concordance_summary,   out_rds)
 
 
 
-####### Supplementary Table 1A support and narrative audit summaries
+####### Supplementary Table 2 sheet A support and narrative audit summaries
 ### Role in manuscript:
 ###   This tail section contains two different types of work:
 ###   1. Console-only narrative summaries that help audit/interpret baseline
 ###      concordance results. These printed paragraphs are not manuscript
 ###      source files.
 ###   2. The active disease-associated feature catalog exported below and staged
-###      as Supplementary Table 1A by ms_copy_artifact().
+###      for Supplementary Table 2 sheet A. `STABLE1A` remains the historical
+###      artifact-routing ID used by ms_copy_artifact().
 
 # --- Step 8. Generate Summary Paragraphs -------------------------------------
 # Example paragraphs (you can further modify the text based on your desired style)
@@ -4082,9 +4084,10 @@ write_csv(feature_catalog, "Output_tables_2025_updated/MM_disease_associated_fea
 saveRDS(feature_catalog,   "Output_tables_2025_updated/MM_disease_associated_features_catalog.rds")
 
 # Historical duplicate export retained under its existing, misleading
-# `Supplementary_Table_2A_*` filenames for backward compatibility. The canonical
-# manuscript mapping is Supplementary Table 1A via artifact ID STABLE1A below.
-# No downstream analysis should infer table numbering from these legacy names.
+# `Supplementary_Table_2A_*` filenames for backward compatibility. The feature
+# catalogue is sheet A of the final Supplementary Table 2 workbook. The
+# `STABLE1A` artifact ID below is a historical routing label and should not be
+# interpreted as the current supplementary-table number.
 supplementary_table_2a_dir <- file.path(
   "Scripts_2025", "Final_Scripts", "final_manuscript_objects",
   "04_supplementary_tables"
@@ -4108,7 +4111,7 @@ writexl::write_xlsx(
 )
 
 # -------------------------------------------------------------------------
-# Manuscript output: Supplementary Table 1A
+# Manuscript output: Supplementary Table 2, sheet A
 #
 # What this is:
 #   Catalog of disease-associated genomic features assessed in the baseline
@@ -4117,7 +4120,7 @@ writexl::write_xlsx(
 #
 # Why it is here:
 #   This feature catalog defines the rows of Extended Data Figure 1 and is the
-#   code-generated source for final Supplementary Table 1A.
+#   code-generated source for sheet A of final Supplementary Table 2.
 # -------------------------------------------------------------------------
 ms_copy_artifact(
   source_path = "Output_tables_2025_updated/MM_disease_associated_features_catalog.csv",

@@ -6,22 +6,22 @@
 # Purpose:
 #   Central configuration file for the cfWGS-MM-MRD analysis pipeline.
 #   Contains two things:
-#     1. PACKAGE LIST  - complete list of every R package required by any
-#        numbered analysis script. Sourcing config.R (or setup_packages.R,
-#        which also references this list) ensures the full environment is
-#        loaded before running the pipeline.
-#     2. DIRECTORY PATHS - common path variables used throughout the scripts.
-#        Update the variables below to match your local environment before
-#        running any analysis script.
+#     1. PACKAGE LIST - the dependency inventory checked by
+#        run_pipeline.R --check-packages. Individual analysis scripts load the
+#        packages they use directly; sourcing this file does not load them.
+#     2. DIRECTORY PATHS - three historical project-relative path constants.
+#        The current numbered scripts use their own explicit relative paths and
+#        do not read these variables.
 #
 # Usage:
-#   source("config.R")   # called at the top of each numbered script
+#   source("config.R")
+#   # Usually read by run_pipeline.R or the separate reproducibility harness.
 #
 # Manuscript outputs created/updated:
 #   - None directly. This support file defines shared package and path
 #     configuration used by the command-line manuscript analysis scripts.
 #
-# Directory variables (update these for your system):
+# Historical directory variables:
 #   clinical_data_dir  <- path to clinical metadata spreadsheets
 #   wgs_results_dir    <- path to WGS variant call, CNA, and fragmentomics files
 #   output_tables_dir  <- path where processed tables and figures are written
@@ -92,8 +92,9 @@ packages <- c(
   "yardstick"
 )
 
-# Central configuration of directory locations.
-# Update these variables to match your local environment.
+# Historical project-relative directory constants. They are retained for
+# compatibility with support code but are not currently read by the numbered
+# Final_Scripts analyses.
 
 clinical_data_dir <- "Clinical data"
 wgs_results_dir   <- "M4_CMRG_Data"
