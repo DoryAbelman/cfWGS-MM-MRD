@@ -36,13 +36,13 @@
 #   - Jan2025_exported_data/All_feature_data_Sep2025_updated2.rds
 #  
 # Output files:
-#   Used in the manuscript:
+#   Used in the manuscript (all evaluable baseline pairs):
+#     Final Tables and Figures/Fig3C_mutation_overlap_lollipop_all_evaluable_baseline.png
+#     Final Tables and Figures/Extended_Data_Figure_2G_all_evaluable_baseline_mutation_overlap_*.csv
+#   Cohort-specific support version (Frontline only):
 #   - Final Tables and Figures/Fig3C_mutation_overlap_lollipop2_updated.png
 #   - Final Tables and Figures/Extended_Data_Figure_2G_mutation_overlap_source_data.csv
 #   - Final Tables and Figures/Extended_Data_Figure_2G_mutation_overlap_summary.csv
-#   - Alternate all-evaluable panel and source/summary tables:
-#     Final Tables and Figures/Fig3C_mutation_overlap_lollipop_all_evaluable_baseline.png
-#     Final Tables and Figures/Extended_Data_Figure_2G_all_evaluable_baseline_mutation_overlap_*.csv
 #
 #   Support-only QA/review:
 #   - Final Tables and Figures/mutation_overlap_support/patient_venn_diagrams/
@@ -63,8 +63,9 @@
 #     recovered in cfDNA (which would instead use the BM count as denominator).
 #   - No `t_depth` threshold is applied here. The depth column is carried into
 #     the wide table with `max`, but overlap uses mutation presence only.
-#   - The mapped Extended Data Figure 2G panel contains the Frontline cohort.
-#     The separately named all-evaluable panel includes both assigned cohorts.
+#   - The Extended Data Figure 2G panel in the final figure PDF is the
+#     all-evaluable version and includes both assigned cohorts. The separately
+#     retained 28-patient panel contains the Frontline cohort only.
 #   - `All_feature_data_Sep2025_updated2.rds`, produced later by 1_5, is loaded
 #     only for a printed high-quality-subset summary. Because the file is still
 #     an unconditional input, a clean run must have it available already or
@@ -74,9 +75,9 @@
 #   Rscript Scripts_2025/Final_Scripts/1_2_Part2_Get_Mutation_Overlap.R
 #
 # Manuscript outputs created/updated:
-#   - Extended Data Figure 2G: Frontline-cohort patient-level lollipop plot
-#     showing the Jaccard percentage overlap between baseline/diagnosis BM and
-#     cfDNA mutation sets. An alternate all-evaluable version is also exported.
+#   - Extended Data Figure 2G: all-evaluable patient-level lollipop plot showing
+#     the Jaccard percentage overlap between baseline/diagnosis BM and cfDNA
+#     mutation sets. A Frontline-only support version is also exported.
 #
 # Pipeline role:
 #   This analysis asks whether baseline tumour mutations seen in diagnostic
@@ -750,8 +751,8 @@ p_overlap <- ggplot(plot_df, aes(x = Percent_Overlap, y = Patient)) +
     legend.text       = element_text(size = 6)
   )
 
-# 4. Save manuscript panel
-# Current manuscript assignment: Extended Data Figure 2G.
+# 4. Save the Frontline-only support panel.
+# The final Extended Data Figure 2G PDF uses the all-evaluable panel below.
 # Historical filename: Fig3C_mutation_overlap_lollipop2_updated.png.
 edfig2g_path <- file.path(outdir, "Fig3C_mutation_overlap_lollipop2_updated.png")
 ggsave(
@@ -762,8 +763,8 @@ ggsave(
   dpi      = 600
 )
 
-# MANUSCRIPT OUTPUT: Extended Data Figure 2G
-# Patient-level lollipop plot summarizing baseline BM/cfDNA Jaccard overlap.
+# SUPPORT OUTPUT: Frontline-cohort version of Extended Data Figure 2G.
+# The artifact ID is retained for compatibility with the existing output map.
 ms_copy_artifact(
   source_path = edfig2g_path,
   artifact_id = "EDFIG2G",
@@ -773,7 +774,7 @@ ms_copy_artifact(
 )
 
 
-# Export manuscript source/helper tables for Extended Data Figure 2G.
+# Export source/helper tables for the Frontline-cohort support version.
 edfig2g_source_data_path <- file.path(outdir, "Extended_Data_Figure_2G_mutation_overlap_source_data.csv")
 edfig2g_summary_path <- file.path(outdir, "Extended_Data_Figure_2G_mutation_overlap_summary.csv")
 
@@ -807,10 +808,8 @@ ms_copy_artifact(
   script_name = "1_2_Part2_Get_Mutation_Overlap.R"
 )
 
-# Alternate ED2G-style panel: all cohort-assigned evaluable diagnosis/baseline
-# BM-cfDNA pairs.
-# The manuscript-mapped ED2G panel above intentionally preserves the original
-# training-cohort-only view. This companion version keeps every matched
+# Extended Data Figure 2G: all cohort-assigned evaluable diagnosis/baseline
+# BM-cfDNA pairs. The final figure PDF uses this version. It keeps every matched
 # baseline/diagnosis patient pair with defined mutation overlap, including the
 # test cohort, after the same upstream metadata joins and pair filters.
 plot_df_all_evaluable <- overlap_with_cohort %>%

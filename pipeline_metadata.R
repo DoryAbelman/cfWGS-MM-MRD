@@ -18,6 +18,13 @@
 #   source("Scripts_2025/Final_Scripts/pipeline_metadata.R")
 #   # Usually sourced by run_pipeline.R, run_manuscript_workflow.R, and
 #   # build_stage_artifact_map.R rather than run directly.
+#
+# Required metadata:
+#   - config/source_pipeline.tsv: script order, stage, run policy, and notes.
+#   - docs/manuscript_artifact_source_map.tsv: script-to-manuscript mapping.
+#   Optional regeneration, generation, and validation TSVs are merged when
+#   present. The write functions create stage/script index files but do not run
+#   any numbered analysis script.
 # =============================================================================
 
 fs_require_columns <- function(data, required, label) {
@@ -36,11 +43,44 @@ fs_read_tsv <- function(path, label) {
 }
 
 fs_project_root_from_script_dir <- function(script_dir) {
-  normalizePath(file.path(script_dir, "..", ".."), mustWork = TRUE)
+  legacy_root <- normalizePath(file.path(script_dir, "..", ".."), mustWork = TRUE)
+  legacy_markers <- c(
+    file.path(legacy_root, "Clinical data"),
+    file.path(legacy_root, "reproducible_workflow"),
+    file.path(legacy_root, "Final Tables and Figures")
+  )
+  if (any(file.exists(legacy_markers) | dir.exists(legacy_markers))) {
+    return(legacy_root)
+  }
+  normalizePath(script_dir, mustWork = TRUE)
+}
+
+fs_metadata_root <- function(project_root) {
+  candidates <- unique(c(
+    project_root,
+    file.path(project_root, "Scripts_2025", "Final_Scripts")
+  ))
+  has_metadata <- vapply(
+    candidates,
+    function(path) {
+      file.exists(file.path(path, "config", "source_pipeline.tsv")) &&
+        file.exists(file.path(path, "docs", "manuscript_artifact_source_map.tsv"))
+    },
+    logical(1)
+  )
+  if (!any(has_metadata)) {
+    stop(
+      "Could not locate repository metadata. Expected config/source_pipeline.tsv ",
+      "and docs/manuscript_artifact_source_map.tsv in the repository root.",
+      call. = FALSE
+    )
+  }
+  normalizePath(candidates[which(has_metadata)[1]], mustWork = TRUE)
 }
 
 fs_read_source_pipeline <- function(project_root) {
-  plan_path <- file.path(project_root, "reproducible_workflow", "config", "source_pipeline.tsv")
+  metadata_root <- fs_metadata_root(project_root)
+  plan_path <- file.path(metadata_root, "config", "source_pipeline.tsv")
   plan <- fs_read_tsv(plan_path, "source pipeline plan")
   fs_require_columns(
     plan,
@@ -51,7 +91,8 @@ fs_read_source_pipeline <- function(project_root) {
 }
 
 fs_read_artifact_source_map <- function(project_root, required = FALSE) {
-  map_path <- file.path(project_root, "docs", "manuscript_artifact_source_map.tsv")
+  metadata_root <- fs_metadata_root(project_root)
+  map_path <- file.path(metadata_root, "docs", "manuscript_artifact_source_map.tsv")
   if (!file.exists(map_path)) {
     if (isTRUE(required)) stop("Missing manuscript artifact source map: ", map_path, call. = FALSE)
     return(data.frame())
@@ -155,9 +196,10 @@ fs_collapse_generation_by_artifact <- function(generation) {
 }
 
 fs_build_stage_artifact_map <- function(project_root) {
+  metadata_root <- fs_metadata_root(project_root)
   plan <- fs_read_source_pipeline(project_root)
   source_map <- fs_read_artifact_source_map(project_root, required = TRUE)
-  status_path <- file.path(project_root, "docs", "artifact_regeneration_status.tsv")
+  status_path <- file.path(metadata_root, "docs", "artifact_regeneration_status.tsv")
   generation_path <- file.path(project_root, "reproducible_workflow", "outputs", "logs", "generation_manifest.tsv")
   validation_path <- file.path(project_root, "reproducible_workflow", "outputs", "logs", "validation_report.tsv")
 
@@ -166,6 +208,8 @@ fs_build_stage_artifact_map <- function(project_root) {
   validation <- fs_optional_tsv(validation_path)
 
   source_map$script <- fs_basename_script(source_map$generating_script)
+  # line_start/line_end are used below even though the general source-map reader
+  # does not require them. The stage-map workflow therefore expects both fields.
   source_map$source_lines <- ifelse(
     nzchar(as.character(source_map$line_start)) | nzchar(as.character(source_map$line_end)),
     paste0(source_map$line_start, "-", source_map$line_end),
@@ -186,6 +230,9 @@ fs_build_stage_artifact_map <- function(project_root) {
     validation <- val
   }
 
+  # Both metadata files are expected to have unique join keys: one pipeline row
+  # per script and one source-map row per artifact_id. This helper does not
+  # enforce those uniqueness assumptions before merging.
   artifact_rows <- merge(
     source_map,
     plan,
@@ -269,9 +316,10 @@ fs_build_stage_artifact_map <- function(project_root) {
 }
 
 fs_write_stage_artifact_map <- function(project_root, output_tsv = NULL, output_md = NULL) {
+  metadata_root <- fs_metadata_root(project_root)
   stage_map <- fs_build_stage_artifact_map(project_root)
-  if (is.null(output_tsv)) output_tsv <- file.path(project_root, "docs", "stage_ordered_script_artifact_map.tsv")
-  if (is.null(output_md)) output_md <- file.path(project_root, "docs", "stage_ordered_script_artifact_map.md")
+  if (is.null(output_tsv)) output_tsv <- file.path(metadata_root, "docs", "stage_ordered_script_artifact_map.tsv")
+  if (is.null(output_md)) output_md <- file.path(metadata_root, "docs", "stage_ordered_script_artifact_map.md")
 
   utils::write.table(stage_map, output_tsv, sep = "\t", row.names = FALSE, quote = TRUE, na = "")
 

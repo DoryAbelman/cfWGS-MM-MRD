@@ -18,6 +18,11 @@
 #   Figure 4A, Extended Data Figure 5A, Extended Data Figure 7A, Extended Data
 #   Figure 9A-B, and Supplementary Table 4. It writes the 32-model result set
 #   read by the downstream grouped-CV plotting and table scripts.
+#   `6_17_Generate_Compact_All_Model_Grouped_CV_ROC_Panels.R` creates the main
+#   Figure 3A/4A panels, while
+#   `6_14_Generate_Grouped_CV_Manuscript_Replacement_Panels.R` creates the
+#   corresponding Extended Data operating-point panels and Supplementary Table
+#   4 source table.
 #
 # Inputs
 #   Three completed output directories from
@@ -123,6 +128,10 @@ required_files <- c(
   "outer_heldout_predictions.csv", "outer_patient_fold_assignments.csv",
   "inner_patient_fold_assignments.csv", "model_fitting_warnings.csv"
 )
+
+# This is the initial completion/QC preflight. Section 3 subsequently reads the
+# longer `merge_files` list and will stop if any additional detail table is
+# absent, although by then the empty combined output directory has been created.
 
 # ----------------------------------------------------------------------------
 # 2. Reject incomplete blocks before creating a combined result
@@ -379,6 +388,8 @@ writeLines(
     "Complete patient-grouped repeated nested cross-validation model library",
     "32 model/cohort combinations",
     paste0(observed_outer_repeats, " repeated outer five-fold splits; 5 repeated inner five-fold splits"),
+    # This line describes the locked manuscript source runs named above. The
+    # assembler does not independently verify bootstrap_reps across those runs.
     "2,000 patient-clustered bootstrap replicates",
     "All combined quality-control checks passed.",
     paste0("Source runs: ", paste(source_run_ids, collapse = ", "))

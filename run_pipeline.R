@@ -20,9 +20,29 @@
 #   Dry-run or execute the numbered scripts in source-pipeline order,
 #   with guardrails for cache-sensitive/model-training stages.
 #
+# Workflow scope:
+#   The executed scripts come only from config/source_pipeline.tsv. That plan
+#   currently covers 0_1 through 4_2. It does not run the later 50-repeat
+#   patient-grouped nested-CV fitting, assembly, plotting, or source-workbook
+#   scripts (6_12 through 6_19 and 5_1 through 5_4). Those steps must therefore
+#   be run separately when reproducing all final manuscript outputs.
+#
+# Inputs:
+#   * config/source_pipeline.tsv supplies the ordered script list and run policy.
+#   * docs/manuscript_artifact_source_map.tsv supplies the reported figure/table
+#     mapping.
+#   * config.R is read only when --check-packages is requested.
+#   * Each selected numbered script has its own data inputs and assumptions.
+#
+# Outputs:
+#   In --execute mode, each numbered script writes its normal outputs. This
+#   runner additionally writes script_index.tsv, the stage/artifact map, and a
+#   timestamped pipeline_logs/<run-id>/ directory containing individual logs
+#   and run_manifest.tsv. Dry-run mode writes nothing.
+#
 # Manuscript outputs created/updated:
 #   - None directly. This support runner documents and executes the numbered
-#     numbered script order but does not itself contain scientific analysis.
+#     script order but does not itself contain scientific analysis.
 # =============================================================================
 
 timestamp <- function() format(Sys.time(), "%Y-%m-%d %H:%M:%S")
@@ -107,18 +127,43 @@ run_one_script <- function(project_root, script_dir, script_name, log_path) {
 main <- function() {
   args <- parse_args()
   script_dir <- get_script_dir()
-  project_root <- normalizePath(file.path(script_dir, "..", ".."), mustWork = TRUE)
   source(file.path(script_dir, "pipeline_metadata.R"))
+  project_root <- fs_project_root_from_script_dir(script_dir)
 
   plan <- fs_read_source_pipeline(project_root)
   source_map <- fs_read_artifact_source_map(project_root, required = TRUE)
   plan <- fs_annotate_plan_with_outputs(plan, source_map)
-  script_index_path <- file.path(script_dir, "script_index.tsv")
-  utils::write.table(plan, script_index_path, sep = "\t", row.names = FALSE, quote = TRUE, na = "")
-  stage_map_paths <- fs_write_stage_artifact_map(project_root)
 
   selected <- select_plan_rows(plan, args)
   if (!nrow(selected)) stop("No scripts selected.", call. = FALSE)
+
+  if (args$check_packages) {
+    message_log("Checking required R packages from config.R")
+    check_packages(script_dir)
+    message_log("Package check passed")
+  }
+
+  if (!args$execute) {
+    message_log("Project root: ", project_root)
+    message_log("Read-only dry run. Add --execute to run scripts.")
+    if (!args$include_cache_sensitive) {
+      message_log("Cache-sensitive nested-CV/model training is excluded from this plan.")
+    }
+    for (i in seq_len(nrow(selected))) {
+      outputs <- selected$manuscript_outputs[i]
+      if (is.na(outputs) || !nzchar(outputs)) outputs <- "upstream/intermediate dependency"
+      message_log(
+        "DRY RUN: ", selected$script_id[i], " | ", selected$script[i],
+        " | ", selected$stage[i], " | manuscript outputs: ", outputs
+      )
+    }
+    message_log("No files were written.")
+    return(invisible(selected))
+  }
+
+  script_index_path <- file.path(script_dir, "script_index.tsv")
+  utils::write.table(plan, script_index_path, sep = "\t", row.names = FALSE, quote = TRUE, na = "")
+  stage_map_paths <- fs_write_stage_artifact_map(project_root)
 
   run_id <- format(Sys.time(), "%Y%m%d_%H%M%S")
   run_dir <- file.path(script_dir, "pipeline_logs", run_id)
@@ -130,7 +175,6 @@ main <- function() {
   message_log("Script index: ", script_index_path, log_file = main_log)
   message_log("Stage-ordered artifact map: ", stage_map_paths$tsv, log_file = main_log)
   message_log("Selected scripts: ", nrow(selected), log_file = main_log)
-  if (!args$execute) message_log("Dry run only. Add --execute to run scripts.", log_file = main_log)
   if (!args$include_cache_sensitive) {
     message_log(
       "Cache-sensitive nested-CV/model training is skipped by default. Add --include-cache-sensitive only for deliberate recomputation; regenerated artifacts may differ unless the exact inputs, seeds, package versions, and execution environment are preserved.",
@@ -138,14 +182,8 @@ main <- function() {
     )
   }
 
-  if (args$check_packages) {
-    message_log("Checking required R packages from config.R", log_file = main_log)
-    check_packages(script_dir)
-    message_log("Package check passed", log_file = main_log)
-  }
-
   manifest <- selected
-  manifest$status <- if (args$execute) "pending" else "dry_run_not_executed"
+  manifest$status <- "pending"
   manifest$status_code <- NA_integer_
   manifest$started_at <- ""
   manifest$finished_at <- ""
@@ -159,15 +197,6 @@ main <- function() {
     outputs <- row$manuscript_outputs
     if (is.na(outputs) || !nzchar(outputs)) {
       outputs <- "no direct mapped manuscript figure/table; upstream or intermediate dependency"
-    }
-
-    if (!args$execute) {
-      message_log(
-        "DRY RUN: ", row$script_id, " | ", row$script, " | ", row$stage,
-        " | manuscript outputs: ", outputs,
-        log_file = main_log
-      )
-      next
     }
 
     message_log("Running ", row$script_id, ": ", row$script, log_file = main_log)

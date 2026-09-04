@@ -27,8 +27,8 @@
 #   TUMOR-NAIVE analysis - parallel to 3_2 but using the z-score-only blood
 #   cfDNA model that does NOT require patient-matched tumour DNA. Reads the
 #   processed dataset produced by 3_1_Optimize_cfWGS_thresholds.R and generates
-#   publication-quality figures and concordance tables for the tumor-naive
-#   calling strategy.
+#   exploratory figures and concordance tables for the tumor-naive calling
+#   strategy.
 #
 #   Specifically:
 #     1. Reads the scored dataset (predicted probabilities + binary calls).
@@ -41,6 +41,7 @@
 # Inputs:
 #   - Output_tables_2025/all_patients_with_BM_and_blood_calls_updated2.rds
 #       (z-score-only tumor-naive calls; output of 3_1_Optimize_cfWGS_thresholds.R)
+#   - Output_tables_2025/selected_combo_models_2025-06-17.rds
 #   - Output_tables_2025/selected_combo_thresholds_<date>.rds
 #
 # Outputs:
@@ -134,8 +135,7 @@ write_support_csv_path <- function(x, path) {
 
 save_support_plot <- function(plot, filename, width, height, dpi = 500, dir = SUPPORT_FIGURE_DIR) {
   # All non-final support plots are written into explicit output folders rather
-  # than the project root, so Code Ocean/GitHub users can find generated review
-  # artifacts without hunting through the working directory.
+  # than the project root so they remain separate from manuscript figures.
   dir.create(dir, recursive = TRUE, showWarnings = FALSE)
   path <- file.path(dir, filename)
   ggplot2::ggsave(filename = path, plot = plot, width = width, height = height, dpi = dpi)
@@ -145,14 +145,12 @@ save_support_plot <- function(plot, filename, width, height, dpi = 500, dir = SU
 
 
 #### Rescore based on new established limit in the dilution serires 
-# RESCORING NOTE: The dilution series LOD analysis (script 3_1_part2) established
-# that the tumor-naive blood z-score model achieves reliable detection above
-# ~1:200 dilution. The probability threshold of 0.457 was derived from that
-# dilution series: it corresponds to the model probability at the lowest
-# experimentally detectable dilution fraction, calibrated to maximise sensitivity
-# while maintaining a specificity consistent with the dilution series floor.
-# This replaces the CV-optimised probability from 3_1 for the purpose of
-# reporting the final tumor-naive blood call in the manuscript.
+# LEGACY RESCORING NOTE: This archived support analysis applies a fixed blood
+# probability threshold of 0.457, described in the original analysis as a
+# dilution-series detection-limit threshold. It therefore differs from the
+# cross-validation-selected threshold stored by script 3_1. No current mapped
+# manuscript output is generated from this override; do not treat it as the
+# active manuscript calling rule without separately revalidating its provenance.
 dat <- dat %>%
   mutate(
     Blood_zscore_only_sites_call_rescored = if_else(

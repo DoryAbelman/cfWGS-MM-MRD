@@ -1,5 +1,5 @@
 # ==============================================================================
-# Final_Scripts GitHub / Code Ocean Ignore Rules
+# cfWGS-MM-MRD GitHub ignore rules
 # ==============================================================================
 #
 # This .gitignore belongs to the nested Git repository rooted at:
@@ -11,14 +11,12 @@
 #
 #   ../../.gitignore
 #
-# This repository now includes a self-contained deidentified release under
-# `public_reproducibility/`; its generated `results/` directory is ignored.
+# The local Code Ocean/capsule tree is not part of this GitHub repository.
 # ==============================================================================
 
 # ------------------------------------------------------------------------------
 # Local/editor/session state.
-# These files are machine-specific and should never be part of a reproducibility
-# capsule.
+# These files are machine-specific and are not part of the analysis repository.
 # ------------------------------------------------------------------------------
 
 # macOS metadata
@@ -44,8 +42,6 @@
 
 # ------------------------------------------------------------------------------
 # Archived, exploratory, and scratch source folders.
-# Only the numbered scripts, command-line runners, helpers, and reviewer-facing
-# documentation at this repo root should be tracked.
 # ------------------------------------------------------------------------------
 
 Other/
@@ -68,8 +64,8 @@ local_input_check_report.tsv
 # ------------------------------------------------------------------------------
 # Generated manuscript output trees.
 # These are useful locally but should not be committed from this nested repo.
-# The full Code Ocean capsule should regenerate/stage outputs through the
-# project-root workflow.
+# Final result files are selected separately rather than committing whole local
+# output trees.
 # ------------------------------------------------------------------------------
 
 /outputs
@@ -77,14 +73,49 @@ local_input_check_report.tsv
 /manuscript_writing
 /Output_figures_2025
 
-# Public capsule results are generated locally. Keep the empty directory marker.
-/public_reproducibility/results/*
-!/public_reproducibility/results/.gitkeep
+# Local capsule-building tree and scripts.
+/public_reproducibility/
+/5_5_Build_CodeOcean_Capsule.R
+/5_5_Build_Response_Only_Figures.R
+/5_6_Package_CodeOcean_Capsule.R
+/5_7_Rebuild_CodeOcean_Public_Workbooks.R
+/5_8_Build_CodeOcean_Analysis_Layer.R
+/CODE_OCEAN_UPLOAD_CHECKLIST.md
+
+# Mutation-tracking analyses are not included in the current manuscript.
+/4_2B_FZ07_mutation_tracking_evolution.R
+/4_2C_Audit_BM_informed_declines_before_relapse.R
+/4_2D_Build_patient_BM_vs_blood_mutation_tracks.R
+/4_2E_Longitudinal_BM_blood_mutation_evolution.R
+/4_2F_Compare_baseline_vs_relapse_WGS_mutation_lists.R
+/4_2G_Baseline_relapse_WGS_mutation_evolution.R
+/4_2H_Supplementary_WGS_subclonal_evolution_figure.R
+
+# Optional IgCaller mini-BAM helpers remain local until their duplicate-call
+# handling has been checked against the review manifest.
+/1_3b_Prepare_IgCaller_MiniBAM_Regions.R
+/1_3b_Create_IgCaller_IGV_MiniBAMs.sh
+
+# Compatibility wrapper; the active operation is documented for 3_1 directly.
+/3_1B_Refresh_test_cohort_confusion_panels.R
+
+# Working audit notes and README proposal. Material intended for GitHub is
+# incorporated into README.md and the final script guide after review.
+/docs/SCRIPT_REVIEW_*.md
+/docs/RELEASE_FILE_SELECTION.md
+/docs/README_DRAFT.md
+/docs/PROPOSED_SCRIPT_ORDER_AND_REPOSITORY_STRUCTURE.md
+/docs/PUBLICATION_TABLES.md
+/docs/SUPPLEMENTARY_TABLE_RECONCILIATION.md
+/docs/artifact_regeneration_status.tsv
+/docs/manuscript_artifact_source_map.tsv
+/docs/stage_ordered_script_artifact_map.md
+/docs/stage_ordered_script_artifact_map.tsv
 
 # ------------------------------------------------------------------------------
 # Archive policy.
 # Most archive content is intentionally excluded. The support-analysis subfolder
-# is retained because it contains reviewer-relevant audit/support material.
+# is retained because it contains study-related sensitivity analyses.
 # ------------------------------------------------------------------------------
 
 /archive/*

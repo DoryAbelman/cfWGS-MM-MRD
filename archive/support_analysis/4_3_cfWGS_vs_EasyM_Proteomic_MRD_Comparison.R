@@ -11,6 +11,14 @@
 ##   Includes kappa agreement statistics, contingency tables, and survival
 ##   stratification by concordant/discordant MRD status.
 ##
+##   Important: this archived script uses the positive/negative calls already
+##   present in `RAPID NOVOR pos-neg with relapse.csv`. It does not calculate
+##   the manuscript EasyM call from residual immunoglobulin as a percentage of
+##   baseline bone-marrow immunoglobulin, and it does not apply the prespecified
+##   isotype-specific cutoffs (IgG <=1%; IgA/light chain <=0.05% for a negative
+##   result). The current EasyM processing is in
+##   `3_1_A_Process_and_optimize_EasyM.R`.
+##
 ## Inputs:
 ##   - Output_tables_2025/all_patients_with_BM_and_blood_calls_updated5.rds
 ##       (cfWGS scored dataset; output of 3_1/3_2)
@@ -21,8 +29,17 @@
 ##       (EasyM binary calls)
 ##
 ## Outputs:
-##   - Output_tables_2025/cfWGS_vs_EasyM_comparison/  (tables + source data)
-##   - Output_figures_2025/Fig4_3_cfWGS_vs_EasyM_*.png
+##   - Output_figures_2025/Fig_cfWGS_vs_EasyM_Positivity_Rates.png
+##   - Output_figures_2025/Fig_cfWGS_vs_EasyM_Concordance_Heatmap.png
+##   - Output_figures_2025/Fig_cfWGS_vs_EasyM_Correlation_Scatter.png
+##   - Output_figures_2025/Fig_cfWGS_vs_EasyM_Kappa_Agreement.png
+##   - Output_figures_2025/Tbl_cfWGS_vs_EasyM_Summary.png
+##   - Output_figures_2025/Fig_cfWGS_vs_EasyM_KM_Survival.png, when the
+##     script's minimum sample/group conditions are met
+##
+##   `Output_tables_2025/cfWGS_vs_EasyM_comparison/` is created for the local
+##   cache, but this version of the script does not export analysis tables or
+##   source-data files there.
 ##
 ## How to run:
 ##   Rscript Scripts_2025/Final_Scripts/archive/support_analysis/4_3_cfWGS_vs_EasyM_Proteomic_MRD_Comparison.R
@@ -135,6 +152,8 @@ pos_to_long <- function(df) {
 }
 
 code_to_mrd_status <- function(code) {
+  # Interpret the collaborator-supplied legacy binary-call file. This parser is
+  # not the isotype-specific EasyM threshold calculation used in the manuscript.
   code_chr <- as.character(code)
   case_when(
     is.na(code_chr) ~ NA_character_,
@@ -529,6 +548,8 @@ kappa_plot <- kappa_data %>%
     Method = "Any-Detect (Binary)"
   ) %>%
   rbind(
+    # Legacy comparison values entered directly in the original support code;
+    # they are not recalculated from `paired_data` in this script.
     tibble(
       landmark_tp = c("Post-ASCT", "Maintenance-1yr"),
       kappa = c(0.746, 0.870),
@@ -583,6 +604,8 @@ ggsave(
 cat("[Supplemental EasyM analysis] Generating summary table...\n")
 
 summary_table_data <- tibble(
+  # This is a hand-entered legacy summary rather than a table derived from the
+  # objects above. It is retained only to preserve the archived analysis.
   Landmark = c("Post-ASCT", "Post-ASCT", "1-yr Maintenance", "1-yr Maintenance"),
   N = c(16, 16, 18, 18),
   Strategy = c("Any-Detect (cfWGS)", "Optimized 2.13%", "Any-Detect (cfWGS)", "Optimized 0.93%"),

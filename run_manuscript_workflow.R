@@ -4,20 +4,37 @@
 # run_manuscript_workflow.R
 #
 # Purpose:
-#   One command-line entry point for the manuscript workflow, while preserving
-#   the original numbered-script organization.
+#   Coordinate the numbered source pipeline, validation, manuscript-number
+#   export, and final-table packaging from one command.
+#
+# Workflow scope:
+#   This is an internal orchestration helper, not a complete one-command rebuild
+#   of every final figure and table. The source plan currently ends at 4_2 and
+#   does not include the 50-repeat grouped-CV chain (6_12 through 6_19) or the
+#   final figure-source workbook builders (5_1 through 5_4). The optional
+#   manuscript-number and table-package steps also require local manuscript
+#   files that are not analysis inputs.
+#
+# Important current behavior:
+#   With --execute and without --skip-source, run_pipeline.R already runs
+#   3_1C_Expanded_test_clustered_sensitivity.R, and this script then runs 3_1C a
+#   second time in its explicit refresh step. Use --skip-source when only that
+#   refresh and the downstream checks are intended. The duplicated call should
+#   be removed before this is presented as the recommended public entry point.
 #
 # What this script does:
 #   1. Dry-runs or executes the numbered source-pipeline scripts.
-#   2. Refreshes the stage-ordered script-to-artifact map.
-#   3. Validates the direct manuscript-output tree in final_manuscript_objects/.
-#   4. Rebuilds the deterministic repeated-measures sensitivity analysis and
+#   2. Rebuilds the deterministic repeated-measures sensitivity analysis and
 #      revision-inclusive Supplementary Table 6 submission workbook.
-#   5. Builds the manuscript-writing number workbook from current outputs and
+#   3. Refreshes the stage-ordered script-to-artifact map.
+#   4. Optionally runs the separate reference generation/validation harness.
+#   5. Refreshes and validates the direct manuscript-output tree in
+#      final_manuscript_objects/. This validation step is not read-only because
+#      validate_manuscript_outputs.R first refreshes organized artifact copies.
+#   6. Builds the manuscript-writing number workbook from current outputs and
 #      the working manuscript DOCX drafts.
-#   6. Assembles a checksum-verified current main/supplementary table package.
-#   7. Optionally runs the separate reproducible_workflow generation/validation
-#      harness when --run-reference-workflow is supplied.
+#   7. Assembles a checksum-verified current main/supplementary table package.
+#   8. Rewrites the stage-ordered map once more after the preceding steps.
 #
 # Guardrails:
 #   - Dry-run is the default.
@@ -37,7 +54,7 @@
 #   - None directly. This top-level orchestration script coordinates numbered
 #     source-stage execution, artifact-map refresh, validation, and manuscript
 #     export staging, including the manuscript-writing number workbook, while
-#     preserving the numbered scripts as the scientific source of truth.
+#     leaving the scientific calculations in the numbered scripts.
 # =============================================================================
 
 timestamp <- function() format(Sys.time(), "%Y-%m-%d %H:%M:%S")
@@ -73,7 +90,7 @@ parse_args <- function(args = commandArgs(trailingOnly = TRUE)) {
       "  By default this is a dry run. Add --execute to run the numbered scripts.\n\n",
       "Common options:\n",
       "  --execute                  Run numbered scripts instead of dry-run.\n",
-      "  --skip-source              Skip numbered-script execution; validate existing outputs only.\n",
+      "  --skip-source              Skip the configured source pipeline; still run the explicit 3_1C refresh and downstream export/validation steps.\n",
       "  --run-reference-workflow   Also run run_analysis.R --mode generate and --mode validate.\n",
       "  --include-cache-sensitive  Include cache-sensitive model/nested-CV training stages.\n",
       "  --from ID --to ID          Run a contiguous numbered-script range, e.g. --from 2_0 --to 2_4.\n",
@@ -131,19 +148,30 @@ source_pipeline_args <- function(args) {
   out
 }
 
+final_script_path <- function(project_root, filename) {
+  nested <- file.path("Scripts_2025", "Final_Scripts", filename)
+  if (file.exists(file.path(project_root, nested))) nested else filename
+}
+
 main <- function() {
   args <- parse_args()
   script_dir <- get_script_dir()
-  project_root <- normalizePath(file.path(script_dir, "..", ".."), mustWork = TRUE)
   source(file.path(script_dir, "pipeline_metadata.R"))
+  project_root <- fs_project_root_from_script_dir(script_dir)
 
-  run_id <- format(Sys.time(), "%Y%m%d_%H%M%S")
-  run_dir <- file.path(script_dir, "pipeline_logs", paste0("manuscript_workflow_", run_id))
-  dir.create(run_dir, recursive = TRUE, showWarnings = FALSE)
-  log_file <- file.path(run_dir, "run_manuscript_workflow.log")
+  run_dir <- NULL
+  log_file <- NULL
+  if (isTRUE(args$execute)) {
+    run_id <- format(Sys.time(), "%Y%m%d_%H%M%S")
+    run_dir <- file.path(script_dir, "pipeline_logs", paste0("manuscript_workflow_", run_id))
+    dir.create(run_dir, recursive = TRUE, showWarnings = FALSE)
+    log_file <- file.path(run_dir, "run_manuscript_workflow.log")
+  }
 
   message_log("Project root: ", project_root, log_file = log_file)
-  message_log("Run directory: ", run_dir, log_file = log_file)
+  if (!is.null(run_dir)) {
+    message_log("Run directory: ", run_dir, log_file = log_file)
+  }
   if (!args$execute) {
     message_log("Dry-run mode. Add --execute to run numbered source scripts.", log_file = log_file)
   }
@@ -161,7 +189,7 @@ main <- function() {
   if (!args$skip_source) {
     run_rscript(
       project_root = project_root,
-      script_path = file.path("Scripts_2025", "Final_Scripts", "run_pipeline.R"),
+      script_path = final_script_path(project_root, "run_pipeline.R"),
       args = source_pipeline_args(args),
       label = "numbered source pipeline",
       log_file = log_file
@@ -170,14 +198,18 @@ main <- function() {
     message_log("Skipping numbered source pipeline because --skip-source was supplied.", log_file = log_file)
   }
 
+  if (!isTRUE(args$execute)) {
+    message_log(
+      "Read-only dry run complete. Validation, manuscript exports, and table packaging were not run.",
+      log_file = log_file
+    )
+    return(invisible(NULL))
+  }
+
   if (isTRUE(args$execute)) {
     run_rscript(
       project_root = project_root,
-      script_path = file.path(
-        "Scripts_2025",
-        "Final_Scripts",
-        "3_1C_Expanded_test_clustered_sensitivity.R"
-      ),
+      script_path = final_script_path(project_root, "3_1C_Expanded_test_clustered_sensitivity.R"),
       label = "expanded-test repeated-measures sensitivity analysis",
       log_file = log_file
     )
@@ -191,7 +223,7 @@ main <- function() {
 
   run_rscript(
     project_root = project_root,
-    script_path = file.path("Scripts_2025", "Final_Scripts", "build_stage_artifact_map.R"),
+    script_path = final_script_path(project_root, "build_stage_artifact_map.R"),
     label = "stage-ordered script-to-artifact map",
     log_file = log_file
   )
@@ -236,14 +268,14 @@ main <- function() {
 
   run_rscript(
     project_root = project_root,
-    script_path = file.path("Scripts_2025", "Final_Scripts", "validate_manuscript_outputs.R"),
+    script_path = final_script_path(project_root, "validate_manuscript_outputs.R"),
     label = "direct manuscript-output validation",
     log_file = log_file
   )
 
   run_rscript(
     project_root = project_root,
-    script_path = file.path("Scripts_2025", "Final_Scripts", "5_0_Build_Manuscript_Text_Number_Exports.R"),
+    script_path = final_script_path(project_root, "5_0_Build_Manuscript_Text_Number_Exports.R"),
     label = "manuscript-writing number exports",
     log_file = log_file
   )
@@ -255,9 +287,7 @@ main <- function() {
     )
     run_rscript(
       project_root = project_root,
-      script_path = file.path(
-        "Scripts_2025", "Final_Scripts", "build_current_final_table_package.R"
-      ),
+      script_path = final_script_path(project_root, "build_current_final_table_package.R"),
       args = package_args,
       label = "current final table-package assembly",
       log_file = log_file

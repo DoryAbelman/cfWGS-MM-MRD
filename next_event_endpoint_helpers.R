@@ -9,9 +9,10 @@
 ##   follow-up/sample date after the sample.
 ##
 ## Workflow role:
-##   These functions are sourced by 2_4, 2_4B, 4_1, and 4_1B. They contribute
-##   the sample-relative progression/censor endpoints used in longitudinal and
-##   survival figures but do not generate a figure or table directly.
+##   These functions are sourced by 2_4, 2_4B, 4_1, 4_1B, and the optional 6_8
+##   exploratory analysis. They contribute the sample-relative
+##   progression/censor endpoints used in longitudinal and survival figures but
+##   do not generate a figure or table directly.
 ##
 ## Main inputs:
 ##   * An RDS PFS table with Patient, Baseline_Date, Censor_date, and Relapsed.
@@ -31,6 +32,8 @@
 ##   sample and its time is set to zero. Earlier progressions are ignored when a
 ##   later event or censor date is available. The two default day-zero overrides
 ##   are described at the add_next_event_endpoint() argument below.
+##   The PFS input is assumed to contain one row per patient. Numeric dates are
+##   interpreted as days since 1970-01-01, not as Excel serial dates.
 ##
 ## R packages used by these functions:
 ##   dplyr, lubridate, purrr, readr, tibble, and tidyr.
@@ -39,6 +42,8 @@
 as_date_safe <- function(x) {
   if (inherits(x, "Date")) return(x)
   if (inherits(x, c("POSIXct", "POSIXlt"))) return(as.Date(x))
+  # Numeric values are treated as R/Unix day counts. Callers with Excel serial
+  # dates must convert them before using this helper.
   if (is.numeric(x)) return(as.Date(x, origin = "1970-01-01"))
 
   out <- suppressWarnings(as.Date(x))
@@ -119,6 +124,8 @@ load_next_event_endpoint_resources <- function(pfs_path,
     stop("Missing full relapse/progression dates table: ", relapse_dates_path, call. = FALSE)
   }
 
+  # The downstream join assumes one PFS row per patient. This function does not
+  # collapse or reject duplicate patient rows in the supplied PFS object.
   pfs <- readRDS(pfs_path) %>%
     dplyr::rename_with(tolower, dplyr::any_of(c("Baseline_Date", "Censor_date", "Relapsed"))) %>%
     dplyr::transmute(
@@ -261,6 +268,9 @@ add_next_event_endpoint <- function(data,
       progression_date >= sample_date - lubridate::days(event_grace_days)
     ) %>%
     dplyr::mutate(days_to_event_raw = as.numeric(progression_date - sample_date)) %>%
+    # Choose the earliest event admitted by the grace window. Therefore a
+    # progression within the pre-sample grace period takes precedence over a
+    # later post-sample progression and is represented as a day-zero event.
     dplyr::arrange(.endpoint_row_id, progression_date) %>%
     dplyr::group_by(.endpoint_row_id) %>%
     dplyr::slice(1) %>%

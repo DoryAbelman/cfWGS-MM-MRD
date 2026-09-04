@@ -4,9 +4,9 @@
 #
 # Purpose:
 #   Compare the historical CHARM/TGL49 healthy-control fragmentomics reference
-#   set against the Spring 2026 CHARM_Xplus_HC healthy controls. This is an
-#   isolated support analysis: it does not feed into the main 1_7A/1_7B
-#   fragmentomics pipeline and does not change any manuscript results.
+#   set against the Spring 2026 CHARM_Xplus_HC healthy controls. The matched
+#   scalar-feature table written here is used by 1_7E and 1_8E to display and
+#   validate the platform harmonization used for the Spring 2026 cohort.
 #
 # Rationale:
 #   The Spring 2026 test-cohort samples were sequenced on NovaSeq X Plus,
@@ -24,6 +24,7 @@
 #     - fragmentomics_domain_pca_scores.csv
 #     - fragmentomics_domain_pca_variance.csv
 #     - fragmentomics_reference_likeness_distances.csv
+#     - fragmentomics_reference_likeness_summary.csv
 #     - fragmentomics_input_domain_availability.csv
 #     - sample_level_feature_values.csv
 #     - xplus_hc_comparison_boxplots.pdf
@@ -280,7 +281,9 @@ read_fs <- function(path, platform) {
 
 safe_wilcox <- function(x, y) {
   # Use a non-parametric Wilcoxon test because these are small healthy-control
-  # groups and feature distributions are not assumed Gaussian. Return NA instead
+  # groups and feature distributions are not assumed Gaussian. These legacy
+  # comparisons are unpaired even though the retained controls are matched by
+  # identity; interpret them as exploratory platform summaries. Return NA instead
   # of forcing a p-value when either group has fewer than two finite values.
   x <- x[is.finite(x)]
   y <- y[is.finite(y)]

@@ -602,10 +602,10 @@ maf_subset_blood <- subsetMaf(maf = maf_object_blood, genes = myeloma_genes, inc
 
 
 # Bone-marrow
-# filter(t_depth > 10): removes variant calls backed by fewer than 10
-# total reads at the locus. This threshold is an operational support filter;
-# it does not establish analytical sensitivity and should be interpreted with
-# the sample's assay depth and caller QC.
+# filter(t_depth > 10): retains variant calls with at least 11 total reads at
+# the locus; calls at exactly depth 10 are excluded. This threshold is an
+# operational support filter; it does not establish analytical sensitivity and
+# should be interpreted with the sample's assay depth and caller QC.
 temp_bm <- maf_subset@data %>%
   filter(t_depth > 10) %>%                           # only well-supported calls
   mutate(
@@ -617,7 +617,7 @@ temp_bm <- maf_subset@data %>%
                             Tumor_Seq_Allele2,
                             sep = "_"),
     # Mutation_Type: simplified 4-class encoding used in the Evidence_of_Disease
-    # logic and in manuscript oncoprint (Figure 2).
+    # logic and in the baseline WGS heatmap (Extended Data Figure 1).
     #   Truncating  - nonsense or frameshift (almost always loss-of-function)
     #   Missense    - single amino-acid substitution or in-frame indel
     #   Splice_Site - affects canonical donor/acceptor; typically loss-of-function
@@ -919,7 +919,7 @@ message("Active expanded mutation/QC helper written: ",
 #     samples where ichorCNA TF may be near zero but a truncal clone
 #     mutation is detectable at >5% VAF (Evidence_of_Disease Tier 2)
 #   Mut_type        - comma-separated mutation category string
-# Filter mutations with t_depth > 10 (all meet this criteria anyway)
+# This repeats the `t_depth > 10` filter used to build `mutation_export` above.
 filtered_mutations <- mutation_export  %>%
   filter(t_depth > 10)
 

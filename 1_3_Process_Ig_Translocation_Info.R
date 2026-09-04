@@ -175,7 +175,10 @@ rm(genius_helper_path)
 metada_df_mutation_comparison <- read_combined_clinical_metadata_with_revision(
   "combined_clinical_data_updated_Feb5_2025.csv"
 )
-cohort_df <- readRDS("cohort_assignment_table_updated.rds")
+# Use the final 71-patient cohort here. The older cohort file does not contain
+# the new revision patients, so using it would leave their IgCaller calls out of
+# the IGV review table.
+cohort_df <- load_final_cohort_assignment(required = TRUE, validate_current = TRUE)
 
 # Add a Tumor_Sample_Barcode column to metada_df_mutation_comparison
 metada_df_mutation_comparison <- metada_df_mutation_comparison %>%
@@ -1145,11 +1148,69 @@ filtered_df <- Ig_caller_df_cfWGS_filtered_aggressive2 %>%
 
 spring2026_revision_metadata_for_igv <- load_spring2026_revision_metadata(required = FALSE)
 if (!is.null(spring2026_revision_metadata_for_igv)) {
-  # Write a revision-specific subset of common MM translocation candidates so
-  # manual reviewers can see exactly which new samples require IGV adjudication
-  # before they can enter the final binary feature matrix.
+  spring2026_revision_patients_for_igv <- spring2026_revision_metadata_for_igv %>%
+    filter(!is.na(.data$Patient), nzchar(.data$Patient)) %>%
+    distinct(.data$Patient) %>%
+    pull(.data$Patient)
+
+  # Keep a complete review queue as well as the smaller baseline table below.
+  # Nothing in this file is promoted until a reviewer records the IGV result.
+  spring2026_all_igv_candidates <- Ig_caller_df_cfWGS_filtered_aggressive2 %>%
+    filter(
+      .data$Patient %in% spring2026_revision_patients_for_igv,
+      .data$Sample_type %in% c("BM_cells", "Blood_plasma_cfDNA")
+    ) %>%
+    distinct(
+      .data$Patient,
+      .data$Sample_ID,
+      .data$Bam_File,
+      .data$breakpoint1,
+      .data$breakpoint2,
+      .keep_all = TRUE
+    ) %>%
+    mutate(
+      review_priority = case_when(
+        .data$timepoint_info %in% c("Baseline", "Diagnosis") &
+          .data$Common_MM_translocation == 1 ~ "1_baseline_common_MM",
+        .data$timepoint_info %in% c("Baseline", "Diagnosis") &
+          .data$Other_gene %in% key_myeloma_genes ~ "2_baseline_driver_gene",
+        .data$timepoint_info %in% c("Baseline", "Diagnosis") ~ "3_baseline_other",
+        .data$Common_MM_translocation == 1 ~ "4_longitudinal_common_MM",
+        .data$Other_gene %in% key_myeloma_genes ~ "5_longitudinal_driver_gene",
+        TRUE ~ "6_longitudinal_other"
+      ),
+      manual_review_status = "not_reviewed",
+      Looks_real = NA_real_,
+      IGV_notes = NA_character_,
+      final_matrix_status = "not_promoted_until_Looks_real_1_in_reviewed_xlsm"
+    ) %>%
+    arrange(
+      .data$review_priority,
+      .data$Patient,
+      .data$Sample_ID,
+      desc(.data$IGCaller_Score)
+    )
+
+  readr::write_csv(
+    spring2026_all_igv_candidates,
+    support_path("spring2026_IgCaller_all_passing_BM_cfDNA_calls_for_IGV_review.csv")
+  )
+
+  # This is the smaller set that can enter the baseline translocation matrix
+  # after review.
   spring2026_igv_candidates <- filtered_df %>%
-    filter(.data$Sample_ID %in% spring2026_revision_metadata_for_igv$Sample_ID) %>%
+    # Match patients rather than sample IDs because the same library sometimes
+    # has an older MyP/MyR name and a newer IMG name. Matching sample IDs would
+    # miss those calls.
+    filter(.data$Patient %in% spring2026_revision_patients_for_igv) %>%
+    distinct(
+      .data$Patient,
+      .data$Sample_ID,
+      .data$Bam_File,
+      .data$breakpoint1,
+      .data$breakpoint2,
+      .keep_all = TRUE
+    ) %>%
     mutate(
       manual_review_status = "candidate_requires_IGV_review_before_feature_matrix",
       final_matrix_status = "not_promoted_until_Looks_real_1_in_reviewed_xlsm"

@@ -744,11 +744,12 @@ load_spring2026_revision_metadata <- function(required = FALSE) {
       "Study", "Sample_ID", "timepoint_info", "integration_ready_for_combined_clinical_data"),
     "Spring 2026 revision metadata"
   )
+  # This check rejects rows explicitly marked FALSE. The revision metadata
+  # producer is expected to reject missing readiness values upstream; NA values
+  # are not separately rejected by this loader.
   not_ready <- metadata$integration_ready_for_combined_clinical_data %in% FALSE
   if (any(not_ready, na.rm = TRUE)) {
-    # Do not let pending-review rows leak into model/test-cohort outputs. The
-    # handoff pipeline can carry unresolved rows, but final scripts only append
-    # rows explicitly marked ready for combined clinical integration.
+    # Do not append rows explicitly marked as pending/not ready.
     stop(
       "Spring 2026 revision metadata has rows not ready for combined clinical integration: ",
       paste(metadata$Sample_ID[not_ready], collapse = ", "),
@@ -913,7 +914,9 @@ load_final_cohort_assignment <- function(required = TRUE, validate_current = TRU
 coerce_revision_column_like_current <- function(current_col, revision_col, column_name) {
   # ## Type harmonization before bind_rows()
   # The revision CSV is read from disk and can arrive as character columns even
-  # when the historical metadata column is Date, numeric, integer, or logical.
+  # when the historical metadata column is Date, numeric (including integer),
+  # or logical. Because R reports integer vectors as numeric, integer columns
+  # follow the numeric branch below and return numeric revision values.
   # Coercing the revision column to the historical column's type preserves
   # downstream expectations and avoids accidental list/character promotion.
   if (grepl("date", column_name, ignore.case = TRUE)) {
@@ -1036,6 +1039,9 @@ repair_historical_combined_clinical_metadata <- function(
   joined <- current_repair_input %>%
     dplyr::left_join(legacy_map, by = key_cols, suffix = c("", ".legacy"))
 
+  # This matrix records repairs made through the patient/timepoint/sample-type
+  # key. Exact-BAM repairs performed below are not added to this matrix, so the
+  # resulting CSV audit does not by itself enumerate every BAM-only fill.
   repair_matrix <- as.data.frame(
     lapply(fill_cols, function(col) {
       legacy_col <- paste0(col, ".legacy")
@@ -2184,6 +2190,9 @@ load_revision_inclusive_baseline_fish_calls <- function(
     )
   }
 
+  # Within one source, the first non-missing patient-level call is retained.
+  # Conflicting non-missing calls within that source are not separately
+  # adjudicated by this helper and should be checked in the source data.
   collapse_patient_calls <- function(data, source_label) {
     for (field in fish_fields) {
       if (!field %in% names(data)) data[[field]] <- NA_character_

@@ -16,15 +16,15 @@
 #   Rscript Scripts_2025/Final_Scripts/0_1_select_additional_samples_for_cohort_expansion.R
 #
 # Manuscript outputs created/updated:
-#   - None directly. This upstream script identifies additional eligible
-#     samples and timepoint classes that feed later manuscript-output scripts.
+#   - None. This script identifies candidate additional samples and timepoint
+#     classes for manual cohort-planning review.
 #
 # Pipeline role:
-#   This script is an upstream cohort-expansion and sample-classification step.
-#   Its outputs are review/operations tables for deciding which new samples can
-#   enter the test cohort. They are not copied into `final_manuscript_objects/`
-#   because no final manuscript panel or table is currently mapped to this
-#   script.
+#   This is a standalone cohort-expansion and sample-classification tool. Its
+#   outputs are review/operations tables for deciding which new samples might
+#   enter a later analysis. No tracked manuscript-analysis script currently
+#   reads these outputs, and they are not copied into
+#   `final_manuscript_objects/`.
 #
 # Required inputs:
 #   - IMMAGINE/LIBERATE study-name to patient-ID mapping workbook.
@@ -46,6 +46,8 @@
 #   - Output_tables_2025/cohort_expansion/eligible_samples_ANY_MRD.csv
 #   - Output_tables_2025/cohort_expansion/eligible_samples_BLOOD_MRD_ONLY.csv
 #   - Output_tables_2025/cohort_expansion/blood_MRD_multi_timepoint_expansion_targets.csv
+#       (written only when at least one ineligible blood-MRD patient has two or
+#       more classified sample timepoints)
 #
 #   Support/QC tables:
 #   - Output_tables_2025/cohort_expansion/support_qc/unmatched_event_comments.csv
@@ -63,9 +65,8 @@
 # Author: Dory Abelman
 # Date: 2026-02-05
 # Pipeline status:
-#   Active upstream dependency. This script does not directly create a named
-#   final manuscript figure/table, but downstream scripts depend on its cleaned
-#   outputs for figure, table, or model generation.
+#   Optional cohort-planning analysis. It is not required to reproduce the
+#   current manuscript figures, tables, or models.
 #
 
 ## Load required libraries

@@ -2,16 +2,29 @@
 # shorten_manuscript_figure_filenames.R
 #
 # Purpose:
-#   Rename manuscript-facing figure image/PDF files in final_manuscript_objects/
-#   to compact PowerPoint-friendly filenames while preserving traceability in the
-#   output manifests. Source-data tables are intentionally not renamed.
+#   Optional internal cleanup that renames existing figure image/PDF files in
+#   final_manuscript_objects/ to shorter filenames. This script is not used to
+#   generate a manuscript figure, table, statistic, or source-data workbook.
+#
+# IMPORTANT:
+#   This script changes filenames in place and rewrites matching absolute paths
+#   in every TSV under final_manuscript_objects/. It does not change image pixels
+#   or scientific values, but it can invalidate links held outside that folder.
+#   There is no dry-run or confirmation step: sourcing or running the file starts
+#   the rename immediately. Preserve a backup before intentional use.
+#
+# Known recovery risk:
+#   The rename manifest is written inside final_manuscript_objects/logs/ before
+#   all TSVs under that tree are rewritten. Because that search includes the
+#   manifest itself, its old_path values can be replaced with new_path values.
+#   The current script therefore does not reliably preserve a reversal map.
 #
 # Scope:
 #   - Organized manuscript figure component folders.
-#   - Additional manuscript-facing exploratory/sensitivity figure folders.
+#   - Additional exploratory and sensitivity figure folders used in the manuscript.
 #   - Top-level stray figure image exports in final_manuscript_objects/.
 #
-# This script does not alter image contents or scientific values.
+# This file-maintenance step is not required to reproduce the manuscript.
 # =============================================================================
 
 source("Scripts_2025/Final_Scripts/manuscript_output_helpers.R")
@@ -222,11 +235,15 @@ if (nrow(planned)) {
   dir.create(dirname(rename_manifest), recursive = TRUE, showWarnings = FALSE)
   utils::write.table(planned, rename_manifest, sep = "\t", row.names = FALSE, quote = TRUE)
 
+  # Renames occur sequentially with no transaction or rollback. A failure after
+  # an earlier successful rename leaves a partially changed output tree.
   for (i in seq_len(nrow(planned))) {
     ok <- file.rename(planned$old_path[[i]], planned$new_path[[i]])
     if (!ok) stop("Failed to rename: ", planned$old_path[[i]], call. = FALSE)
   }
 
+  # This list currently includes rename_manifest itself; see the recovery-risk
+  # warning in the file header.
   tsv_files <- list.files(output_root, pattern = "[.]tsv$", recursive = TRUE, full.names = TRUE)
   for (tsv in tsv_files) {
     text <- readLines(tsv, warn = FALSE)

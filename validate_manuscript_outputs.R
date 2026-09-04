@@ -4,8 +4,16 @@
 # validate_manuscript_outputs.R
 #
 # Purpose:
-#   Validate the manuscript-facing output tree written directly by the numbered
-#   scripts in Scripts_2025/Final_Scripts.
+#   Refresh and then validate the manuscript figure/table organization written
+#   by the numbered scripts in Scripts_2025/Final_Scripts.
+#
+# Important file operations:
+#   Despite its name, this is not a read-only validator. Before running its
+#   checks it calls ms_write_output_index(), which recopies mapped final
+#   artifacts, rewrites output indexes and README files, mirrors logs and manual
+#   assembly references, and renders figure previews. Existing organized copies
+#   can be overwritten. It does not rerun a scientific analysis, but it should
+#   not be used when only a non-modifying check is intended.
 #
 # What this checks:
 #   - docs/manuscript_artifact_source_map.tsv is readable.
@@ -14,7 +22,7 @@
 #     artifact ID.
 #   - manuscript_output_index.tsv and script_output_index.tsv exist and are
 #     complete.
-#   - final_manuscript_objects/README.md exists and summarizes manuscript-facing
+#   - final_manuscript_objects/README.md exists and summarizes the manuscript
 #     output folders, regeneration status, validation status, and caveats.
 #   - manuscript_output_index.tsv contains regeneration/validation status
 #     columns, so known cached/manual/value-difference items are explicit.
@@ -28,9 +36,14 @@
 #   - Numbered source scripts have manuscript-output headers, and the README
 #     lists every script that owns a mapped final artifact.
 #
-# This script does not generate scientific figures/tables. It refreshes the
-# non-scientific output indexes/README from the current manifest and artifact
-# source map, then writes a validation report for developer/release checks.
+# This script does not calculate scientific figures/tables. It refreshes the
+# organized output tree and documentation from the current manifest and
+# artifact map, then writes a validation report. The report covers only entries
+# present in config/source_pipeline.tsv and
+# docs/manuscript_artifact_source_map.tsv; omitted scripts are not validated.
+# Most checks verify paths, names, counts, or text references. They do not
+# compare artifact contents with the manuscript, rerun generators, or verify
+# the MD5 values recorded in the generation manifest.
 #
 # Usage from project root:
 #   Rscript Scripts_2025/Final_Scripts/validate_manuscript_outputs.R
@@ -60,6 +73,8 @@ split_paths <- function(x) {
 }
 
 all_listed_paths_exist <- function(values) {
+  # Empty entries are discarded before the aggregate check. Consequently this
+  # verifies all paths that are listed, but not that every input row lists one.
   paths <- unlist(lapply(values, split_paths), use.names = FALSE)
   paths <- paths[nzchar(paths)]
   if (!length(paths)) return(FALSE)
@@ -102,7 +117,8 @@ record_check <- function(checks, check_name, passed, details = "") {
 
 main <- function() {
   script_dir <- get_script_dir()
-  project_root <- normalizePath(file.path(script_dir, "..", ".."), mustWork = TRUE)
+  source(file.path(script_dir, "pipeline_metadata.R"))
+  project_root <- fs_project_root_from_script_dir(script_dir)
   old_wd <- getwd()
   on.exit(setwd(old_wd), add = TRUE)
   setwd(project_root)
@@ -113,8 +129,9 @@ main <- function() {
   }
   source(helper_path)
 
-  source_map_path <- file.path(project_root, "docs", "manuscript_artifact_source_map.tsv")
-  source_pipeline_path <- file.path(project_root, "reproducible_workflow", "config", "source_pipeline.tsv")
+  metadata_root <- fs_metadata_root(project_root)
+  source_map_path <- file.path(metadata_root, "docs", "manuscript_artifact_source_map.tsv")
+  source_pipeline_path <- file.path(metadata_root, "config", "source_pipeline.tsv")
   readme_path <- file.path(script_dir, "README.md")
   output_root <- ms_output_root(project_root)
   manifest_path <- ms_manifest_path(project_root)
@@ -594,6 +611,8 @@ main <- function() {
     }
   )
 
+  # This is a text-presence check, not an R call-graph check: a helper name in a
+  # comment is sufficient to satisfy it.
   script_helper_presence <- vapply(mapped_scripts[file.exists(mapped_scripts)], function(path) {
     any(grepl("ms_copy_artifact|ms_save_plot", readLines(path, warn = FALSE)))
   }, logical(1))

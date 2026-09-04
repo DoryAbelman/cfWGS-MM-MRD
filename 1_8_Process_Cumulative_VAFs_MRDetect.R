@@ -9,6 +9,19 @@
 #     patient samples that feed model training, clinical concordance, and
 #     survival analyses.
 #
+# Downstream use:
+#   - `2_0_Assemble_Table_With_All_Features.R` reads the BM-informed and
+#     blood-informed longitudinal CSVs and adds their MRDetect features to the
+#     integrated analysis table.
+#   - `1_8B_Export_MRDetect_patient_feature_table.R` and
+#     `2_4_Longitudinal_features_analysis.R` read the complete z-scored RDS.
+#   - `2_1_Part2_Cohort_Swim_Plot.R` reads the all-patient blood-informed CSV.
+#   - `1_10_Estimate_MRDetect_LOD_proxy.R` and
+#     `3_1_part2_Apply_cfWGS_thresholds_to_dilution_series.R` read the retained
+#     historical CHARM control export.
+#   The integrated outputs subsequently feed the model, concordance, survival,
+#   and longitudinal manuscript figures and tables.
+#
 # Author:   Dory Abelman
 # Date:     January 2025
 # Last Updated: September 2026
@@ -38,6 +51,10 @@
 #     incorporated by read_combined_clinical_metadata_with_revision()
 #   • Jan2025_exported_data/All_feature_data_Sep2025_updated2.rds
 #   • cohort_assignment_table_updated.rds
+#   • Scripts_2025/Final_Scripts/input_overrides/
+#     VA15_mrdetect_rerun_2026-07-10.csv, when present
+#   • helpers.R, which resolves Spring 2026 inputs, sample identities, cohort
+#     metadata, strict MRDetect parsing, and control deduplication
 #
 # Output Directory (created if necessary):
 #   • MRDetect_output_winter_2025/Processed_R_outputs/
@@ -52,6 +69,19 @@
 #       - Blood_muts_plots_baseline/cfWGS MRDetect Blood data updated Sep.csv
 #       - Blood_muts_plots_baseline/
 #         cfWGS MRDetect Blood data updated Sep with all patients.csv
+#       - clinical_support/baseline_diagnosis_mutation_source_by_patient.csv
+#       - audit CSVs describing excluded mutation panels, control coverage,
+#         rerun overrides, source selection, aliases, and duplicate sources
+#
+# Important interpretation details:
+#   • Personalized mutation-list VCFs are restricted to Baseline or Diagnosis
+#     sources before the final BM- and blood-informed exports are written.
+#   • Historical queried samples are normalized against historical CHARM
+#     controls; Spring 2026 XPlus samples request the XPlus CHARM reference.
+#   • `Mrd_by_WGS` and `Cumulative_VAF` use the retained exploratory 4.5-z-score
+#     screen. Final cfWGS binary calls are defined downstream by script 3_1.
+#   • The “All_detection_rates_baseline_and_controls” filename is historical;
+#     the current export contains historical CHARM control rows only.
 #
 # Usage:
 #   Run from the project root with the command shown above.
@@ -915,6 +945,9 @@ Merged_MRDetect <- Merged_MRDetect %>%
 Merged_MRDetect_cfDNA <- Merged_MRDetect %>%
   filter(Sample_type_Bam == "Blood_plasma_cfDNA",
          timepoint_info_Bam %in% c("Baseline","Diagnosis","Progression"))
+# This subset is retained as an interactive diagnostic object. The saved raw,
+# z-scored, BM-informed, and blood-informed outputs below are built from
+# `Merged_MRDetect`/`Merged_MRDetect_zscore`, not from this object.
 
 
 # ──────────────────────────────────────────────────────────────────────────────

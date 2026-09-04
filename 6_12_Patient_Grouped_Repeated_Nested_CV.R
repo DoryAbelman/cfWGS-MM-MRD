@@ -35,9 +35,11 @@
 #     eligibility for the corresponding model families.
 #   * helpers.R supplies load_final_cohort_assignment(), which identifies the
 #     Frontline training cohort.
-#   * The frozen model and validation RDS files listed in frozen_artifacts below
-#     preserve the historical training membership, predictors, and test-scoring
-#     boundary. They are read but never overwritten.
+#   * The frozen model and validation RDS files named in the model
+#     specifications preserve the historical training membership, predictors,
+#     and test-scoring boundary. They are read but never overwritten. The five
+#     primary artifacts listed in `frozen_artifacts` below are also checked for
+#     write protection and included in the input manifest.
 #   * The optional nonbaseline-timepoint audit is used when present to exclude
 #     rows previously identified as mislabeled Baseline or Diagnosis samples.
 #
@@ -47,8 +49,10 @@
 # Design
 #   * Repeated five-fold outer cross-validation grouped by patient.
 #   * Repeated five-fold inner cross-validation grouped by patient.
-#   * Inner folds tune glmnet hyperparameters and generate out-of-fold
-#     predictions used to select the outer-training Youden threshold.
+#   * A one-predictor specification fits centered/scaled logistic regression.
+#     A multi-predictor specification tunes elastic-net alpha and lambda.
+#   * Both paths generate inner out-of-fold predictions used to select the
+#     outer-training Youden threshold.
 #   * The threshold is then applied unchanged to the outer-held-out patients.
 #   * Primary summaries pool held-out predictions within each outer repeat and
 #     average the resulting repeat-level metrics.
