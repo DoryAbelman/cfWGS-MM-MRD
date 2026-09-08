@@ -3,7 +3,7 @@
 #
 # Description:
 #   End-to-end arm-level CNA caller for Sequenza segments with **ploidy-aware**
-#   labels and a realistic **hyperdiploidy** definition for myeloma.
+#   labels and the project-specific **hyperdiploidy** definition.
 #
 # Goal:
 #   Convert Sequenza segment calls into ploidy-aware CNA feature tables that
@@ -44,8 +44,8 @@
 #        – FISH-style Sequenza call matrices: RDS/TXT
 #    11) Prints cohort-level frequencies for quick QC
 #
-# How to run:
-#   Rscript Scripts_2025/Final_Scripts/1_4A_Process_sequenza_CNA_Data.R
+# How to run from the repository root:
+#   Rscript 1_4A_Process_sequenza_CNA_Data.R
 #
 # Manuscript outputs created/updated:
 #   - None directly. This upstream CNA-processing script creates Sequenza CNA
@@ -110,8 +110,8 @@
 #   library(tidyverse)  # dplyr, tidyr, readr, purrr
 #   library(GenomicRanges); library(IRanges); library(S4Vectors); library(readxl)
 #
-# Usage:
-#   source("Scripts_2025/Final_Scripts/1_4A_Process_sequenza_CNA_Data.R")
+# Usage from an interactive R session opened at the repository root:
+#   source("1_4A_Process_sequenza_CNA_Data.R")
 #   # Produces: combined_seg_data, sample_ploidy, results, cna_data, and exports
 #
 # Author: Dory Abelman

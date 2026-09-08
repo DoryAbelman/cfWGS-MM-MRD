@@ -78,8 +78,8 @@
 #   library(stringr)
 #   library(purrr)
 #
-# Usage:
-#   Rscript Scripts_2025/Final_Scripts/1_2_Process_Mutation_Data.R
+# Usage from the repository root:
+#   Rscript 1_2_Process_Mutation_Data.R
 #
 # Failure behaviour:
 #   The script stops if no BM/blood MAFs or required recovery snapshots are
@@ -152,7 +152,7 @@ resolve_maf_files <- function(label, env_var, candidate_dirs) {
 
 # During the Spring 2026 update, only the locally staged Ultima MAF subset and
 # the new revision MAFs were available. Rebuilding directly from those folders
-# would silently discard historical samples from the canonical RDS files. Until
+# would silently discard historical samples from the retained RDS files. Until
 # the complete historical raw-MAF directories are restaged, union the newly
 # parsed calls with the preserved historical snapshots. Variant-level keys make
 # this idempotent: rerunning with a complete raw directory will not duplicate

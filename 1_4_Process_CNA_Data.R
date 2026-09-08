@@ -31,8 +31,8 @@
 #   landscape summaries, BM-vs-cfDNA concordance analyses, FISH-vs-WGS
 #   concordance, and Supplementary Table 2 support.
 #
-# How to run:
-#   Rscript Scripts_2025/Final_Scripts/1_4_Process_CNA_Data.R
+# How to run from the repository root:
+#   Rscript 1_4_Process_CNA_Data.R
 #
 # Inputs:
 #   • Scripts_2025/Final_Scripts/helpers.R
@@ -87,8 +87,8 @@
 #   library(tidyverse); library(purrr)
 #   library(GenomicRanges); library(IRanges); library(S4Vectors); library(readxl)
 #
-# Usage:
-#   source("Scripts_2025/Final_Scripts/1_4_Process_CNA_Data.R")
+# Usage from an interactive R session opened at the repository root:
+#   source("1_4_Process_CNA_Data.R")
 #   # creates combined_seg_data and myeloma_CNA_matrix_with_HRD in memory
 #
 # Manuscript outputs created/updated:

@@ -3,8 +3,8 @@
 #
 # Purpose:
 #   Build a cohort swim plot showing treatment timelines
-#   (induction, transplant, maintenance, progression/relapse) for all patients
-#   across the M4, SPORE, and IMMAGINE cohorts. Each row is one patient;
+#   (induction, transplant, maintenance, progression/relapse) for the manuscript
+#   cohort drawn from M4, SPORE, and IMMAGINE. Each row is one patient;
 #   horizontal bars represent treatment lines and vertical markers indicate
 #   key clinical events (e.g. ASCT, relapse). Saved as a high-resolution PNG
 #   for manuscript Figure 1 / supplementary.
@@ -15,13 +15,25 @@
 #   - Clinical data/IMMAGINE/Cleaned_IMMAGINE_chemotherapy.csv
 #   - combined_clinical_data_updated_April2025.csv  (for relapse/event dates)
 #   - cohort_assignment_table_updated.rds            (M4/SPORE/IMMAGINE label)
+#   - Output_tables_2025/all_patients_with_BM_and_blood_calls_updated6_full.rds
+#       (required to add eligible Spring 2026 longitudinal patients)
+#   - id_map.rds (fixed patient-to-index mapping used before this script later
+#       recreates the map; a clean run currently requires the existing file)
 #
 # Outputs:
-#   - Final Tables and Figures/Cohort_swim_plot.png (or PDF)
+#   - Final Tables and Figures/Figure1A_swimplot_with_3_annotations_wide_updated10A.png
+#       (Figure 1A plotted component)
+#   - Final Tables and Figures/
+#       Supp_Table_1_all_events_for_swim_plot_INDEX_DATES_privacy_protected.csv
+#       (generated Supplementary Table 1 candidate)
+#   - Supporting event tables and review plots described in the labelled
+#       export sections below
 #
 # Dependencies:
 #   tidyverse, readxl, lubridate, patchwork, forcats, purrr
-#   Must be run after 2_1_Clinical_Demographics_Table.R
+#   This script does not depend on the Table 1 output from
+#   2_1_Clinical_Demographics_Table.R; it requires the clinical, cohort,
+#   MRDetect-call, and fixed ID-map inputs listed above.
 #
 # How to run:
 #   Rscript Scripts_2025/Final_Scripts/2_1_Part2_Cohort_Swim_Plot.R

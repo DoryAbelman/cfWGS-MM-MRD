@@ -23,8 +23,8 @@
 #     Lists parsed laboratory values excluded by the explicit plausibility
 #     ranges below; it is a review aid, not a manuscript table.
 #
-# How to run:
-#   Rscript Scripts_2025/Final_Scripts/1_1B_Process_clinical_labs.R
+# How to run from the repository root:
+#   Rscript 1_1B_Process_clinical_labs.R
 #
 # Manuscript outputs created/updated:
 #   - None directly. This upstream script processes clinical laboratory
@@ -46,8 +46,9 @@
 #   4. Derive a heuristic immunoglobulin/light-chain subtype.
 #   5. Harmonize curated SPORE and IMMAGINE baseline clinical/FISH fields.
 #   6. Export the cross-cohort clinical/lab helper table used by script 2_0.
-#   The intended unit is one patient-timepoint, although distinct relapse
-#   events may remain as separate rows and are reported by the duplicate QC.
+#   The working unit is a clinical-event or patient-timepoint staging row.
+#   Distinct relapse events and unmatched full-join rows may remain separate;
+#   script 2_0 performs the final patient/timepoint consolidation.
 #
 
 # Load only the packages actually used below

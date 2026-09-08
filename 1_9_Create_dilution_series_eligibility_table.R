@@ -5,8 +5,8 @@
 #   Rscript Scripts_2025/Final_Scripts/1_9_Create_dilution_series_eligibility_table.R
 #
 # Manuscript outputs created/updated:
-#   - None directly. This upstream script creates dilution-series eligibility
-#     and dilution-plan tables used by the dilution-series analysis.
+#   - None. This is an optional experimental-planning script; the completed
+#     manuscript dilution analysis does not read its outputs.
 #
 # Author: Dory Abelman
 # Date: February 2026
@@ -31,14 +31,17 @@
 # Outputs:
 #   1) eligible_dilution_pairs_Feb2026.csv
 #        A table of patients with one high and one low timepoint.
-#   2) dilution_plan_Feb2026.csv
-#        For each eligible pair, a plan for 10^-1 to 10^-6 target fractions
-#        with 3 technical replicates per level.
+#   2) dilution_plan_raw_Feb2026.csv
+#   3) dilution_plan_diff_vs_hc_Feb2026.csv
+#        Theoretical mixture plans for target MRDetect detection-rate signals.
+#   4) dilution_plan_diff_vs_hc_1e6_capable_patients_Feb2026.csv
+#   5) patients_reaching_1e6_diff_vs_hc_Feb2026.csv
+#   6) patients_reaching_1e6_sample_ids_Feb2026.csv
+#        Feasibility subsets and their selected physical sample IDs.
 # =============================================================================
 # Pipeline status:
-#   Active upstream dependency. This script does not directly create a named
-#   final manuscript figure/table, but downstream scripts depend on its cleaned
-#   outputs for figure, table, or model generation.
+#   Optional experimental-design support; not part of the current
+#   paper-reproduction sequence.
 #
 
 suppressPackageStartupMessages({
@@ -65,7 +68,8 @@ if (!dir.exists(output_dir)) {
 #
 #   The core metric is detection_rate_as_reads_detected_over_reads_checked:
 #   the fraction of cfDNA reads (at patient-specific mutation sites) that
-#   show the somatic mutation. This is a proxy for circulating tumor fraction.
+#   show the somatic mutation. It is a detection-rate signal related to disease
+#   burden, not an independently measured cellular tumour fraction.
 #
 #   We add two derived columns:
 #     • detection_rate_diff_vs_hc: the patient's detection rate minus the mean
@@ -235,8 +239,8 @@ if (anyDuplicated(eligible_pairs[patient_source_vars])) {
 # ──────────────────────────────────────────────────────────────────────────────
 # STEP 5: Compute the dilution plan (using raw detection rates)
 #
-#   For each eligible pair, we calculate the physical mixing fractions needed
-#   to achieve a series of TARGET tumor fractions spanning 6 orders of magnitude:
+#   For each eligible pair, we calculate theoretical physical mixing fractions
+#   for target MRDetect detection-rate signals spanning six orders of magnitude:
 #   10^-1 (10%) down to 10^-6 (0.0001%).
 #
 #   KEY INSIGHT: the tumor-low sample is not perfectly zero - it has a small
@@ -286,17 +290,19 @@ if (nrow(eligible_pairs) > 0) {
 }
 
 # ──────────────────────────────────────────────────────────────────────────────
-# STEP 6: Alternative dilution plan using HC-corrected (diff vs HC) rates
+# STEP 6: Alternative plan using healthy-control-corrected MRDetect rates
 #
 #   The raw detection rate includes a universal background noise floor that
 #   exists even in healthy controls (technical noise from sequencing errors,
 #   mapping artifacts, etc.). Using the raw rate to compute mixing fractions
-#   means we may be over-estimating how much of the "low" sample's signal
-#   is actually tumor-derived.
+#   means the planning signal combines possible disease signal with estimated
+#   healthy-control background. This is a planning approximation; subtracting
+#   the healthy-control mean does not prove that all residual signal is
+#   tumour-derived.
 #
 #   This alternative uses detection_rate_diff_vs_hc = (sample_rate - mean_HC_rate)
-#   for both the high and low samples. After subtraction, the shared HC noise
-#   floor cancels out, and the values represent only the tumor-specific signal.
+#   for both the high and low samples. The subtraction removes the estimated
+#   shared healthy-control mean from the planning proxy.
 #
 #   The mixing formula is the same:
 #     f = (target - low_diff_vs_hc) / (high_diff_vs_hc - low_diff_vs_hc)
@@ -329,7 +335,7 @@ if (nrow(eligible_pairs) > 0) {
 }
 
 # ──────────────────────────────────────────────────────────────────────────────
-# STEP 7: Identify the "gold standard" subset - patients whose pairs span
+# STEP 7: Identify the planning subset whose pairs span
 #         far enough to feasibly reach the 10^-6 (0.0001%) target level
 #
 #   Reaching 10^-6 requires both:

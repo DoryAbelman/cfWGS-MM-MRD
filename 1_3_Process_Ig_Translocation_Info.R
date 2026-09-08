@@ -52,7 +52,8 @@
 #   This is not a fully unattended workflow. Candidate calls are exported for
 #   IGV review, and only rows marked `Looks_real == 1` in the reviewed workbook
 #   enter the final feature matrix. New samples therefore require review before
-#   rerunning the final export block.
+#   rerunning the final export block. Fractional `Looks_real` values remain
+#   candidate evidence in the workbook but are not promoted to confirmed calls.
 # 
 # Active downstream outputs:
 #   • Jan2025_exported_data/translocation_data_cytoband_updated.rds
@@ -84,8 +85,8 @@
 #   loaded below must be installed, including those used only in legacy/support
 #   sections.
 # 
-# How to run:
-#   Rscript Scripts_2025/Final_Scripts/1_3_Process_Ig_Translocation_Info.R
+# How to run from the repository root:
+#   Rscript 1_3_Process_Ig_Translocation_Info.R
 #
 # Manuscript outputs created/updated:
 #   - None directly. This upstream script processes Ig-caller translocation
@@ -1154,7 +1155,7 @@ if (!is.null(spring2026_revision_metadata_for_igv)) {
     pull(.data$Patient)
 
   # Keep a complete review queue as well as the smaller baseline table below.
-  # Nothing in this file is promoted until a reviewer records the IGV result.
+  # Nothing in this file is promoted until the manual IGV result is recorded.
   spring2026_all_igv_candidates <- Ig_caller_df_cfWGS_filtered_aggressive2 %>%
     filter(
       .data$Patient %in% spring2026_revision_patients_for_igv,

@@ -2,8 +2,8 @@
 # Script:   3_1_Optimize_cfWGS_thresholds.R
 # Project:  cfWGS MRD detection in multiple myeloma (MM)
 #           Part of Abelman et al. (2025) manuscript
-# How to run:
-#   Rscript Scripts_2025/Final_Scripts/3_1_Optimize_cfWGS_thresholds.R
+# How to run from the repository root:
+#   Rscript 3_1_Optimize_cfWGS_thresholds.R
 #
 # Current manuscript outputs created/updated by the default preserved-model path:
 #   - Figure 3B: BM model confusion matrices.
@@ -15,14 +15,16 @@
 #     historical source file is named Supplementary_Table_4_All_Model_Metrics_*
 #     because of a manuscript-numbering correction; the artifact map records it
 #     as Supplementary Table 5.
-#   - Supplementary Table 6: final blood model metrics/source workbook.
+#   - Classifier-performance inputs used by
+#     3_1C_Expanded_test_clustered_sensitivity.R to assemble Supplementary
+#     Table 6. The final Table 6 workbook is written by that later script.
 #
 # Current grouped-CV outputs made elsewhere:
 #   Figure 3A, Figure 4A, Extended Data Figure 5A, Extended Data Figure 7A,
 #   and Extended Data Figure 9A-B come from the patient-grouped repeated
-#   nested-CV workflow in scripts 6_12 through 6_18. Final Supplementary Table
-#   4 is also assembled from that workflow. This script retains the older
-#   sample-row CV panels and tables only as analysis history.
+#   nested-CV workflow in scripts 6_12, 6_13, 6_14_Generate, and 6_17. Final
+#   Supplementary Table 4 is also assembled from that workflow. This script
+#   retains the older sample-row CV panels and tables only as analysis history.
 #
 # Pipeline role and reproducibility note:
 #   The default path reads the February 2026 models and thresholds, applies them
@@ -51,7 +53,9 @@
 #
 #   3. THRESHOLD OPTIMIZATION (Sections 4-5)
 #      Evaluate univariate and simple ridge-regression thresholds
-#      NOTE: These are exploratory; final results use nested CV models
+#      NOTE: These are in the disabled historical branch. Current model
+#      comparison uses patient-grouped repeated nested CV, while current
+#      thresholded calls use the preserved February 2026 fitted models.
 #
 #   4. HISTORICAL NESTED CROSS-VALIDATION (Section 7)
 #      Earlier elastic-net analysis using sample-row resampling:
@@ -81,7 +85,7 @@
 #        • Sensitivity @95% specificity, specificity @95% sensitivity
 #
 #   7. TABLE & FIGURE GENERATION (Sections 10+)
-#      Export supplementary tables and create publication figures
+#      Export supplementary tables and create manuscript figures
 #
 # KEY DESIGN DECISIONS:
 # ────────────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -95,16 +99,17 @@
 # • MASKING: Patient eligibility by sample type prevents scoring BM models on patients with only
 #   blood samples (and vice versa).
 #
-# OUTPUTS (saved to Output_tables_2025/):
+# OUTPUTS FROM THE NORMAL PRESERVED-MODEL RUN:
 # ────────────────────────────────────────────────────────────────────────────────────────────────────────────
-#   • all_validation_metrics_v2_with_fragmentomics_restricted_cohorts.rds|csv
-#   • all_nested_cv_metrics_v2_with_fragmentomics_restricted_cohorts.rds|csv
-#   • all_cfWGS_models_list_v2_with_fragmentomics_restricted_cohorts.rds
-#   • all_model_thresholds_v2_with_fragmentomics_restricted_cohorts.rds
 #   • all_patients_with_BM_and_blood_calls_updated6.rds|csv (masked scores)
 #   • all_patients_with_BM_and_blood_calls_updated6_full.rds|csv (unmasked scores)
-#   • Supplementary_Table_*.csv (formatted for manuscript)
-#   • Final Tables and Figures/*.png (manuscript-ready figures)
+#   • Current test-cohort metric and audit CSV files used by later table scripts
+#   • Figure 3B, Figure 4B, and Extended Data performance/confusion panels
+#
+# The all_nested_cv_metrics, all_cfWGS_models_list, and all_model_thresholds
+# files named later in this script belong to the disabled historical refitting
+# branch. They are not created by the normal run and are not the 50-repeat
+# patient-grouped nested-CV results.
 #
 # =============================================================================
 # Pipeline status:
@@ -155,8 +160,8 @@ library(readxl)         # Excel file reading
 # Shared helper for final manuscript-organized outputs.
 # The model script retains its historical filenames and cached model artifacts,
 # while these helper calls copy the final figures and tables into
-# Scripts_2025/Final_Scripts/final_manuscript_objects with final labels such as
-# Figure_3A, Extended_Data_Figure_5A, and Supplementary_Table_5.
+# final_manuscript_objects/ with final labels such as Figure_3B, Figure_4B,
+# Extended_Data_Figure_5B, and Supplementary_Table_5.
 .manuscript_helper <- file.path("Scripts_2025", "Final_Scripts", "manuscript_output_helpers.R")
 if (!file.exists(.manuscript_helper)) {
   .manuscript_helper <- "manuscript_output_helpers.R"
@@ -196,7 +201,7 @@ dat <- dat %>%                # <‑‑ the master data frame
 #
 # WHAT:   Define the binary outcome variable (MRD_truth) used to train
 #         all models. MRD truth comes from two sources:
-#         • clonoSEQ: molecular MRD assay (gold standard)
+#         • clonoSEQ: primary molecular MRD reference assay
 #         • MFC:     flow cytometry MRD assay (backup)
 #
 # HIERARCHY: Use clonoSEQ if available; otherwise use MFC; missing=NA
@@ -1328,8 +1333,8 @@ if (USE_PRESERVED_MODELS_ONLY) {
   # data/provenance copies. Bars show preserved Youden-threshold metrics;
   # triangles show test-cohort metrics at a high-sensitivity operating point
   # fixed exclusively in the preserved training data. Legacy copies are
-  # refreshed because manuscript assembly still reads those stable paths,
-  # while ms_copy_artifact registers canonical outputs.
+  # refreshed because manuscript assembly still reads those paths, while
+  # ms_copy_artifact registers the labeled manuscript copies.
   write_current_test_performance_panel <- function(eval_dat,
                                                    model_names,
                                                    model_labels,
@@ -1519,7 +1524,7 @@ if (USE_PRESERVED_MODELS_ONLY) {
   sync_existing_panel_copy(
     source_png = "Final Tables and Figures/Supp5A_classifier_performance_bar_updated3.png",
     artifact_id = "EDFIG5B",
-    description = "BM training-cohort performance panel synchronized from the canonical manuscript output; not recomputed for test-cohort expansion.",
+    description = "BM training-cohort performance panel copied from the retained manuscript output; not recomputed for test-cohort expansion.",
     legacy_component_png = file.path(
       "Scripts_2025/Final_Scripts/final_manuscript_objects/generated/figure_components/Extended_Data_Figure_5/panel_B",
       "Supp5A_classifier_performance_bar_updated3.png"
@@ -1529,7 +1534,7 @@ if (USE_PRESERVED_MODELS_ONLY) {
   sync_existing_panel_copy(
     source_png = "Final Tables and Figures/Supp7A_classifier_performance_bar_updated_blood_muts2.png",
     artifact_id = "EDFIG7B",
-    description = "Blood/cfDNA training-cohort performance panel synchronized from the canonical manuscript output; not recomputed for test-cohort expansion.",
+    description = "Blood/cfDNA training-cohort performance panel copied from the retained manuscript output; not recomputed for test-cohort expansion.",
     legacy_component_png = file.path(
       "Scripts_2025/Final_Scripts/final_manuscript_objects/generated/figure_components/Extended_Data_Figure_7/panel_B",
       "Supp7A_classifier_performance_bar_updated_blood_muts2.png"
@@ -1539,7 +1544,7 @@ if (USE_PRESERVED_MODELS_ONLY) {
   sync_existing_panel_copy(
     source_png = "Final Tables and Figures/Supp9D_classifier_performance_bar_updated_frag2.png",
     artifact_id = "EDFIG9C",
-    description = "Fragmentomics training-cohort performance panel synchronized from the canonical manuscript output; not recomputed for test-cohort expansion.",
+    description = "Fragmentomics training-cohort performance panel copied from the retained manuscript output; not recomputed for test-cohort expansion.",
     legacy_component_png = file.path(
       "Scripts_2025/Final_Scripts/final_manuscript_objects/generated/figure_components/Extended_Data_Figure_9/panel_C",
       "Supp9D_classifier_performance_bar_updated_frag2.png"
@@ -1549,7 +1554,7 @@ if (USE_PRESERVED_MODELS_ONLY) {
   sync_existing_panel_copy(
     source_png = "Final Tables and Figures/Supp7D_ROC_performance_blood_updated4.png",
     artifact_id = "EDFIG7E",
-    description = "Blood/cfDNA full-cohort refit ROC panel synchronized from the canonical manuscript output; this training/refit panel is not recomputed for test-cohort expansion.",
+    description = "Blood/cfDNA full-cohort refit ROC panel copied from the retained manuscript output; this training/refit panel is not recomputed for test-cohort expansion.",
     legacy_component_png = file.path(
       "Scripts_2025/Final_Scripts/final_manuscript_objects/generated/figure_components/Extended_Data_Figure_7/panel_E",
       "Supp7D_ROC_performance_blood_updated4.png"

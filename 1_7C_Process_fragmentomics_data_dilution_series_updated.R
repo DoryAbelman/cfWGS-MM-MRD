@@ -134,8 +134,9 @@ clean_sample <- function(x) {
 # tumour-fraction steps.
 # Purpose: establish analytical sensitivity for each fragmentomics feature
 # (GRIFFIN z-scores, FS, Proportion.Short) as a function of tumour fraction.
-# The metadata file contains a "LOD" (limit-of-detection) column rather than
-# clinical timepoint labels; no PR/PS/response/trial group comparisons are run.
+# The metadata file uses the historical column name `LOD` for the prepared
+# dilution percentage (input tumour-fraction level), rather than for an
+# assay-derived limit of detection. No clinical response comparisons are run.
 #
 # Point these to your *dilution-series* folders:
 
@@ -601,11 +602,10 @@ write_tsv(stats.data,
           file.path(out.dir, "Griffin/griffin_per_site_stats_dilution.tsv"))
 
 
-### 8.  EXTRACT “MM_DARs_chromatin_activation” SITE + ATTACH CLINICAL KEYS ######## Filters to the single MM-DAR site of interest, then re-attaches columns
-# from Metadata_dilution_series.csv. Key dilution-specific column:
-#   LOD ("limit of detection") = the known input tumour fraction (%) for
-#   this dilution step, used downstream to plot feature detectability vs.
-#   tumour content and to define the analytical sensitivity threshold.
+### 8.  EXTRACT “MM_DARs_chromatin_activation” SITE + ATTACH CLINICAL KEYS ##########################
+# Filter to the single MM-DAR site of interest, then re-attach columns from
+# Metadata_dilution_series.csv. The historical `LOD` column stores the known
+# prepared dilution percentage (input tumour-fraction level) for each library.
 mm_dars_small <- results.data %>%
   filter(Site == "MM_DARs_chromatin_activation") %>%
   # re-attach Bam, Patient, Date_of_sample_collection from clinical.csv
@@ -694,9 +694,9 @@ if (file.exists(meta.csv)) {
 #     Zscore.Coverage/Midpoint/Amplitude, Threshold flags)
 #   • Proportion.Short   (short-fragment ratio from insert_size_summary.tsv)
 #   • FS                 (CHARM Fragment Score from fragment_scores.tsv)
-# Plus clinical keys: Bam, Patient, Sample_ID, LOD (tumour fraction).
-# This feeds directly into script 1_9 for dilution-series eligibility tables
-# and script 3_1_part2 for sensitivity analysis.
+# Plus clinical keys: Bam, Patient, Sample_ID, and the historical `LOD` column
+# containing the prepared dilution percentage. This table feeds directly into
+# 3_1_part2 for the manuscript dilution-series sensitivity analysis.
 
 key_frag_dilution <- mm_dars_small %>%
   dplyr::select(-Site) %>%

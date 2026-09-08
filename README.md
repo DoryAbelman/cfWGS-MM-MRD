@@ -1,16 +1,25 @@
 # cfWGS-MM-MRD
 
-Analysis code for **Abelman et al. (2025)**: *"Cell-free DNA Whole Genome Sequencing for Non-Invasive MRD Detection in Multiple Myeloma"*.
+Analysis code for *"Cell-free DNA Whole Genome Sequencing for Non-Invasive
+Minimal Residual Disease Detection in Multiple Myeloma"*.
 
-The pipeline is a series of numbered R scripts. Each script reads the outputs of the previous step and can be run from the command line through the included runner.
+The repository contains the R scripts used to process the clinical and cfWGS
+data, construct the analysis tables, fit and evaluate the MRD classifiers, and
+produce the main and supplementary figures and tables. The scripts retain their
+original analysis-based numbering so that saved objects and manuscript records
+can be traced back to the code that generated them.
 
-This directory contains the main analysis pipeline. The numbered scripts remain organized by analysis stage and scientific question, matching the original workflow: raw/clinical processing, WGS feature processing, dilution-series analyses, model training/application, concordance analyses, and survival analyses. The scripts create the analysis results and the figures and tables used in the manuscript.
+The files are not one simple linear pipeline: several scripts branch into
+mutation, copy-number, fragmentomics, MRDetect, dilution-series, longitudinal,
+and survival analyses. The tables below describe the purpose, inputs, outputs,
+and manuscript contribution of each script. A concise panel-level crosswalk is
+also available in [`docs/FIGURE_TABLE_MAP.md`](docs/FIGURE_TABLE_MAP.md).
 
-The main workflow is described by `run_pipeline.R`. The numbered scripts contain
-the analyses, and the figure/table map identifies which script produces each
-manuscript result.
-
-The workflow runs from staged input data through the final tables, source-data files, and figure panels used in the manuscript. The deliberate exception is routine test-cohort expansion: final training-derived model objects, nested-CV fold objects, metric summaries, and related cached intermediates are preserved unless `--include-cache-sensitive` is supplied. New test-cohort samples should be processed through the upstream feature scripts and then scored with the saved training-derived objects, so test-cohort metrics can update without unintentionally recomputing the training-stage model outputs.
+`run_pipeline.R` can list or run the scripts in
+`config/source_pipeline.tsv`, but that plan currently ends at `4_2` and does
+not include the final 50-repeat nested-CV or figure-source-workbook steps.
+Accordingly, it should be treated as a convenience runner for the configured
+source scripts, not as a one-command reproduction of every manuscript output.
 
 **Raw data files are not included in this repository** (see [Data availability](#data-availability) below).
 
@@ -18,37 +27,32 @@ The workflow runs from staged input data through the final tables, source-data f
 
 ## Quick start
 
-Check that required local inputs are staged inside the project before running
-the analysis:
+Run commands from the root of this repository. Before running a script, stage
+the protected inputs listed in that script's header and confirm that its
+upstream objects are present.
+
+List the configured source-script order without running any analysis:
 
 ```sh
-Rscript Scripts_2025/Final_Scripts/prepare_local_inputs.R --check
+Rscript run_pipeline.R
 ```
 
-If the required files are available in another local mirror, copy missing inputs
-into the project while preserving the relative paths expected by the scripts:
+Run the configured source scripts:
 
 ```sh
-Rscript Scripts_2025/Final_Scripts/prepare_local_inputs.R --source-dir /path/to/staged_inputs --copy-missing
+Rscript run_pipeline.R --execute
 ```
 
-Dry-run the numbered source pipeline from the project root:
+This command does **not** run the final 50-repeat patient-grouped nested-CV
+workflow. See [Patient-grouped repeated nested cross-validation](#patient-grouped-repeated-nested-cross-validation)
+for the analysis used in Figures 3A and 4A, Extended Data Figures 5A, 7A and
+9A-B, and Supplementary Table 4.
 
-```sh
-Rscript Scripts_2025/Final_Scripts/run_pipeline.R
-```
-
-Execute the pipeline from the project root:
-
-```sh
-Rscript Scripts_2025/Final_Scripts/run_pipeline.R --execute
-```
-
-Numbered scripts also write manuscript-labeled copies of their final
-figure/table components to:
+Scripts that call `manuscript_output_helpers.R` also place manuscript-labeled
+copies of selected outputs under:
 
 ```text
-Scripts_2025/Final_Scripts/final_manuscript_objects/
+final_manuscript_objects/
 ```
 
 That folder is organized by final manuscript item, for example:
@@ -67,11 +71,10 @@ Each copied/saved file is recorded in
 artifact ID, final figure/table label, source path, destination path, checksum,
 and generating script.
 
-For manuscript text updates after adding samples or rerunning the pipeline, the
-workflow also writes a section-organized number workbook to:
+The local manuscript-number helper writes section-organized review files under:
 
 ```text
-Scripts_2025/Final_Scripts/manuscript_writing/
+manuscript_writing/
 ```
 
 The key files are:
@@ -86,38 +89,36 @@ manuscript_paragraph_metric_audit.tsv
 by_section/
 ```
 
-`manuscript_numbers_by_section.*` is the main manuscript update helper. It lists
+`manuscript_numbers_by_section.*` lists
 the section, statistic label, formatted value, numerator/denominator when
 relevant, source file/script, related figure or table, update trigger, and
 caveats.
 
-The paragraph review/audit files extract number-containing paragraphs from the
-working DOCX drafts and link them to pipeline-derived metric rows where
-possible. Rows without an exact match are flagged for manual source-table
-review. The `by_section/` folder contains smaller TSVs for section-by-section
-manuscript updates.
+The paragraph review files are internal manuscript-checking aids: they extract
+number-containing paragraphs from local DOCX drafts and link them to analysis
+outputs where possible. They are not required to run the scientific analyses.
 
-Validate the organized manuscript-output tree:
+Refresh and then validate the organized manuscript-output tree:
 
 ```sh
-Rscript Scripts_2025/Final_Scripts/validate_manuscript_outputs.R
+Rscript validate_manuscript_outputs.R
 ```
 
-This validator checks the audited source map, direct-output manifest,
-human-readable output indexes, final easy-use folders, generated component
-mirrors, per-script manuscript helper calls, manuscript-output headers in the
-numbered scripts, and README coverage for every script that owns a mapped final
-artifact. It writes:
+Important: this command is not read-only. It first refreshes mapped copies and
+indexes under `final_manuscript_objects/`, and can therefore replace files in
+that generated output tree. It then checks the source map, direct-output
+manifest, organized paths, script headers, helper calls, and README coverage,
+and writes:
 
 ```text
-Scripts_2025/Final_Scripts/final_manuscript_objects/manuscript_output_validation_report.tsv
+final_manuscript_objects/manuscript_output_validation_report.tsv
 ```
 
-The most useful files for seeing what each numbered script produces are:
+After the refresh, these indexes summarize what each mapped script produces:
 
 ```text
-Scripts_2025/Final_Scripts/final_manuscript_objects/manuscript_output_index.tsv
-Scripts_2025/Final_Scripts/final_manuscript_objects/script_output_index.tsv
+final_manuscript_objects/manuscript_output_index.tsv
+final_manuscript_objects/script_output_index.tsv
 ```
 
 ## Manuscript figure/table ownership
@@ -131,105 +132,79 @@ script runs, the files used in the manuscript are copied or saved into
 | --- | --- |
 | `1_2_Part2_Get_Mutation_Overlap.R` | Extended Data Figure 2G |
 | `1_8C_Analyze_MRDetect_Healthy_Control_Platform_Calibration.R`; `1_8D_Build_ED3DE_MRDetect_Platform_Calibration.R` | Extended Data Figure 3D-E (MRDetect healthy-control platform shift and platform-matched z-score calibration) |
-| `1_8E_Build_ED3FG_Fragmentomics_Platform_Calibration.R` | Extended Data Figure 3F-G (paired fragmentomics platform shift and leave-one-control-out calibration validation) |
+| `1_7D_Compare_CHARM_Xplus_HC_controls.R`; `1_8E_Build_ED3FG_Fragmentomics_Platform_Calibration.R` | Extended Data Figure 3F-G (paired fragmentomics platform shift and leave-one-control-out calibration validation) |
 | `1_6_Identify_High_Quality_Patient_Pairs.R` | Figure 1B source table |
 | `2_1_Clinical_Demographics_Table.R` | Table 1 |
 | `2_1_Part2_Cohort_Swim_Plot.R` | Figure 1A; Supplementary Table 1 |
-| `2_2_Baseline_demographics_by_WGS_heatmap_updated.R` | Extended Data Figure 1; Supplementary Table 2 sheet A (feature catalogue) |
-| `2_3_Feature_Concordance_And_Mutation_Counts.R` | Extended Data Figure 2A-F; Supplementary Tables 2-3 |
-| `2_4_Longitudinal_features_analysis.R` | Figure 2A-D; Extended Data Figure 3A-C; Extended Data Figure 4 |
-| `2_4B_Build_all_evaluable_longitudinal_panels.R` | Figure 2E terminal-evaluable patient summaries and the all-evaluable Figure 2B-D / Extended Data Figure 3A-C longitudinal companion panels |
-| `3_1_Optimize_cfWGS_thresholds.R` | Historical model-library fitting, full-training refits and thresholds used by downstream scoring; Supplementary Table 5 and inputs to later figures/tables |
+| `2_2_Baseline_demographics_by_WGS_heatmap_updated.R` | Extended Data Figure 1; Supplementary Table 2 sheets A-B |
+| `2_3_Feature_Concordance_And_Mutation_Counts.R` | Extended Data Figure 2A-F; Supplementary Table 2 sheets C-F; Supplementary Table 3 |
+| `2_4_Longitudinal_features_analysis.R` | Figure 2A; Extended Data Figure 4 |
+| `2_4B_Build_all_evaluable_longitudinal_panels.R` | Figure 2B-E; Extended Data Figure 3A-C |
+| `3_1_Optimize_cfWGS_thresholds.R` | Figure 3B; Figure 4B; Extended Data Figures 5B-C, 7B-C/7E and 9C-F; Supplementary Table 5; saved full-training models and thresholds used downstream |
 | `3_1C_Expanded_test_clustered_sensitivity.R` | Patient-clustered bootstrap and deterministic one-sample-per-patient sensitivity outputs for the revision-inclusive Figure 3B/Figure 4B test analyses; final Supplementary Table 6 workbook combining those results with the preserved expanded-test classifier metrics and exact sample manifest |
 | `3_1_part2_Apply_cfWGS_thresholds_to_dilution_series.R` | Figure 3C; Extended Data Figure 5D; Extended Data Figure 7D; Supplementary Table 7 |
-| `3_2_Plot_optimal_cutoff_and_clinical_concordance.R` | Figure 3D-E; Figure 4C-D; Extended Data Figure 5E-G; Extended Data Figure 7F-H; Supplementary Tables 8 and 10 |
-| `4_1_Survival_Analysis.R` | Figure 3F; Figure 4E; Extended Data Figure 6A-K; Extended Data Figure 8A-D plus bottom panels; Supplementary Table 9. The time-window results used in Extended Data Figure 6I, Extended Data Figure 8D, and Supplementary Table 9 are regenerated from the current prospective `detection_progression_updated6` source CSVs, requiring progression on/after the sample date and adequate follow-up for non-event calls. |
-| `4_2_Compare_subclonal_evolution.R` | Extended Data Figure 10A-B |
+| `3_2_Plot_optimal_cutoff_and_clinical_concordance.R` | Figure 3D-E; Figure 4C-D; Extended Data Figure 5E-H; Extended Data Figure 7F-I; Supplementary Tables 8 and 10 |
+| `4_1_Survival_Analysis.R` | Figure 3F; Figure 4E; Extended Data Figures 6A-K and 8A-F; Supplementary Table 9. The time-window results use prospective labels that require progression on or after the sample date, or adequate follow-up for a non-event call. |
+| `4_2_Compare_subclonal_evolution.R` | Supporting event summary for Extended Data Figure 10; the final genome-wide tracks come from the separate ichorCNA plotting workflow |
 | `6_12_Patient_Grouped_Repeated_Nested_CV.R` | Final 50-repeat patient-grouped nested-CV fitting and held-out predictions used for Supplementary Table 4 |
 | `6_13_Assemble_All_Model_Grouped_CV_Results.R` | Combines the 32 model-specific grouped-CV runs and writes the final performance table |
 | `6_17_Generate_Compact_All_Model_Grouped_CV_ROC_Panels.R` | Figure 3A and Figure 4A |
 | `6_14_Generate_Grouped_CV_Manuscript_Replacement_Panels.R` | Extended Data Figures 5A, 7A, 9A and 9B |
 
-Exact source filenames, companion CSVs, and historical name corrections are
-listed in `docs/manuscript_artifact_source_map.tsv`. The validator
-uses that file plus the direct-output manifest to confirm that every mapped
-artifact lands in the organized manuscript-output tree.
-
-Run the full manuscript command sequence through one entry point:
-
-```sh
-Rscript Scripts_2025/Final_Scripts/run_manuscript_workflow.R
-Rscript Scripts_2025/Final_Scripts/run_manuscript_workflow.R --execute
-Rscript Scripts_2025/Final_Scripts/run_manuscript_workflow.R --execute --skip-source
-```
-
-The `--execute --skip-source` form is the fastest deterministic way to rebuild
-the repeated-measures sensitivity outputs and final Supplementary Table 6 from
-the current scored table and frozen model thresholds without rerunning upstream
-processing or cache-sensitive training.
-
-`run_manuscript_workflow.R` dry-runs by default. With `--execute`, it runs the
-numbered `Final_Scripts` pipeline through `run_pipeline.R`, refreshes the
-stage-ordered script/artifact map, and validates the direct manuscript outputs
-under `Scripts_2025/Final_Scripts/final_manuscript_objects/`. It also refreshes
-the manuscript-writing number exports under
-`Scripts_2025/Final_Scripts/manuscript_writing/`.
-
-The source pipeline skips cache-sensitive nested-CV/model training unless
-`--include-cache-sensitive` is explicitly supplied.
+`run_manuscript_workflow.R` is an internal orchestration helper. It runs the
+configured source plan and then performs several local refresh, validation,
+manuscript-number, and table-packaging steps. It does not run `6_12` through
+`6_19` or the complete figure-source workbook workflow, and it currently runs
+`3_1C_Expanded_test_clustered_sensitivity.R` twice during a full execution.
+It is therefore not the recommended entry point for reproducing the paper.
 
 Run a subset of the numbered source pipeline:
 
 ```sh
-Rscript Scripts_2025/Final_Scripts/run_pipeline.R --execute --from 2_0 --to 2_4
-Rscript Scripts_2025/Final_Scripts/run_pipeline.R --execute --only 2_1_part2
+Rscript run_pipeline.R --execute --from 2_0 --to 2_4
+Rscript run_pipeline.R --execute --only 2_1_part2
 ```
 
 Check packages without running analysis:
 
 ```sh
-Rscript Scripts_2025/Final_Scripts/prepare_local_inputs.R --check
-Rscript Scripts_2025/Final_Scripts/run_pipeline.R --check-packages
+Rscript run_pipeline.R --check-packages
 ```
 
-The runner writes timestamped logs and `run_manifest.tsv` under `Scripts_2025/Final_Scripts/pipeline_logs/`. It skips `3_1_Optimize_cfWGS_thresholds.R` by default because that script contains cache-sensitive nested-CV model training and manuscript values should remain stable during routine test-cohort expansion. Add `--include-cache-sensitive` only when intentional model recomputation is expected; regenerated artifacts may differ unless the exact same inputs, seeds, package versions, and execution environment are preserved.
+The runner writes timestamped logs and `run_manifest.tsv` under
+`pipeline_logs/`. It skips
+`3_1_Optimize_cfWGS_thresholds.R` by default because this script can refit the
+historical model library and update saved training-derived objects. The final
+50-repeat validation is a separate, explicitly versioned analysis described
+below.
 
 Each numbered script header lists the manuscript figure/table outputs that the
 script creates or updates. Where a final manuscript object is generated, the
 script calls `manuscript_output_helpers.R` to place a labeled copy into
-`final_manuscript_objects/`.
-
-The runner also refreshes `script_index.tsv`, a table of every numbered script, its stage, run policy, and mapped manuscript figures/tables. See `MANUSCRIPT_OUTPUT_MAP.md` for the concise script-to-figure/table map.
-
-It also refreshes the stage-ordered crosswalk:
-
-```text
-../../docs/stage_ordered_script_artifact_map.tsv
-../../docs/stage_ordered_script_artifact_map.md
-```
-
-Those files keep scripts grouped by analysis stage/question and show the
-manuscript figure/table, generated output path, regeneration status, and
-validation status for each mapped artifact.
+`final_manuscript_objects/`. Use
+[`docs/FIGURE_TABLE_MAP.md`](docs/FIGURE_TABLE_MAP.md) for the current,
+manually reviewed panel-to-script map.
 
 ---
 
 ## Pipeline scripts
 
-Scripts are numbered to indicate execution order. Run them sequentially from a working directory set to the project root.
+The stage numbers describe the broad order of the analysis. Scripts within a
+stage may form separate branches, and optional/support scripts are identified
+below. Run commands from the repository root.
 
 ### Stage 0 - Cohort selection
 
 | Script | Purpose | Key inputs | Key outputs |
 |--------|---------|------------|-------------|
-| `0_1_select_additional_samples_for_cohort_expansion.R` | Identify candidate test-cohort expansion samples by linking IMMAGINE inventory records to patient IDs, classifying samples as Baseline / MRD / Treatment, and reporting blood-MRD expansion opportunities. These are review/operations outputs, not final manuscript tables. | IMMAGINE patient ID mapping, sample inventory, MRD date, diagnosis date, and treatment-line Excel files (`Clinical data/IMMAGINE/`). | Cohort-expansion review tables under `Output_tables_2025/cohort_expansion/`; matching/duplicate/blood-MRD diagnostics under `Output_tables_2025/cohort_expansion/support_qc/`. |
+| `0_1_select_additional_samples_for_cohort_expansion.R` | Identify possible test-cohort expansion samples by linking IMMAGINE inventory records to patient IDs, classifying samples as Baseline / MRD / Treatment, and reporting blood-MRD opportunities. This is a planning analysis and is not required to reproduce the current paper. | IMMAGINE patient ID mapping, sample inventory, MRD date, diagnosis date, and treatment-line Excel files (`Clinical data/IMMAGINE/`). | Cohort-expansion planning tables under `Output_tables_2025/cohort_expansion/`; matching, duplicate, and blood-MRD checks under `Output_tables_2025/cohort_expansion/support_qc/`. |
 
 ### Stage 1 - Data processing
 
 | Script | Purpose | Key inputs | Key outputs |
 |--------|---------|------------|-------------|
-| `1_0_Process_clinical_metadata.R` | Harmonise clinical metadata across SPORE, M4, IMMAGINE, and MyC cohorts; annotate timepoints; compute relapse/PFS date helpers; and export the canonical clinical metadata table consumed by downstream mutation, CNA, fragmentomics, swim-plot, model, and survival scripts. Support-only count summaries, BAM review lists, and QC plots are separated from manuscript outputs. | Clinical metadata spreadsheets from `Clinical data/`, `M4_CMRG_Data/`, and reviewed `cohort_assignment_table_updated.rds`. | Canonical downstream inputs retained at historical paths, especially `combined_clinical_data_updated_April2025.csv`, `M4_labs_cleaned.csv`, `Relapse_dates_M4_clean.csv`, `Relapse dates cfWGS updated.csv`, and PFS/censor-date files under `Exported_data_tables_clinical/`; support-only summaries under `Output_tables_2025/clinical_metadata_support/`. |
-| `1_1A_Process_post_ACST_and_clinical_OS_PFS_and_clinical_FISH_metadata.R` | Parse transplant dates, relapse/progression events, OS follow-up, and FISH flags for SPORE, M4, and IMMAGINE. This is an upstream clinical-helper step, not a direct manuscript figure/table owner. | SPORE, M4, and IMMAGINE clinical Excel/CSV workbooks with ASCT, progression, FISH, and OS follow-up data; canonical clinical and relapse-date outputs from `1_0`. | Active downstream clinical inputs in `Clinical data/SPORE/tidy_*.csv` and `Clinical data/Exported clinical data April 2025/*.csv`; support-only relapse/OS helper tables and QC plots under `Output_tables_2025/clinical_followup_support/`. |
+| `1_0_Process_clinical_metadata.R` | Harmonise clinical metadata across SPORE, M4, IMMAGINE, and MyC cohorts; annotate timepoints; compute relapse/PFS date helpers; and export the main clinical metadata table consumed by downstream mutation, CNA, fragmentomics, swim-plot, model, and survival scripts. Support-only count summaries, BAM review lists, and QC plots are separated from manuscript outputs. | Clinical metadata spreadsheets from `Clinical data/`, `M4_CMRG_Data/`, and reviewed `cohort_assignment_table_updated.rds`. | Downstream inputs retained at historical paths, especially `combined_clinical_data_updated_April2025.csv`, `M4_labs_cleaned.csv`, `Relapse_dates_M4_clean.csv`, `Relapse dates cfWGS updated.csv`, and PFS/censor-date files under `Exported_data_tables_clinical/`; support-only summaries under `Output_tables_2025/clinical_metadata_support/`. |
+| `1_1A_Process_post_ACST_and_clinical_OS_PFS_and_clinical_FISH_metadata.R` | Parse transplant dates, relapse/progression events, OS follow-up, and FISH flags for SPORE, M4, and IMMAGINE. This is an upstream clinical-helper step, not a direct manuscript figure/table owner. | SPORE, M4, and IMMAGINE clinical Excel/CSV workbooks with ASCT, progression, FISH, and OS follow-up data; clinical and relapse-date outputs from `1_0`. | Active downstream clinical inputs in `Clinical data/SPORE/tidy_*.csv` and `Clinical data/Exported clinical data April 2025/*.csv`; support-only relapse/OS helper tables and QC plots under `Output_tables_2025/clinical_followup_support/`. |
 | `1_1B_Process_clinical_labs.R` | Compile cross-cohort clinical laboratory, staging, demographic, and FISH/cytogenetic helper fields for M4, SPORE, and IMMAGINE. This is an upstream clinical-helper step, not a direct manuscript figure/table owner. | M4 clinical workbooks (`M4_COHORT_*.xlsx`), curated SPORE/IMMAGINE clinical sheets, and FISH helper files generated by `1_1A`. | Active downstream input `Clinical data/Master_clinical_data_table_all_projects_May2025_updated2.csv`, consumed by `2_0_Assemble_Table_With_All_Features.R`. |
 | `1_2_Process_Mutation_Data.R` | Ingest bone-marrow and cfDNA MAF files, compute VAFs, annotate with clinical metadata, and create the mutation-call intermediates used by downstream mutation-overlap, heatmap, feature-integration, and MRDetect analyses. VAF/read-depth plots are support-only QC, not manuscript panels. | BM and cfDNA WGS MAF files (`*.maf`), `combined_clinical_data_updated_April2025.csv`. | Core intermediates `combined_maf_bm_all_muts.rds`, `combined_maf_bm_dx.rds`, `combined_maf_blood_all_muts_updated.rds`, and temporary MAF exports used by downstream scripts; support-only QC plots under `Final Tables and Figures/mutation_processing_support/`. |
 | `1_2_Part2_Get_Mutation_Overlap.R` | Compute patient-level Jaccard overlap between baseline/diagnosis bone-marrow and cfDNA mutation sets. The 41-patient all-evaluable protected-ID lollipop panel is used for Extended Data Figure 2G; the 28-patient Frontline version is a cohort-specific support analysis. Support-only Venn diagrams and QA barplots are written under `Final Tables and Figures/mutation_overlap_support/`. | `combined_maf_bm_dx.rds`, `combined_maf_blood_all_muts_updated.rds`, `combined_clinical_data_updated_April2025.csv`, `cohort_assignment_table_updated.rds`, `id_map.rds` | Extended Data Figure 2G all-evaluable panel PNG plus source-data and summary CSVs; cohort-specific and per-patient support plots are retained separately. |
@@ -241,12 +216,22 @@ Scripts are numbered to indicate execution order. Run them sequentially from a w
 | `1_7A_Process_fragmentomics_data_nucleosome_accessibility.R` | Compute nucleosome-accessibility metrics (coverage, amplitude, z-scores vs healthy controls) from cfWGS data. | Nucleosome-distance `.tsv` files from `Fragmentomics_data/` and `Normals/`. | `griffin_per_site_metrics.tsv`, `griffin_per_site_stats.tsv`, `MM_DARs_chromatin_activation_data.csv` |
 | `1_7B_Process_fragment_score_and_inetegrate_fragmentomics_data.R` | Compute fragment-size (short-fragment) scores and merge with nucleosome accessibility and clinical data. | `insert_size_summary.tsv`, `fragment_scores.tsv`, `MM_DARs_chromatin_activation_data.csv`. | `Key_fragmentomics_data_updated.csv` |
 | `1_7C_Process_fragmentomics_data_dilution_series_updated.R` | Repeat fragmentomics processing (steps 1.7A–B) specifically for the experimental dilution-series samples (physically diluted in the lab). | Dilution-series nucleosome-distance files and fragmentomics summaries. | `key_fragmentomics_info_dilution_series.csv/rds` |
-| `1_7E_Harmonize_Fragmentomics_Sequencing_Platforms.R` | Compare matched NovaSeq 6000 and NovaSeq XPlus healthy controls and visualize the fixed location/scale harmonization applied before scoring with the frozen NovaSeq 6000 models. This is calibration QC and does not retrain a model. | Matched-control fragment scores, short-fragment values, regulatory coverage values, and platform mean/SD reference parameters. | Source data, platform summaries, and before/after harmonization figures under `Results_Fragmentomics/Healthy_control_platform_harmonization/`. |
+| `1_7D_Compare_CHARM_Xplus_HC_controls.R` | Assemble the 19 paired healthy-control profiles used to compare fragmentomics features across NovaSeq 6000 and NovaSeq XPlus. | Matched-control fragment scores, insert-size summaries, nucleosome-accessibility files, and control identity map. | `sample_level_feature_values.csv`, comparison summaries, and QC plots under `Results_Fragmentomics/CHARM_Xplus_HC_comparison/`. |
+| `1_7E_Harmonize_Fragmentomics_Sequencing_Platforms.R` | Reconstruct and plot the fixed location/scale mapping used to place XPlus fragmentomics features on the NovaSeq 6000 reference scale. This is an in-sample implementation check and does not retrain a model. | Paired-control table from `1_7D` and the platform mean/SD parameters used by `1_7B`. | Platform summaries and before/after harmonization figures under `Results_Fragmentomics/Healthy_control_platform_harmonization/`. |
 | `1_8_Process_Cumulative_VAFs_MRDetect.R` | Process MRDetect cfDNA mutation-detection output; compute z-scores relative to CHARM healthy controls; filter to patient timepoints. | MRDetect CSV output files (`MRDetect_outputs/*.csv`). | `cfWGS_Winter2025All_MRDetect_with_Zscore.rds/txt`, BM and Blood processed CSVs. |
 | `1_8A_Process_Cumulative_VAFs_for_dilution_series.R` | Identical processing pipeline to `1_8`, applied to the dilution-series MRDetect outputs. | MRDetect CSV files for dilution-series samples. | `cfWGS_Winter2025Dilution_series_with_zscore.rds` |
 | `1_8B_Export_MRDetect_patient_feature_table.R` | Create an analysis-ready matched-patient MRDetect table containing both BM-derived and cfDNA-derived mutation-source features. This is a derived export and does not modify the processed MRDetect input. | Processed MRDetect z-score RDS from `1_8` and the cfWGS sample identity map. | `MRDetect_patient_features_BM_and_cfDNA_baselines_Feb2026.csv/rds` under `MRDetect_output_winter_2025/Processed_R_outputs/Derived_exports/`. |
+| `1_8C_Analyze_MRDetect_Healthy_Control_Platform_Calibration.R` | Compare paired healthy-control MRDetect results across sequencing platforms and evaluate platform-matched z-score calibration at the level of the 19 matched controls. | Processed CHARM and XPlus healthy-control MRDetect outputs and the control identity map. | Paired-control summaries and source tables used by Extended Data Figure 3D-E. |
+| `1_8D_Build_ED3DE_MRDetect_Platform_Calibration.R` | Plot the MRDetect platform comparison and matched-reference calibration analysis prepared by `1_8C`. | The paired-control and calibration tables written by `1_8C`. | Extended Data Figure 3D-E panels and plotted source-data files. |
+| `1_8E_Build_ED3FG_Fragmentomics_Platform_Calibration.R` | Validate fragmentomics platform calibration by leaving out each of the 19 matched controls in turn, estimating the mapping from the other 18, and evaluating the held-out control. | Paired fragmentomics control table from `1_7D`. | Extended Data Figure 3F-G panels, paired-test summaries, and plotted source data. |
 | `1_9_Create_dilution_series_eligibility_table.R` | Identify eligible patient pairs for the experimental dilution series: one "tumor-high" (≥0.5% detection rate) and one "tumor-low" (≤0.05% AND z-score < 2 vs healthy controls) timepoint per patient. Computes physical mixing fractions for target tumor fractions 10⁻¹ to 10⁻⁶. | `cfWGS_MRDetect_BM_data_updated_Feb2026.csv` (from step 1.8). | `eligible_dilution_pairs_Feb2026.csv`, `dilution_plan_raw_Feb2026.csv`, `dilution_plan_diff_vs_hc_Feb2026.csv` |
 | `1_10_Estimate_MRDetect_LOD_proxy.R` | Add read-denominator-based one-read and 95% Poisson LOD proxy fields for MRDetect QC and interpretation. This does not rerun MRDetect or change detection calls. | Baseline/control MRDetect detection-rate table and its informative-read denominator (`reads_checked` by default). | `All_detection_rates_baseline_and_controls_Feb2026_with_mrdetect_lod.csv`. |
+
+The platform-calibration branches have explicit dependencies that are not fully
+represented in the current runner: run `1_7D` before `1_7E` or `1_8E`, and run
+`1_8C` before `1_8D`. The `1_7E` plot is an optional implementation check;
+`1_8D` and `1_8E` generate the platform-calibration panels used in Extended
+Data Figure 3.
 
 ### Stage 2 - Summary statistics and baseline figures
 
@@ -257,26 +242,43 @@ Scripts are numbered to indicate execution order. Run them sequentially from a w
 | `2_1_Part2_Cohort_Swim_Plot.R` | Generate the treatment-timeline swim plot and privacy-protected event table. Support-only cohort/legend QA exports are written under `Final Tables and Figures/swim_plot_support/`. | `tidy_treatments.csv`, M4 and IMMAGINE chemotherapy tables. | Figure 1A component; Supplementary Table 1 event table. Support QA exports are not copied to `final_manuscript_objects/`. |
 | `2_2_Baseline_demographics_by_WGS_heatmap_updated.R` | Create the baseline integrated alteration heatmap (BM overlaid with cfDNA; mutations, CNAs, translocations) and disease-feature catalog. | `Final_aggregate_table*.rds`, cohort assignment, CNA/translocation/mutation RDS files. | Extended Data Figure 1 component; feature catalogue used as sheet A of Supplementary Table 2. |
 | `2_3_Feature_Concordance_And_Mutation_Counts.R` | Compute FISH-WGS concordance; summarise baseline mutation counts by cohort; build concordance and feature-correlation exports. BAM archive/unarchive helper tables are support-only and run only when `CFWGS_RUN_BAM_ARCHIVE_DIAGNOSTICS=true`. | Master feature table, cohort assignments, mutation export RDS. Optional BAM diagnostic mode also reads `All_bam_storage_locations.xlsx`. | Extended Data Figure 2 components; Supplementary Tables 2 and 3. Optional BAM diagnostic files are written under `Output_tables_2025_updated/support_only_bam_archive_diagnostics/` and are not copied to `final_manuscript_objects/`. |
-| `2_4_Longitudinal_features_analysis.R` | Summarise how cfWGS features change over time; generate longitudinal mutation, CNA, and fragmentomics panels. | Master feature table, cohort assignments. | Figure 2 components; Extended Data Figures 3 and 4 source panels. |
+| `2_4_Longitudinal_features_analysis.R` | Generate the selected longitudinal examples and the broader all-evaluable feature-change analysis. Earlier frontline-only panels retained in this file have been replaced by `2_4B`. | Master feature table and cohort assignments. | Figure 2A and Extended Data Figure 4; additional historical/support panels. |
+| `2_4B_Build_all_evaluable_longitudinal_panels.R` | Build the all-evaluable longitudinal summaries used for the current multi-patient panels. | Master feature table, event dates, and cohort assignments. | Figure 2B-E and Extended Data Figure 3A-C, with their source tables. |
 
 ### Stage 3 - Model training, model application, and validation
 
 | Script | Purpose | Key inputs | Key outputs |
 |--------|---------|------------|-------------|
 | `3_1_Optimize_cfWGS_thresholds.R` | Fit or load the historical elastic-net model library, full-training refits, and thresholds used for downstream sample scoring. Its older nested-CV exports are not the final 50-repeat patient-grouped validation; that analysis is performed by `6_12` and assembled by `6_13`. | Master feature table, clonoSEQ/MFC ground-truth labels. | Preserved models and thresholds; full-training metrics used in Supplementary Table 5; inputs to downstream scoring and concordance analyses. |
-| `3_1_A_Process_and_optimize_EasyM.R` | Process EasyM (proteomic MRD) quantitative data and export the optimized EasyM call/threshold tables required by `3_2` and `4_1`. | EasyM CSV files from clinical collaborators; cfWGS call table from `3_1`. | Required intermediate CSVs: `EasyM_all_samples_with_optimized_calls.csv` and `EasyM_threshold_values_by_timepoint.csv`; support-only landmark-analysis tables/figures. |
-| `3_1_part2_Apply_cfWGS_thresholds_to_dilution_series.R` | Apply trained models and thresholds to the dilution-series samples to establish the LOD (limit of detection) for each feature and combined model. | Saved models/thresholds from `3_1`; fragmentomics and MRDetect dilution-series outputs. | Figure 3C component; Extended Data Figures 5D and 7D; Supplementary Table 7. |
-| `3_2_Plot_optimal_cutoff_and_clinical_concordance.R` | Generate tumour-informed cfWGS clinical-concordance figures: assay positivity, model-vs-clinical assay comparisons, calibration/decision-curve support, and contingency tables. | `all_patients_with_BM_and_blood_calls_updated*.rds`, threshold table. | Figure 3D-E and Figure 4C-D components; Extended Data Figures 5E-G and 7F-H; Supplementary Tables 8 and 10. |
+| `3_1_A_Process_and_optimize_EasyM.R` | Process EasyM residual immunoglobulin as a percentage of the baseline BM immunoglobulin and calculate the prespecified isotype-specific call: negative at ≤1% for IgG and ≤0.05% for IgA/light-chain disease. The file also retains exploratory optimized thresholds separately. | EasyM CSV files, clinical/isotype information, and the cfWGS call table from `3_1`. | `EasyM_all_samples_with_optimized_calls.csv`, including the named isotype-specific reference call, plus threshold/provenance tables used by `3_2` and `4_1`. |
+| `3_1C_Expanded_test_clustered_sensitivity.R` | Evaluate the saved classifier calls in the expanded test cohort while accounting for repeated samples by patient-clustered bootstrap and one-sample-per-patient sensitivity analyses. It does not refit the classifiers or change their thresholds. | Current scored test-cohort table and preserved model thresholds. | Supplementary Table 6, exact scored-sample manifest, clustered-bootstrap summaries, and one-sample-per-patient sensitivity results supporting Figure 3B and Figure 4B. |
+| `3_1_part2_Apply_cfWGS_thresholds_to_dilution_series.R` | Apply saved models and thresholds to the experimental dilution-series libraries and describe detection performance across the tested dilution range. This is not a formal analytical limit-of-detection study. | Saved models/thresholds from `3_1`; fragmentomics and MRDetect dilution-series outputs. | Figure 3C; Extended Data Figures 5D and 7D; Supplementary Table 7. |
+| `3_2_Plot_optimal_cutoff_and_clinical_concordance.R` | Generate tumour-informed cfWGS clinical-concordance figures: assay positivity, model-vs-clinical assay comparisons, calibration/decision-curve support, and contingency tables. | `all_patients_with_BM_and_blood_calls_updated*.rds`, threshold table. | Figure 3D-E and Figure 4C-D; Extended Data Figures 5E-H and 7F-I; Supplementary Tables 8 and 10. |
 | `archive/support_analysis/3_3_Plot_optimal_cutoff_tumor_naive_calls_and_clinical_concordance.R` | Archived tumour-naive blood cfDNA support/sensitivity analysis. This is not required for routine manuscript regeneration because the final clinical-concordance figures/tables are produced by `3_2`, and no current final manuscript artifact is mapped to `3_3`. | `all_patients_with_BM_and_blood_calls_updated*.rds`, threshold table. | Support-only tumour-naive review outputs; not copied to `final_manuscript_objects/`. |
+
+Figure 3D and Figure 4C use assay-specific evaluable subsets. Their denominators
+therefore differ because BM-informed and blood-informed cfWGS calls are not
+available for exactly the same observations; this is not a change in cohort
+assignment. The corresponding source tables should be used when reporting each
+panel denominator.
 
 ### Stage 4 - Clinical outcome analyses
 
 | Script | Purpose | Key inputs | Key outputs |
 |--------|---------|------------|-------------|
 | `4_1_Survival_Analysis.R` | Kaplan-Meier PFS curves stratified by MRD status at landmark timepoints (Post-ASCT, 1yr Maintenance). Calculate sensitivity of each assay for detecting future relapse. The current manuscript time-window outputs are regenerated under `detection_progression_updated6` from prospective labels that require either a future progression event or adequate follow-up through each prediction window. PFS event/censor dates remain separate from patient-level last-follow-up dates; the prospective labels use `patient_followup_dates_updated.*` generated by `1_0_Process_clinical_metadata.R` when available. | `all_patients_with_BM_and_blood_calls_updated*.rds`, EasyM calls, `Censor_dates_per_patient_for_PFS_updated.rds`, `patient_followup_dates_updated.rds`, curated progression-date CSVs. | Figure 3F and Figure 4E components; Extended Data Figures 6 and 8; Supplementary Table 9; main and prospective QC outputs under `Output_tables_2025/detection_progression_updated6/`. |
-| `4_1B_Build_all_evaluable_first_nonbaseline_KM.R` | Build descriptive all-evaluable Kaplan–Meier companion analyses using one prospective non-baseline assessment per patient, with separate documented-maintenance and sensitivity anchors. | Current cfWGS/clinical call table, PFS and relapse-date objects, follow-up tables, and cohort-specific treatment records. | Versioned KM figures, source data, denominator audits, and Cox-model summaries under `final_manuscript_objects/additional_all_evaluable_first_nonbaseline_km/`. |
+| `4_1B_Build_all_evaluable_first_nonbaseline_KM.R` | Optional descriptive all-evaluable Kaplan–Meier companion analysis using one prospective non-baseline assessment per patient. It is not a submitted manuscript panel. | Current cfWGS/clinical call table, PFS and relapse-date objects, follow-up tables, and cohort-specific treatment records. | Versioned KM figures, source data, denominator audits, and Cox-model summaries under `final_manuscript_objects/additional_all_evaluable_first_nonbaseline_km/`. |
 | `4_2_Compare_subclonal_evolution.R` | Identify emergent CNA events between baseline and relapse cfDNA samples. The final Extended Data Figure 10 genome-wide CNA tracks come from an external ichorCNA plotting workflow; this script provides repo-side supporting event outputs. | `All_feature_data_Sep2025_updated2.rds`, cohort assignments. | `Emergent_CNA_events.csv` and subclonal-evolution support outputs for Extended Data Figure 10. |
 | `archive/support_analysis/4_3_cfWGS_vs_EasyM_Proteomic_MRD_Comparison.R` | Archived cfWGS-vs-EasyM support/sensitivity analysis. This is not required for routine manuscript regeneration because final EasyM call generation is handled by `3_1_A`, and final survival/relapse EasyM panels are handled by `4_1`. | cfWGS call table, EasyM quantitative and binary CSVs, PFS censor dates. | Support-only EasyM comparison figures/tables; not copied to `final_manuscript_objects/`. |
+
+### Stage 5 - Patient-grouped model validation and final ROC panels
+
+| Script | Purpose | Key inputs | Key outputs |
+|--------|---------|------------|-------------|
+| `6_12_Patient_Grouped_Repeated_Nested_CV.R` | Fit and evaluate the complete model library using patient-grouped repeated nested cross-validation. The manuscript run uses 50 outer repeats, five outer folds, five inner repeats, five inner folds, and 2,000 patient-clustered bootstrap replicates. | Preserved training data and model/validation objects, current patient/sample identities, and cohort assignments. | Versioned fold assignments, held-out predictions, tuning results, thresholds, repeat-level metrics, clustered-bootstrap summaries, QC files, and `RUN_COMPLETE`. |
+| `6_13_Assemble_All_Model_Grouped_CV_Results.R` | Combine the separately run BM, blood, and full-cohort fragmentomics blocks and verify that all 32 model/cohort specifications are present exactly once. It does not fit models. | Three completed `6_12` run directories. | Combined 32-model result used by the final plots and Supplementary Table 4. |
+| `6_17_Generate_Compact_All_Model_Grouped_CV_ROC_Panels.R` | Plot mean empirical ROC curves from the 50 outer repeats for the complete BM-informed and blood-informed model sets. It does not refit models or select new thresholds. | Completed combined result from `6_13`. | Figure 3A and Figure 4A PNG/PDF panels and plotted source-data tables. |
+| `6_14_Generate_Grouped_CV_Manuscript_Replacement_Panels.R` | Plot the grouped nested-CV operating-point panels and build the grouped-CV performance table from the same completed result. | Completed combined result from `6_13`. | Extended Data Figures 5A, 7A and 9A-B; Supplementary Table 4 source table. |
 
 ---
 
@@ -288,10 +290,10 @@ Scripts are numbered to indicate execution order. Run them sequentially from a w
 | `config.R` | Package inventory used by `run_pipeline.R --check-packages`, plus three historical path constants. The numbered scripts use their own project-relative paths rather than these constants. |
 | `helpers.R` | Shared loaders and study-specific rules for metadata corrections, sample identities and aliases, cohort assignment, MRDetect parsing and controls, revision mutation counts, dilution metadata, and baseline FISH calls. Some functions write audit CSVs under `Output_tables_2025/`. |
 | `next_event_endpoint_helpers.R` | Shared sample-relative progression/censor endpoint construction used by the longitudinal and survival analyses. It applies the 30-day event grace rule and two documented relapse-sample day-zero overrides by default. |
-| `prepare_local_inputs.R` | Local/Code Ocean preflight utility. It checks that required protected/de-identified inputs are staged under project-relative paths and can copy missing files/directories from a local source mirror with `--source-dir ... --copy-missing`. |
-| `manuscript_output_helpers.R` | Shared utilities used inside numbered scripts to copy/save final manuscript figure, table, and source-data components into `final_manuscript_objects/` with audited manuscript labels. |
-| `validate_manuscript_outputs.R` | Command-line validator for the direct manuscript-output tree. It checks coverage against `docs/manuscript_artifact_source_map.tsv`, verifies organized paths, and writes `manuscript_output_validation_report.tsv`. |
-| `5_0_Build_Manuscript_Text_Number_Exports.R` | Builds the manuscript-writing helper workbook/TSV/Markdown under `manuscript_writing/`. It indexes the working DOCX drafts and gathers section-organized values from current pipeline outputs so manuscript prose can be updated after adding samples. |
+| `prepare_local_inputs.R` | Local author utility that checks a limited input manifest and can recursively copy missing paths from another local mirror. It is not a complete clean-clone input manifest; even `--check` writes a report. |
+| `manuscript_output_helpers.R` | Shared utilities used by numbered scripts to copy/save selected figure, table, and source-data components under `final_manuscript_objects/`. Some functions replace mapped copies or remove stale aliases, so they should not be called as read-only inspection tools. |
+| `validate_manuscript_outputs.R` | Refreshes mapped manuscript-output copies and indexes, then runs structural checks and writes `manuscript_output_validation_report.tsv`. A passing report confirms mapped-file organization, not scientific equivalence to the manuscript. |
+| `5_0_Build_Manuscript_Text_Number_Exports.R` | Local manuscript-checking helper that indexes working DOCX drafts and writes section-organized number tables under `manuscript_writing/`. It is not part of the scientific analysis. |
 | `pipeline_metadata.R` | Reads `docs/manuscript_artifact_source_map.tsv` and builds script-to-artifact crosswalks used by the command-line runner and documentation. |
 
 ---
@@ -300,23 +302,20 @@ Scripts are numbered to indicate execution order. Run them sequentially from a w
 
 ```
 Final_Scripts/
-├── 0_1_*.R … 4_2_*.R      ← active numbered analysis scripts (primary manuscript pipeline)
-├── archive/support_analysis/ ← non-required support/sensitivity scripts retained for audit
+├── 0_1_*.R                 ← optional cohort-expansion planning analysis
+├── 1_0_*.R … 4_2_*.R      ← clinical, feature, figure, model, and outcome scripts
+├── 6_12_*.R … 6_17_*.R    ← 50-repeat grouped nested-CV and plotting scripts
+├── archive/support_analysis/ ← analyses not required for the submitted paper
 ├── config.R                ← package inventory and historical path constants
 ├── helpers.R               ← shared utility functions
 ├── manuscript_output_helpers.R ← direct manuscript-output helper for numbered scripts
-├── validate_manuscript_outputs.R ← direct manuscript-output validator
-├── 5_0_Build_Manuscript_Text_Number_Exports.R ← manuscript text-number export helper
-├── 6_12_Patient_Grouped_Repeated_Nested_CV.R ← leakage-free grouped internal validation
-├── 6_13_Assemble_All_Model_Grouped_CV_Results.R ← optional 32-model grouped-CV assembly
-├── 6_13_Temporal_Validation_Subset_Audit.R ← original-seven versus later-accrued frozen-model audit
-├── 6_14_Build_Corrected_Grouped_CV_Panels.R ← corrected Figure 3A/4A panel generator
+├── validate_manuscript_outputs.R ← refresh-and-validate output helper
 ├── pipeline_metadata.R      ← shared script/output metadata helpers
 ├── final_manuscript_objects/ ← manuscript-labeled outputs created at run time
-├── manuscript_writing/      ← section-organized manuscript text-number exports
-├── run_manuscript_workflow.R ← one-command manuscript workflow orchestrator
+├── docs/                    ← script guide and figure/table crosswalk
+├── config/source_pipeline.tsv ← configured 1_0-to-4_2 source-script plan
+├── run_pipeline.R           ← runner for that configured source plan
 ├── setup_packages.R        ← optional common-package checker/loader
-├── prepare_local_inputs.R  ← local input staging/check utility
 └── README.md               ← this file
 ```
 
@@ -327,112 +326,112 @@ Final_Scripts/
 **Prerequisites**
 
 - R ≥ 4.2
-- Run `Rscript Scripts_2025/Final_Scripts/run_pipeline.R --check-packages` to check all required packages. Key libraries: **tidyverse**, **readxl**, **data.table**, **lubridate**, **ComplexHeatmap**, **circlize**, **ChromHeatMap**, **maftools**, **GenomicRanges**, **gtsummary**, **officer**, **flextable**, **gt**, **pROC**, **patchwork**, **rmda**, **exact2x2**, **survival**, **survminer**, **tableone**, **ggbreak**, **ggridges**, **ggpubr**, **GGally**, **pbapply**, **PRROC**, **VennDiagram**, **caret**, **glmnet**, **Matrix**, **DescTools**, **GeneCycle**, **RColorBrewer**, **fuzzyjoin**, **rstatix**, **openxlsx**, **scales**, **viridis**, **writexl**, and others. See `config.R` for the full list.
+- Run `Rscript run_pipeline.R --check-packages` to check all required packages. Key libraries: **tidyverse**, **readxl**, **data.table**, **lubridate**, **ComplexHeatmap**, **circlize**, **ChromHeatMap**, **maftools**, **GenomicRanges**, **gtsummary**, **officer**, **flextable**, **gt**, **pROC**, **patchwork**, **rmda**, **exact2x2**, **survival**, **survminer**, **tableone**, **ggbreak**, **ggridges**, **ggpubr**, **GGally**, **pbapply**, **PRROC**, **VennDiagram**, **caret**, **glmnet**, **Matrix**, **DescTools**, **GeneCycle**, **RColorBrewer**, **fuzzyjoin**, **rstatix**, **openxlsx**, **scales**, **viridis**, **writexl**, and others. See `config.R` for the full list.
 
-**Steps**
+**Source-script workflow**
 
-1. Obtain the staged raw/protected input files (see [Data availability](#data-availability)) and place them in the directory structure expected by each script. Paths and key inputs are documented in the relevant script headers and in the tables above. Use `prepare_local_inputs.R --check` to verify the local staging before running the analysis, or `prepare_local_inputs.R --source-dir /path/to/staged_inputs --copy-missing` to copy missing inputs from a local mirror.
-2. Run from the project root. The numbered scripts use the project-relative
-   input and output paths documented in their headers; changing the historical
-   path constants in `config.R` does not redirect those scripts.
-3. Dry-run the command-line sequence:
+1. Obtain the protected inputs described in [Data availability](#data-availability)
+   and place them at the project-relative paths listed in each script header.
+   `prepare_local_inputs.R` may help authors copy an existing local mirror, but
+   it does not yet cover every input required for a clean-clone reproduction.
+2. Run from the repository root. Most scripts use their own project-relative paths;
+   the historical constants in `config.R` do not redirect all inputs or outputs.
+3. Inspect the configured order without running the analyses:
+
    ```sh
-   Rscript Scripts_2025/Final_Scripts/run_pipeline.R
-   ```
-4. Execute scripts in numbered order through the runner:
-   ```sh
-   Rscript Scripts_2025/Final_Scripts/run_pipeline.R --execute
-   ```
-Each script runs in a fresh R process from the project root and writes its outputs to the historical analysis locations such as `Output_tables_2025/` and `Final Tables and Figures/`. Scripts under `Scripts_2025/Final_Scripts/archive/support_analysis/` are retained for audit/support review and are not selected by `run_pipeline.R`.
-5. Inspect the exported manuscript figures and tables:
-   ```sh
-   find Scripts_2025/Final_Scripts/final_manuscript_objects -maxdepth 4 -type f
-   ```
-   This folder contains manuscript-labeled figures, tables, source-data files,
-   manifests, and validation reports produced by the numbered scripts.
-6. Validate that the manuscript figure and table folders are complete:
-   ```sh
-   Rscript Scripts_2025/Final_Scripts/validate_manuscript_outputs.R
+   Rscript run_pipeline.R
    ```
 
-### Corrected classifier validation
+4. Run all or part of that plan only after checking the listed inputs:
 
-This workflow corrects the **internal validation procedure** for repeated
-samples. Patients—not sample rows—are assigned to both outer and inner folds,
-so samples from one patient can never appear on both sides of a split. The
-correction is deliberately versioned: it does not overwrite the legacy
-row-level CV results, reselect features, or change the frozen models and
-thresholds used to score the independent test cohort.
+   ```sh
+   Rscript run_pipeline.R --execute
+   Rscript run_pipeline.R --execute --from 2_0 --to 2_4
+   Rscript run_pipeline.R --execute --only 3_2
+   ```
+
+Each selected script runs in a fresh R process and writes to its documented
+historical output paths. The configured plan is useful for the upstream and
+figure-generating scripts through `4_2`, but it is not sufficient on its own to
+produce every final manuscript figure and table. In particular, run the nested
+CV workflow below separately.
+
+### Patient-grouped repeated nested cross-validation
+
+The manuscript's internal-validation analysis assigns patients—not individual
+sample rows—to both outer and inner folds. Thus, all repeated samples belonging
+to a patient remain on the same side of every split. This workflow is separate
+from the saved full-training models and thresholds used to score the test
+cohort; it does not overwrite those test-scoring objects.
 
 #### What each script does and why
 
 | Step | Script | What it does | Why it is separate |
 |---|---|---|---|
 | 1 | `6_12_Patient_Grouped_Repeated_Nested_CV.R` | Reconstructs the historical training frame, creates repeated outer and inner folds grouped by patient, tunes `glmnet` inside each outer-training set, derives a Youden threshold from inner out-of-fold predictions, and scores outer-held-out patients. It then reports repeat-pooled metrics with patient-clustered bootstrap intervals. | This is the only step that fits validation models. Keeping it versioned protects the frozen test-scoring models and makes every fold, prediction, threshold, and warning auditable. |
-| 2, optional | `6_13_Assemble_All_Model_Grouped_CV_Results.R` | Combines separately executed BM, blood, and fragmentomics blocks for the complete 32-model sensitivity analysis; verifies model completeness, prediction uniqueness, fold integrity, finite probabilities, and source-run QC. | Large model-library runs can be executed in blocks. Assembly is kept separate from fitting so it cannot silently alter results. This all-model analysis is broader than the four-model headline figure workflow. |
-| 3 | `6_13_Temporal_Validation_Subset_Audit.R` | Applies the already-fixed test predictions and thresholds to two visible phases: the original seven-patient selection-informed hold-out and the later-accrued temporal-validation patients. Reports all-evaluable-sample and earliest-evaluable-sample-per-patient results separately. | The original hold-out influenced which feature specifications were emphasized and should not be presented as equivalent to later-accrued validation data. This step does not retrain or rescore a model. |
-| 4 | `6_14_Build_Corrected_Grouped_CV_Panels.R` | Reads the locked grouped-CV summaries, verifies the exact four headline models and resampling settings, writes plotted source data and checksums, and renders corrected Figure 3A and Figure 4A components. | Plotting is deterministic and separate from fitting, so a layout change cannot alter model estimates. Historical figure files are not overwritten. |
+| 2 | `6_13_Assemble_All_Model_Grouped_CV_Results.R` | Combines the separately executed BM, blood, and full-cohort fragmentomics blocks; verifies that all 32 model/cohort combinations are present once and checks prediction and fold integrity. | Splitting the computation into three blocks makes the long run manageable; this assembly step does not fit models. |
+| 3 | `6_17_Generate_Compact_All_Model_Grouped_CV_ROC_Panels.R` | Calculates and plots mean empirical ROC curves across the 50 outer repeats. | This creates the main Figure 3A and Figure 4A panels without refitting a model or selecting a new threshold. |
+| 4 | `6_14_Generate_Grouped_CV_Manuscript_Replacement_Panels.R` | Summarizes outer-test-fold operating points and generates the remaining grouped-CV panels and table source. | This creates Extended Data Figures 5A, 7A and 9A-B and the Supplementary Table 4 source from the same completed result. |
 
-#### Headline grouped-CV runs
+#### Manuscript settings
 
-Run from the project root. The current locked panel inputs were produced as a
-three-model headline run plus a separate `Blood_Sites` run; the same engine and
-resampling safeguards are used for both.
+The paper uses the complete 32-model library, five outer folds repeated 50
+times, five inner folds repeated five times, 2,000 patient-clustered bootstrap
+replicates, and base seed `20260731`. `--model-library all` must be supplied
+explicitly because the script default is the smaller `headline` library.
 
-```sh
-Rscript Scripts_2025/Final_Scripts/6_12_Patient_Grouped_Repeated_Nested_CV.R \
-  --run-id 2026-07-31_v1 \
-  --models BM_Sites,BM_cVAF,Blood_Combined \
-  --outer-repeats 50 --inner-repeats 5 --bootstrap-reps 2000
-
-Rscript Scripts_2025/Final_Scripts/6_12_Patient_Grouped_Repeated_Nested_CV.R \
-  --run-id 2026-07-31_blood_sites_v1 \
-  --models Blood_Sites \
-  --outer-repeats 50 --inner-repeats 5 --bootstrap-reps 2000
-```
-
-`--models` accepts a comma-separated subset of the named model specifications.
-`--model-library all` exposes the complete 32-model sensitivity library. Every
-run refuses to overwrite an existing run directory and writes `RUN_COMPLETE`
-only after its correctness checks pass.
-
-#### Optional complete model-library assembly
-
-The all-model analysis can be split into independently completed blocks. After
-those source runs finish, review the three explicit `source_run_ids` and the
-new `output_run_id` at the top of the assembler, then run:
+Run the three model blocks from the repository root with new, unused run IDs:
 
 ```sh
-Rscript Scripts_2025/Final_Scripts/6_13_Assemble_All_Model_Grouped_CV_Results.R
+Rscript 6_12_Patient_Grouped_Repeated_Nested_CV.R \
+  --run-id paper_50rep_bm_v1 --model-library all \
+  --models BM_Sites,BM_cVAF,BM_Raw_cVAF,BM_All_Mutation_Features,BM_Combined_Mutation_Zscores,BM_Mutation_Fragmentomics_Full,BM_Mutation_Fragmentomics_Min,Fragmentomics_BMRestricted_Full,Fragmentomics_BMRestricted_Min,Fragmentomics_BMRestricted_FS,Fragmentomics_BMRestricted_Mean_Coverage,Fragmentomics_BMRestricted_Proportion_Short,Fragmentomics_BMRestricted_Tumor_Fraction \
+  --outer-repeats 50 --inner-repeats 5 --bootstrap-reps 2000 \
+  --seed 20260731
+
+Rscript 6_12_Patient_Grouped_Repeated_Nested_CV.R \
+  --run-id paper_50rep_blood_v1 --model-library all \
+  --models Blood_Sites,Blood_cVAF,Blood_Raw_cVAF,Blood_All_Mutation_Features,Blood_Combined_Mutation_Zscores,Blood_Mutation_Fragmentomics_Full,Blood_Mutation_Fragmentomics_Min,Fragmentomics_BloodRestricted_Full,Fragmentomics_BloodRestricted_Min,Fragmentomics_BloodRestricted_FS,Fragmentomics_BloodRestricted_Mean_Coverage,Fragmentomics_BloodRestricted_Proportion_Short,Fragmentomics_BloodRestricted_Tumor_Fraction \
+  --outer-repeats 50 --inner-repeats 5 --bootstrap-reps 2000 \
+  --seed 20260731
+
+Rscript 6_12_Patient_Grouped_Repeated_Nested_CV.R \
+  --run-id paper_50rep_fullfrag_v1 --model-library all \
+  --models Fragmentomics_FullCohort_Full,Fragmentomics_FullCohort_Min,Fragmentomics_FullCohort_FS,Fragmentomics_FullCohort_Mean_Coverage,Fragmentomics_FullCohort_Proportion_Short,Fragmentomics_FullCohort_Tumor_Fraction \
+  --outer-repeats 50 --inner-repeats 5 --bootstrap-reps 2000 \
+  --seed 20260731
 ```
 
-This produces the complete 32-model comparison and grouped-versus-legacy AUC
-table. It is a sensitivity analysis and is not an input to the four-model
-headline panels.
+Each run writes all fold assignments, held-out predictions, fitted settings,
+thresholds, warnings, summaries, session information, and QC results under
+`Output_tables_2025/patient_grouped_repeated_nested_cv/<run-id>/`. It refuses
+to overwrite an existing run directory and writes `RUN_COMPLETE` only after
+its checks pass. The preserved model/validation input files listed in the
+`6_12` header must be present and non-writable.
 
-#### Temporal validation audit
-
-First generate the expanded-test scored manifest with
-`3_1C_Expanded_test_clustered_sensitivity.R`. For a release, pass the exact
-manifest explicitly rather than relying on automatic latest-file discovery:
+After all three blocks complete, assemble the 32-model result:
 
 ```sh
-Rscript Scripts_2025/Final_Scripts/6_13_Temporal_Validation_Subset_Audit.R \
-  --run-id 2026-07-31_v1 \
-  --scored-manifest Output_tables_2025/expanded_test_clustered_sensitivity/expanded_test_repeated_measures_sample_manifest_YYYY-MM-DD.csv \
-  --bootstrap-reps 10000
+Rscript 6_13_Assemble_All_Model_Grouped_CV_Results.R \
+  --source-runs paper_50rep_bm_v1,paper_50rep_blood_v1,paper_50rep_fullfrag_v1 \
+  --output-run-id paper_50rep_combined_v1
 ```
 
-#### Corrected Figure 3A and Figure 4A panels
-
-The panel builder defaults to the two locked grouped-CV summary paths shown
-above. Alternative versioned summaries must be supplied explicitly with
-`--headline-run` and `--blood-sites-run`.
+Generate the main ROC panels and the Extended Data operating-point panels from
+that completed combined result:
 
 ```sh
-Rscript Scripts_2025/Final_Scripts/6_14_Build_Corrected_Grouped_CV_Panels.R \
-  --run-id 2026-07-31_v4_compact --layout compact
+Rscript 6_17_Generate_Compact_All_Model_Grouped_CV_ROC_Panels.R \
+  --input-run-id paper_50rep_combined_v1 \
+  --output-run-id paper_50rep_main_roc_v1
+
+Rscript 6_14_Generate_Grouped_CV_Manuscript_Replacement_Panels.R \
+  --input-run-id=paper_50rep_combined_v1 \
+  --output-run-id=paper_50rep_extended_data_v1
 ```
+
+The `6_14_Generate_*` script uses `--name=value` arguments; the preceding
+`6_12`, `6_13`, and `6_17` commands use `--name value` arguments.
 
 #### Interpretation boundaries
 
@@ -442,15 +441,14 @@ Rscript Scripts_2025/Final_Scripts/6_14_Build_Corrected_Grouped_CV_Panels.R \
   selection; outer-held-out patients are used only for evaluation.
 - Patient-clustered bootstrap intervals preserve all repeated samples from a
   resampled patient.
-- The temporal audit reports the original selection-informed and later-accrued
-  phases separately; their combined total is not a purely independent temporal
-  validation estimate.
-- None of these scripts overwrites the frozen production models, thresholds,
-  legacy CV objects, or independent test-cohort predictions.
+- The model specifications were selected before this repeated validation; the
+  grouped-CV AUC therefore evaluates those fixed specifications rather than a
+  new feature-discovery process.
+- None of these scripts overwrites the saved full-training models, thresholds,
+  older CV objects, or test-cohort predictions.
 
 Outputs are written to new versioned directories under
-`Output_tables_2025/patient_grouped_repeated_nested_cv/`,
-`Output_tables_2025/temporal_validation_subset/`, and
+`Output_tables_2025/patient_grouped_repeated_nested_cv/` and
 `Output_figures_2025/patient_grouped_repeated_nested_cv/`.
 
 ---
@@ -474,7 +472,7 @@ To reproduce the analysis, request the de-identified data from the study authors
 The pipeline produces:
 
 - **CSV / XLSX tables** - cleaned metadata, mutation counts, MRD feature matrices, concordance statistics, sensitivity/specificity tables (written to `Output_tables_2025/`)
-- **PDF / PNG figures** - all manuscript and supplementary figures (written to `Final Tables and Figures/`)
+- **PDF / PNG figures** - the manuscript panels generated in R (primarily under `Final Tables and Figures/` and `Output_figures_2025/`); Figure 1B is assembled from an exported source table, and the final Extended Data Figure 10 genome-wide tracks come from a separate ichorCNA plotting workflow
 - **Support-only QA outputs** - non-manuscript review exports are kept in explicitly named support folders such as `Final Tables and Figures/swim_plot_support/` and `Output_tables_2025_updated/support_only_bam_archive_diagnostics/`
 - **RDS objects** - intermediate R data objects passed between scripts
 

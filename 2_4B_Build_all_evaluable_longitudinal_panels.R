@@ -2405,8 +2405,8 @@ walk2(
   }
 )
 
-# Stage the compact Figure 2 strip as the current Figure 2E component in the
-# canonical final-manuscript object tree. The Extended Data strip remains a
+# Copy the compact Figure 2 strip to the Figure 2E folder used in the assembled
+# manuscript figure. The Extended Data strip remains a
 # separately exported support view and is not used in assembled ED Figure 3.
 figure2e_output_dir <- file.path(figure2_dir, "Figure_2E")
 dir.create(figure2e_output_dir, recursive = TRUE, showWarnings = FALSE)
@@ -2549,91 +2549,91 @@ ms_copy_artifact(
   source_path = file.path(output_dir, "Figure_2B_all_evaluable_BM_zscore_longitudinal.png"),
   artifact_id = "FIG2B",
   role = "all_evaluable_figure_panel_png",
-  description = "All-evaluable training/test companion version of Main Figure 2B longitudinal BM mutation z-score panel; red follow-up points use next progression within 180 days after the sample.",
+  description = "All-evaluable longitudinal BM mutation z-score panel used in Figure 2B; red follow-up points use the relapse-grouping rules defined in this script.",
   script_name = "2_4B_Build_all_evaluable_longitudinal_panels.R"
 )
 ms_copy_artifact(
   source_path = file.path(output_dir, "Figure_2B_all_evaluable_BM_zscore_longitudinal_pseudolog.png"),
   artifact_id = "FIG2B",
   role = "all_evaluable_pseudolog_figure_panel_png",
-  description = "All-evaluable training/test companion version of Main Figure 2B with a signed pseudo-log cumulative VAF z-score axis that retains zero and negative values.",
+  description = "Alternative Figure 2B display with a signed pseudo-log cumulative VAF z-score axis that retains zero and negative values.",
   script_name = "2_4B_Build_all_evaluable_longitudinal_panels.R"
 )
 ms_copy_artifact(
   source_path = file.path(output_dir, "Figure_2C_all_evaluable_blood_zscore_longitudinal.png"),
   artifact_id = "FIG2C",
   role = "all_evaluable_figure_panel_png",
-  description = "All-evaluable training/test companion version of Main Figure 2C longitudinal cfDNA mutation z-score panel; red follow-up points use next progression within 180 days after the sample.",
+  description = "Alternative uncapped display of the all-evaluable longitudinal cfDNA mutation z-score panel for Figure 2C.",
   script_name = "2_4B_Build_all_evaluable_longitudinal_panels.R"
 )
 ms_copy_artifact(
   source_path = file.path(output_dir, "Figure_2C_all_evaluable_blood_zscore_longitudinal_pseudolog.png"),
   artifact_id = "FIG2C",
   role = "all_evaluable_pseudolog_figure_panel_png",
-  description = "All-evaluable training/test companion version of Main Figure 2C with signed pseudo-log cumulative VAF and site-detection z-score axes.",
+  description = "Alternative Figure 2C display with signed pseudo-log cumulative VAF and site-detection z-score axes.",
   script_name = "2_4B_Build_all_evaluable_longitudinal_panels.R"
 )
 ms_copy_artifact(
   source_path = file.path(output_dir, "Figure_2C_all_evaluable_blood_zscore_longitudinal_capped300.png"),
   artifact_id = "FIG2C",
   role = "all_evaluable_capped300_figure_panel_png",
-  description = "All-evaluable training/test companion version of Main Figure 2C with cfDNA z-score display capped at 300; red follow-up points use next progression within 180 days after the sample.",
+  description = "All-evaluable longitudinal cfDNA mutation z-score panel used in Figure 2C, with both plotted z-score axes capped at 300.",
   script_name = "2_4B_Build_all_evaluable_longitudinal_panels.R"
 )
 ms_copy_artifact(
   source_path = file.path(output_dir, "Figure_2D_all_evaluable_fragmentomics_longitudinal.png"),
   artifact_id = "FIG2D",
   role = "all_evaluable_figure_panel_png",
-  description = "All-evaluable training/test companion version of Main Figure 2D longitudinal fragmentomics panel; red follow-up points use next progression within 180 days after the sample.",
+  description = "All-evaluable longitudinal fragmentomics panel used in Figure 2D; red follow-up points use the relapse-grouping rules defined in this script.",
   script_name = "2_4B_Build_all_evaluable_longitudinal_panels.R"
 )
 ms_copy_artifact(
   source_path = file.path(output_dir, "Figure_2D_all_evaluable_fragmentomics_longitudinal_pseudolog.png"),
   artifact_id = "FIG2D",
   role = "all_evaluable_pseudolog_figure_panel_png",
-  description = "All-evaluable training/test companion version of Main Figure 2D with signed pseudo-log fragment-size and reversed pseudo-log coverage axes.",
+  description = "Alternative Figure 2D display with signed pseudo-log fragment-size and reversed pseudo-log coverage axes.",
   script_name = "2_4B_Build_all_evaluable_longitudinal_panels.R"
 )
 ms_copy_artifact(
   source_path = file.path(output_dir, "Extended_Data_Figure_3A_all_evaluable_BM_raw_longitudinal.png"),
   artifact_id = "EDFIG3A",
   role = "all_evaluable_figure_panel_png",
-  description = "All-evaluable training/test companion version of Extended Data Figure 3A raw BM mutation trajectory panel; red follow-up points use next progression within 180 days after the sample.",
+  description = "All-evaluable raw BM mutation trajectory panel used in Extended Data Figure 3A; red follow-up points use the relapse-grouping rules defined in this script.",
   script_name = "2_4B_Build_all_evaluable_longitudinal_panels.R"
 )
 ms_copy_artifact(
   source_path = file.path(output_dir, "Extended_Data_Figure_3A_all_evaluable_BM_raw_longitudinal_pseudolog.png"),
   artifact_id = "EDFIG3A",
   role = "all_evaluable_pseudolog_figure_panel_png",
-  description = "All-evaluable training/test companion version of Extended Data Figure 3A with pseudo-log raw BM mutation axes.",
+  description = "Alternative Extended Data Figure 3A display with pseudo-log raw BM mutation axes.",
   script_name = "2_4B_Build_all_evaluable_longitudinal_panels.R"
 )
 ms_copy_artifact(
   source_path = file.path(output_dir, "Extended_Data_Figure_3B_all_evaluable_blood_raw_longitudinal.png"),
   artifact_id = "EDFIG3B",
   role = "all_evaluable_figure_panel_png",
-  description = "All-evaluable training/test companion version of Extended Data Figure 3B raw cfDNA mutation trajectory panel; red follow-up points use next progression within 180 days after the sample.",
+  description = "All-evaluable raw cfDNA mutation trajectory panel used in Extended Data Figure 3B; red follow-up points use the relapse-grouping rules defined in this script.",
   script_name = "2_4B_Build_all_evaluable_longitudinal_panels.R"
 )
 ms_copy_artifact(
   source_path = file.path(output_dir, "Extended_Data_Figure_3B_all_evaluable_blood_raw_longitudinal_pseudolog.png"),
   artifact_id = "EDFIG3B",
   role = "all_evaluable_pseudolog_figure_panel_png",
-  description = "All-evaluable training/test companion version of Extended Data Figure 3B with pseudo-log raw cfDNA mutation axes.",
+  description = "Alternative Extended Data Figure 3B display with pseudo-log raw cfDNA mutation axes.",
   script_name = "2_4B_Build_all_evaluable_longitudinal_panels.R"
 )
 ms_copy_artifact(
   source_path = file.path(output_dir, "Extended_Data_Figure_3C_all_evaluable_fragmentomics_longitudinal.png"),
   artifact_id = "EDFIG3C",
   role = "all_evaluable_figure_panel_png",
-  description = "All-evaluable training/test companion version of Extended Data Figure 3C fragmentomics trajectory panel; red follow-up points use next progression within 180 days after the sample.",
+  description = "All-evaluable fragmentomics trajectory panel used in Extended Data Figure 3C; red follow-up points use the relapse-grouping rules defined in this script.",
   script_name = "2_4B_Build_all_evaluable_longitudinal_panels.R"
 )
 ms_copy_artifact(
   source_path = file.path(output_dir, "Extended_Data_Figure_3C_all_evaluable_fragmentomics_longitudinal_pseudolog.png"),
   artifact_id = "EDFIG3C",
   role = "all_evaluable_pseudolog_figure_panel_png",
-  description = "All-evaluable training/test companion version of Extended Data Figure 3C with pseudo-log short-fragment and tumour-fraction axes.",
+  description = "Alternative Extended Data Figure 3C display with pseudo-log short-fragment and tumour-fraction axes.",
   script_name = "2_4B_Build_all_evaluable_longitudinal_panels.R"
 )
 
@@ -2696,8 +2696,8 @@ all_evaluable_support_manifest <- tribble(
     exists = file.exists(path),
     md5 = if_else(exists, map_chr(path, ~ unname(tools::md5sum(.x))), NA_character_),
     note = paste(
-      "All-evaluable companion panel staged beside the normal Figure 2 panel",
-      "using an all_evaluable role; the normal manuscript panel remains frontline-only."
+      "These files include the all-evaluable panels used in Figure 2B-D and",
+      "Extended Data Figure 3A-C, together with clearly named display alternatives."
     )
   )
 

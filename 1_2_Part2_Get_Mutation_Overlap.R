@@ -13,8 +13,8 @@
 #        • draws a Venn diagram of BM vs. cfDNA calls  
 #        • computes the Jaccard overlap percentage and plots a summary
 #  
-# Usage       :  
-#   Rscript Scripts_2025/Final_Scripts/1_2_Part2_Get_Mutation_Overlap.R
+# Usage from the repository root:
+#   Rscript 1_2_Part2_Get_Mutation_Overlap.R
 #   - or -  
 #   source("1_2_Part2_Get_Mutation_Overlap.R")  
 #  
@@ -71,8 +71,8 @@
 #     an unconditional input, a clean run must have it available already or
 #     rerun this script after 1_5.
 #  
-# How to run:
-#   Rscript Scripts_2025/Final_Scripts/1_2_Part2_Get_Mutation_Overlap.R
+# How to run from the repository root:
+#   Rscript 1_2_Part2_Get_Mutation_Overlap.R
 #
 # Manuscript outputs created/updated:
 #   - Extended Data Figure 2G: all-evaluable patient-level lollipop plot showing
@@ -924,6 +924,10 @@ write.csv(
   row.names = FALSE
 )
 
+# The role and description strings below are retained historical manifest
+# labels. Despite the word "alternate" in those strings, the all-evaluable
+# panel above is the version used as Extended Data Figure 2G; the Frontline-only
+# panel is a cohort-specific support version.
 ms_copy_artifact(
   source_path = edfig2g_all_evaluable_path,
   artifact_id = "EDFIG2G",

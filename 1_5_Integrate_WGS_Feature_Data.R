@@ -80,8 +80,15 @@
 # Usage:
 #   source("1_5_Integrate_WGS_Feature_Data.R")
 #
-# How to run:
-#   Rscript Scripts_2025/Final_Scripts/1_5_Integrate_WGS_Feature_Data.R
+# How to run from the repository root:
+#   Rscript 1_5_Integrate_WGS_Feature_Data.R
+#
+# Failure behavior:
+#   The script stops before writing the final integrated table when a retained
+#   mutation-positive sample has no matching CNA/translocation identity row.
+#   Resolve the upstream sample key and compare the rebuilt table with the
+#   retained output rather than converting an unknown CNA/translocation row to
+#   a negative call.
 #
 # Manuscript outputs created/updated:
 #   - None directly. This upstream script merges WGS-derived mutation, CNA,

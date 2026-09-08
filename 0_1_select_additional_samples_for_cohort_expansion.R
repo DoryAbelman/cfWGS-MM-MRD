@@ -218,7 +218,7 @@ cat("========== ID MAPPING AND INVENTORY COMPLETE ==========\n\n")
 
 ## Now work on getting the info of available samples for the comparison.
 # This workbook contains the clinical date anchors used below. Keep this as an
-# explicit input so reviewers can see exactly which clinical export drives the
+# explicit input so it is clear which clinical export drives the
 # cohort-expansion tables.
 file_path <- "Clinical data/IMMAGINE/IMMAGINE  LIBERATE_MRD_withoutMRN_or_DOB_18Dec2025.xlsx"
 

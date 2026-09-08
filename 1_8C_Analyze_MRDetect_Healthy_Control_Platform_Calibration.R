@@ -238,8 +238,9 @@ if (anyNA(paired_long$value) || any(!is.finite(paired_long$value))) {
 }
 
 # Independent inferential unit: each paired CHARM identity contributes its
-# median across the 17 common VCFs. VCF-level observations are retained for
-# descriptive plots but are not treated as 323 independent subjects.
+# median across the eight baseline/diagnosis VCFs used in the primary audit.
+# VCF-level observations are retained for descriptive plots but are not treated
+# as 152 independent subjects.
 control_medians <- paired_long %>%
   group_by(.data$platform, .data$control_id, .data$metric, .data$metric_label) %>%
   summarise(value = median(.data$value), .groups = "drop")

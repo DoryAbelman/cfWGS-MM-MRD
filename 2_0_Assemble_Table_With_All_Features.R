@@ -28,6 +28,16 @@
 #   - Clinical data/SPORE/SPORE_pct_flow_extracted.xlsx
 #   - Clinical data/IMMAGINE/Extracted_clinical_MRD_data.xlsx  (sheet 3)
 #   - New OICR Submissions/derived_metadata/oicr_submission_clinical_comprehensive_rows.csv
+#   - Clinical data/M4/Updated Rapid Novor Data.xlsx and PET_dataframe.xlsx
+#   - Results_Fragmentomics/Key_fragmentomics_data_updated2.csv
+#   - Clinical data/Master_clinical_data_table_all_projects_May2025_updated2.csv
+#   - Mutation_counts/mutation_counts_table_{BM,Blood}_no_RSID.txt
+#   - Exported_data_tables_clinical/ M4 date/lab and relapse-date tables
+#   - Optional compatibility fallbacks used only when present:
+#       Final_aggregate_table_*_updated6.csv (sample identities/missing rows)
+#       Final_aggregate_table_*_updated8.rds (missing Mean.Coverage values)
+#   Additional revision clinical-MRD inputs are resolved conditionally in their
+#   labelled sections below.
 #
 # Outputs:
 #   - cfWGS clinical MRD values with timepoint and dates updated August 2025.csv
@@ -1883,8 +1893,8 @@ cfWGS_Clinical_MRD_filled_final <- cfWGS_dedup %>%
 wgs_wide <- wgs_wide %>%
   mutate(Date_of_sample_collection = as.Date(Date_of_sample_collection))
 
-# fuzzy‐join on Patient, Sample_type, Timepoint (exact) 
-# and Date within ±14 days
+# Fuzzy join on Patient and Timepoint exactly, with collection dates within
+# seven days. The join does not include Sample_type.
 library(fuzzyjoin)
 
 joined <- cfWGS_Clinical_MRD_filled_final %>%
@@ -2167,7 +2177,8 @@ counts_consolidated <- counts_consolidated %>%
   mutate(Timepoint = if_else(Timepoint == "R-", "R", Timepoint))
 
 
-# 2) fuzzy‐join within a 14-day window
+# 2) Join mutation counts exactly by Patient and Timepoint; no date window is
+#    applied at this step.
 joined_with_counts <- joined_clean %>%
   left_join(
     counts_consolidated,

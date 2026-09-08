@@ -1327,7 +1327,7 @@ ms_copy_artifact(
 
 ### Exploratory threshold-crossing trajectory views
 # The plots in this block are additional diagnostic views saved under historical
-# Output_tables_2025 filenames. They are not the canonical Figure 2/Extended
+# Output_tables_2025 filenames. They are not the current Figure 2/Extended
 # Data Figure 3 components copied by `ms_copy_artifact()` below.
 
 # ---- knobs to adjust ----
@@ -2299,7 +2299,7 @@ for(pid in all_pids){
 #
 # Why it is here:
 #   These components are copied from the plots regenerated immediately above,
-#   keeping their manuscript headings synchronized with the canonical plotting
+#   keeping their manuscript headings synchronized with the plotting
 #   function and the current de-identification map.
 # -------------------------------------------------------------------------
 ms_copy_artifact(

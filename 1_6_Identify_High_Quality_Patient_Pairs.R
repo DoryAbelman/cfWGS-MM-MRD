@@ -1,17 +1,18 @@
 # =============================================================================
 # 1_6_Identify_High_Quality_Patient_Pairs.R
 # Project:  cfWGS MRD Detection (M4 / IMMAGINE / SPORE)
-# How to run:
-#   Rscript Scripts_2025/Final_Scripts/1_6_Identify_High_Quality_Patient_Pairs.R
+# How to run from the repository root:
+#   Rscript 1_6_Identify_High_Quality_Patient_Pairs.R
 #
 # Manuscript outputs created/updated:
 #   - Figure 1B source table: patient/sample availability and quality-control
 #     counts used to assemble the final study-flow diagram.
 #
 # Pipeline role:
-#   This script defines which patients and sample pairs are eligible for the
-#   downstream baseline analyses. It does not draw the final flowchart panel
-#   itself; instead, it exports the auditable source table copied into
+#   This script defines patient-level WGS evidence eligibility and cohort
+#   assignments for downstream analyses. It does not construct matched sample
+#   pairs. It also does not draw the final flowchart panel; instead, it exports
+#   the source table copied into
 #   final_manuscript_objects/Figure_1B.
 #
 # Author:   Dory Abelman
@@ -19,7 +20,9 @@
 # Last Updated: May 2025
 #
 # Purpose:
-#   1. Load raw BM sample list and processing log; clean and compute DNA availability per sample.
+#   1. Read the historical BM sample list for compatibility, then clean the
+#      processing log and compute DNA availability per sample. The `bm_data`
+#      object is not used in the active calculations.
 #   2. Merge with clinical metadata and feature‐level “Evidence_of_Disease” to flag
 #      baseline (Diagnosis/Baseline) and progression (Progression/Relapse) BM or cfDNA samples.
 #   3. Build a patient‐level summary of sample availability, quality flags, study
@@ -40,6 +43,7 @@
 #
 # Input Files:
 #   • Clinical data/M4/M4 V1 BM processed at baseline.xlsx
+#     (read for compatibility; not used by the active calculations)
 #   • TFRIM4_Processing Log_Nov2024.xlsx   (sheet 6)
 #   • combined_clinical_data_updated_April2025.csv
 #   • Jan2025_exported_data/All_feature_data_Sep2025_updated2.rds

@@ -12,22 +12,22 @@
 #    • Export intermediary and final “combined_clinical_data_updated” master table along with
 #      derived tables: baseline dates, PFS_days, latest_dates_per_patient, patient_counts, BAM lists, etc.
 #
-# How to run:
-#   Rscript Scripts_2025/Final_Scripts/1_0_Process_clinical_metadata.R
+# How to run from the repository root:
+#   Rscript 1_0_Process_clinical_metadata.R
 #
 # Manuscript outputs created/updated:
 #   - None directly. This upstream script harmonizes clinical metadata across
 #     cohorts for downstream Table 1, swim-plot, model, and survival scripts.
 #
 # Pipeline role:
-#   This script creates the canonical clinical metadata inputs used by later
+#   This script creates the clinical metadata inputs used by later
 #   scripts. Historical root-level outputs that are read downstream are kept in
 #   place for compatibility. Support-only QC summaries, temporary checkpoints,
 #   and BAM review lists are written under
 #   `Output_tables_2025/clinical_metadata_support/` so they are not confused
 #   with manuscript figure/table outputs.
 #
-# Reader orientation:
+# Analysis unit and order:
 #   The primary working unit is one sequenced or inventoried sample nested
 #   within a patient. Patient-level progression, censoring, baseline, and
 #   follow-up tables are derived later in the script. The major phases are:
@@ -35,7 +35,7 @@
 #   progression and follow-up integration; PFS endpoint construction; final
 #   sample-level relapse annotation; and availability/QC exports.
 #
-# Primary downstream authorities:
+# Main outputs used downstream:
 #   - combined_clinical_data_updated_April2025.csv: sample-level clinical table.
 #   - Exported_data_tables_clinical/Censor_dates_per_patient_for_PFS_updated.rds:
 #     current patient-level baseline/event/censor table.
@@ -2561,7 +2561,7 @@ write.csv(Relapse_dates_full, "Exported_data_tables_clinical/Relapse dates cfWGS
 # Write the final combined clinical CSV after all endpoint sources have been
 # integrated. Sample-level relapse fields are derived from the finalized
 # progression-date inventory so downstream tables start from the same endpoint
-# source of truth as the patient-level PFS table.
+# finalized progression dates as the patient-level PFS table.
 recompute_sample_relapse_fields <- function(clinical_df, relapse_dates_tbl) {
   relapse_dates_tbl <- relapse_dates_tbl %>%
     transmute(

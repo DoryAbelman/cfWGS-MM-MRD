@@ -10,7 +10,7 @@
 #      baseline mutation counts by cohort.
 #   4. Calculate Spearman correlations between mutation burden and
 #      clinical/fragmentomic features and fit the exploratory BM count model.
-#   5. Generate publication-ready figures:
+#   5. Generate figures used in the manuscript:
 #        • Boxplots of mutation counts and cfDNA tumor fraction by cohort
 #        • Scatterplots of mutation burden vs. tumor fraction, fragment-size score, albumin
 #        • Dumbbell plots of event-level concordance, sensitivity & specificity by ctDNA fraction
@@ -59,8 +59,8 @@
 #   - Feature correlations: pairwise-complete selected baseline patient rows;
 #     n_pairs is therefore allowed to differ across variable pairs.
 #
-# Final-table authority:
-#   The submission-facing files are the cleanly numbered tables in
+# Final tables used in the manuscript:
+#   The cleanly numbered tables are stored in
 #   Final docs/Final Tables and Supplementary Tables. Historical filenames in
 #   this script are retained as provenance and intermediate compatibility
 #   outputs; table status should not be inferred from those names alone.

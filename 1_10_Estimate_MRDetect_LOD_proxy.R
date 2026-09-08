@@ -6,9 +6,9 @@
 #
 # ## Goal
 # Add transparent, read-denominator-based limit-of-detection (LOD) proxy columns
-# to an MRDetect detection-rate table. The output is intended for QC,
-# interpretability, and manuscript-supporting sensitivity analyses; it does not
-# re-run MRDetect and it does not change detection calls.
+# to an MRDetect detection-rate table. This optional QC calculation does not
+# re-run MRDetect or change detection calls, and it is not used by the current
+# manuscript figures, models, or tables.
 #
 # Unit of analysis
 # One input MRDetect row. No rows are pooled: each proxy is calculated from that
@@ -39,15 +39,12 @@
 #     --ir-column reads_checked
 #
 # ## Manuscript outputs created/updated
-# - None directly. This upstream QC/annotation script augments MRDetect
-#   detection-rate outputs with denominator-derived LOD proxy fields that can
-#   audit analytical sensitivity and explain why low-informative-read samples
-#   have weaker detection limits.
+# - None. This optional script adds denominator-derived sampling-limit fields
+#   for inspection; it is not the experimentally measured dilution-series LOD.
 #
 # ## Pipeline status
-# Active upstream dependency. This script does not directly create a named final
-# manuscript figure/table, but downstream MRDetect sensitivity summaries can use
-# the LOD proxy fields that it adds.
+# Optional MRDetect QC annotation; not part of the current paper-reproduction
+# sequence and not read by a downstream manuscript script.
 #
 # ## Main input
 # - MRDetect_output_winter_2025/Processed_R_outputs/

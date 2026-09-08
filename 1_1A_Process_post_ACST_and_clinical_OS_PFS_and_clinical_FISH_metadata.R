@@ -32,27 +32,31 @@
 #       If present, M4_CMRG_Data/March 2026/M4_COHORT_DEMO.csv supplements the
 #       historical M4 follow-up and vital-status workbook; it is optional.
 #
-#  Execution note:
-#   Rscript Scripts_2025/Final_Scripts/1_1A_Process_post_ACST_and_clinical_OS_PFS_and_clinical_FISH_metadata.R
+#  Run from the repository root:
+#   Rscript 1_1A_Process_post_ACST_and_clinical_OS_PFS_and_clinical_FISH_metadata.R
 #
 # Manuscript outputs created/updated:
 #   - None directly. This upstream script processes transplant, OS/PFS,
 #     progression, and FISH metadata for downstream clinical, concordance, and
 #     survival figures/tables.
 #
-# Active downstream outputs:
+# Outputs used by later manuscript scripts:
+#   - Clinical data/SPORE/tidy_fish.csv
+#   - Clinical data/Exported clinical data April 2025/IMMAGINE_fish_flags.csv
+#   Script 1_1B reads these two FISH files.
+#
+# Additional clinical and compatibility exports:
 #   - Clinical data/SPORE/tidy_timepoints.csv
 #   - Clinical data/SPORE/tidy_treatments.csv
 #   - Clinical data/SPORE/tidy_progression.csv
-#   - Clinical data/SPORE/tidy_fish.csv
 #   - Clinical data/Exported clinical data April 2025/SPORE_timepoints.csv
 #   - Clinical data/Exported clinical data April 2025/SPORE_treatments.csv
 #   - Clinical data/Exported clinical data April 2025/SPORE_progression.csv
 #   - Clinical data/Exported clinical data April 2025/SPORE_fish_flags.csv
+#     (compatibility copy; 1_1B reads tidy_fish.csv instead)
 #   - Clinical data/Exported clinical data April 2025/M4_cohort_df_clean.csv
 #   - Clinical data/Exported clinical data April 2025/M4_ASCT_dates.csv
 #   - Clinical data/Exported clinical data April 2025/IMMAGINE_dates_long.csv
-#   - Clinical data/Exported clinical data April 2025/IMMAGINE_fish_flags.csv
 #   - Clinical data/Exported clinical data April 2025/all_cohorts_ASCT_dates.csv
 #   - Clinical data/Exported clinical data April 2025/ASCT_relapse_summary.csv
 #

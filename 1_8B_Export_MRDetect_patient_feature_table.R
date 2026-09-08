@@ -3,7 +3,7 @@
 # Project: cfWGS MRDetect
 #
 # Purpose:
-#   Create a non-destructive, analysis-ready table of matched-patient MRDetect
+#   Create a derived long-form table of matched-patient MRDetect
 #   values using both tumor/BM-derived mutations and cfDNA-derived mutations as
 #   the patient-specific baseline/diagnosis mutation source.
 #
@@ -33,14 +33,13 @@
 #   Rscript Scripts_2025/Final_Scripts/1_8B_Export_MRDetect_patient_feature_table.R
 #
 # Manuscript outputs created/updated:
-#   - None directly. This upstream script exports the combined MRDetect patient
-#     feature table used by downstream model and concordance scripts.
+#   - None. No current manuscript script reads this derived CSV or RDS.
+#     Keep it as an optional MRDetect export unless a specific downstream use is
+#     added and documented.
 #
 # =============================================================================
 # Pipeline status:
-#   Active upstream dependency. This script does not directly create a named
-#   final manuscript figure/table, but downstream scripts depend on its cleaned
-#   outputs for figure, table, or model generation.
+#   Optional derived export; not part of the current paper-reproduction path.
 #
 
 

@@ -23,6 +23,14 @@
 #   - Output_EasyM_MRD_analysis_2025/EasyM_threshold_values_by_timepoint.csv
 #   - Output_EasyM_MRD_analysis_2025/landmark_analyses/
 #
+# EasyM units and manuscript call:
+#   - EasyM_value is recorded in percentage points relative to the patient's
+#     baseline bone marrow immunoglobulin signal: 1.00 means 1% of baseline and
+#     0.05 means 0.05% of baseline.
+#   - The manuscript call is negative at <=1% for IgG and <=0.05% for
+#     IgA/light-chain disease. EasyM_reference_threshold_binary stores this
+#     prespecified call; the optimized timepoint-specific calls are exploratory.
+#
 # Support-only outputs:
 #   The EasyM-only plots, exploratory landmark tables, optimized cutoff RDS
 #   files, and joint risk summaries are retained for audit and interpretation.
@@ -309,7 +317,8 @@ theme_mrd <- theme_bw(base_size = 16) +
 ## 2) EasyM ONLY: load quantitative + binary EasyM data
 ## ============================================================
 # EasyM provides two types of data:
-# 1. Quantitative: Residual M-protein as % of total protein
+# 1. Quantitative: residual immunoglobulin signal as a percentage of the
+#    patient's baseline bone marrow immunoglobulin signal
 # 2. Binary: MRD positive (100) vs negative (0) calls
 # Both are measured longitudinally across treatment visits
 
@@ -354,7 +363,7 @@ p_EasyM_traj <- ggplot(EasyM_values_long, aes(x = visit, y = value, group = pati
   labs(
     title = "EasyM longitudinal trajectories",
     x = "Visit",
-    y = "% Residual M-protein (EasyM)"
+    y = "Residual immunoglobulin (% of baseline BM)"
   ) +
   theme_mrd
 

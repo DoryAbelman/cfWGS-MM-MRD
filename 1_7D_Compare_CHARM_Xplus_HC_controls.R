@@ -15,6 +15,13 @@
 #   healthy controls differ materially from the historical controls before any
 #   future decision to use them as the reference distribution for new cases.
 #
+# Unit of analysis:
+#   The comparison contains 19 control identities measured once per platform
+#   (38 library rows), not every possible control-by-file combination. The
+#   exploratory Wilcoxon tests below are currently unpaired even though the
+#   retained controls are identity matched; do not describe their p-values as
+#   paired tests.
+#
 # Outputs:
 #   Results_Fragmentomics/CHARM_Xplus_HC_comparison/
 #     - insert_size_group_comparison.csv
@@ -555,7 +562,7 @@ compute_reference_likeness <- function(domain_obj) {
 
 compute_domain_feature_tests <- function(domain_obj) {
   # Per-feature tests are exploratory domain diagnostics. FDR is applied within
-  # each domain so reviewers can identify features most responsible for a shift,
+  # each domain to identify the features most responsible for a shift,
   # but these p-values do not update the production fragmentomics model.
   mat <- impute_feature_median_matrix(domain_obj$mat)
   info <- get_domain_sample_info(domain_obj) %>%
