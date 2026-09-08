@@ -23,7 +23,9 @@
 #   summary. The default is the 50-repeat result used in the manuscript.
 #
 # Analysis steps
-#   1. Validate the completed combined run and its expected outer folds.
+#   1. Require a completed combined run, sequential outer repeats, and exactly
+#      five outer folds. The inner-resampling design is recorded upstream by
+#      6_12 and 6_13; this plotting script does not independently reconstruct it.
 #   2. Reconstruct a mean ROC curve across outer repeats for each model.
 #   3. Summarize fold-wise sensitivity and specificity for each model.
 #   4. Draw the BM, blood, and fragmentomics ROC and operating-point plots.
@@ -38,8 +40,8 @@
 # R packages
 #   dplyr, ggplot2, patchwork, readr, scales, and tidyr.
 #
-# Run from the repository root
-#   Rscript 6_14_Generate_Grouped_CV_Manuscript_Replacement_Panels.R \
+# Run from the analysis project directory that contains Output_tables_2025/
+#   Rscript Scripts_2025/Final_Scripts/6_14_Generate_Grouped_CV_Manuscript_Replacement_Panels.R \
 #     --input-run-id=<completed-6_13-run-id> \
 #     --output-run-id=<new-figure-run-id>
 #
@@ -258,9 +260,8 @@ write_csv(
   file.path(output_dir, "grouped_cv_fold_operating_point_source_data.csv")
 )
 
-# Match the established manuscript visual language used by the original
-# 3_1-generated ROC and operating-point panels. Only presentation changes here;
-# all values continue to come from the definitive grouped-CV analysis above.
+# Match the visual style of the original 3_1-generated ROC and operating-point
+# panels. All plotted values come from the completed grouped-CV analysis above.
 base_theme <- theme_bw(base_size = 8) +
   theme(
     plot.title = element_text(face = "bold", size = 8.2, hjust = 0.5,

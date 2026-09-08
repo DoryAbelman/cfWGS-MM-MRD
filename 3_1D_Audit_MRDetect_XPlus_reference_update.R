@@ -1,7 +1,23 @@
 #!/usr/bin/env Rscript
 
-# Compare a preserved pre-correction scored table with the current frozen-model
-# scored table. This script never fits models or changes thresholds.
+# Purpose -----------------------------------------------------------------
+# Compare a saved pre-correction scored table with the current frozen-model
+# scored table after the XPlus MRDetect reference update. The two inputs must
+# contain the same rows in the same order, identified by Patient, Sample_Code,
+# Date, and Timepoint.
+#
+# This is a change-impact audit, not a manuscript figure/table generator. It
+# never fits models or changes thresholds.
+#
+# Run ---------------------------------------------------------------------
+# Rscript Scripts_2025/Final_Scripts/3_1D_Audit_MRDetect_XPlus_reference_update.R \
+#   <pre_correction.rds> <corrected.rds> <output_directory>
+#
+# Outputs -----------------------------------------------------------------
+# <output_directory>/mrdetect_xplus_reference_update_sample_impact.csv
+#   One row per affected sample, with old and corrected values side by side.
+# <output_directory>/mrdetect_xplus_reference_update_call_flip_summary.csv
+#   One row per call column that changed, with flip direction and counts.
 
 suppressPackageStartupMessages({
   library(dplyr)

@@ -36,6 +36,8 @@
 #     patient identifiers remain.
 #   - Repairs dangling OOXML drawing relationships emitted by some openxlsx
 #     versions so the files open in strict spreadsheet readers.
+#   - The current builder reads the audit CSV but does not use its rows when
+#     constructing a workbook. Audit-status validation is performed by 5_4.
 #
 # How to run
 #   Normally run through 5_3. Direct use requires:
@@ -254,6 +256,8 @@ style_data_sheet <- function(wb, sheet, dat) {
   }
 }
 
+# Retained helper from an earlier workbook layout. `build_workbook()` does not
+# currently call it, so the two output workbooks contain panel sheets only.
 add_readme <- function(wb, workbook_type, manifest_rows) {
   addWorksheet(wb, "README", gridLines = FALSE)
   title <- if (workbook_type == "main") "Source Data - Main Figures" else "Source Data - Extended Data Figures"
@@ -334,7 +338,7 @@ outputs <- vapply(c("main", "extended"), function(workbook_type) {
   )
 }, character(1))
 
-# Keep the canonical manuscript-object tree synchronized on every rebuild.
+# Keep the manuscript-object tree synchronized on every rebuild.
 # The panel-specific ED2 CSVs/PNGs are exported by their native generators;
 # this full workbook belongs at the extended-data category root because it
 # contains source sheets for all extended-data figures, not only ED Figure 2.

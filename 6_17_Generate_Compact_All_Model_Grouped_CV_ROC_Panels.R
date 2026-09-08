@@ -32,10 +32,10 @@
 #   README.txt, and RUN_COMPLETE.
 #
 # R packages
-#   dplyr, ggplot2, readr, and tibble.
+#   dplyr, ggplot2, readr, scales, and tibble.
 #
-# Run from the repository root
-#   Rscript 6_17_Generate_Compact_All_Model_Grouped_CV_ROC_Panels.R \
+# Run from the analysis project directory that contains Output_tables_2025/
+#   Rscript Scripts_2025/Final_Scripts/6_17_Generate_Compact_All_Model_Grouped_CV_ROC_Panels.R \
 #     --input-run-id <completed-6_13-run-id> \
 #     --output-run-id <new-figure-run-id>
 #

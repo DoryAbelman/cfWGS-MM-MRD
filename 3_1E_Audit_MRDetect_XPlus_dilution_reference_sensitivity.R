@@ -1,7 +1,22 @@
 #!/usr/bin/env Rscript
 
+# Purpose -----------------------------------------------------------------
 # Compare dilution-series scoring produced with two XPlus healthy-control
-# reference panels. This script does not fit models or alter thresholds.
+# reference panels: the paired 19-control sensitivity calculation and the
+# primary 22-library calculation. The two input CSVs must contain identical
+# Patient/Sample_ID/Sample/LOD keys; their row order may differ.
+#
+# This is a sensitivity audit, not the dilution-series generator and not a
+# manuscript figure/table generator. It does not fit models or alter thresholds.
+#
+# Run ---------------------------------------------------------------------
+# Rscript Scripts_2025/Final_Scripts/3_1E_Audit_MRDetect_XPlus_dilution_reference_sensitivity.R \
+#   <paired19.csv> <primary22.csv> <output_directory>
+#
+# Outputs -----------------------------------------------------------------
+# <output_directory>/dilution_reference_22_vs_19_sample_impact.csv
+# <output_directory>/dilution_reference_22_vs_19_call_flip_summary.csv
+# <output_directory>/dilution_reference_22_vs_19_correlation_summary.csv
 
 suppressPackageStartupMessages({
   library(dplyr)

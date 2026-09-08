@@ -95,7 +95,7 @@ library(patchwork)       # Combine multiple plots
 library(tableone)        # Create summary tables (optional)
 library(timeROC)         # Time-dependent ROC analysis (optional)
 library(scales)          # Axis/percentage label formatting
-library(glue)            # Inline text summaries for manuscript-ready statements
+library(glue)            # Inline text summaries used to check reported values
 library(writexl)         # Simple multi-sheet Excel exports
 
 # Shared manuscript-output helpers.
@@ -146,18 +146,18 @@ dat_rds       <- "Output_tables_2025/all_patients_with_BM_and_blood_calls_update
 outdir <- "Output_tables_2025/detection_progression_updated6"
 dir.create(outdir, showWarnings = FALSE, recursive = TRUE)
 
-# SOURCE DATA DIRECTORY: Stores figure source data for manuscript submission
+# SOURCE DATA DIRECTORY: Stores the row-level data used in figure panels
 outdir_source_data <- "Output_tables_2025/Source_data"
 dir.create(outdir_source_data, showWarnings = FALSE, recursive = TRUE)
 
 # ═════════════════════════════════════════════════════════════════════════════
-# FILE VERSIONING: Prevents overwriting previous results
+# FILE VERSIONING: Date-tagged working outputs retain separate runs
 # ═════════════════════════════════════════════════════════════════════════════
 # All output files include today's date in their names:
 #   KM_assay_timepoint_updated_no_CI_2026-02-24.png
 #   frontline_postASCT_sensitivity_2026-02-24.csv
-# This ensures each run creates new files without overwriting previous versions.
-# To compare runs across different dates, simply check the date suffix.
+# Date-tagged files retain separate runs. Fixed manuscript-output copies written
+# later in the script are updated when the script is rerun.
 # ═════════════════════════════════════════════════════════════════════════════
 
 date_tag <- format(Sys.Date(), "%Y-%m-%d")
@@ -656,8 +656,9 @@ cat(sprintf("  - Timepoints to analyze: %s\n", paste(tps, collapse=", ")))
 dpi_target <- 500  # Resolution for PNG output of KM curves
 
 # GROUP SIZE THRESHOLDS
-# Skip KM curve if < this many patients in either MRD+/MRD- group
-# (Small sample sizes lead to unreliable survival estimates)
+# Skip a KM curve when the complete landmark table has fewer than this many
+# patients. The code separately requires both MRD groups to be present, but it
+# does not require five patients in each group.
 min_n <- 5
 
 # COLOR PALETTE FOR KM CURVES
@@ -747,7 +748,7 @@ km_manuscript_artifacts <- tibble::tribble(
 ##       - Subjects split into MRD+ vs MRD- groups based on assay result
 ##       - Curve shows PFS probability over follow-up time
 ##       - Risk table shows number at risk per group at each time
-##    4. Saves PNG at 500 dpi for manuscript inclusion
+##    4. Saves the PNG at 500 dpi
 ##
 ##  Nested Loop Structure:
 ##    for (timepoint in all timepoints)
@@ -772,7 +773,8 @@ km_manuscript_artifacts <- tibble::tribble(
 ##        └── ...
 ##
 ##  Notes on Curve Generation:
-##    - Skips assays with < min_n (5) patients in either group
+##    - Skips a timepoint/assay combination with fewer than min_n (5) patients
+##      in total or with only one observed MRD group
 ##    - Uses Kaplan-Meier non-parametric estimator
 ##    - Includes log-rank p-value testing MRD+ vs MRD- groups
 ##    - Risk table shows N at risk below x-axis at selected timepoints
@@ -854,7 +856,7 @@ for(tp in tps) {
     # survfit() fits KM curves stratified by MRD status (one curve per group)
     fit      <- survfit(surv_obj ~ Group, data = df_sub)
     
-    # ggsurvplot generates publication-quality KM plot with:
+    # ggsurvplot generates the KM plot with:
     #   - Log-rank p-value comparing groups
     #   - Risk table showing number of subjects at risk over time
     #   - Customized colors, labels, and formatting
@@ -1647,7 +1649,9 @@ for(tp in tps) {
 }
 
 
-### Set the CI instead to be to 90% 
+### Optional refit using 90% confidence limits in the survfit object
+# The current ggsurvplot call sets conf.int = FALSE, so this block does not
+# display a confidence band despite calculating 90% limits.
 for(tp in tps) {
   #  nice_tp <- tp_labels[tp] %||% tp   # fall back to tp if no mappiht
   # instead of  %||% line:
@@ -2414,7 +2418,7 @@ cat("  ✓ Saved blood-subset sensitivity barplot\n\n")
 #   median RFS, Cox HRs, rank correlations, and power diagnostics at the
 #   one-year-maintenance and post-ASCT landmarks. These summaries feed the ED6B
 #   and ED8B hazard-ratio source tables/plots generated later in this script and
-#   print analyst-facing prose checks to the console. They are not the
+#   print prose checks to the console. They are not the
 #   non-frontline/test-cohort time-window analysis; that begins in the separate
 #   "Time-window prediction performance in Non-frontline cohort" section below.
 
@@ -4902,7 +4906,7 @@ build_timewindow_metrics <- function(df, assays_available, windows) {
     arrange(Window_days, desc(Sensitivity), desc(Specificity))
 }
 
-# Legacy matched cfWGS-tested subsets retained for provenance/QC. The final
+# Earlier matched cfWGS-tested subsets retained for comparison. The final
 # manuscript block below is overwritten with the prospective current labels,
 # because revision samples can occur after an earlier patient-level PFS event.
 bm_col <- assays[["cfWGS_BM"]]
@@ -4935,9 +4939,8 @@ print(legacy_results_blood)
 ## This avoids counting patients with insufficient follow-up as true negatives.
 ## It also avoids dropping all samples without a future progression date, which
 ## was too conservative for this small test cohort. These prospective outputs
-## are not the submitted manuscript artifacts; they are written as audited QC
-## files so that new test-cohort samples can be handled with an explicit,
-## defensible rule.
+## provide the calculation used for Extended Data Figures 6I and 8D and
+## Supplementary Table 9.
 max_date_pair <- function(x, y) {
   out <- pmax(as.numeric(as.Date(x)), as.numeric(as.Date(y)), na.rm = TRUE)
   out[is.infinite(out)] <- NA_real_
@@ -5982,15 +5985,11 @@ cat(glue(
 #    - Blood cfWGS subset results used for Extended Data Figure 8D
 #    - Cleaned workbook exported as Supplementary Table 9
 #
-# 6. SPEARMAN CORRELATION ANALYSIS
-#    - Pairwise correlations between assays
-#    - Both full cohort and subset analyses
-#
-# 7. NARRATIVE SUMMARY STATISTICS
+# 6. CONSOLE SUMMARY STATISTICS
 #    - Patient/sample counts and demographics
 #    - Timing analysis: Days from baseline to collection/relapse
 #    - Nadir timing and relapse progression timing
-#    - Formatted paragraphs suitable for methods/results sections
+#    - Formatted values used to check methods/results text
 #
 # ─────────────────────────────────────────────────────────────────────────────
 # KEY STATISTICAL FINDINGS EXPORTED FOR VISUALIZATION
@@ -6001,22 +6000,6 @@ cat(glue(
 # - Hazard ratios with 95% confidence intervals
 # - Sensitivity metrics (% detection among relapsers)
 # - Time-to-event distributions (days and months)
-#
-# ─────────────────────────────────────────────────────────────────────────────
-# NEXT STEPS
-# ─────────────────────────────────────────────────────────────────────────────
-#
-# After running this script:
-# 1. Review KM curves in output folders for publication-ready figures
-# 2. Check sensitivity tables for clinical assay performance comparison
-# 3. Examine barplots for supplementary figures
-# 4. Use narrative statistics for manuscript methods/results sections
-# 5. Consult statistical summaries for hypothesis testing and effect sizes
-#
-# For questions or modifications, reference upstream scripts:
-#   - 3_1_Optimize_cfWGS_thresholds.R (cfWGS optimization)
-#   - 3_1_A_Process_and_optimize_EasyM.R (EasyM model)
-#   - 2_0_Assemble_Table_With_All_Features.R (feature integration)
 #
 # ═════════════════════════════════════════════════════════════════════════════
 

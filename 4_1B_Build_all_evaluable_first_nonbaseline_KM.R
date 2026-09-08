@@ -1,14 +1,14 @@
 ################################################################################
-## All-Evaluable Longitudinal and Maintenance Landmark KM Analysis
+## Alternative Post-Baseline and Maintenance Landmark KM Analyses
 ##
 ## Purpose:
-##   Build companion Kaplan-Meier curves that include evaluable patients from
-##   both the training/frontline and test/non-frontline cohorts. Because the two
+##   Build sensitivity-analysis Kaplan-Meier curves that include evaluable
+##   patients from both the training/frontline and test/non-frontline cohorts. Because the two
 ##   cohorts have different sampling schedules, this script uses a patient-level
 ##   first prospective non-baseline assessment as a broad descriptive landmark,
-##   and audits the former label-defined first-maintenance analysis. The promoted
-##   Figure 3F companion now uses a clinically anchored assessment collected
-##   during documented frontline maintenance, 12-18 months after maintenance
+##   and audits the former label-defined first-maintenance analysis. One
+##   analysis uses a clinically anchored assessment collected during documented
+##   frontline maintenance, 12-18 months after maintenance
 ##   initiation, with no prior progression and >=30 event-free days. A pooled
 ##   all-treatment-line version is exported only as an exploratory sensitivity.
 ##
@@ -18,12 +18,13 @@
 ##   PFS by MRD status at that assessment.
 ##
 ## Pipeline role:
-##   This is a companion to 4_1_Survival_Analysis.R. It starts from the same
-##   frozen sample-level cfWGS calls but evaluates alternative patient-level
+##   This is an optional sensitivity analysis downstream of
+##   4_1_Survival_Analysis.R. It starts from the same frozen sample-level cfWGS
+##   calls but evaluates alternative patient-level
 ##   anchors for broader longitudinal and maintenance analyses. It does not fit
-##   or select cfWGS classifiers and does not replace the primary landmark KM
-##   curves created by 4_1 unless its explicitly labelled companion file is
-##   selected during manuscript assembly.
+##   or select cfWGS classifiers. None of its alternate-anchor plots is used in
+##   the assembled manuscript; the Figure 3F and Figure 4E panels are generated
+##   by 4_1_Survival_Analysis.R.
 ##
 ## Required inputs:
 ##   - Output_tables_2025/all_patients_with_BM_and_blood_calls_updated6.rds:
@@ -47,7 +48,7 @@
 ##   - Exports fixed-window availability summaries for 6 and 12 months, but
 ##     does not treat them as primary because counts are smaller.
 ##   - Does not equate a `timepoint_info` Maintenance label with documented
-##     maintenance exposure for the promoted Figure 3F companion.
+##     maintenance exposure for the documented-maintenance sensitivity analysis.
 ##   - Caps documented maintenance intervals at recorded progression and, for
 ##     SPORE, at the next treatment start.
 ##   - Keeps the primary documented-maintenance landmark frontline-only because
@@ -55,7 +56,7 @@
 ##
 ## Outputs:
 ##   Scripts_2025/Final_Scripts/final_manuscript_objects/
-##     01_main_figures/ or 02_extended_data_figures/<normal panel>/
+##     01_main_figures/ or 02_extended_data_figures/<figure panel>/
 ##       <panel>__all_evaluable_first_nonbaseline*_figure_panel_png__*.png
 ##     additional_all_evaluable_first_nonbaseline_km/
 ##       KM_*_first_nonbaseline_primary.png
@@ -69,10 +70,11 @@
 ##       all_evaluable_patient_sampling_pattern_summary.csv
 ##       all_evaluable_first_nonbaseline_method_note.md
 ##
-## Manuscript outputs created/updated:
-##   - Supporting versions associated with Figure 3F, Figure 4E, Extended Data
-##     Figure 6C, and Extended Data Figure 6D. These are copied with distinct
-##     companion roles and do not overwrite the primary role labels from 4_1.
+## Relationship to manuscript outputs:
+##   - Alternate versions are stored under the artifact directories associated
+##     with Figure 3F, Figure 4E, Extended Data Figure 6C, and Extended Data
+##     Figure 6D. They use distinct roles and are not the panels used in the
+##     assembled manuscript.
 ##   - Full anchor, model, denominator, and source-data outputs under
 ##     final_manuscript_objects/additional_all_evaluable_first_nonbaseline_km/.
 ##

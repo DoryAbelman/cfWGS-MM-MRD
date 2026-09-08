@@ -9,6 +9,10 @@
 #     5_4 validate workbook structure and content
 #   Script 5_3 runs those three steps in order. This script does not fit models,
 #   select thresholds, or redraw the manuscript figures.
+#   Despite its historical "Export" name, it also reconstructs source data for
+#   panels that do not have a complete panel CSV. Those blocks use saved models,
+#   thresholds, analysis tables, and figure-specific inputs; they are identified
+#   in the code below rather than treated as simple file copies.
 #
 # Manuscript coverage and unit of analysis
 #   - Covers 74 sheets representing every panel in Figures 1-4 and Extended
@@ -26,7 +30,7 @@
 #   - Panel source CSVs in final_manuscript_objects/generated/figure_components
 #   - Retained validation metrics, models, call tables, and figure-specific
 #     source objects at the project root
-#   - id_map.rds, a complete one-to-one Patient/New_ID publication mapping
+#   - id_map.rds, a complete one-to-one Patient/New_ID mapping
 #
 # Outputs
 #   - Output_tables_2025/Figure_Source_Data/panels/*.csv
@@ -46,7 +50,7 @@
 #
 # This script uses the final panel inventory and revision-inclusive analysis
 # tables. If a figure is changed, update the expectations here in the same
-# commit. Silent denominator drift is treated as a provenance error.
+# commit. Silent denominator drift is treated as a validation error.
 
 suppressPackageStartupMessages({
   library(dplyr)
@@ -91,8 +95,8 @@ if (
 }
 
 # This one ED1 oncoprint specimen is outside the 71-patient id_map.rds cohort.
-# Reuse its existing Code Ocean public specimen alias rather than inventing a
-# new patient identifier or exposing the original SPORE code.
+# Reuse its existing deidentified specimen alias rather than creating a second
+# identifier for the same specimen.
 publication_sample_overrides <- c("SPORE_0008_Baseline" = "S0112")
 
 deidentify_character_vector <- function(x) {
@@ -177,8 +181,8 @@ select_existing <- function(data, columns) {
 }
 
 minimalize_publication_panel <- function(data, panel_key) {
-  # Administrative provenance remains in the external manifest/audit files,
-  # not in the journal-facing panel sheets.
+  # Administrative fields remain in the manifest and audit files rather than
+  # the panel-level CSVs.
   provenance_columns <- c(
     "figure_panel", "locked_figure", "source_table", "source_note",
     "source_call_path", "record_type", "analysis_value", "value_scale",
@@ -204,7 +208,7 @@ minimalize_publication_panel <- function(data, panel_key) {
     select(-matches("(^|_)source_(file|path)$|(^|_)file_path$", ignore.case = TRUE))
 
   if (panel_key == "Fig1A") {
-    # The swim-plot source table carries only the event intervals. The locked
+    # The swim-plot source table carries only the event intervals. The final
     # panel also draws a cohort band and a four-assay MRD-at-1yr band
     # (2_1_Part2_Cohort_Swim_Plot.R:2807-2818 builds `df_mrd_long` from
     # `dat_1yr`, and :3246 draws the cohort band). Those per-patient values are
@@ -274,7 +278,7 @@ minimalize_publication_panel <- function(data, panel_key) {
         "panel", "terminal_group", "wilcoxon_q_bh_global_12_tests"
       ))
   } else if (panel_key == "ED3E") {
-    # The compact canonical ED3E component prints a metric-specific annotation
+    # The final ED3E component prints a metric-specific annotation
     # assembled from the displayed condition percentages plus a paired
     # leave-one-out comparison. The component source CSV historically omitted
     # that annotation table, making an exact public redraw impossible.
@@ -366,10 +370,10 @@ minimalize_publication_panel <- function(data, panel_key) {
     # `timepoint_label` metadata columns. The current dated KM exports (now
     # selected by the overrides above) carry the raw assay call columns
     # instead, so the assay variable and its labels are resolved from the
-    # canonical `techs` / `tp_labels` vectors in 4_1_Survival_Analysis.R.
+    # `techs` / `tp_labels` vectors in 4_1_Survival_Analysis.R.
     #
     # The panel -> assay assignment below is not inferred from the rendered
-    # panels; it is taken from the locked component source-data filenames under
+    # panels; it is taken from the final component source-data filenames under
     # final_manuscript_objects/generated/figure_components/, which name the
     # assay and landmark explicitly:
     #   ED6C Extended_Data_Figure_6C_MFC_one_year_maintenance_KM_source_data.csv
@@ -660,10 +664,10 @@ panel_overrides <- list(
       "F1B_figure_source_csv.csv"
     )
   ),
-  # The locked Figure 2B-D and Extended Data Figure 3A-C panels are the
+  # The final Figure 2B-D and Extended Data Figure 3A-C panels are the
   # all-evaluable July 2026 versions.  The generated component directories
   # also contain older training-only CSVs, so pin the exact source exports
-  # written by the canonical 2_4B generator.
+  # written by the main 2_4B generator.
   Fig2B = file.path(
     canonical_root, "final_manuscript_objects",
     "additional_all_evaluable_longitudinal_panels",
@@ -726,7 +730,7 @@ panel_overrides <- list(
   # Panel G plots all evaluable baseline pairs (currently n = 41). The undated
   # `Extended_Data_Figure_2G_mutation_overlap_*` files are the earlier
   # 9-patient subset and disagree with the panel subtitle and legend
-  # (median 4.7%, IQR 0.7-17.3%). The locked panel is ED2G_all_eval.png.
+  # (median 4.7%, IQR 0.7-17.3%). The final panel is ED2G_all_eval.png.
   ED2G = file.path(
     component_root, "Extended_Data_Figure_2", "panel_G",
     c(
@@ -770,7 +774,7 @@ panel_overrides <- list(
   # only the 2026-02-25 exports.
   #
   # Without these overrides `default_component_files()` picks up the February
-  # CSV that happens to sit in the component directory, even though the locked
+  # CSV that happens to sit in the component directory, even though the final
   # panel in the figure deck was re-rendered from the July 2026 pipeline. That
   # is how Extended Data Fig. 6B came to ship a one-year-maintenance cfWGS
   # hazard ratio of 24.14 in the Source Data while the plotted panel and the
@@ -845,9 +849,9 @@ panel_overrides <- list(
   # an override, `default_component_files()` selects a component CSV built from
   # the 2026-07-01/07-02 freeze, which predates the 2026-07-03 relapse and
   # follow-up refresh. The patients are the same; the event counts and censoring
-  # times are not, so the exported panels disagree with the locked components:
+  # times are not, so the exported panels disagree with the final components:
   #
-  #   panel  stale (07-01/02)          current (07-23)           locked panel
+  #   panel  stale (07-01/02)          current (07-23)           final panel
   #   Fig4E  21, 9 ev, p=0.0252        21, 9 ev, p=0.0237        p = 0.02
   #   ED6C   30, 8 ev, p=0.0162        30, 10 ev, p=0.0140       p = 0.01
   #   ED6D   17, 5 ev, p=0.452         17, 6 ev, p=0.838         --
@@ -855,9 +859,9 @@ panel_overrides <- list(
   #   ED6F   35, 11 ev, p=0.296        38, 18 ev, p=0.611        --
   #   ED8C   23, 11 ev, p=0.157        24, 13 ev, p=0.0509       --
   #
-  # The current exports reproduce the locked components; the stale ones do not.
+  # The current exports reproduce the final components; the stale ones do not.
   # ED6E is the clearest case: the stale freeze would publish a nominally
-  # significant p = 0.03 where the locked panel reports p = 0.14.
+  # significant p = 0.03 where the final panel reports p = 0.14.
   #
   # ED6G/ED6H (EasyM) need no override: their earliest available export is
   # 2026-07-07, which already postdates the refresh.
@@ -906,7 +910,7 @@ panel_overrides <- list(
   # match, so it still files the BM ROC under Extended_Data_Figure_5/panel_A.
   # default_component_files() therefore handed every one of these four sheets
   # the wrong panel's content, and the files it picked are the pre-50-repeat
-  # run as well. Against the locked pages:
+  # run as well. Against the final pages:
   #
   #   Figure 3A  = BM mean-ROC     AUC 0.81/0.79/0.77/0.74/0.72/0.64/0.64
   #   Figure 4A  = Blood mean-ROC  AUC 0.75/0.71/0.69/0.63/0.63/0.56/0.35
@@ -956,7 +960,7 @@ panel_overrides <- list(
   # to 0% for the analysis. ED5D and ED7D retain the four-patient dilution-
   # series points used by their LoD panels, with the same zero-reference rule.
   #
-  # Note for Fig3C: the canonical pooled CSV sits in the component directory,
+  # Note for Fig3C: the pooled CSV sits in the component directory,
   # but `default_component_files()` excludes names matching
   # "^F3C_source_data_csv", so the single-patient file was selected instead.
   # An explicit override bypasses that exclusion.
@@ -974,7 +978,7 @@ panel_overrides <- list(
   )
 )
 
-# These exact source names are the locked semantic authority for the KM
+# These are the exact source files used for the KM
 # panel-to-assay mapping. Assert them during export so a future override cannot
 # silently place the wrong assay beneath a correct-looking panel title.
 km_expected_source_basename <- c(
@@ -986,7 +990,7 @@ km_expected_source_basename <- c(
 )
 
 # Main Figure 2A: exact patient rows and the assay-background values used by
-# the canonical plotting script. Healthy-control assay values are scientific
+# the main plotting script. Healthy-control assay values are scientific
 # reference measurements; no control identifier or collection date is exposed.
 build_figure_2a <- function() {
   aggregate_path <- file.path(
@@ -1265,7 +1269,7 @@ metric_panel <- function(model_map) {
     arrange(match(model, names(model_map)), match(operating_point, c("Youden", "95% sensitivity")))
 }
 
-# Full-cohort ROC source rows for locked Extended Data Figure 7E.
+# Full-cohort ROC source rows for the final Extended Data Figure 7E.
 build_ed7e <- function() {
   # ED7E is the frozen full-training/refit ROC. The revision change log
   # explicitly distinguishes it from expanded-test performance (ED7C).
@@ -1338,9 +1342,9 @@ current_call_path <- file.path(
 # native_script_runs/FIG1A_swim_plot/`. That nested file is a snapshot taken
 # during a Figure 1A native-script run and has 586 rows against the live
 # table's 581; it is stale for the BM call columns, so the exported panels
-# disagreed with the locked components:
+# disagreed with the final components:
 #
-#   panel  snapshot MFC pairs   live MFC pairs   locked panel total
+#   panel  snapshot MFC pairs   live MFC pairs   final panel total
 #   ED5E   14                   20               20  (9+2+2+7)
 #   ED5F   14                   18               18  (10+2+1+5)
 #   ED5G   22                   28               --
@@ -1348,8 +1352,8 @@ current_call_path <- file.path(
 #   ED7G   19                   19               unchanged
 #   ED7H   14                   25               --
 #
-# The live table reproduces the locked ED5E and ED5F counts exactly, so the
-# canonical 3_2 confusion-matrix blocks were run against it, not the snapshot.
+# The live table reproduces the final ED5E and ED5F counts exactly, so the
+# main 3_2 confusion-matrix blocks were run against it, not the snapshot.
 # ED7F/ED7G are unaffected because the blood call columns agree in both files.
 clinical_call_path <- current_call_path
 stop_if_missing(
@@ -1583,11 +1587,10 @@ expected_sample_level_rows <- tribble(
   "ED9F", 37L
 )
 
-# Publication-panel schema contract. These are the fields consumed by the
-# canonical plotting ports, not merely whatever columns happened to be present
+# Panel schema contract. These are the fields consumed by the
+# main plotting scripts, not merely whatever columns happened to be present
 # in the latest export. Every one of the 74 panels must be covered so an export
-# layer regression fails here, before a visually plausible but scientifically
-# wrong capsule can be built.
+# check fails before an incomplete source-data workbook is built.
 panel_schema_contract <- setNames(vector("list", nrow(locked_figures)), locked_figures$sheet_name)
 set_contract <- function(panels, columns) {
   panel_schema_contract[panels] <<- rep(list(columns), length(panels))

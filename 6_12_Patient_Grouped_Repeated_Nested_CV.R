@@ -146,7 +146,7 @@ BOOTSTRAP_REPS <- as_positive_integer(get_arg("--bootstrap-reps", "2000"),
                                       "--bootstrap-reps")
 BASE_SEED <- as_positive_integer(get_arg("--seed", "20260731"), "--seed")
 MODEL_FILTER <- get_arg("--models", NULL)
-MODEL_LIBRARY <- tolower(get_arg("--model-library", "headline"))
+MODEL_LIBRARY <- tolower(get_arg("--model-library", "all"))
 ALLOW_DIM_MISMATCH <- "--allow-dim-mismatch" %in% args
 MANIFEST_ONLY <- "--manifest-only" %in% args
 SHOW_WARNINGS <- "--show-warnings" %in% args
@@ -246,9 +246,9 @@ if (!file.exists(AGG_PATH)) stop("Missing aggregate input: ", AGG_PATH, call. = 
 # ----------------------------------------------------------------------------
 # 3. Reconstruct the exact training population and model specifications
 # ----------------------------------------------------------------------------
-# The headline library contains preselected manuscript models. The optional
-# all-model library is a sensitivity expansion; it does not repeat feature
-# selection or redefine the independent test cohort.
+# The complete `all` library is used for the manuscript comparison and is the
+# default. The `headline` option is a shorter subset for targeted checks. Neither
+# option repeats feature selection or redefines the independent test cohort.
 
 .helpers_path <- file.path("Scripts_2025", "Final_Scripts", "helpers.R")
 if (!file.exists(.helpers_path)) .helpers_path <- "helpers.R"

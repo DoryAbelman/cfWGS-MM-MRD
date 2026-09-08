@@ -250,17 +250,21 @@ Data Figure 3.
 | Script | Purpose | Key inputs | Key outputs |
 |--------|---------|------------|-------------|
 | `3_1_Optimize_cfWGS_thresholds.R` | Fit or load the historical elastic-net model library, full-training refits, and thresholds used for downstream sample scoring. Its older nested-CV exports are not the final 50-repeat patient-grouped validation; that analysis is performed by `6_12` and assembled by `6_13`. | Master feature table, clonoSEQ/MFC ground-truth labels. | Preserved models and thresholds; full-training metrics used in Supplementary Table 5; inputs to downstream scoring and concordance analyses. |
-| `3_1_A_Process_and_optimize_EasyM.R` | Process EasyM residual immunoglobulin as a percentage of the baseline BM immunoglobulin and calculate the prespecified isotype-specific call: negative at ≤1% for IgG and ≤0.05% for IgA/light-chain disease. The file also retains exploratory optimized thresholds separately. | EasyM CSV files, clinical/isotype information, and the cfWGS call table from `3_1`. | `EasyM_all_samples_with_optimized_calls.csv`, including the named isotype-specific reference call, plus threshold/provenance tables used by `3_2` and `4_1`. |
+| `3_1_A_Process_and_optimize_EasyM.R` | Process EasyM residual immunoglobulin as a percentage of the baseline BM immunoglobulin and calculate the prespecified isotype-specific call: negative at ≤1% for IgG and ≤0.05% for IgA/light-chain disease. The file also retains exploratory optimized thresholds separately. | EasyM CSV files, clinical/isotype information, and the cfWGS call table from `3_1`. | `EasyM_all_samples_with_optimized_calls.csv`, including the named isotype-specific reference call, plus threshold and QC tables used by `3_2` and `4_1`. |
 | `3_1C_Expanded_test_clustered_sensitivity.R` | Evaluate the saved classifier calls in the expanded test cohort while accounting for repeated samples by patient-clustered bootstrap and one-sample-per-patient sensitivity analyses. It does not refit the classifiers or change their thresholds. | Current scored test-cohort table and preserved model thresholds. | Supplementary Table 6, exact scored-sample manifest, clustered-bootstrap summaries, and one-sample-per-patient sensitivity results supporting Figure 3B and Figure 4B. |
 | `3_1_part2_Apply_cfWGS_thresholds_to_dilution_series.R` | Apply saved models and thresholds to the experimental dilution-series libraries and describe detection performance across the tested dilution range. This is not a formal analytical limit-of-detection study. | Saved models/thresholds from `3_1`; fragmentomics and MRDetect dilution-series outputs. | Figure 3C; Extended Data Figures 5D and 7D; Supplementary Table 7. |
+| `3_1C_Summarize_dilution_correlations_across_patients.R` | Calculate dilution-series Spearman correlations by patient and technical replicate, average replicates within patient, and then give each of the four patients equal weight. | Point-level dilution source tables written by `3_1_part2`. | Patient-weighted Figure 3C component and its source data; alternate three-patient and patient-mean displays. |
+| `3_1D_Build_Dilution_cVAF_vs_controls.R` | Build additional cVAF and MRDetect z-score plots comparing four dilution series with matched healthy-control measurements and unrelated plasma BAM/mutation-panel pairings. | Dilution and healthy-control source tables, all-by-all MRDetect object, high-quality mutation-panel list, and sample-scoring manifest. | Additional descriptive plots and source CSVs; not used in a final manuscript panel. |
+| `3_1D_Audit_MRDetect_XPlus_reference_update.R` | Compare sample scores before and after the XPlus MRDetect reference update and report changed values and calls. | Two scored RDS files supplied as command-line arguments. | Sample-level impact CSV and call-flip summary; audit only. |
+| `3_1E_Audit_MRDetect_XPlus_dilution_reference_sensitivity.R` | Compare dilution scores calculated with the paired 19-control and primary 22-library XPlus references. | Two dilution CSV files supplied as command-line arguments. | Sample-level impact, call-flip, and correlation-summary CSVs; audit only. |
 | `3_2_Plot_optimal_cutoff_and_clinical_concordance.R` | Generate tumour-informed cfWGS clinical-concordance figures: assay positivity, model-vs-clinical assay comparisons, calibration/decision-curve support, and contingency tables. | `all_patients_with_BM_and_blood_calls_updated*.rds`, threshold table. | Figure 3D-E and Figure 4C-D; Extended Data Figures 5E-H and 7F-I; Supplementary Tables 8 and 10. |
 | `archive/support_analysis/3_3_Plot_optimal_cutoff_tumor_naive_calls_and_clinical_concordance.R` | Archived tumour-naive blood cfDNA support/sensitivity analysis. This is not required for routine manuscript regeneration because the final clinical-concordance figures/tables are produced by `3_2`, and no current final manuscript artifact is mapped to `3_3`. | `all_patients_with_BM_and_blood_calls_updated*.rds`, threshold table. | Support-only tumour-naive review outputs; not copied to `final_manuscript_objects/`. |
 
-Figure 3D and Figure 4C use assay-specific evaluable subsets. Their denominators
-therefore differ because BM-informed and blood-informed cfWGS calls are not
-available for exactly the same observations; this is not a change in cohort
-assignment. The corresponding source tables should be used when reporting each
-panel denominator.
+Figure 3D and Figure 4C use the same cohort assignment but different frontline
+eligibility rules. Figure 3D includes all 42 landmark samples with an evaluable
+BM-informed cfWGS call; 39 of those also have MFC or clonoSEQ data. Figure 4C
+first requires an evaluable blood-informed cfWGS call and at least one of MFC
+or clonoSEQ, leaving 41 of 46 blood-call-evaluable landmark samples.
 
 ### Stage 4 - Clinical outcome analyses
 
@@ -377,8 +381,9 @@ cohort; it does not overwrite those test-scoring objects.
 
 The paper uses the complete 32-model library, five outer folds repeated 50
 times, five inner folds repeated five times, 2,000 patient-clustered bootstrap
-replicates, and base seed `20260731`. `--model-library all` must be supplied
-explicitly because the script default is the smaller `headline` library.
+replicates, and base seed `20260731`. These are now the script defaults. The
+commands below still specify them explicitly so the saved command records the
+complete resampling design.
 
 Run the three model blocks from the repository root with new, unused run IDs:
 

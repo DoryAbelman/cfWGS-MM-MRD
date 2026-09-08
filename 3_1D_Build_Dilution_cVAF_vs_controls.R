@@ -1,5 +1,5 @@
 # ==============================================================================
-# Build a shareable cVAF-only dilution-series comparison panel
+# Build cVAF and MRDetect z-score dilution/control comparison plots
 #
 # Goal:
 #   Plot all four controlled dilution series using raw cumulative VAF (cVAF),
@@ -10,9 +10,12 @@
 #   - Dilution points are patient-specific trajectories and technical replicates.
 #   - Healthy controls are evaluated against the four dilution-patient panels.
 #   - Unmatched plasma points are negative BAM-panel pairings, not biological
-#     longitudinal observations. The XPlus component is pooled across the 17
-#     baseline BM mutation panels included in the revision all-by-all run.
+#     longitudinal observations. After the evaluability filters below, the
+#     XPlus component contains 725 pairings from 54 plasma BAMs and 14 baseline
+#     BM mutation panels.
 #   - Controls are excluded from dilution-series correlation calculations.
+#   - These plots are additional descriptive analyses and are not used in the
+#     final main or Extended Data figures.
 #
 # Inputs:
 #   Output_tables_2025/Source_Data_Extended_Data/
@@ -20,6 +23,8 @@
 #     SourceData_ED5D_BM_healthy_control_background_after_zero.csv
 #   MRDetect_output_winter_2025/Processed_R_outputs/
 #     cfWGS_Winter2025All_MRDetect_with_Zscore_Sep2025.rds
+#   Output_tables_2025/high_quality_patients_list_for_baseline_mut_calling2.csv
+#   Output_tables_2025/clinical_support/sample_scoring_status_manifest.csv
 #
 # Outputs:
 #   Final Tables and Figures/
@@ -32,6 +37,7 @@
 #   Output_tables_2025/Source_Data_Extended_Data/
 #     SourceData_Dilution_cVAF_vs_healthy_and_unmatched_plasma.csv
 #     SourceData_Dilution_cVAF_vs_healthy_and_unmatched_plasma_summary.csv
+#     SourceData_Dilution_BM_cVAF_and_sites_zscores_vs_healthy_and_unmatched_plasma.csv
 # ==============================================================================
 
 suppressPackageStartupMessages({
@@ -155,7 +161,7 @@ if (nrow(healthy) != 92L || n_distinct(healthy$query_bam) != 48L) {
 
 # Revision XPlus all-by-all negative controls. These are unrelated plasma BAM
 # and baseline BM mutation-panel pairs. Require both (1) a mutation-source
-# patient in the canonical high-quality baseline helper and (2) a query plasma
+# patient in the current high-quality baseline helper and (2) a query plasma
 # row with an evaluable blood cfWGS score in the current scoring manifest.
 # Restricting to available XPlus healthy normalization prevents legacy/revision
 # platform mixing in this component.
@@ -435,7 +441,7 @@ ggsave(
 )
 
 # BM-derived cVAF and mutant-sites z-score companion figure. Field mapping is
-# inherited from the canonical dilution workflow:
+# inherited from the main dilution workflow:
 #   z_score_detection_rate_BM = cVAF z-score
 #   zscore_BM                 = proportion of sites detected z-score
 zscore_labels <- c(

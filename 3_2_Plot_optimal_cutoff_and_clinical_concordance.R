@@ -9,7 +9,7 @@
 #   - Figure 4C-D: blood cfWGS clinical-concordance and probability panels.
 #   - Extended Data Figure 5E-H: BM supplementary concordance/diagnostic panels.
 #   - Extended Data Figure 7F-I: blood supplementary concordance/diagnostic panels.
-#   - Supplementary Table 8: BM model concordance/source-data workbook.
+#   - Supplementary Table 8: BM- and blood-informed sample/comparator workbook.
 #   - Supplementary Table 10: blood model concordance/source-data workbook.
 #
 # Pipeline role:
@@ -43,21 +43,35 @@
 #   • Output_tables_2025/all_patients_with_BM_and_blood_calls_updated6.rds
 #     from 3_1_Optimize_cfWGS_thresholds.R.
 #   • Output_EasyM_MRD_analysis_2025/EasyM_all_samples_with_optimized_calls.csv
-#     from 3_1_A_Process_and_optimize_EasyM.R, when EasyM comparison panels are
-#     available.
-#   • Optional preserved model/threshold RDS files in Output_tables_2025/ for
-#     model-definition labels and benchmarking; this script does not refit
-#     models.
+#     from 3_1_A_Process_and_optimize_EasyM.R. The script can continue without
+#     it, but that produces empty EasyM facets rather than the manuscript panels.
+#   • Output_tables_2025/selected_combo_models_2026-02-16.rds and
+#     selected_combo_thresholds_2026-02-16.rds. These are required for model
+#     labels and operating points; this script does not refit the models.
 #
 # Outputs:
 #   Historical working outputs are written to Output_figures_2025/,
-#   Output_tables_2025/, and Final Tables and Figures/. Final manuscript
-#   outputs are copied into final_manuscript_objects/ by artifact ID.
+#   Output_tables_2025/, and Final Tables and Figures/. The files used in the
+#   manuscript are copied into final_manuscript_objects/ by artifact ID. Key
+#   working files are:
+#   • Output_figures_2025/Fig_4I_BM_positivity_by_tech_facet7.png (Figure 3D)
+#   • Final Tables and Figures/Fig4K_cfWGS_vs_MFC_clonoSEQ_EasyM_BM_muts_updated5.png
+#     (Figure 3E)
+#   • Output_figures_2025/Fig_5I_Blood_positivity_by_tech_facet7.png (Figure 4C)
+#   • Final Tables and Figures/Fig5K_cfWGS_vs_MFC_clonoSEQ_EasyM_Blood_muts_updated5.png
+#     (Figure 4D)
+#   • Final Tables and Figures/Supplementary_Table_8_model_comparisons_to_clinical_metrics3.xlsx
+#   • Output_tables_2025/Supplementary_Table_9_All_call_metrics_against_clinical_metrics.xlsx
+#     (historical filename for Supplementary Table 10)
 #
 # Units of analysis and denominators:
-#   • Figure 3D and Figure 4C summarize each technology using the samples for
-#     which that comparator and the corresponding cfWGS call are both available;
-#     the technology-specific denominators can therefore differ.
+#   • Figure 3D starts with all 42 frontline landmark rows having the BM-informed
+#     cfWGS call, then uses available rows for each comparator. Its cfWGS bar
+#     therefore has n=42, although only 39 rows have MFC or clonoSEQ data.
+#   • Figure 4C first requires the blood-informed cfWGS call and at least one of
+#     MFC or clonoSEQ. Its frontline cfWGS bar therefore has n=41 rather than all
+#     46 blood-call-evaluable landmark rows. This difference is retained because
+#     changing it would alter the manuscript denominator and positivity rate.
 #   • Figure 3E and Figure 4D contain one row per evaluable sample-comparator
 #     pair. A sample can contribute one point for each available comparator.
 #   • Supplementary Table 8 records sample-comparator rows rather than one row
@@ -148,8 +162,8 @@ cat("\nLoading cfWGS data from prior analysis...\n")
 dat <- readRDS(file.path(outdir, "all_patients_with_BM_and_blood_calls_updated6.rds"))
 cat(sprintf("✓ Loaded %d rows from cfWGS dataset\n", nrow(dat)))
 
-# Optional model and threshold definitions used only for labels/benchmarking.
-# Keep these paths project-relative for Code Ocean portability. The scored calls
+# Required model and threshold definitions used for labels and operating points.
+# Keep these paths project-relative. The scored calls
 # and probabilities are read from all_patients_with_BM_and_blood_calls_updated6.rds;
 # this script does not retrain the models.
 # Use the same preserved 2026-02-16 model and threshold objects as
@@ -355,7 +369,7 @@ cfwgs_neg <- neg_sets[["cfWGS"]]
 mfc_also_cfwgs <- intersect(mfc_neg, cfwgs_neg)
 seq_also_cfwgs <- intersect(seq_neg, cfwgs_neg)
 
-# Build analyst-facing prose snippets for manuscript text checks.
+# Build prose summaries used to check values reported in the manuscript text.
 mfc_sentence <- sprintf(
   "Of %d patients that were negative at both timepoints by MFC, %d (%.1f%%) were also negative by cfWGS.",
   length(mfc_neg),
@@ -546,7 +560,7 @@ p_front_grouped <- ggplot(front_tbl,
             vjust    = -0.4,
             size     = 3.5)
 
-# Save the first standalone frontline BM positivity plot for provenance.
+# Save the first standalone frontline BM positivity plot.
 ggsave(
     filename = file.path(OUTPUT_DIR_FIGURES, "Fig_BM_positivity_by_tech_updated5.png"),
   plot     = p_front_grouped,
@@ -564,7 +578,7 @@ readr::write_csv(
 )
 
 
-# Intermediate BM positivity plot retained for historical/provenance output.
+# Intermediate BM positivity plot retained as a working output.
 # The final manuscript-staged BM positivity component is the faceted Figure 3D
 # panel built below.
 custom_cols <- c(
@@ -641,7 +655,7 @@ non_tbl <- non_tbl %>%
                         levels = c("cfWGS", "clonoSEQ", "MFC", "EasyM"))
   )
 
-# Build a standalone non-frontline/test-cohort plot for provenance.
+# Build a standalone non-frontline/test-cohort plot.
 p_non_grouped <- ggplot(non_tbl, 
                           aes(x    = Technology,
                               y    = pos_rate * 100,
@@ -673,8 +687,7 @@ p_non_grouped <- ggplot(non_tbl,
             vjust    = -0.4,
             size     = 3.5)
 
-# Save the first standalone non-frontline/test-cohort BM positivity plot for
-# provenance.
+# Save the first standalone non-frontline/test-cohort BM positivity plot.
 ggsave(
   filename = file.path(OUTPUT_DIR_FIGURES, "Fig_BM_positivity_by_tech_later_line5.png"),
   plot     = p_non_grouped,
@@ -692,7 +705,7 @@ readr::write_csv(
 )
 
 
-# Intermediate themed non-frontline/test-cohort plot retained for provenance.
+# Intermediate themed non-frontline/test-cohort plot retained as a working output.
 p_non_grouped <- ggplot(non_tbl, 
                           aes(x    = Technology,
                               y    = pos_rate * 100,
@@ -1892,8 +1905,8 @@ readr::write_csv(
   file.path(outdir_source_data, "Fig4_confmat_EasyM_reference_BM_updated1_source_data.csv")
 )
 
-# Auxiliary combined BM layout retained for provenance. This is not staged as a
-# final manuscript artifact; the final ED5E-G components are copied separately
+# Auxiliary combined BM layout retained as a working output. This is not used in
+# the manuscript; the final ED5E-G components are copied separately
 # by the `ms_copy_artifact()` calls above.
 combined_cm <- (p_post  +
                   theme(
@@ -1941,8 +1954,8 @@ ggsave("Final Tables and Figures/Fig4J_confusion_matrices_all_three_4.png",
 # ══════════════════════════════════════════════════════════════════════════
 # (Source data already exported individually above)
 
-# Auxiliary side-by-side BM layout retained for provenance. This is not staged
-# as a final manuscript artifact.
+# Auxiliary side-by-side BM layout retained as a working output. This is not used
+# in the manuscript.
 combined_cm <- (p_post +
                   theme(
                     panel.spacing = unit(1, "lines"),
@@ -2076,8 +2089,7 @@ writexl::write_xlsx(
 )
 
 
-# Format an analyst-facing prose check using rounded manuscript-style
-# percentages.
+# Format a prose check using the rounded percentages reported in the manuscript.
 fmt_pct <- function(x) sprintf("%.0f%%", 100*x)
 
 post_sentence <- glue(
@@ -2253,8 +2265,8 @@ readr::write_csv(
   file.path(outdir_source_data, "Fig5_confmat_EasyM_reference_blood_updated1_source_data.csv")
 )
 
-# Auxiliary combined blood layout retained for provenance. This is not staged
-# as a final manuscript artifact; the final ED7F-H components are copied
+# Auxiliary combined blood layout retained as a working output. This is not used
+# in the manuscript; the final ED7F-H components are copied
 # separately by the `ms_copy_artifact()` calls above.
 combined_cm <- (p_post  +
                   theme(
@@ -2389,8 +2401,7 @@ writexl::write_xlsx(
 )
 
 
-# Format an analyst-facing prose check using rounded manuscript-style
-# percentages.
+# Format a prose check using the rounded percentages reported in the manuscript.
 fmt_pct <- function(x) sprintf("%.0f%%", 100*x)
 
 post_sentence <- glue(
@@ -2670,8 +2681,8 @@ baseline_counts <- dat %>%
 dat <- dat %>%
   left_join(baseline_counts, by = "Patient")
 
-# Analyst-facing preview of the new columns. This is printed during command-line
-# execution for QC but is not exported as a manuscript artifact.
+# Preview the new columns during command-line execution. This table is not used
+# in a manuscript figure or table.
 dat %>%
   select(Patient, timepoint_info, BM_Mutation_Count, BM_MutCount_Baseline,
          Blood_Mutation_Count, Blood_MutCount_Baseline) %>%
@@ -3894,7 +3905,7 @@ plot_df2 <- plot_df2 %>%
 # QC check: any rows with missing detection-pattern labels should be reviewed.
 plot_df2 %>% filter(is.na(shape_cat)) %>% select(Patient, Comparator, cfwgs_bin, ref_binary)
 
-# Historical detection-pattern palette retained for provenance; the active plot
+# Historical detection-pattern palette retained for the earlier working plot; the active plot
 # below uses relapse status for point fill.
 detect_cols <- c(
   `cfWGS only`      = "#1b9e77",
@@ -4012,7 +4023,7 @@ p_scatter_simple <- ggplot(plot_df2,
 
 p_scatter_simple
 
-# Save the historical two-comparator BM panel for provenance.
+# Save the historical two-comparator BM panel as a working output.
 ggsave("Final Tables and Figures/Fig4K_cfWGS_vs_MFC_clonoSEQ_clean_BM_muts_updated4.png",
        p_scatter_simple,
        width  = 6.5, height = 5, dpi = 600)
@@ -4457,7 +4468,7 @@ p_easym_bm <- ggplot(plot_df_easym_bm,
 
 p_easym_bm
 
-# Save the auxiliary EasyM-vs-BM probability plot for provenance.
+# Save the auxiliary EasyM-vs-BM probability plot as a working output.
 ggsave("Final Tables and Figures/FigS_EasyM_vs_BM_cfWGS_prob.png",
        p_easym_bm,
        width = 5, height = 6, dpi = 600)
@@ -4677,7 +4688,7 @@ p_scatter_simple_blood <- ggplot(plot_df2,
 
 p_scatter_simple_blood
 
-# Save the historical two-comparator blood/cfDNA panel for provenance.
+# Save the historical two-comparator blood/cfDNA panel as a working output.
 ggsave("Final Tables and Figures/Fig5K_cfWGS_vs_MFC_clonoSEQ_clean_Blood_muts_updated3.png",
        p_scatter_simple_blood,
        width  = 6.5, height = 5, dpi = 600)
@@ -4813,11 +4824,28 @@ easyM_threshold_lines_blood <- easyM_threshold_lines_blood %>%
   mutate(landmark_timepoint = factor(landmark_timepoint, levels = c("Post-ASCT", "Maintenance-1yr")))
 
 # Build the final Figure 4D panel with EasyM added.
+# Use the operating point for the same blood/cfDNA sites model whose
+# probabilities are plotted. The earlier code used the BM cVAF-model threshold
+# (0.4215524), which misplaced only the dashed reference line.
+figure4d_blood_threshold <- unname(selected_thr[["Blood_zscore_only_sites"]])
+if (length(figure4d_blood_threshold) != 1L ||
+    !is.finite(figure4d_blood_threshold)) {
+  stop(
+    "Missing finite preserved threshold for Blood_zscore_only_sites; ",
+    "cannot draw the Figure 4D operating-point line.",
+    call. = FALSE
+  )
+}
+
 p_scatter_with_easym_blood <- ggplot(plot_df_blood_with_easym,
                                       aes(x = x_plot, y = y_plot,
                                           fill = relapse_cat)) +
   # Reference lines for cfWGS and comparator thresholds.
-  geom_hline(yintercept = 0.4215524, linetype = "dashed", colour = "grey80") +
+  geom_hline(
+    yintercept = figure4d_blood_threshold,
+    linetype = "dashed",
+    colour = "grey80"
+  ) +
   # Clinical-comparator LOD line for clonoSEQ and MFC facets.
   geom_vline(
     data = data.frame(

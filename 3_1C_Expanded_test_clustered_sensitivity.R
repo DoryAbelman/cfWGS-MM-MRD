@@ -7,6 +7,8 @@
 # ----
 # Quantify how repeated samples from the same patient affect the expanded-test
 # confusion-matrix estimates used in Main Figures 3B and 4B.
+# This is a test-cohort sensitivity analysis. It is separate from the
+# patient-grouped repeated nested cross-validation in scripts 6_12-6_14/6_17.
 #
 # Analyses
 # --------
@@ -21,9 +23,13 @@
 #
 # Inputs
 # ------
-# - Current masked scored table from 3_1_Optimize_cfWGS_thresholds.R
-# - Current Figure 3B and Figure 4B test-confusion source tables, which provide
-#   the frozen model thresholds and the model labels shown in the manuscript
+# - Output_tables_2025/all_patients_with_BM_and_blood_calls_updated6.csv,
+#   written by 3_1_Optimize_cfWGS_thresholds.R.
+# - final_manuscript_objects/.../Figure_3B/
+#   F3B_supporting_data_csv_test_confusion.csv and the corresponding Figure 4B
+#   file, which provide the model labels and thresholds shown in those panels.
+# - Output_tables_2025/selected_combo_thresholds_2026-02-16.rds.
+# - id_map.rds, used only to replace study IDs in the exported sample manifest.
 #
 # Outputs
 # -------
@@ -31,6 +37,12 @@
 # are written to:
 #   Output_tables_2025/expanded_test_clustered_sensitivity/
 # The workbook is also copied to the final manuscript-object tree as STABLE6.
+# Key outputs are Supplementary_Table_6_FINAL.xlsx, the clustered-bootstrap
+# metrics CSV, the one-sample-per-patient metrics CSV, and the matched-workflow
+# comparison CSV.
+#
+# Run from the project root:
+#   Rscript Scripts_2025/Final_Scripts/3_1C_Expanded_test_clustered_sensitivity.R
 #
 # Reproducibility
 # ---------------
@@ -446,10 +458,8 @@ bootstrap_summary <- map_dfr(analysis_results, "bootstrap_summary")
 one_sample_summary <- map_dfr(analysis_results, "one_sample_summary")
 sample_manifest <- map_dfr(analysis_results, "manifest")
 
-# Deidentify every patient- and sample-level label before exporting the
-# submission workbook. The sample manifest is intentionally auditable, but it
-# must never expose the original study identifiers used by the analysis.
-id_map_path <- "id_map.rds"
+# Replace study patient and sample IDs before exporting the sample manifest.
+id_map_path <- file.path(project_root, "id_map.rds")
 if (!file.exists(id_map_path)) {
   stop("Required deidentification map not found: ", id_map_path, call. = FALSE)
 }
@@ -498,9 +508,9 @@ sample_manifest <- sample_manifest %>%
   mutate(
     Sample_Code = paste0(
       .data$Patient,
-      str_sub(
+      stringr::str_sub(
         as.character(.data$Sample_Code),
-        str_length(.data$Patient_raw) + 1L
+        stringr::str_length(.data$Patient_raw) + 1L
       )
     )
   ) %>%

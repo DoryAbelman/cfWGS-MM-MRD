@@ -5,7 +5,7 @@
 #
 # Goal
 #   Assemble independently executed blocks from the complete 32-model grouped
-#   nested-CV sensitivity analysis into one result set used for the manuscript.
+#   nested-CV analysis into one result set used for the manuscript.
 #
 # Why this is separate
 #   The full model library was run in smaller BM, blood, and fragmentomics
@@ -41,6 +41,14 @@
 # R packages
 #   dplyr, purrr, readr, tibble, and tidyr.
 #
+# How to run
+#   From the project root, use the default manuscript source runs:
+#     Rscript Scripts_2025/Final_Scripts/6_13_Assemble_All_Model_Grouped_CV_Results.R
+#   Or state all run IDs explicitly:
+#     Rscript Scripts_2025/Final_Scripts/6_13_Assemble_All_Model_Grouped_CV_Results.R \
+#       --source-runs <bm-run>,<blood-run>,<full-fragmentomics-run> \
+#       --output-run-id <new-combined-run-id>
+#
 # Analysis steps
 #   1. Resolve the explicitly named completed source runs.
 #   2. Reject missing files or incomplete source runs.
@@ -70,7 +78,7 @@ get_arg <- function(flag, default = NULL) {
 }
 
 # ----------------------------------------------------------------------------
-# 1. Locked source-run selection and expected model inventory
+# 1. Manuscript source-run selection and expected model inventory
 # ----------------------------------------------------------------------------
 project_root <- normalizePath(getwd(), mustWork = TRUE)
 results_root <- file.path(
@@ -271,7 +279,7 @@ write_csv(warning_summary, file.path(output_dir, "model_fitting_warning_summary.
 # 5. Compare grouped results with preserved legacy validation estimates
 # ----------------------------------------------------------------------------
 # The difference is descriptive: it quantifies the impact of patient grouping.
-# It is not external validation and does not change the frozen deployed model.
+# It is not external validation and does not change the saved test-scoring model.
 
 legacy_sources <- tribble(
   ~cohort_group, ~legacy_file,
@@ -388,7 +396,7 @@ writeLines(
     "Complete patient-grouped repeated nested cross-validation model library",
     "32 model/cohort combinations",
     paste0(observed_outer_repeats, " repeated outer five-fold splits; 5 repeated inner five-fold splits"),
-    # This line describes the locked manuscript source runs named above. The
+    # This line describes the manuscript source runs named above. The
     # assembler does not independently verify bootstrap_reps across those runs.
     "2,000 patient-clustered bootstrap replicates",
     "All combined quality-control checks passed.",
