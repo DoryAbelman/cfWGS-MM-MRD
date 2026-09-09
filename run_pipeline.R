@@ -24,8 +24,9 @@
 #   The executed scripts come only from config/source_pipeline.tsv. That plan
 #   currently covers 0_1 through 4_2. It does not run the later 50-repeat
 #   patient-grouped nested-CV fitting, assembly, plotting, or source-workbook
-#   scripts (6_12 through 6_19 and 5_1 through 5_4). Those steps must therefore
-#   be run separately when reproducing all final manuscript outputs.
+#   scripts (`6_12`, `6_13`, `6_14_Generate`, `6_17`, and `5_1` through
+#   `5_4`). Those steps must therefore be run separately when reproducing all
+#   final manuscript outputs.
 #
 # Inputs:
 #   * config/source_pipeline.tsv supplies the ordered script list and run policy.

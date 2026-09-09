@@ -92,7 +92,7 @@
 
 library(dplyr)       # Data manipulation
 library(tidyr)       # Data reshaping (pivot_*, separate_*, etc.)
-library(ggplot2)     # Publication-quality graphics
+library(ggplot2)     # Plotting
 library(pROC)        # ROC curves and AUC calculation
 library(patchwork)   # Multi-panel figure assembly
 library(janitor)     # Quick crosstabs (tabyl) and data cleaning
@@ -5096,7 +5096,7 @@ p_easym_blood <- ggplot(plot_df_easym_blood,
 
 p_easym_blood
 
-# Save figure to publication-quality resolution
+# Save the figure at 600 dpi
 ggsave("Final Tables and Figures/FigS_EasyM_vs_Blood_cfWGS_prob_updated6.png",
        p_easym_blood,
        width = 5, height = 6, dpi = 600)

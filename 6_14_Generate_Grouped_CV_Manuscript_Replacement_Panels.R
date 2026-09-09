@@ -11,10 +11,10 @@
 #       -> Extended Data Figure 9A
 #     * ExtendedDataFigure9B_patient_grouped_repeated_nested_cv
 #       -> Extended Data Figure 9B
-#   The first two source filenames reflect an earlier panel plan. Script
-#   6_19_Sync_ROC_Main_Operating_Extended_Data.R copies them to their final
-#   Extended Data locations. The final main Figure 3A and Figure 4A ROC plots
-#   come from 6_17_Generate_Compact_All_Model_Grouped_CV_ROC_Panels.R.
+#   The first two source filenames reflect an earlier panel plan; despite those
+#   filenames, they are the operating-point panels used in Extended Data
+#   Figures 5A and 7A. The final main Figure 3A and Figure 4A ROC plots come
+#   from 6_17_Generate_Compact_All_Model_Grouped_CV_ROC_Panels.R.
 #
 # Inputs
 #   The combined output directory created by
@@ -91,7 +91,8 @@ output_dir <- file.path(
 )
 
 if (!file.exists(file.path(input_dir, "RUN_COMPLETE"))) {
-  stop("Definitive grouped-CV input is incomplete: ", input_dir, call. = FALSE)
+  stop("Completed grouped-CV input is missing RUN_COMPLETE: ", input_dir,
+       call. = FALSE)
 }
 if (dir.exists(output_dir)) {
   stop("Refusing to overwrite existing output directory: ", output_dir, call. = FALSE)
@@ -437,7 +438,7 @@ if (!all(file.exists(file.path(output_dir, expected_files)))) {
 
 writeLines(
   c(
-    "Definitive grouped-CV manuscript replacement panels",
+    "Grouped-CV panels used in the manuscript",
     paste0("Input: ", input_run_id),
     sprintf(
       "Outer resampling: %d repeats of patient-grouped five-fold CV",

@@ -17,12 +17,22 @@
 #   but applied exclusively to the EXPERIMENTAL DILUTION SERIES samples rather than
 #   the main patient cohort. Reads MRDetect CSV outputs from the dilution series
 #   input directory, annotates records with z-scores relative to CHARM healthy
-#   controls, and exports processed tables for use in the LOD (limit-of-detection)
-#   analysis (script 3_1_part2).
+#   controls, and exports processed tables for use in the dilution-range
+#   analysis (script 3_1_part2). That downstream analysis
+#   describes performance across tested dilutions; it is not a formal
+#   analytical limit-of-detection validation.
 #
 # Unit of analysis:
 #   One row is one dilution-series queried BAM evaluated against one personalized
 #   mutation-list VCF under one mutation-source/filter-source combination.
+#
+# Healthy-control references:
+#   Historical NovaSeq 6000 dilution samples use the preserved 26-library CHARM
+#   reference. Spring 2026 NovaSeq XPlus dilution samples use the complete
+#   allowlisted 22-library XPlus reference (21 control identities; one identity
+#   has both cfDNA and PB libraries). The separate set of 19 controls matched
+#   one-to-one across platforms is used for platform comparison and sensitivity
+#   analyses, not for the primary XPlus MRDetect z-scores generated here.
 #
 # Dependencies:
 #   • readr, data.table, tidyverse (dplyr, tidyr, stringr), openxlsx
@@ -36,7 +46,7 @@
 #   • Fragmentomics_data/Dilution_series/Metadata_dilution_series.csv plus
 #     Spring 2026 PWGVAL and physical-zero dilution metadata
 #   • MRDetect_output_winter_2025/Processed_R_outputs/
-#     cfWGS_Winter2025All_MRDetect_May2025.rds (preserved 26-control reference)
+#     cfWGS_Winter2025All_MRDetect_May2025.rds (preserved 26-library reference)
 #
 # Output Directory (created if necessary):
 #   • MRDetect_output_winter_2025/Processed_R_outputs/

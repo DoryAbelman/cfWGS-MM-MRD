@@ -1,20 +1,20 @@
 #!/usr/bin/env Rscript
 
 # Purpose -----------------------------------------------------------------
-# Build patient-weighted dilution-series sensitivity panels from the Spring
-# 2026 PWGVAL/M4CHIP release, then copy the pooled 48-library panel made by
-# 3_1_part2 into the Figure 3C manuscript folder. The sensitivity panels retain
-# the patient and technical-replicate structure.
+# Build the patient-weighted dilution-series correlation panel used in Figure
+# 3C. The script combines the Spring 2026 PWGVAL/M4CHIP series with the
+# historical dilution series prepared by 3_1_part2 and retains the patient and
+# technical-replicate structure.
 #
 # Statistical summary -----------------------------------------------------
-# 1. Calculate Spearman rho separately for every feature, patient, and
-#    technical replicate (six series: three patients x two replicates).
-# 2. Average the two replicate-level rho values within each patient.
-# 3. Take an equal-patient arithmetic mean of the three patient means.
+# 1. Calculate Spearman rho separately for every feature, patient, and series
+#    (seven series: three patients x two technical replicates plus one
+#    historical patient with one series).
+# 2. Average the two replicate-level rho values within each replicated patient.
+# 3. Take an equal-patient arithmetic mean of the four patient-level values.
 #
-# This is a descriptive reproducibility summary, not an inferential
-# meta-analysis. The range shown in the figure is the range of the three
-# patient means; it is not a confidence interval. A direct arithmetic mean is
+# This is a descriptive summary, not an inferential meta-analysis. A direct
+# arithmetic mean is
 # used because Fisher's z transformation is derived for Pearson correlations
 # and several short dilution series can yield rho = +/-1.
 #
@@ -31,6 +31,7 @@
 #     Fig3C_dilution_feature_rho_all_patients_with_series_points.pdf
 #   Output_tables_2025/Source_Data_Extended_Data/
 #     SourceData_Fig3C_alt_dilution_feature_rho_by_patient_replicate.csv
+#     SourceData_Figure3C_dilution_feature_rho_all_four_patients.csv
 
 suppressPackageStartupMessages({
   library(dplyr)
@@ -902,11 +903,12 @@ ggsave(
   bg = "white"
 )
 
-# The patient-weighted panels above are retained as sensitivity/diagnostic
-# outputs. The current Figure 3C manuscript panel matches
-# Supplementary Table 7: pooled library-level Spearman correlations across the
-# 48 scored libraries, with all four MRD-negative references at 0%. The pooled
-# panel and source table are generated upstream by 3_1_part2.
+# Legacy local staging below also retains the pooled 48-library display made by
+# 3_1_part2 under an older generic artifact role. The final Figure 3 composite
+# instead uses `Fig3C_dilution_feature_rho_all_patients_with_series_points`,
+# generated above. The pooled display corresponds to the Supplementary Table 7
+# calculation. This block is left unchanged here because altering artifact
+# roles would change generated manifests and copy destinations.
 canonical_pooled_png_path <- file.path(
   figure_dir,
   "Fig4H_feature_corr_lollipop_nice2_updated2.png"

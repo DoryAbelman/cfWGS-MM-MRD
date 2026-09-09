@@ -18,11 +18,29 @@
 # A separate sensitivity analysis compares the 19-control and 22-library XPlus
 # reference parameters; it is not used to estimate the platform effect.
 #
+# Inputs
+# ------
+# - MRDetect_output_winter_2025/Processed_R_outputs/
+#     cfWGS_Winter2025All_MRDetect_May2025.rds
+# - Data_Spring_2026_Revisions/MRDetect_outputs/
+#     MRDetect_all_RESULTS_combined_with_source_final_healthy_control_Xplus.csv
+# - helpers.R, which defines the matched-control identities and strict MRDetect
+#   parser used here.
+#
 # Unit of inference
 # -----------------
 # The independent unit is the paired healthy-control identity (n = 19). VCFs
 # are repeated technical/assay contexts within each identity, not independent
 # subjects. Figures and row-level exports retain all control-by-VCF observations.
+#
+# Outputs
+# -------
+# Results_MRDetect/Healthy_control_platform_calibration/ contains the combined
+# calibration PNG/PDF, the paired raw-rate and test tables, VCF reference and
+# concordance summaries, leave-one-control-out z-score tables, 19-versus-22
+# control sensitivity tables, and a Markdown report. Script 1_8D reads the
+# paired raw-rate, paired-test, VCF-manifest, and normalization tables from this
+# directory to build Extended Data Figure 3D-E.
 #
 # How to run
 # ----------
@@ -760,7 +778,7 @@ report_lines <- c(
     "Paired platform tests use each control identity as the inferential unit."
   ),
   "",
-  "## Manuscript-ready interpretation",
+  "## Interpretation used in the manuscript",
   "",
   "MRDetect background measurements were compared between sequencing platforms using 19 healthy-control identities with matched specimen material and results available for the same eight baseline/diagnosis VCF panels on both platforms. Although raw detection rates were systematically higher on NovaSeq XPlus, VCF-specific reference means remained highly concordant across platforms. Applying the NovaSeq 6000 reference to XPlus controls produced strongly positive z-scores, whereas platform-matched leave-one-control-out normalization restored distributions centered near zero with tail rates comparable to those observed on NovaSeq 6000. Platform-specific healthy-control references were therefore used while retaining the prespecified locked decision thresholds. The figure and source data document the platform shift, normalization correction, and sensitivity to use of 19 versus all 22 available XPlus control libraries."
 )

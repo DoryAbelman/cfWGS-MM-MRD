@@ -64,8 +64,7 @@
 #
 # The historical `reviewer_alternative_terminal_summary_v2` directory name is
 # retained because 5_1_Export_Locked_Figure_Source_Data.R consumes that exact
-# path. The contents are the current terminal-sample summary analysis and are
-# not evidence that the analysis originated from a reviewer request.
+# path. The contents are the terminal-sample summary analysis used in Figure 2E.
 #
 # How to run:
 #   Rscript Scripts_2025/Final_Scripts/2_4B_Build_all_evaluable_longitudinal_panels.R

@@ -23,6 +23,13 @@
 #   - Output_EasyM_MRD_analysis_2025/EasyM_threshold_values_by_timepoint.csv
 #   - Output_EasyM_MRD_analysis_2025/landmark_analyses/
 #
+# Main inputs:
+#   - Aimee additional data/RAPID NOVOR VALUES with values with relapse.csv
+#   - Aimee additional data/RAPID NOVOR pos-neg with relapse.csv
+#   - Output_tables_2025/all_patients_with_BM_and_blood_calls_updated6.rds
+#   - Exported_data_tables_clinical/Censor_dates_per_patient_for_PFS_updated.rds
+#   - Final_aggregate_table_cfWGS_features_with_clinical_and_demographics_updated9.rds
+#
 # EasyM units and manuscript call:
 #   - EasyM_value is recorded in percentage points relative to the patient's
 #     baseline bone marrow immunoglobulin signal: 1.00 means 1% of baseline and
@@ -72,8 +79,7 @@ suppressPackageStartupMessages({
 # support-only figures/tables for audit.
 easym_input_dir <- "Aimee additional data"
 
-# Main output directory for all results
-# Using descriptive name focusing on analysis type (cfWGS/EasyM MRD) rather than specific meetings
+# Main output directory for the EasyM analyses and downstream call table.
 out_dir  <- "Output_EasyM_MRD_analysis_2025/"
 
 # Create directory if it doesn't exist

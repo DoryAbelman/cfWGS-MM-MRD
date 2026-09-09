@@ -50,6 +50,21 @@
 #   Distinct relapse events and unmatched full-join rows may remain separate;
 #   script 2_0 performs the final patient/timepoint consolidation.
 #
+# Matching and interpretation rules:
+#   - Date-based FISH/biopsy and laboratory joins allow records from the same
+#     patient within +/-60 days of the clinical sample date.
+#   - Laboratory matches retain the smallest absolute date difference. The M4
+#     FISH block first consolidates candidate rows by Patient and INTENT using
+#     the first available values, so it does not always select the closest date.
+#   - Duplicate laboratory values on the same patient/date/test are averaged
+#     when all are zero or all are nonzero; when zero and nonzero values coexist,
+#     the nonzero maximum is retained.
+#   - Values outside the explicit `lab_plausibility_ranges` table are written to
+#     the plausibility audit and set to missing in the analysis table.
+#   - Immunoglobulin/light-chain subtype labels are deterministic helper
+#     annotations derived from available lab values, not adjudicated clinical
+#     subtype assignments.
+#
 
 # Load only the packages actually used below
 library(dplyr)       # data manipulation

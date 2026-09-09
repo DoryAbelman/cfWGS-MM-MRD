@@ -6,9 +6,8 @@
 #
 # Manuscript role
 #   This script generates the 50-repeat ROC plots used in Figure 3A (BM-informed
-#   models) and Figure 4A (baseline-plasma-informed models). Script
-#   6_19_Sync_ROC_Main_Operating_Extended_Data.R copies the completed PNG/PDF
-#   files into their final manuscript-object directories.
+#   models) and Figure 4A (baseline-plasma-informed models). The PNG/PDF files
+#   written by this script are the panel files used in those figures.
 #
 # Inputs
 #   The combined 32-model output from

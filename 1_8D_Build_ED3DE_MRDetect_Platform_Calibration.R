@@ -12,6 +12,11 @@
 #
 # Inputs: source-data tables written by 1_8C in
 #   Results_MRDetect/Healthy_control_platform_calibration/.
+# Units:
+#   Panel D contains one median across the eight VCF panels for each control,
+#   platform, and metric. Panel E displays all 152 control-by-VCF z-scores per
+#   metric and condition, but its paired test uses one summary per control
+#   identity (n = 19); the VCF rows are not treated as independent subjects.
 # Outputs: ED3D/ED3E figures, source data, statistics, annotations, manifests,
 #   and captions in the generated-component and manuscript-object trees.
 # How to run:

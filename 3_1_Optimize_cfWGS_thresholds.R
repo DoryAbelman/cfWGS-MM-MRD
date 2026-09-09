@@ -10,7 +10,9 @@
 #   - Figure 4B: blood/cfDNA model confusion matrices.
 #   - Extended Data Figure 5B-C: BM training- and test-cohort performance.
 #   - Extended Data Figure 7B-C and 7E: blood/cfDNA performance and ROC panels.
-#   - Extended Data Figure 9C-F: fragmentomics performance and confusion panels.
+#   - Extended Data Figure 9C-F: fragmentomics performance and confusion
+#     panels. The test-cohort panel in 9F is calculated here from the current
+#     37-sample scored set.
 #   - Supplementary Table 5: final all-model metrics workbook. Note that the
 #     historical source file is named Supplementary_Table_4_All_Model_Metrics_*
 #     because of a manuscript-numbering correction; the artifact map records it

@@ -21,8 +21,9 @@
 #   `6_17_Generate_Compact_All_Model_Grouped_CV_ROC_Panels.R` creates the main
 #   Figure 3A/4A panels, while
 #   `6_14_Generate_Grouped_CV_Manuscript_Replacement_Panels.R` creates the
-#   corresponding Extended Data operating-point panels and Supplementary Table
-#   4 source table.
+#   corresponding Extended Data ROC and operating-point panels. Supplementary
+#   Table 4 is formatted from this script's assembled 32-model performance
+#   table.
 #
 # Inputs
 #   Three completed output directories from

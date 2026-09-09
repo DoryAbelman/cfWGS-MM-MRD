@@ -33,7 +33,9 @@
 #     correlation CSV for Supplementary Table 3 in Final Tables and Figures/
 #   - Figures in Final Tables and Figures/Baseline_concordance/
 #   - R objects (RDS) for downstream concordance/source-data reuse
-#   - Source tables supporting Extended Data Figure 2 panels A-F.
+#   - Source tables supporting Extended Data Figure 2 panels A-C and E-F.
+#     The numerical source for the manually assembled panel D is exported by
+#     5_1_Export_Locked_Figure_Source_Data.R.
 #
 # Required packages:
 #   tidyverse, purrr, stringr, writexl, glue, Hmisc, broom,
@@ -42,8 +44,9 @@
 #   Rscript Scripts_2025/Final_Scripts/2_3_Feature_Concordance_And_Mutation_Counts.R
 #
 # Manuscript outputs created/updated:
-#   - Extended Data Figure 2A-F: baseline concordance, mutation burden, and
-#     feature-correlation panels.
+#   - Extended Data Figure 2A-C and 2E-F: baseline concordance, mutation burden,
+#     and feature-correlation panels. The script can stage the retained full
+#     Extended Data Figure 2 PDF, but it does not draw panel D.
 #   - Supplementary Table 2: this script supplies the BM/cfDNA performance,
 #     FISH/WGS agreement, FISH-probe, and per-sample-call components. The
 #     delivered six-sheet workbook also contains the feature catalogue and
@@ -53,9 +56,15 @@
 #
 # Units of analysis:
 #   - Baseline clinical/mutation summaries: one selected row per patient.
+#     The documented CA-02 consolidation and IMG-142/IMG-235 close-date pairing
+#     can fill complementary fields from more than one visit, so these are
+#     integrated analysis records and not always single physical specimens.
 #   - FISH/WGS concordance: one evaluable patient × event × WGS source row.
 #   - Mutation-set concordance: one matched patient × baseline timepoint row;
 #     confusion counts are over unique mutation identities within that row.
+#     Its true-negative count is defined relative to the complete observed
+#     mutation-identity universe in this section. A patient with no mutation row
+#     in either compartment cannot enter this mutation-row-derived comparison.
 #   - Feature correlations: pairwise-complete selected baseline patient rows;
 #     n_pairs is therefore allowed to differ across variable pairs.
 #

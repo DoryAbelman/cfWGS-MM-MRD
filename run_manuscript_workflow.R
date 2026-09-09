@@ -10,8 +10,9 @@
 # Workflow scope:
 #   This is an internal orchestration helper, not a complete one-command rebuild
 #   of every final figure and table. The source plan currently ends at 4_2 and
-#   does not include the 50-repeat grouped-CV chain (6_12 through 6_19) or the
-#   final figure-source workbook builders (5_1 through 5_4). The optional
+#   does not include the final 50-repeat grouped-CV scripts (`6_12`, `6_13`,
+#   `6_17`, and `6_14`). It also does not run the final figure-source workbook
+#   builders (5_1 through 5_4). The optional
 #   manuscript-number and table-package steps also require local manuscript
 #   files that are not analysis inputs.
 #
@@ -86,13 +87,13 @@ parse_args <- function(args = commandArgs(trailingOnly = TRUE)) {
       "Usage:\n",
       "  Rscript Scripts_2025/Final_Scripts/run_manuscript_workflow.R [options]\n\n",
       "Purpose:\n",
-      "  One command-line entry point for the cleaned Final_Scripts manuscript pipeline.\n",
-      "  By default this is a dry run. Add --execute to run the numbered scripts.\n\n",
+      "  Internal wrapper for the configured source plan and local manuscript-output checks.\n",
+      "  It is not the complete manuscript workflow. By default it is a dry run.\n\n",
       "Common options:\n",
       "  --execute                  Run numbered scripts instead of dry-run.\n",
       "  --skip-source              Skip the configured source pipeline; still run the explicit 3_1C refresh and downstream export/validation steps.\n",
       "  --run-reference-workflow   Also run run_analysis.R --mode generate and --mode validate.\n",
-      "  --include-cache-sensitive  Include cache-sensitive model/nested-CV training stages.\n",
+      "  --include-cache-sensitive  Include the historical cache-sensitive model-training stage in the configured plan.\n",
       "  --from ID --to ID          Run a contiguous numbered-script range, e.g. --from 2_0 --to 2_4.\n",
       "  --only ID                  Run one numbered script ID, e.g. --only 4_1.\n",
       "  --check-packages           Check package availability before stage execution.\n",

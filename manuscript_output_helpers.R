@@ -391,7 +391,7 @@ ms_remove_legacy_primary_artifact_versions <- function(destination_path) {
 }
 
 # Remove redundant historical siblings only when their file contents are
-# exactly identical to the newly written canonical artifact. This deliberately
+# exactly identical to the newly written standard artifact. This deliberately
 # preserves scientifically distinct alternates that share an artifact folder.
 ms_remove_identical_sibling_artifacts <- function(destination_path) {
   if (!file.exists(destination_path)) return(invisible(character()))
@@ -908,7 +908,7 @@ ms_copy_current_final_artifact <- function(artifact_id,
   if (is.na(final_dir)) return(invisible(NA_character_))
 
   # For script-generated supplementary tables, the newest recorded generator
-  # output is the source of truth. Looking up the historical mapped workbook
+  # output is used. Looking up the historical mapped workbook
   # first allowed a valid newly generated workbook to be overwritten by a
   # stale manuscript copy when ms_write_output_index() refreshed all current
   # artifacts. Restrict this preference to supplementary tables so manually

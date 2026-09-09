@@ -18,8 +18,10 @@
 # Analysis unit and denominator:
 #   The pooled manuscript analysis contains 48 scored libraries, including
 #   technical-replicate libraries as separate observations and four
-#   MRD-negative 0% reference libraries. Figure 3C and Supplementary Table 7
-#   report library-level Spearman correlations across those same 48 rows.
+#   MRD-negative 0% reference libraries. Supplementary Table 7 reports these
+#   pooled library-level Spearman correlations. The patient/replicate source
+#   tables written here are summarized with equal patient weighting by 3_1C for
+#   Figure 3C.
 #
 # Inputs:
 #   - Output_tables_2025/selected_combo_models_2025-09-17.rds and
@@ -47,7 +49,8 @@
 # Outputs:
 #   - Dilution_Series_Scoring_2025/ (intermediate scored dilution tables)
 #   - Final Tables and Figures/Fig4H_feature_corr_lollipop_nice2_updated2.png
-#     (Figure 3C).
+#     (pooled 48-library correlation display corresponding to Supplementary
+#     Table 7; not the panel used in the final Figure 3 composite).
 #   - Final Tables and Figures/Fig4G_LOD_combined_HCaxis_v2_20260225.png
 #     (Extended Data Figure 5D; historical filename).
 #   - Final Tables and Figures/Fig5G_LOD_combined_HCaxis_v2_20260225.png
@@ -64,11 +67,10 @@
 #   Rscript 3_1_part2_Apply_cfWGS_thresholds_to_dilution_series.R
 #
 # Manuscript outputs created/updated:
-#   - The pooled feature/model correlations across 48 dilution-series
-#     libraries, including four MRD-negative 0% references, are used in both
-#     Figure 3C and Supplementary Table 7. Patient-weighted/equal-patient
-#     summaries from 3_1C_Summarize_dilution_correlations_across_patients.R are
-#     sensitivity analyses, not the analysis used in the manuscript.
+#   - Supplies the scored patient/replicate source tables summarized by
+#     3_1C_Summarize_dilution_correlations_across_patients.R for Figure 3C.
+#   - Supplementary Table 7 uses the pooled feature/model correlations across
+#     48 dilution-series libraries, including four MRD-negative 0% references.
 #   - Extended Data Figure 5D: BM dilution-series source/diagnostic panel.
 #   - Extended Data Figure 7D: blood-model dilution-series panel.
 #   - Supplementary Table 7: dilution-series correlations and scored data.
@@ -106,8 +108,8 @@ library(writexl)    # standards-compliant supplementary workbooks
 # Shared helper for final manuscript-organized outputs.
 # This script keeps its historical dilution-series filenames. The helper copies
 # the dilution-series figure and table components into
-# final_manuscript_objects/. Its pooled 48-library plot is the Figure 3C
-# analysis used in the manuscript.
+# final_manuscript_objects/. The patient-weighted Figure 3C panel is generated
+# downstream by 3_1C_Summarize_dilution_correlations_across_patients.R.
 .manuscript_helper <- file.path("Scripts_2025", "Final_Scripts", "manuscript_output_helpers.R")
 if (!file.exists(.manuscript_helper)) {
   .manuscript_helper <- "manuscript_output_helpers.R"
