@@ -903,12 +903,9 @@ ggsave(
   bg = "white"
 )
 
-# Legacy local staging below also retains the pooled 48-library display made by
-# 3_1_part2 under an older generic artifact role. The final Figure 3 composite
-# instead uses `Fig3C_dilution_feature_rho_all_patients_with_series_points`,
-# generated above. The pooled display corresponds to the Supplementary Table 7
-# calculation. This block is left unchanged here because altering artifact
-# roles would change generated manifests and copy destinations.
+# Register the patient-weighted panel generated above as Figure 3C. The pooled
+# 48-library display from 3_1_part2 is retained as supporting material because
+# it corresponds to the Supplementary Table 7 calculation.
 canonical_pooled_png_path <- file.path(
   figure_dir,
   "Fig4H_feature_corr_lollipop_nice2_updated2.png"
@@ -939,49 +936,59 @@ if (length(missing_canonical_pooled) > 0L) {
 }
 
 final_panel_path <- ms_copy_artifact(
-  source_path = canonical_pooled_png_path,
+  source_path = all_four_series_png_path,
   artifact_id = "FIG3C",
   role = "figure_panel_png",
   description = paste(
-    "Figure 3C pooled library-level dilution correlations across 48 scored libraries;",
-    "all four MRD-negative references are 0%, matching Supplementary Table 7."
-  ),
-  script_name = "3_1C_Summarize_dilution_correlations_across_patients.R"
-)
-ms_copy_artifact(
-  source_path = canonical_pooled_pdf_path,
-  artifact_id = "FIG3C",
-  role = "figure_panel_pdf",
-  description = "Vector PDF companion to the pooled 48-library Figure 3C panel.",
-  script_name = "3_1C_Summarize_dilution_correlations_across_patients.R"
-)
-ms_copy_artifact(
-  source_path = canonical_pooled_source_path,
-  artifact_id = "FIG3C",
-  role = "source_data_csv_all_four_patients",
-  description = paste(
-    "Exact pooled 48-library Spearman rho, nominal p-value, and rho-squared values",
-    "used by Figure 3C and Supplementary Table 7."
-  ),
-  script_name = "3_1C_Summarize_dilution_correlations_across_patients.R"
-)
-ms_copy_artifact(
-  source_path = all_four_series_png_path,
-  artifact_id = "FIG3C",
-  role = "series_points",
-  description = paste(
-    "Alternate original-style Figure 3C lollipop with the equal-patient",
-    "summary highlighted and all patient/experimental-series correlations shown."
+    "Figure 3C patient-weighted dilution correlations across four patients;",
+    "technical replicates are averaged within patient before equal weighting."
   ),
   script_name = "3_1C_Summarize_dilution_correlations_across_patients.R"
 )
 ms_copy_artifact(
   source_path = all_four_series_pdf_path,
   artifact_id = "FIG3C",
-  role = "series_points",
+  role = "figure_panel_pdf",
+  description = "Vector PDF companion to the patient-weighted Figure 3C panel.",
+  script_name = "3_1C_Summarize_dilution_correlations_across_patients.R"
+)
+ms_copy_artifact(
+  source_path = all_four_source_path,
+  artifact_id = "FIG3C",
+  role = "source_data_csv",
   description = paste(
-    "Vector PDF companion to the alternate Figure 3C lollipop with",
-    "individual patient/experimental-series correlations."
+    "Patient-, series-, and equal-patient Spearman correlations used in",
+    "the patient-weighted Figure 3C panel."
+  ),
+  script_name = "3_1C_Summarize_dilution_correlations_across_patients.R"
+)
+ms_copy_artifact(
+  source_path = canonical_pooled_png_path,
+  artifact_id = "FIG3C",
+  role = "supporting_pooled_48_library_png",
+  description = paste(
+    "Supporting pooled 48-library dilution-correlation display corresponding",
+    "to the Supplementary Table 7 calculation."
+  ),
+  script_name = "3_1C_Summarize_dilution_correlations_across_patients.R"
+)
+ms_copy_artifact(
+  source_path = canonical_pooled_pdf_path,
+  artifact_id = "FIG3C",
+  role = "supporting_pooled_48_library_pdf",
+  description = paste(
+    "Vector PDF companion to the supporting pooled 48-library",
+    "dilution-correlation display."
+  ),
+  script_name = "3_1C_Summarize_dilution_correlations_across_patients.R"
+)
+ms_copy_artifact(
+  source_path = canonical_pooled_source_path,
+  artifact_id = "FIG3C",
+  role = "supporting_pooled_48_library_source_data_csv",
+  description = paste(
+    "Pooled 48-library Spearman correlations retained for Supplementary",
+    "Table 7 provenance; these are not the patient-weighted Figure 3C values."
   ),
   script_name = "3_1C_Summarize_dilution_correlations_across_patients.R"
 )

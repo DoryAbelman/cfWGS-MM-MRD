@@ -29,6 +29,9 @@
 ##      └─ Kaplan-Meier curves (PNG, organized by timepoint)
 ##      └─ Sensitivity tables (CSV)
 ##      └─ Comparative barplots (Supp_6A, Supp_8A)
+##      └─ prospective_timewindow_qc/
+##         └─ prospective_Supplementary_Table_9_timewindow_results.xlsx
+##            (the 16-row-per-sheet result used in Supplementary Table 9)
 ##  
 ##  Scripts this Script Depends On:
 ##    1. 3_1_Optimize_cfWGS_thresholds.R - cfWGS model optimization/thresholds
@@ -5545,13 +5548,23 @@ write_xlsx(
   path = file.path("Final Tables and Figures/Supplementary_Table_9_timewindow_results_test_cohort.xlsx")
 )
 
-# MANUSCRIPT OUTPUT: Supplementary Table 9
-# Multi-sheet workbook with BM and blood time-window results for the test cohort.
+# Historical reduced export/staging block.
+# `results_BM` and `results_blood` contain the prospective calculations above,
+# but the two filters immediately before this block remove comparator rows. The
+# retained Supplementary Table 9 instead uses the complete 16-row-per-sheet
+# workbook written to `prospective_timewindow_qc/`. This block is retained
+# unchanged for now; do not treat its staged workbook as the final table.
 ms_copy_artifact(
-  source_path = file.path("Final Tables and Figures/Supplementary_Table_9_timewindow_results_test_cohort.xlsx"),
+  source_path = file.path(
+    prospective_timewindow_dir,
+    "prospective_Supplementary_Table_9_timewindow_results.xlsx"
+  ),
   artifact_id = "STABLE9",
   role = "supplementary_table_xlsx",
-  description = "Supplementary Table 9: test-cohort time-window sensitivity results for BM and blood models.",
+  description = paste(
+    "Supplementary Table 9: complete prospective time-window results for",
+    "BM and blood models, including all comparator rows."
+  ),
   script_name = "4_1_Survival_Analysis.R"
 )
 
@@ -5983,7 +5996,8 @@ cat(glue(
 #    - Sensitivity, specificity, PPV, and NPV across fixed relapse windows
 #    - BM cfWGS subset results used for Extended Data Figure 6I
 #    - Blood cfWGS subset results used for Extended Data Figure 8D
-#    - Cleaned workbook exported as Supplementary Table 9
+#    - Reduced compatibility workbook exported after the complete prospective
+#      Supplementary Table 9 workbook is written above
 #
 # 6. CONSOLE SUMMARY STATISTICS
 #    - Patient/sample counts and demographics

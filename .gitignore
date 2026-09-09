@@ -38,7 +38,8 @@
 
 # Python virtual environment (used only by VS Code tooling, not analysis code)
 .venv/
-.github/copilot-instructions.md
+/.github/
+/scripts/
 
 # ------------------------------------------------------------------------------
 # Archived, exploratory, and scratch source folders.
@@ -49,6 +50,7 @@ Tmp/
 figures/
 Scripts prior to rerunning ML model/
 For targetted panel MS/
+/0_Local_only/
 
 # ------------------------------------------------------------------------------
 # Generated run logs and local input reports.
@@ -82,6 +84,64 @@ local_input_check_report.tsv
 /5_8_Build_CodeOcean_Analysis_Layer.R
 /CODE_OCEAN_UPLOAD_CHECKLIST.md
 
+# Internal utilities.
+# These do not generate the scientific results shown in the manuscript.
+/5_0_Build_Manuscript_Text_Number_Exports.R
+/run_manuscript_workflow.R
+/validate_manuscript_outputs.R
+/shorten_manuscript_figure_filenames.R
+/build_current_final_table_package.R
+/build_stage_artifact_map.R
+/deduplicate_final_manuscript_figure_artifacts.R
+/refresh_final_manuscript_table_bundle.R
+/sync_current_submission_table_package.R
+/rebuild_current_submission_ed2_workbooks.mjs
+/run_50repeat_all_models_2026-08-05.sh
+
+# Optional derived exports and sensitivity checks not used for the manuscript
+# figures or tables.
+/1_8B_Export_MRDetect_patient_feature_table.R
+/1_10_Estimate_MRDetect_LOD_proxy.R
+/3_1D_Audit_MRDetect_XPlus_reference_update.R
+/4_1B_Build_all_evaluable_first_nonbaseline_KM.R
+
+# Review-only audits and exploratory analyses that are not used to generate a
+# main figure, Extended Data figure, or manuscript table.
+/6_0_Run_Repo_Correctness_Audit.R
+/6_1_MRD_Eligibility_Sensitivity_Audit.R
+/6_2_Dataflow_Retention_Audit.R
+/6_3_Manuscript_Output_Trace_Audit.R
+/6_4_Scoring_Mask_Audit.R
+/6_5_Endpoint_Correctness_Audit.R
+/6_6_Heatmap_Genomic_Retention_Audit.R
+/6_7_Strong_cfDNA_Signal_Rescue_Audit.R
+/6_8_Exploratory_MRD_ctDNA_PFS.R
+/6_9_Patient_Grouped_CV_Diagnostic.R
+/6_10_Audit_MRDetect_XPlus_full22_manuscript_refresh.R
+/6_13_Temporal_Validation_Subset_Audit.R
+
+# Superseded or optional plotting and manuscript-file synchronization helpers.
+# The retained 6_12, 6_13, 6_14_Generate, and 6_17 scripts contain the final
+# 50-repeat nested-CV analysis, combined results, and plots.
+/6_11_Assemble_Extended_Data_Figure_3_full22.R
+/6_12_Assemble_Extended_Data_Figure_1.R
+/6_14_Build_Corrected_Grouped_CV_Panels.R
+/6_15_Generate_Selected_Model_Grouped_CV_ROC_Panels.R
+/6_16_Generate_All_Model_Grouped_CV_ROC_Panels.R
+/6_18_Sync_Grouped_CV_Replacements_To_Final_Manuscript_Objects.R
+/6_19_Generate_Current_Fragmentomics_Test_Confusion_Panel.R
+/6_19_Sync_ROC_Main_Operating_Extended_Data.R
+/6_20_Sync_50Repeat_Figure_Source_Workbooks.R
+/6_21_Sync_ED9D_37Sample_Source_Workbook.R
+
+# Generated index and local documentation used during this review.
+/script_index.tsv
+/docs/SCRIPT_DOCUMENTATION_STANDARD.md
+/docs/FIGURE_SOURCE_WORKBOOK_RECONCILIATION.md
+/MANUSCRIPT_OUTPUT_MAP.md
+/PROSPECTIVE_TIMEWINDOW_QC.md
+/data/
+
 # Mutation-tracking analyses are not included in the current manuscript.
 /4_2B_FZ07_mutation_tracking_evolution.R
 /4_2C_Audit_BM_informed_declines_before_relapse.R
@@ -108,7 +168,6 @@ local_input_check_report.tsv
 /docs/PUBLICATION_TABLES.md
 /docs/SUPPLEMENTARY_TABLE_RECONCILIATION.md
 /docs/artifact_regeneration_status.tsv
-/docs/manuscript_artifact_source_map.tsv
 /docs/stage_ordered_script_artifact_map.md
 /docs/stage_ordered_script_artifact_map.tsv
 
@@ -118,9 +177,7 @@ local_input_check_report.tsv
 # is retained because it contains study-related sensitivity analyses.
 # ------------------------------------------------------------------------------
 
-/archive/*
-!/archive/support_analysis/
-!/archive/support_analysis/**
+/archive/
 
 # ------------------------------------------------------------------------------
 # Agent/runtime instruction files.

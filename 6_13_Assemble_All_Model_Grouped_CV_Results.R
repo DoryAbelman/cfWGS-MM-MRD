@@ -37,7 +37,7 @@
 #   A new combined directory under
 #   Output_tables_2025/patient_grouped_repeated_nested_cv/. It contains the
 #   merged detail tables, the 32-model summary, source-run manifest, combined QC
-#   table, warning summary, and RUN_COMPLETE marker.
+#   table, warning summary, Supplementary_Table_4.csv, and RUN_COMPLETE marker.
 #
 # R packages
 #   dplyr, purrr, readr, tibble, and tidyr.
@@ -56,7 +56,8 @@
 #   3. Merge detailed folds, predictions, tuning results, and bootstraps.
 #   4. Validate model completeness, uniqueness, and fold integrity.
 #   5. Compare grouped-CV AUCs with preserved legacy row-level estimates.
-#   6. Write a combined manifest, QC table, and RUN_COMPLETE marker.
+#   6. Format Supplementary Table 4 without changing the model results.
+#   7. Write a combined manifest, QC table, and RUN_COMPLETE marker.
 #
 # Scientific boundary
 #   This script does not fit models, select features, change thresholds,
@@ -380,7 +381,90 @@ publication_summary <- summary_tbl |>
 write_csv(publication_summary, file.path(output_dir, "publication_model_performance_and_legacy_comparison.csv"), na = "")
 
 # ----------------------------------------------------------------------------
-# 6. Record the source runs and mark the combined run complete
+# 6. Format Supplementary Table 4 from the completed 50-repeat result
+# ----------------------------------------------------------------------------
+# The manuscript table contains the core sample counts and performance metrics.
+# Values are rounded to nine decimal places for display; the full-precision
+# values remain available in primary_performance_summary.csv and
+# publication_model_performance_and_legacy_comparison.csv.
+
+supplementary_table_4 <- publication_summary |>
+  transmute(
+    analysis_stratum = cohort_group,
+    model_id = model,
+    display_name = paper_label,
+    n_samples,
+    n_patients,
+    n_positive_samples,
+    n_negative_samples,
+    n_patients_with_repeated_samples,
+    outer_repeats,
+    outer_folds,
+    inner_repeats,
+    inner_folds,
+    mean_repeat_pooled_auc = repeat_pooled_auc_mean,
+    sd_repeat_pooled_auc = repeat_pooled_auc_sd,
+    patient_cluster_boot_auc_ci_low = auc_cluster_boot_q025,
+    patient_cluster_boot_auc_ci_high = auc_cluster_boot_q975,
+    mean_sensitivity = sensitivity_estimate,
+    sd_sensitivity = sensitivity_split_sd,
+    patient_cluster_boot_sensitivity_ci_low = sensitivity_cluster_boot_q025,
+    patient_cluster_boot_sensitivity_ci_high = sensitivity_cluster_boot_q975,
+    mean_specificity = specificity_estimate,
+    sd_specificity = specificity_split_sd,
+    patient_cluster_boot_specificity_ci_low = specificity_cluster_boot_q025,
+    patient_cluster_boot_specificity_ci_high = specificity_cluster_boot_q975,
+    mean_balanced_accuracy = balanced_accuracy_estimate,
+    sd_balanced_accuracy = balanced_accuracy_split_sd,
+    patient_cluster_boot_balanced_accuracy_ci_low = balanced_accuracy_cluster_boot_q025,
+    patient_cluster_boot_balanced_accuracy_ci_high = balanced_accuracy_cluster_boot_q975,
+    mean_accuracy = accuracy_estimate,
+    sd_accuracy = accuracy_split_sd,
+    patient_cluster_boot_accuracy_ci_low = accuracy_cluster_boot_q025,
+    patient_cluster_boot_accuracy_ci_high = accuracy_cluster_boot_q975,
+    mean_brier_score = brier_estimate,
+    sd_brier_score = brier_split_sd,
+    patient_cluster_boot_brier_ci_low = brier_cluster_boot_q025,
+    patient_cluster_boot_brier_ci_high = brier_cluster_boot_q975,
+    patient_cluster_bootstrap_replicates = bootstrap_reps
+  ) |>
+  mutate(across(where(is.double), ~ round(.x, digits = 9)))
+
+expected_table_4_columns <- c(
+  "analysis_stratum", "model_id", "display_name", "n_samples", "n_patients",
+  "n_positive_samples", "n_negative_samples", "n_patients_with_repeated_samples",
+  "outer_repeats", "outer_folds", "inner_repeats", "inner_folds",
+  "mean_repeat_pooled_auc", "sd_repeat_pooled_auc",
+  "patient_cluster_boot_auc_ci_low", "patient_cluster_boot_auc_ci_high",
+  "mean_sensitivity", "sd_sensitivity",
+  "patient_cluster_boot_sensitivity_ci_low",
+  "patient_cluster_boot_sensitivity_ci_high", "mean_specificity",
+  "sd_specificity", "patient_cluster_boot_specificity_ci_low",
+  "patient_cluster_boot_specificity_ci_high", "mean_balanced_accuracy",
+  "sd_balanced_accuracy", "patient_cluster_boot_balanced_accuracy_ci_low",
+  "patient_cluster_boot_balanced_accuracy_ci_high", "mean_accuracy",
+  "sd_accuracy", "patient_cluster_boot_accuracy_ci_low",
+  "patient_cluster_boot_accuracy_ci_high", "mean_brier_score",
+  "sd_brier_score", "patient_cluster_boot_brier_ci_low",
+  "patient_cluster_boot_brier_ci_high", "patient_cluster_bootstrap_replicates"
+)
+
+if (nrow(supplementary_table_4) != 32L ||
+    anyDuplicated(supplementary_table_4$model_id) ||
+    !identical(names(supplementary_table_4), expected_table_4_columns) ||
+    anyNA(supplementary_table_4)) {
+  stop("Supplementary Table 4 failed its row, model, column, or missing-value check.",
+       call. = FALSE)
+}
+
+write_csv(
+  supplementary_table_4,
+  file.path(output_dir, "Supplementary_Table_4.csv"),
+  na = ""
+)
+
+# ----------------------------------------------------------------------------
+# 7. Record the source runs and mark the combined run complete
 # ----------------------------------------------------------------------------
 
 run_manifest <- tibble(

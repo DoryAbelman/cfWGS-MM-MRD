@@ -32,8 +32,7 @@
 #     April 2025 table written by 1_0. helpers.R may append revision metadata.
 #   • Cohort assignments = cohort_assignment_table_updated.rds
 #   • IGV BAM inventory  = IG_Mini_Bams.csv
-#   • Shared helpers      = Scripts_2025/Final_Scripts/helpers.R and
-#       GENIUSVariantAnalysis_Functions.R
+#   • Shared helper       = Scripts_2025/Final_Scripts/helpers.R
 #   • Reviewed calls     = Jan2025_exported_data/
 #       Ig_caller_df_cfWGS_filtered_aggressive2_iGV_check.xlsm
 #   • Optional Spring 2026 metadata and IgCaller outputs under
@@ -151,21 +150,6 @@ first_existing <- function(candidates, label) {
   }
   hit
 }
-
-
-genius_helper_path <- c(
-  "GENIUSVariantAnalysis_Functions.R",
-  file.path("..", "..", "GENIUSVariantAnalysis_Functions.R")
-)
-genius_helper_path <- genius_helper_path[file.exists(genius_helper_path)][1]
-if (is.na(genius_helper_path)) {
-  stop(
-    "Could not find GENIUSVariantAnalysis_Functions.R. Run from the project root or stage the helper at the project root.",
-    call. = FALSE
-  )
-}
-source(genius_helper_path)
-rm(genius_helper_path)
 
 
 ### Add clinical metadata for sample/patient annotation.

@@ -76,19 +76,6 @@ suppressPackageStartupMessages({
   library(GeneCycle)   # for periodogram()
 })
 
-# Optional project helper. This script keeps the key helper functions it needs
-# below, so absence of session.functions.R should not block dilution-series
-# processing. If the helper is staged, source it for consistency with 1_7A/B.
-session_functions_path <- c(
-  "session.functions.R",
-  file.path("..", "..", "session.functions.R")
-)
-session_functions_path <- session_functions_path[file.exists(session_functions_path)][1]
-if (!is.na(session_functions_path)) {
-  source(session_functions_path)
-}
-rm(session_functions_path)
-
 .helpers_path <- file.path("Scripts_2025", "Final_Scripts", "helpers.R")
 if (!file.exists(.helpers_path)) {
   .helpers_path <- "helpers.R"

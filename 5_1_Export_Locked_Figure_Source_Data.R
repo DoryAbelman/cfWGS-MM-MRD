@@ -260,7 +260,7 @@ minimalize_publication_panel <- function(data, panel_key) {
     fig2e_stats_path <- file.path(
       canonical_root, "final_manuscript_objects",
       "additional_all_evaluable_longitudinal_panels",
-      "reviewer_alternative_terminal_summary_v2",
+      "terminal_sample_summary_v2",
       "terminal_sample_group_statistics.csv"
     )
     stop_if_missing(fig2e_stats_path, "Figure 2E global 12-test statistics")
@@ -541,7 +541,7 @@ build_figure_2e <- function() {
   source_root <- file.path(
     canonical_root, "final_manuscript_objects",
     "additional_all_evaluable_longitudinal_panels",
-    "reviewer_alternative_terminal_summary_v2"
+    "terminal_sample_summary_v2"
   )
   point_path <- file.path(
     source_root, "terminal_sample_patient_level_source_data.csv"
@@ -1661,7 +1661,7 @@ for (i in seq_len(nrow(locked_figures))) {
     source_paths <- file.path(
       canonical_root, "final_manuscript_objects",
       "additional_all_evaluable_longitudinal_panels",
-      "reviewer_alternative_terminal_summary_v2",
+      "terminal_sample_summary_v2",
       c(
         "terminal_sample_patient_level_source_data.csv",
         "terminal_sample_group_statistics.csv"

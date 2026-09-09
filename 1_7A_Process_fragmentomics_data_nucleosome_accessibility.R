@@ -30,7 +30,7 @@
 #        – combined_clinical_data_updated_April2025.csv
 #   • Optional Spring 2026 patient and matched-control GRIFFIN exports are
 #     resolved by helpers.R when present.
-#   • session.functions.R and Scripts_2025/Final_Scripts/helpers.R
+#   • Scripts_2025/Final_Scripts/helpers.R
 #
 # Analysis units and statistical scope:
 #   Metric tables contain one sample-site row. Site-level t-tests treat sample
@@ -76,20 +76,6 @@ library(dplyr)
 library(readr)
 library(stringr)
 library(data.table)
-
-session_functions_path <- c(
-  "session.functions.R",
-  file.path("..", "..", "session.functions.R")
-)
-session_functions_path <- session_functions_path[file.exists(session_functions_path)][1]
-if (is.na(session_functions_path)) {
-  stop(
-    "Could not find session.functions.R. Run from the project root or stage the helper at the project root.",
-    call. = FALSE
-  )
-}
-source(session_functions_path)
-rm(session_functions_path)
 
 .helpers_path <- file.path("Scripts_2025", "Final_Scripts", "helpers.R")
 if (!file.exists(.helpers_path)) {

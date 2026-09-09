@@ -2,7 +2,7 @@
 
 This map identifies the script that calculates or draws each result used in the
 paper. It does not include scripts that only copy files into local manuscript
-folders.
+folders. Final multi-panel figure assembly is performed separately.
 
 ## Main figures
 
@@ -61,12 +61,12 @@ folders.
 | Supplementary Table 1 | `2_1_Part2_Cohort_Swim_Plot.R` | Final CSV matches the retained script output. |
 | Supplementary Table 2 | `2_2_Baseline_demographics_by_WGS_heatmap_updated.R`; `2_3_Feature_Concordance_And_Mutation_Counts.R` | Six-sheet assembly requires reconciliation before regeneration. |
 | Supplementary Table 3 | `2_3_Feature_Concordance_And_Mutation_Counts.R` | Final CSV matches the retained correlation export. |
-| Supplementary Table 4 | `6_12_Patient_Grouped_Repeated_Nested_CV.R`; `6_13_Assemble_All_Model_Grouped_CV_Results.R` | Uses the 50-repeat grouped nested-CV result; final CSV applies rounding and removes one descriptive column. |
+| Supplementary Table 4 | `6_12_Patient_Grouped_Repeated_Nested_CV.R`; `6_13_Assemble_All_Model_Grouped_CV_Results.R` | `6_13` writes `Supplementary_Table_4.csv` from the 50-repeat grouped nested-CV result, using the manuscript columns and nine-decimal rounding. |
 | Supplementary Table 5 | `3_1_Optimize_cfWGS_thresholds.R` | Full-training refit metrics; distinct from held-out nested-CV performance. |
 | Supplementary Table 6 | `3_1C_Expanded_test_clustered_sensitivity.R` | Final workbook removes one presentation-only `resampling_unit` column. |
 | Supplementary Table 7 | `3_1_part2_Apply_cfWGS_thresholds_to_dilution_series.R` | Pooled correlations across 48 scored libraries plus the selected 73-column scored-data export; this weighting differs from Figure 3C. |
 | Supplementary Table 8 | `3_2_Plot_optimal_cutoff_and_clinical_concordance.R` | All four sheets match the reviewed generated values. |
-| Supplementary Table 9 | `4_1_Survival_Analysis.R` | Final workbook uses the 16-row-per-sheet prospective result before later comparator filtering. |
+| Supplementary Table 9 | `4_1_Survival_Analysis.R` | The 16-row-per-sheet workbook is written to `Output_tables_2025/detection_progression_updated6/prospective_timewindow_qc/prospective_Supplementary_Table_9_timewindow_results.xlsx`; a later historical export filters out comparator rows. |
 | Supplementary Table 10 | `3_2_Plot_optimal_cutoff_and_clinical_concordance.R` | Values match; the historical generated filename incorrectly calls this Table 9. |
 
 The retained Supplementary Table 2 workbook should not be regenerated until its

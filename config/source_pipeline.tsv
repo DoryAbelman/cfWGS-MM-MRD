@@ -1,0 +1,36 @@
+order	script_id	stage	script	run_policy	notes
+1	1_0	clinical_processing	1_0_Process_clinical_metadata.R	run	Harmonises clinical metadata across cohorts.
+2	1_1A	clinical_processing	1_1A_Process_post_ACST_and_clinical_OS_PFS_and_clinical_FISH_metadata.R	run	Processes transplant, OS/PFS, progression, and FISH metadata.
+3	1_1B	clinical_processing	1_1B_Process_clinical_labs.R	run	Processes cross-cohort clinical laboratory, staging, demographic, and FISH fields.
+4	1_2	mutation_processing	1_2_Process_Mutation_Data.R	run	Processes bone-marrow and cfDNA MAF files.
+5	1_2_part2	mutation_processing	1_2_Part2_Get_Mutation_Overlap.R	run	Computes patient-level bone-marrow/cfDNA mutation-set Jaccard overlap and Extended Data Figure 2G.
+6	1_3	translocation_processing	1_3_Process_Ig_Translocation_Info.R	run	Processes Ig-caller structural-variant calls into the reviewed translocation feature matrix.
+7	1_4	ichor_cna_processing	1_4_Process_CNA_Data.R	run	Processes ichorCNA segments into arm-level and FISH-locus CNA features.
+8	1_4A	sequenza_cna_processing	1_4A_Process_sequenza_CNA_Data.R	run	Processes Sequenza segments and purity/ploidy outputs.
+9	1_5	feature_integration	1_5_Integrate_WGS_Feature_Data.R	run	Integrates mutation, CNA, translocation, tumour-fraction, and clinical sample features.
+10	1_6	sample_qc	1_6_Identify_High_Quality_Patient_Pairs.R	run	Defines baseline WGS evidence eligibility, cohort assignment, and the Figure 1B source table.
+11	1_7A	fragmentomics_processing	1_7A_Process_fragmentomics_data_nucleosome_accessibility.R	run	Processes nucleosome-accessibility features.
+12	1_7B	fragmentomics_processing	1_7B_Process_fragment_score_and_inetegrate_fragmentomics_data.R	run	Processes fragment-size scores and integrates fragmentomics.
+13	1_7C	dilution_series_processing	1_7C_Process_fragmentomics_data_dilution_series_updated.R	run	Processes dilution-series fragmentomics.
+14	1_7D	platform_calibration	1_7D_Compare_CHARM_Xplus_HC_controls.R	run	Builds the paired healthy-control fragmentomics comparison used by Extended Data Figure 3F-G.
+15	1_8	mrdetect_processing	1_8_Process_Cumulative_VAFs_MRDetect.R	run	Processes MRDetect outputs for patient samples.
+16	1_8A	dilution_series_processing	1_8A_Process_Cumulative_VAFs_for_dilution_series.R	run	Processes MRDetect outputs for the dilution series.
+17	1_8C	platform_calibration	1_8C_Analyze_MRDetect_Healthy_Control_Platform_Calibration.R	run	Analyzes the MRDetect healthy-control platform comparison and calibration used by Extended Data Figure 3D-E.
+18	1_8D	platform_calibration	1_8D_Build_ED3DE_MRDetect_Platform_Calibration.R	run	Builds Extended Data Figure 3D-E and its source data.
+19	1_8E	platform_calibration	1_8E_Build_ED3FG_Fragmentomics_Platform_Calibration.R	run	Builds Extended Data Figure 3F-G and its source data.
+20	2_0	master_table	2_0_Assemble_Table_With_All_Features.R	run	Assembles the integrated clinical and cfWGS feature table.
+21	2_1	main_table	2_1_Clinical_Demographics_Table.R	run	Generates Table 1 source outputs.
+22	2_1_part2	figure_generation	2_1_Part2_Cohort_Swim_Plot.R	run	Generates Figure 1A and Supplementary Table 1.
+23	2_2	figure_generation	2_2_Baseline_demographics_by_WGS_heatmap_updated.R	run	Generates Extended Data Figure 1 and Supplementary Table 2 sheets A-B inputs.
+24	2_3	table_and_figure_generation	2_3_Feature_Concordance_And_Mutation_Counts.R	run	Generates Extended Data Figure 2, Supplementary Table 2 sheets C-F inputs, and Supplementary Table 3.
+25	2_4	longitudinal_generation	2_4_Longitudinal_features_analysis.R	run	Generates Figure 2A and Extended Data Figure 4.
+26	2_4B	longitudinal_generation	2_4B_Build_all_evaluable_longitudinal_panels.R	run	Generates Figure 2B-E and Extended Data Figure 3A-C.
+27	3_1	model_scoring	3_1_Optimize_cfWGS_thresholds.R	run	Applies the preserved models and thresholds and generates model-performance outputs without retraining.
+28	3_1_A	easym_processing	3_1_A_Process_and_optimize_EasyM.R	run	Processes EasyM as percent of baseline bone-marrow immunoglobulin and produces the isotype-specific calls used downstream.
+29	3_1C_expanded	repeated_measures_sensitivity	3_1C_Expanded_test_clustered_sensitivity.R	run	Builds patient-clustered and one-sample-per-patient sensitivity outputs and Supplementary Table 6.
+30	3_1_part2	dilution_series_model_application	3_1_part2_Apply_cfWGS_thresholds_to_dilution_series.R	run	Applies preserved models and thresholds to the dilution series.
+31	3_1C_dilution	dilution_series_summary	3_1C_Summarize_dilution_correlations_across_patients.R	run	Builds the patient-weighted Figure 3C dilution-series correlation panel.
+32	3_2	figure_generation	3_2_Plot_optimal_cutoff_and_clinical_concordance.R	run	Generates clinical-concordance figures and Supplementary Tables 8 and 10.
+33	4_1	survival_analysis	4_1_Survival_Analysis.R	run	Generates survival and relapse-detection figures and Supplementary Table 9.
+34	4_2	subclonal_evolution	4_2_Compare_subclonal_evolution.R	run	Generates the repository-side event summary supporting Extended Data Figure 10.
+35	5_3	figure_source_workbooks	5_3_Rebuild_Figure_Source_Data_Workbooks.R	post_cv	Rebuilds and validates the main and Extended Data figure source-data workbooks after all figure inputs, including grouped-CV outputs, are available.

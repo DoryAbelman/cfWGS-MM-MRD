@@ -7,6 +7,11 @@ release.
 Run scripts from the main project directory so their relative input and output
 paths resolve correctly.
 
+`run_pipeline.R` reads `config/source_pipeline.tsv` and provides a read-only
+dry run by default. Add `--execute` only after the required protected inputs
+have been staged. The 50-repeat grouped nested-CV commands remain separate
+because they require three parameterized model blocks and unique run IDs.
+
 ## Workflow overview
 
 ```text
@@ -28,19 +33,22 @@ patient-grouped repeated nested CV used in the paper.
 
 ### Shared setup and helper files
 
+- `config.R` records the package inventory checked by
+  `run_pipeline.R --check-packages`.
+- `setup_packages.R` optionally loads the commonly used packages; numbered
+  scripts also declare and load their direct dependencies.
+- `prepare_local_inputs.R` checks the expected project-relative input paths.
+- `pipeline_metadata.R` reads and validates the ordered plan used by
+  `run_pipeline.R`.
+
 - `helpers.R` contains study-specific metadata corrections, identity aliases,
   cohort rules, MRDetect parsing/control definitions, revision mutation counts,
   dilution metadata, and FISH recovery used by multiple numbered scripts. Some
   helper calls also write audit CSVs under `Output_tables_2025/`.
 - `next_event_endpoint_helpers.R` constructs the sample-relative progression or
-  censor endpoint used by `2_4`, `2_4B`, `4_1`, and `4_1B`. It admits a
+  censor endpoint used by `2_4`, `2_4B`, and `4_1`. It admits a
   progression up to 30 days before a sample as a day-zero event and otherwise
   selects the first later progression or latest available censor date.
-- `config.R` supplies the package inventory used by
-  `run_pipeline.R --check-packages`. Its three path variables are historical;
-  they do not redirect the numbered scripts.
-- `setup_packages.R` is an optional common-package loader, not an installer or
-  the complete environment definition.
 - `publication_export_helpers.R` relabels internal cohort terminology as
   Training or Testing in copied table and workbook data. It does not change
   numeric values, sample inclusion, or model predictions.
@@ -212,21 +220,10 @@ patient-grouped repeated nested CV used in the paper.
 - **Main inputs:** historical and XPlus healthy-control fragmentomics outputs.
 - **Main output used downstream:**
   `Results_Fragmentomics/CHARM_Xplus_HC_comparison/sample_level_feature_values.csv`.
-- **Downstream use:** `1_7E` and `1_8E`.
+- **Downstream use:** `1_8E`.
 - **Important detail:** its exploratory Wilcoxon tests are unpaired even though
   the controls are identity matched. The transformation itself is defined in
   `1_7B`.
-
-### `1_7E_Harmonize_Fragmentomics_Sequencing_Platforms.R`
-
-- **Purpose:** plot the fixed mean/SD transformation before and after mapping
-  the same 19 XPlus controls to the historical scale.
-- **Inputs:** the `1_7D` matched-control table, `1_7B` parameter table, and
-  `1_7A` regulatory-coverage values.
-- **Outputs:** optional QC tables and plots under
-  `Results_Fragmentomics/Healthy_control_platform_harmonization/`.
-- **Important detail:** this is an in-sample implementation check, not the
-  leave-one-control-out validation used in the paper.
 
 ### `1_8E_Build_ED3FG_Fragmentomics_Platform_Calibration.R`
 
@@ -255,7 +252,7 @@ patient-grouped repeated nested CV used in the paper.
   `Output_tables_2025/clinical_support/`.
 - **Downstream use:** `2_0` adds the BM- and blood-informed features to the
   integrated analysis table; `2_4` uses the complete z-scored data; `2_1_Part2`
-  uses the all-patient blood-informed table; and `1_10`/`3_1_part2` use the
+  uses the all-patient blood-informed table; and `3_1_part2` uses the
   historical control export.
 - **Important boundary:** the retained `sites_rate_zscore_charm > 4.5` screen is
   an upstream feature definition. Final model-based cfWGS calls are defined in
@@ -289,10 +286,6 @@ patient-grouped repeated nested CV used in the paper.
 - **Purpose:** plot the MRDetect platform shift and platform-matched reference
   calibration.
 - **Paper use:** Extended Data Figure 3D-E.
-
-`1_8B_Export_MRDetect_patient_feature_table.R` is a derived export not read by a
-main manuscript script. Keep it outside the required sequence unless that table
-is specifically needed.
 
 ## 5. Integrated tables and descriptive figures
 
@@ -373,9 +366,10 @@ segment and FISH-probe source data; `2_3` does not draw that panel.
   patient follow-up, and progression dates.
 - **Paper use:** Figures 3F and 4E, Extended Data Figures 6 and 8, and
   Supplementary Table 9.
-
-`4_1B_Build_all_evaluable_first_nonbaseline_KM.R` contains alternative survival
-anchors and is not the generator of the submitted Figure 3F.
+- **Supplementary Table 9 output:**
+  `Output_tables_2025/detection_progression_updated6/prospective_timewindow_qc/prospective_Supplementary_Table_9_timewindow_results.xlsx`.
+  This is the complete 16-row-per-sheet workbook; a later historical export in
+  the same script contains fewer comparator rows.
 
 ## 7. Dilution series
 
@@ -391,13 +385,6 @@ Supplementary Table 7 treats the 48 dilution libraries as observations. Figure
 across four patients. Other three-patient and patient-mean displays in
 `3_1C_Summarize_dilution_correlations_across_patients.R` are sensitivity
 analyses.
-
-`1_9_Create_dilution_series_eligibility_table.R` and
-`1_10_Estimate_MRDetect_LOD_proxy.R` are experiment-planning/QC scripts and are
-not required to reproduce the submitted dilution results. The manuscript
-analysis begins with the completed physical dilution measurements processed by
-`1_7C` and `1_8A`; the values calculated by `1_9` are candidate mixing proxies,
-not measured tumour fractions or a formal analytical LOD.
 
 ## 8. Patient-grouped repeated nested cross-validation
 
@@ -424,6 +411,9 @@ not measured tumour fractions or a formal analytical LOD.
   blocks and verify the expected 32-model inventory.
 - **Paper use:** assembled values for Supplementary Table 4 and all final
   grouped-CV panels.
+- **Outputs:** the full-precision combined result and
+  `Supplementary_Table_4.csv`, which uses the manuscript column set and rounds
+  displayed metrics to nine decimal places.
 
 ### Grouped-CV figure scripts
 
@@ -431,13 +421,6 @@ not measured tumour fractions or a formal analytical LOD.
 | --- | --- |
 | `6_17_Generate_Compact_All_Model_Grouped_CV_ROC_Panels.R` | Figures 3A and 4A |
 | `6_14_Generate_Grouped_CV_Manuscript_Replacement_Panels.R` | Extended Data Figures 5A, 7A, and 9A-B |
-
-The tracked `6_14_Build_Corrected_Grouped_CV_Panels.R` produces an earlier
-four-model display and is not the final manuscript panel generator.
-
-`6_13_Temporal_Validation_Subset_Audit.R` separately compares fixed-model
-performance in the original seven-patient hold-out and later-accrued patients.
-It is a sensitivity audit, not an input to a manuscript figure or table.
 
 ## 9. CNA change analysis
 
@@ -477,7 +460,18 @@ the paper and are not part of the GitHub release.
 - **Safety:** the script checks sheet counts and original patient identifiers,
   but overwrites the workbook destinations.
 
-Neither source-data script is called by `run_pipeline.R`.
+### `5_3_Rebuild_Figure_Source_Data_Workbooks.R`
+
+- **Purpose:** run `5_1`, `5_2`, and `5_4` in order after all figure inputs,
+  including grouped-CV outputs, are available.
+- **Outputs:** rebuilt and validated main-figure and Extended Data source-data
+  workbooks.
+
+### `5_4_Validate_Figure_Source_Data_Workbooks.R`
+
+- **Purpose:** check workbook structure, formula errors, empty sheets, calendar
+  dates, and original patient identifiers without changing scientific values.
+- **Outputs:** validation status and optional rendered QA PDFs.
 
 The workbooks currently stored with the final manuscript contain 17 main-
 figure sheets and 54 Extended Data sheets. The generated 18/56-sheet versions
@@ -485,6 +479,10 @@ add `Fig1B`, `ED10A`, and `ED10B`. No other sheet names differ. Figure 1B is
 assembled from exported counts, and the final Extended Data Figure 10 tracks
 come from the separate ichorCNA plotting workflow. The retained final workbooks
 were not replaced during this review.
+
+The repository generates individual panels and source-data files. Final
+multi-panel figure assembly is performed separately, and assembly scripts are
+not included.
 
 ## 11. Outputs and table assembly
 
@@ -500,13 +498,9 @@ At present:
 - Supplementary Table 2 requires a reviewed scientific reconciliation before
   it is regenerated.
 
-The local manuscript-copy, package-building, Code Ocean, and audit scripts are
-not analysis entry points and are omitted from this guide.
+Standalone package-building and audit scripts are not analysis entry points and
+are omitted from this guide.
 
-Two tracked maintenance helpers also sit outside the analysis workflow:
-
-- `run_manuscript_workflow.R` combines the incomplete configured source plan
-  with local manuscript-output refresh and packaging steps; it is not the
-  complete paper workflow.
-- `shorten_manuscript_figure_filenames.R` renames files in place without a dry
-  run and is not required for manuscript reproduction.
+`manuscript_output_helpers.R` copies selected outputs into labeled folders
+under `final_manuscript_objects/`. Several retained analysis scripts call this
+helper, which requires `docs/manuscript_artifact_source_map.tsv`.

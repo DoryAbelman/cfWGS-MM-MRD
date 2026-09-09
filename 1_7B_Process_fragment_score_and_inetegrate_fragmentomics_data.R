@@ -28,7 +28,7 @@
 #   • patients_with_either_cfDNA_at_baseline_and_monitoring.csv and
 #     patients_with_cfDNA_at_baseline_and_monitoring.csv are read for historical
 #     compatibility but are not referenced by the active calculations.
-#   • session.functions.R and Scripts_2025/Final_Scripts/helpers.R
+#   • Scripts_2025/Final_Scripts/helpers.R
 #
 # Outputs:
 #   • Pairwise_t_Test_Results_fragment_scores.csv
@@ -100,20 +100,6 @@ first_nonmissing <- function(x) {
   if (length(x) == 0L) return(NA)
   x[[1]]
 }
-
-session_functions_path <- c(
-  "session.functions.R",
-  file.path("..", "..", "session.functions.R")
-)
-session_functions_path <- session_functions_path[file.exists(session_functions_path)][1]
-if (is.na(session_functions_path)) {
-  stop(
-    "Could not find session.functions.R. Run from the project root or stage the helper at the project root.",
-    call. = FALSE
-  )
-}
-source(session_functions_path)
-rm(session_functions_path)
 
 .helpers_path <- file.path("Scripts_2025", "Final_Scripts", "helpers.R")
 if (!file.exists(.helpers_path)) {

@@ -15,31 +15,30 @@
 # Usage from this directory:
 #   Rscript run_pipeline.R
 #   Rscript run_pipeline.R --execute --from 2_0 --to 2_4
+#   Rscript run_pipeline.R --execute --only 5_3 --include-post-cv
 #
 # Purpose:
-#   Dry-run or execute the numbered scripts in source-pipeline order,
-#   with guardrails for cache-sensitive/model-training stages.
+#   Dry-run or execute the retained numbered scripts in source-pipeline order.
 #
 # Workflow scope:
-#   The executed scripts come only from config/source_pipeline.tsv. That plan
-#   currently covers 0_1 through 4_2. It does not run the later 50-repeat
-#   patient-grouped nested-CV fitting, assembly, plotting, or source-workbook
-#   scripts (`6_12`, `6_13`, `6_14_Generate`, `6_17`, and `5_1` through
-#   `5_4`). Those steps must therefore be run separately when reproducing all
-#   final manuscript outputs.
+#   The executed scripts come only from config/source_pipeline.tsv. The default
+#   plan covers the retained preprocessing, preserved-model scoring, and
+#   manuscript figure/table generation scripts. The 50-repeat
+#   patient-grouped nested-CV workflow remains separate because it requires
+#   three parameterized long-running fits with unique run IDs. After those fits
+#   and their plots are complete, add --include-post-cv to rebuild and validate
+#   the figure source-data workbooks through the 5_3 runner.
 #
 # Inputs:
 #   * config/source_pipeline.tsv supplies the ordered script list and run policy.
-#   * docs/manuscript_artifact_source_map.tsv supplies the reported figure/table
-#     mapping.
 #   * config.R is read only when --check-packages is requested.
 #   * Each selected numbered script has its own data inputs and assumptions.
 #
 # Outputs:
 #   In --execute mode, each numbered script writes its normal outputs. This
-#   runner additionally writes script_index.tsv, the stage/artifact map, and a
-#   timestamped pipeline_logs/<run-id>/ directory containing individual logs
-#   and run_manifest.tsv. Dry-run mode writes nothing.
+#   runner additionally writes script_index.tsv and a timestamped
+#   pipeline_logs/<run-id>/ directory containing individual logs and
+#   run_manifest.tsv. Dry-run mode writes nothing.
 #
 # Manuscript outputs created/updated:
 #   - None directly. This support runner documents and executes the numbered
@@ -72,7 +71,7 @@ parse_flag_value <- function(args, flag, default = NULL) {
 parse_args <- function(args = commandArgs(trailingOnly = TRUE)) {
   list(
     execute = "--execute" %in% args,
-    include_cache_sensitive = "--include-cache-sensitive" %in% args,
+    include_post_cv = "--include-post-cv" %in% args,
     keep_going = "--keep-going" %in% args,
     check_packages = "--check-packages" %in% args,
     from = parse_flag_value(args, "--from"),
@@ -95,8 +94,8 @@ select_plan_rows <- function(plan, args) {
     if (!args$to %in% plan$script_id) stop("--to does not match a script_id: ", args$to, call. = FALSE)
     selected <- selected[selected$order <= plan$order[match(args$to, plan$script_id)], , drop = FALSE]
   }
-  if (!args$include_cache_sensitive) {
-    selected <- selected[selected$run_policy != "cache_sensitive", , drop = FALSE]
+  if (!args$include_post_cv) {
+    selected <- selected[selected$run_policy != "post_cv", , drop = FALSE]
   }
   selected[order(selected$order), , drop = FALSE]
 }
@@ -132,11 +131,21 @@ main <- function() {
   project_root <- fs_project_root_from_script_dir(script_dir)
 
   plan <- fs_read_source_pipeline(project_root)
-  source_map <- fs_read_artifact_source_map(project_root, required = TRUE)
-  plan <- fs_annotate_plan_with_outputs(plan, source_map)
 
   selected <- select_plan_rows(plan, args)
   if (!nrow(selected)) stop("No scripts selected.", call. = FALSE)
+
+  allowed_policies <- c("run", "post_cv")
+  unknown_policies <- setdiff(unique(plan$run_policy), allowed_policies)
+  if (length(unknown_policies)) {
+    stop("Unknown run_policy value(s): ", paste(unknown_policies, collapse = ", "), call. = FALSE)
+  }
+  if (anyDuplicated(plan$order)) stop("config/source_pipeline.tsv contains duplicate order values.", call. = FALSE)
+  if (anyDuplicated(plan$script_id)) stop("config/source_pipeline.tsv contains duplicate script_id values.", call. = FALSE)
+  missing_scripts <- selected$script[!file.exists(file.path(script_dir, selected$script))]
+  if (length(missing_scripts)) {
+    stop("Selected pipeline script(s) are missing: ", paste(missing_scripts, collapse = ", "), call. = FALSE)
+  }
 
   if (args$check_packages) {
     message_log("Checking required R packages from config.R")
@@ -147,15 +156,13 @@ main <- function() {
   if (!args$execute) {
     message_log("Project root: ", project_root)
     message_log("Read-only dry run. Add --execute to run scripts.")
-    if (!args$include_cache_sensitive) {
-      message_log("Cache-sensitive nested-CV/model training is excluded from this plan.")
+    if (!args$include_post_cv) {
+      message_log("Post-CV source-workbook rebuilding is excluded. Add --include-post-cv after grouped-CV outputs are complete.")
     }
     for (i in seq_len(nrow(selected))) {
-      outputs <- selected$manuscript_outputs[i]
-      if (is.na(outputs) || !nzchar(outputs)) outputs <- "upstream/intermediate dependency"
       message_log(
         "DRY RUN: ", selected$script_id[i], " | ", selected$script[i],
-        " | ", selected$stage[i], " | manuscript outputs: ", outputs
+        " | ", selected$stage[i], " | purpose: ", selected$notes[i]
       )
     }
     message_log("No files were written.")
@@ -164,7 +171,6 @@ main <- function() {
 
   script_index_path <- file.path(script_dir, "script_index.tsv")
   utils::write.table(plan, script_index_path, sep = "\t", row.names = FALSE, quote = TRUE, na = "")
-  stage_map_paths <- fs_write_stage_artifact_map(project_root)
 
   run_id <- format(Sys.time(), "%Y%m%d_%H%M%S")
   run_dir <- file.path(script_dir, "pipeline_logs", run_id)
@@ -174,11 +180,10 @@ main <- function() {
   message_log("Project root: ", project_root, log_file = main_log)
   message_log("Script directory: ", script_dir, log_file = main_log)
   message_log("Script index: ", script_index_path, log_file = main_log)
-  message_log("Stage-ordered artifact map: ", stage_map_paths$tsv, log_file = main_log)
   message_log("Selected scripts: ", nrow(selected), log_file = main_log)
-  if (!args$include_cache_sensitive) {
+  if (!args$include_post_cv) {
     message_log(
-      "Cache-sensitive nested-CV/model training is skipped by default. Add --include-cache-sensitive only for deliberate recomputation; regenerated artifacts may differ unless the exact inputs, seeds, package versions, and execution environment are preserved.",
+      "Post-CV source-workbook rebuilding is skipped. Add --include-post-cv after grouped-CV outputs are complete.",
       log_file = main_log
     )
   }
@@ -195,13 +200,9 @@ main <- function() {
     row <- selected[i, , drop = FALSE]
     log_path <- file.path(run_dir, paste0(sprintf("%02d", row$order), "_", row$script_id, ".log"))
     manifest$log_path[i] <- log_path
-    outputs <- row$manuscript_outputs
-    if (is.na(outputs) || !nzchar(outputs)) {
-      outputs <- "no direct mapped manuscript figure/table; upstream or intermediate dependency"
-    }
 
     message_log("Running ", row$script_id, ": ", row$script, log_file = main_log)
-    message_log("Manuscript outputs: ", outputs, log_file = main_log)
+    message_log("Purpose: ", row$notes, log_file = main_log)
     start <- Sys.time()
     manifest$started_at[i] <- format(start, "%Y-%m-%d %H:%M:%S")
     status <- run_one_script(project_root, script_dir, row$script, log_path)

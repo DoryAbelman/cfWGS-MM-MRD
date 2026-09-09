@@ -4,10 +4,10 @@
 # Purpose:
 # Shared metadata helpers for the numbered cfWGS-MM-MRD scripts.
 #
-# These helpers intentionally do not perform any scientific analysis. They read
-# the source pipeline plan and manuscript artifact source map so command-line
-# tools can report what each numbered script does and which manuscript outputs
-# it affects.
+# These helpers intentionally do not perform any scientific analysis.
+# run_pipeline.R uses the source pipeline plan for script order and purpose.
+# Separate internal output-index functions can also read the manuscript
+# artifact registry when those functions are called directly.
 #
 # Manuscript outputs created/updated:
 #   - None directly. This support/provenance file is used by workflow runners
@@ -19,9 +19,11 @@
 #   # Usually sourced by run_pipeline.R, run_manuscript_workflow.R, and
 #   # build_stage_artifact_map.R rather than run directly.
 #
-# Required metadata:
-#   - config/source_pipeline.tsv: script order, stage, run policy, and notes.
-#   - docs/manuscript_artifact_source_map.tsv: script-to-manuscript mapping.
+# Metadata:
+#   - config/source_pipeline.tsv: required by run_pipeline.R for script order,
+#     stage, run policy, and purpose.
+#   - docs/manuscript_artifact_source_map.tsv: required only by the separate
+#     artifact-index functions below and by manuscript_output_helpers.R.
 #   Optional regeneration, generation, and validation TSVs are merged when
 #   present. The write functions create stage/script index files but do not run
 #   any numbered analysis script.

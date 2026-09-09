@@ -1,0 +1,72 @@
+cff-version: 1.2.0
+message: "Please cite the associated manuscript and this software repository."
+title: "cfWGS-MM-MRD analysis code"
+type: software
+version: 1.0.0
+date-released: 2026-09-03
+license: MIT
+repository-code: "https://github.com/DoryAbelman/cfWGS-MM-MRD"
+authors:
+  - family-names: Abelman
+    given-names: Dor D.
+    affiliation: "Department of Medical Biophysics, University of Toronto; Princess Margaret Cancer Centre, University Health Network"
+  - family-names: Eagles
+    given-names: Jenna
+    affiliation: "Princess Margaret Cancer Centre, University Health Network"
+  - family-names: Wong
+    given-names: Aimee
+    affiliation: "School of Integrated Health, University of New Brunswick, Saint John"
+  - family-names: Shah
+    given-names: Saumil
+    affiliation: "Faculty of Medicine, Dalhousie University"
+  - family-names: Bruce
+    given-names: Jeff P.
+    affiliation: "Princess Margaret Cancer Centre, University Health Network"
+  - family-names: Pedersen
+    given-names: Stephanie
+    affiliation: "Princess Margaret Cancer Centre, University Health Network"
+  - family-names: Scott
+    given-names: David S.
+    affiliation: "Princess Margaret Cancer Centre, University Health Network"
+  - family-names: Bonolo de Campos
+    given-names: Cecilia
+    affiliation: "Princess Margaret Cancer Centre, University Health Network"
+  - family-names: Chow
+    given-names: Signy
+    affiliation: "Odette Cancer Centre and Sunnybrook Health Sciences Centre; Division of Medical Oncology and Hematology, Temerty Faculty of Medicine, University of Toronto"
+  - family-names: Wei
+    given-names: Ellen N.
+    affiliation: "Princess Margaret Cancer Centre, University Health Network"
+  - family-names: Abdulsalam
+    given-names: Safa
+    affiliation: "Princess Margaret Cancer Centre, University Health Network"
+  - family-names: White
+    given-names: Darrell
+    affiliation: "Faculty of Medicine, Dalhousie University; Queen Elizabeth II Health Sciences Centre"
+  - family-names: Sandhu
+    given-names: Irwindeep
+    affiliation: "Cross Cancer Institute"
+  - family-names: Song
+    given-names: Kevin
+    affiliation: "Vancouver General Hospital"
+  - family-names: Braggio
+    given-names: Esteban
+    affiliation: "Department of Cancer Biology, Mayo Clinic Arizona"
+  - family-names: Kumar
+    given-names: Shaji
+    affiliation: "Mayo Clinic Rochester"
+  - family-names: Murugesan
+    given-names: Alli
+    affiliation: "Faculty of Medicine, Dalhousie University; Faculty of Science, Applied Science and Engineering, University of New Brunswick, Saint John"
+  - family-names: Reiman
+    given-names: Anthony
+    affiliation: "School of Integrated Health, University of New Brunswick, Saint John; Faculty of Medicine, Dalhousie University; Department of Oncology, Saint John Regional Hospital"
+  - family-names: Stewart
+    given-names: A. Keith
+    affiliation: "Princess Margaret Cancer Centre, University Health Network"
+  - family-names: Trudel
+    given-names: Suzanne
+    affiliation: "Department of Medical Biophysics, University of Toronto; Princess Margaret Cancer Centre, University Health Network"
+  - family-names: Pugh
+    given-names: Trevor J.
+    affiliation: "Department of Medical Biophysics, University of Toronto; Princess Margaret Cancer Centre, University Health Network; Ontario Institute for Cancer Research"

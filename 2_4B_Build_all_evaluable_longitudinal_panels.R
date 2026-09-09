@@ -50,7 +50,7 @@
 #       Extended_Data_Figure_3A_all_evaluable_BM_raw_longitudinal_pseudolog.png
 #       Extended_Data_Figure_3B_all_evaluable_blood_raw_longitudinal_pseudolog.png
 #       Extended_Data_Figure_3C_all_evaluable_fragmentomics_longitudinal_pseudolog.png
-#     reviewer_alternative_terminal_summary_v2/  [historical directory name]
+#     terminal_sample_summary_v2/
 #       Figure_2B_V2_trajectory_plus_terminal_summary.{png,pdf,tiff}
 #       Figure_2C_V2_trajectory_plus_terminal_summary.{png,pdf,tiff}
 #       Figure_2D_V2_trajectory_plus_terminal_summary.{png,pdf,tiff}
@@ -62,9 +62,9 @@
 #       *_source_data.csv
 #       all_evaluable_longitudinal_panel_qc.csv
 #
-# The historical `reviewer_alternative_terminal_summary_v2` directory name is
-# retained because 5_1_Export_Locked_Figure_Source_Data.R consumes that exact
-# path. The contents are the terminal-sample summary analysis used in Figure 2E.
+# The `terminal_sample_summary_v2` directory contains the terminal-sample
+# summary analysis used in Figure 2E and read by
+# 5_1_Export_Locked_Figure_Source_Data.R.
 #
 # How to run:
 #   Rscript Scripts_2025/Final_Scripts/2_4B_Build_all_evaluable_longitudinal_panels.R
@@ -1234,7 +1234,7 @@ ed3c_panel_pseudolog <- make_extended_fragmentomics_panel(
 # sample code. A hard validation requires the terminal row's sample-level
 # relapse flag to agree with the patient-level trajectory facet.
 
-v2_output_dir <- file.path(output_dir, "reviewer_alternative_terminal_summary_v2")
+v2_output_dir <- file.path(output_dir, "terminal_sample_summary_v2")
 dir.create(v2_output_dir, recursive = TRUE, showWarnings = FALSE)
 
 terminal_group_levels <- c(
