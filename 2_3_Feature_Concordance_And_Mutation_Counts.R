@@ -1206,9 +1206,28 @@ mut_matched$Date_of_sample_collection <-
 combined_clinical_data_updated$Date_of_sample_collection <-
   as.Date(combined_clinical_data_updated$Date_of_sample_collection)
 
-# filter to in cohort 
-mut_matched <- mut_matched %>% left_join(cohort_df)
-mut_matched <- mut_matched %>% left_join(combined_clinical_data_updated)
+# Filter to the manuscript cohort and add only the clinical field used below.
+# Explicit keys are essential here: the expanded QC mutation export retains
+# caller-dependent annotation columns (including date fields), and an implicit
+# join would incorrectly treat every same-named annotation column as a key.
+mut_matched <- mut_matched %>%
+  left_join(cohort_df, by = "Patient") %>%
+  left_join(
+    combined_clinical_data_updated %>%
+      select(Patient, Timepoint, Sample_type, timepoint_info) %>%
+      distinct(),
+    by = c("Patient", "Timepoint", "Sample_type"),
+    suffix = c("", ".clinical")
+  ) %>%
+  mutate(
+    timepoint_info = coalesce(
+      as.character(timepoint_info),
+      as.character(timepoint_info.clinical)
+    )
+  ) %>%
+  select(
+    -timepoint_info.clinical
+  )
 mut_matched <- mut_matched %>% filter(timepoint_info %in% c("Baseline", "Diagnosis")) # get baseline
 mut_matched <- mut_matched %>% filter(!is.na(Cohort))
 

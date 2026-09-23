@@ -36,7 +36,7 @@
 #   - Output_tables_2025/Figure_Source_Data/panels/*.csv
 #   - Output_tables_2025/Figure_Source_Data/source_data_workbook_manifest.csv
 #   - Output_tables_2025/Figure_Source_Data/source_data_audit.csv
-#   - Output_tables_2025/Figure_Source_Data/panel_schema_contract.csv
+#   - Output_tables_2025/Figure_Source_Data/required_columns_by_figure_panel.csv
 #
 # Additional staged copies
 #   - Rewrites the Extended Data Figure 2D component source CSV from the
@@ -75,6 +75,22 @@ canonical_root <- file.path(project_root, "Scripts_2025", "Final_Scripts")
 component_root <- file.path(
   canonical_root, "final_manuscript_objects", "generated", "figure_components"
 )
+fig2e_terminal_root <- file.path(
+  canonical_root, "final_manuscript_objects",
+  "additional_all_evaluable_longitudinal_panels", "terminal_sample_summary_v2"
+)
+fig2e_terminal_root_legacy <- file.path(
+  canonical_root, "final_manuscript_objects",
+  "additional_all_evaluable_longitudinal_panels",
+  "reviewer_alternative_terminal_summary_v2"
+)
+if (!dir.exists(fig2e_terminal_root) && dir.exists(fig2e_terminal_root_legacy)) {
+  message(
+    "Using the retained Figure 2E terminal-sample directory under its earlier name: ",
+    fig2e_terminal_root_legacy
+  )
+  fig2e_terminal_root <- fig2e_terminal_root_legacy
+}
 output_root <- file.path(project_root, "Output_tables_2025", "Figure_Source_Data")
 panel_output_root <- file.path(output_root, "panels")
 dir.create(panel_output_root, recursive = TRUE, showWarnings = FALSE)
@@ -101,6 +117,11 @@ publication_sample_overrides <- c("SPORE_0008_Baseline" = "S0112")
 
 deidentify_character_vector <- function(x) {
   x <- as.character(x)
+  # Remove the internal sequencing-run token before any value is written to the
+  # public source layer. The remaining text retains only assay/material labels
+  # and the release patient/timepoint identifier needed to interpret a panel.
+  x <- gsub("TFRIM4_[0-9]{4}_?", "", x, perl = TRUE)
+  x <- gsub("[-_]+$", "", x, perl = TRUE)
   for (raw_sample in names(publication_sample_overrides)) {
     x <- gsub(raw_sample, publication_sample_overrides[[raw_sample]], x, fixed = TRUE)
   }
@@ -258,9 +279,7 @@ minimalize_publication_panel <- function(data, panel_key) {
       distinct()
   } else if (panel_key == "Fig2E") {
     fig2e_stats_path <- file.path(
-      canonical_root, "final_manuscript_objects",
-      "additional_all_evaluable_longitudinal_panels",
-      "terminal_sample_summary_v2",
+      fig2e_terminal_root,
       "terminal_sample_group_statistics.csv"
     )
     stop_if_missing(fig2e_stats_path, "Figure 2E global 12-test statistics")
@@ -286,6 +305,17 @@ minimalize_publication_panel <- function(data, panel_key) {
       project_root, "Results_MRDetect", "Healthy_control_platform_calibration",
       "MRDetect_leave_one_out_platform_comparison.csv"
     )
+    comparison_path_legacy <- file.path(
+      project_root, "Results_MRDetect", "Reviewer_platform_shift",
+      "Reviewer_MRDetect_leave_one_out_platform_comparison.csv"
+    )
+    if (!file.exists(comparison_path) && file.exists(comparison_path_legacy)) {
+      message(
+        "Using the retained ED3E platform comparison under its earlier review filename: ",
+        comparison_path_legacy
+      )
+      comparison_path <- comparison_path_legacy
+    }
     stop_if_missing(comparison_path, "Extended Data Figure 3E annotation")
     primary_metrics <- c(
       "detection_rate_as_reads_detected_over_reads_checked",
@@ -538,11 +568,7 @@ combine_source_files <- function(paths) {
 }
 
 build_figure_2e <- function() {
-  source_root <- file.path(
-    canonical_root, "final_manuscript_objects",
-    "additional_all_evaluable_longitudinal_panels",
-    "terminal_sample_summary_v2"
-  )
+  source_root <- fig2e_terminal_root
   point_path <- file.path(
     source_root, "terminal_sample_patient_level_source_data.csv"
   )
@@ -955,18 +981,14 @@ panel_overrides <- list(
     "grouped_cv_fold_operating_point_source_data.csv"
   ),
 
-  # Dilution-series panels. Fig3C is the pooled library-level Spearman analysis
-  # across all 48 scored libraries, with all four MRD-negative references set
-  # to 0% for the analysis. ED5D and ED7D retain the four-patient dilution-
-  # series points used by their LoD panels, with the same zero-reference rule.
-  #
-  # Note for Fig3C: the pooled CSV sits in the component directory,
-  # but `default_component_files()` excludes names matching
-  # "^F3C_source_data_csv", so the single-patient file was selected instead.
-  # An explicit override bypasses that exclusion.
+  # Dilution-series panels. Figure 3C is the four-patient summary used in the
+  # final panel: seven patient/replicate correlations are shown as small grey
+  # points for each of 13 features, and the large coloured point is the equal
+  # mean of the four patient-level correlations. ED5D and ED7D retain the
+  # four-patient dilution-series points used by their LoD panels.
   Fig3C = file.path(
-    component_root, "Figure_3", "panel_C",
-    "F3C_source_data_csv_all_four_patients.csv"
+    project_root, "Output_tables_2025", "Source_Data_Extended_Data",
+    "SourceData_Figure3C_dilution_feature_rho_all_four_patients.csv"
   ),
   ED5D = file.path(
     project_root, "Output_tables_2025", "Source_Data_Extended_Data",
@@ -1602,7 +1624,7 @@ set_contract(c("Fig2B", "Fig2C", "Fig2D", "ED3A", "ED3B", "ED3C"), c("Patient", 
 set_contract("Fig2E", c("Patient", "Metric", "Value", "terminal_group", "relapse_within_180", "wilcoxon_q_bh_global_12_tests"))
 set_contract(c("Fig3A", "Fig4A"), c("cohort", "model", "display_name", "fpr", "mean_tpr", "repeat_pooled_auc_mean"))
 set_contract(c("Fig3B", "Fig4B"), c("Patient", "Cohort", "MRD_Truth", "Model_1_Probability", "Model_1_Call", "Model_2_Probability", "Model_2_Call"))
-set_contract("Fig3C", c("feature", "plot_label", "n_complete", "rho (Spearman)", "p-value"))
+set_contract("Fig3C", c("feature", "summary_level", "Patient", "series_label", "replicate_id", "rho", "n_complete", "n_lod", "n_series", "n_patients"))
 set_contract(c("Fig3D", "Fig4C"), c("landmark_tp", "Technology", "n_total", "n_pos", "pos_rate", "Cohort"))
 set_contract(c("Fig3E", "Fig4D"), c("Patient", "Comparator", "x_plot", "y_plot", "relapse_cat", "rho", "p", "label"))
 set_contract("Fig3F", c("Patient", "Time_to_event_months", "Relapsed_Binary", "BM_zscore_only_detection_rate_call", "Group"))
@@ -1644,12 +1666,78 @@ if (any(lengths(panel_schema_contract) == 0L)) {
 manifest_rows <- list()
 audit_rows <- list()
 
+# The retained Figure 3E/4D sidecars predate the final EasyM scaling fix in
+# 3_2. They contain EasyM percentage-point values after an incorrect 0-1 cap,
+# which both shifts the points and creates ties that change Spearman rho. Join
+# the uncapped EasyM measurements by sample, apply the original script's
+# EasyM_value / 100 conversion, and recalculate the six displayed correlations.
+rebuild_easym_scatter_rows <- function(data, panel) {
+  required <- c(
+    "Patient", "Sample_Code", "landmark_timepoint", "Comparator",
+    "x_plot", "y_plot", "relapse_cat"
+  )
+  missing <- setdiff(required, names(data))
+  if (length(missing)) {
+    stop(
+      panel, " EasyM correction is missing required column(s): ",
+      paste(missing, collapse = ", "), call. = FALSE
+    )
+  }
+
+  easym_path <- file.path(
+    project_root, "Output_EasyM_MRD_analysis_2025",
+    "EasyM_all_samples_with_optimized_calls.csv"
+  )
+  if (!file.exists(easym_path)) {
+    stop("EasyM source table not found: ", easym_path, call. = FALSE)
+  }
+  easym <- read_csv(easym_path, show_col_types = FALSE) %>%
+    select(Patient, Sample_Code, EasyM_value) %>%
+    distinct(Patient, Sample_Code, .keep_all = TRUE)
+
+  point_rows <- data %>%
+    filter(!is.na(Patient), nzchar(Patient), is.finite(as.numeric(y_plot)))
+  easym_rows <- point_rows %>%
+    filter(Comparator == "EasyM") %>%
+    select(-any_of("EasyM_value")) %>%
+    left_join(easym, by = c("Patient", "Sample_Code"), relationship = "many-to-one")
+  if (nrow(easym_rows) == 0L || any(!is.finite(easym_rows$EasyM_value))) {
+    bad_samples <- easym_rows$Sample_Code[!is.finite(easym_rows$EasyM_value)]
+    stop(
+      panel, " EasyM values did not match every plotted sample: ",
+      paste(bad_samples, collapse = ", "), call. = FALSE
+    )
+  }
+  easym_rows <- easym_rows %>%
+    mutate(x_plot = pmin(pmax(EasyM_value / 100, 1e-6), 1)) %>%
+    select(-EasyM_value)
+
+  point_rows <- bind_rows(
+    point_rows %>% filter(Comparator != "EasyM"),
+    easym_rows
+  )
+  correlation_rows <- point_rows %>%
+    group_by(landmark_timepoint, Comparator) %>%
+    summarize(
+      rho = cor(x_plot, y_plot, method = "spearman", use = "complete.obs"),
+      p = suppressWarnings(cor.test(x_plot, y_plot, method = "spearman")$p.value),
+      .groups = "drop"
+    ) %>%
+    mutate(
+      label = sprintf("\u03c1 = %.2f\np = %.2f", rho, p),
+      x = 0.035,
+      y = 0.99
+    )
+
+  bind_rows(point_rows, correlation_rows)
+}
+
 for (i in seq_len(nrow(locked_figures))) {
   item <- locked_figures[i, ]
   key <- item$sheet_name
   component_dir <- file.path(component_root, item$component_figure, item$component_panel)
   status <- "PASS"
-  note <- "Canonical panel source data exported."
+  note <- "Panel source data exported from the final figure inputs."
   source_paths <- character()
 
   data <- if (key == "Fig2A") {
@@ -1659,9 +1747,7 @@ for (i in seq_len(nrow(locked_figures))) {
     build_figure_2a()
   } else if (key == "Fig2E") {
     source_paths <- file.path(
-      canonical_root, "final_manuscript_objects",
-      "additional_all_evaluable_longitudinal_panels",
-      "terminal_sample_summary_v2",
+      fig2e_terminal_root,
       c(
         "terminal_sample_patient_level_source_data.csv",
         "terminal_sample_group_statistics.csv"
@@ -1822,6 +1908,20 @@ for (i in seq_len(nrow(locked_figures))) {
       "The sign-inverted value used by the joint analysis is retained as analysis_value."
     )
   }
+  if (key %in% c("Fig3E", "Fig4D")) {
+    easym_path <- file.path(
+      project_root, "Output_EasyM_MRD_analysis_2025",
+      "EasyM_all_samples_with_optimized_calls.csv"
+    )
+    data <- rebuild_easym_scatter_rows(data, key)
+    source_paths <- unique(c(source_paths, easym_path))
+    status <- "CORRECTED_TO_LOCKED"
+    note <- paste(
+      "EasyM percentage-point measurements are converted to proportions as in",
+      "the final Figure 3E/4D plotting code; displayed correlations are",
+      "recalculated from the corrected, uncapped plotting values."
+    )
+  }
   data <- relabel_publication_cohorts(
     data,
     paste0("Figure source-data panel ", key)
@@ -1887,7 +1987,7 @@ for (i in seq_len(nrow(locked_figures))) {
 manifest <- bind_rows(manifest_rows)
 audit <- bind_rows(audit_rows)
 schema_contract_table <- imap_dfr(panel_schema_contract, ~ tibble(sheet_name = .y, required_column = .x))
-write_csv(schema_contract_table, file.path(output_root, "panel_schema_contract.csv"), na = "")
+write_csv(schema_contract_table, file.path(output_root, "required_columns_by_figure_panel.csv"), na = "")
 
 for (j in seq_len(nrow(expected_sample_level_rows))) {
   check <- expected_sample_level_rows[j, ]

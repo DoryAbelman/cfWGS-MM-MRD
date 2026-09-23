@@ -240,6 +240,119 @@ dat_mrd <- dat %>%
 
 USE_PRESERVED_MODELS_ONLY <- Sys.getenv("CFWGS_RETRAIN_MODELS", unset = "0") != "1"
 
+# Rebuild the manuscript ED7E panel from the frozen full-training/refit models.
+# This is deterministic and does not refit a classifier or select a threshold.
+# Colors match the patient-grouped CV model palette used by script 6_14:
+# Sites = blue and Combined = purple.
+write_full_training_ed7e_panel <- function(output_png) {
+  model_path <- "nested_blood_validation_updated3.rds"
+  frame_path <- "nested_blood_validation_updated3_run2.rds"
+  missing_inputs <- c(model_path, frame_path)[!file.exists(c(model_path, frame_path))]
+  if (length(missing_inputs)) {
+    stop(
+      "Cannot rebuild ED7E; missing frozen input(s): ",
+      paste(missing_inputs, collapse = ", "),
+      call. = FALSE
+    )
+  }
+
+  refit_object <- readRDS(model_path)
+  frame_object <- readRDS(frame_path)
+  evaluation_data <- frame_object$models$Blood_plus_fragment_min$trainingData
+  required_models <- c("Blood_zscore_only_sites", "Blood_plus_fragment_min")
+  if (is.null(evaluation_data) || nrow(evaluation_data) != 34L ||
+      !".outcome" %in% names(evaluation_data)) {
+    stop("ED7E requires the preserved 34-row full-training evaluation frame.", call. = FALSE)
+  }
+  if (!all(required_models %in% names(refit_object$models))) {
+    stop(
+      "ED7E frozen refit object is missing model(s): ",
+      paste(setdiff(required_models, names(refit_object$models)), collapse = ", "),
+      call. = FALSE
+    )
+  }
+
+  roc_df <- purrr::map_dfr(required_models, function(model_name) {
+    probability <- predict(
+      refit_object$models[[model_name]],
+      newdata = evaluation_data,
+      type = "prob"
+    )[, "pos"]
+    roc_object <- pROC::roc(
+      response = evaluation_data$.outcome,
+      predictor = probability,
+      levels = c("neg", "pos"),
+      direction = "<",
+      quiet = TRUE
+    )
+    tibble::tibble(
+      combo = model_name,
+      fpr = 1 - roc_object$specificities,
+      tpr = roc_object$sensitivities
+    )
+  }) %>%
+    dplyr::mutate(combo = factor(.data$combo, levels = required_models))
+
+  # These coordinates were calculated from the canonical scored table in the
+  # original analysis and are intentionally kept separate from the ROC inputs.
+  marker_pts <- tibble::tribble(
+    ~combo, ~threshold, ~fpr, ~tpr,
+    "Blood_zscore_only_sites", 0.432, 0.500, 0.750,
+    "Blood_zscore_only_sites", 0.380, 1.000, 0.938,
+    "Blood_plus_fragment_min", 0.435, 0.167, 0.875
+  ) %>%
+    dplyr::mutate(combo = factor(.data$combo, levels = required_models))
+
+  model_colours <- c(
+    Blood_zscore_only_sites = "#2C7FB8",
+    Blood_plus_fragment_min = "#6A3D9A"
+  )
+  model_labels <- c(
+    Blood_zscore_only_sites = "Sites model",
+    Blood_plus_fragment_min = "Combined model"
+  )
+
+  ed7e_plot <- ggplot2::ggplot(
+    roc_df,
+    ggplot2::aes(x = .data$fpr, y = .data$tpr, colour = .data$combo)
+  ) +
+    ggplot2::geom_line(linewidth = 1) +
+    ggplot2::geom_abline(linetype = 2, colour = "grey60") +
+    ggplot2::geom_point(
+      data = marker_pts,
+      ggplot2::aes(x = .data$fpr, y = .data$tpr),
+      fill = "white", colour = "darkgrey", stroke = 0.9, size = 2,
+      inherit.aes = FALSE
+    ) +
+    ggplot2::scale_colour_manual(
+      name = "Model",
+      values = model_colours,
+      breaks = required_models,
+      labels = model_labels,
+      drop = FALSE
+    ) +
+    ggplot2::labs(
+      x = "False-positive rate (1 - specificity)",
+      y = "True-positive rate (sensitivity)",
+      title = "Full-Cohort ROC (Refit on all Training Samples)"
+    ) +
+    ggplot2::theme_bw(base_size = 12) +
+    ggplot2::theme(
+      panel.grid = ggplot2::element_blank(),
+      legend.position = "right",
+      legend.background = ggplot2::element_blank(),
+      legend.key = ggplot2::element_blank(),
+      legend.title = ggplot2::element_text(face = "bold", size = 10),
+      legend.text = ggplot2::element_text(size = 9),
+      plot.title = ggplot2::element_text(face = "bold", size = 14, hjust = 0.5),
+      plot.title.position = "plot"
+    )
+
+  dir.create(dirname(output_png), recursive = TRUE, showWarnings = FALSE)
+  ggplot2::ggsave(output_png, plot = ed7e_plot, width = 5.5, height = 4, dpi = 600)
+  invisible(output_png)
+}
+
 if (USE_PRESERVED_MODELS_ONLY) {
   message("Using preserved cfWGS models and thresholds; no model retraining will be run.")
 
@@ -1507,10 +1620,12 @@ if (USE_PRESERVED_MODELS_ONLY) {
       stop("Cannot synchronize existing panel for ", artifact_id, ". Missing file: ", source_png, call. = FALSE)
     }
     if (!is.null(legacy_component_png)) {
-      dir.create(dirname(legacy_component_png), recursive = TRUE, showWarnings = FALSE)
-      copied_png <- file.copy(source_png, legacy_component_png, overwrite = TRUE)
-      if (!isTRUE(copied_png)) {
-        stop("Failed to update legacy generated-component PNG for ", artifact_id, ": ", legacy_component_png, call. = FALSE)
+      for (legacy_png in legacy_component_png) {
+        dir.create(dirname(legacy_png), recursive = TRUE, showWarnings = FALSE)
+        copied_png <- file.copy(source_png, legacy_png, overwrite = TRUE)
+        if (!isTRUE(copied_png)) {
+          stop("Failed to update legacy generated-component PNG for ", artifact_id, ": ", legacy_png, call. = FALSE)
+        }
       }
     }
     ms_copy_artifact(
@@ -1553,13 +1668,24 @@ if (USE_PRESERVED_MODELS_ONLY) {
     )
   )
 
+  ed7e_main_cohort_png <- file.path(
+    "Final Tables and Figures",
+    "Supp7D_ROC_performance_blood_refit_main_cohort.png"
+  )
+  write_full_training_ed7e_panel(ed7e_main_cohort_png)
   sync_existing_panel_copy(
-    source_png = "Final Tables and Figures/Supp7D_ROC_performance_blood_updated4.png",
+    source_png = ed7e_main_cohort_png,
     artifact_id = "EDFIG7E",
     description = "Blood/cfDNA full-cohort refit ROC panel copied from the retained manuscript output; this training/refit panel is not recomputed for test-cohort expansion.",
-    legacy_component_png = file.path(
-      "Scripts_2025/Final_Scripts/final_manuscript_objects/generated/figure_components/Extended_Data_Figure_7/panel_E",
-      "Supp7D_ROC_performance_blood_updated4.png"
+    legacy_component_png = c(
+      file.path(
+        "Scripts_2025/Final_Scripts/final_manuscript_objects/generated/figure_components/Extended_Data_Figure_7/panel_E",
+        "Supp7D_ROC_performance_blood_updated3.png"
+      ),
+      file.path(
+        "Scripts_2025/Final_Scripts/final_manuscript_objects/02_extended_data_figures/Extended_Data_Figure_7/Extended_Data_Figure_7E",
+        "ED7E_ROC_refit_main_cohort.png"
+      )
     )
   )
 
@@ -7845,10 +7971,16 @@ ggsave(
 #   The final Extended Data Figure 7 uses this as panel E.
 # -------------------------------------------------------------------------
 ms_copy_artifact(
-  source_path = "Final Tables and Figures/Supp7D_ROC_performance_blood_updated4.png",
+  # Stage a deterministic redraw from the frozen 34-row full-training/refit
+  # inputs. The historical `updated4` file is not a safe manuscript source
+  # because `valid_df` is mutable in this development branch.
+  source_path = write_full_training_ed7e_panel(file.path(
+    "Final Tables and Figures",
+    "Supp7D_ROC_performance_blood_refit_main_cohort.png"
+  )),
   artifact_id = "EDFIG7E",
   role = "figure_panel_png",
-  description = "Blood/cfDNA ROC performance panel used as Extended Data Figure 7E.",
+  description = "Blood/cfDNA full-training/refit ROC performance panel used as Extended Data Figure 7E.",
   script_name = "3_1_Optimize_cfWGS_thresholds.R"
 )
 

@@ -812,7 +812,16 @@ temp_qc_blood <- maf_subset_blood@data %>%
     )
   ) %>%
   mutate(
-    across(any_of(c("Patient", "Timepoint", "Sample_type")), as.character)
+    # These specimen metadata fields have mixed storage classes across the
+    # marrow and blood MAF objects (most notably Date versus character). They
+    # are descriptive QC columns here, so normalize them before bind_rows().
+    across(
+      any_of(c(
+        "Patient", "Timepoint", "Sample_type", "Date_of_sample_collection",
+        "Study", "Sample_ID"
+      )),
+      as.character
+    )
   ) %>%
   
   # 3) pick your key QC columns first, then grab everything else
@@ -866,7 +875,15 @@ temp_qc_bm <- maf_subset@data %>%
     )
   ) %>%
   mutate(
-    across(any_of(c("Patient", "Timepoint", "Sample_type")), as.character)
+    # Match the blood-side metadata types so the expanded QC export remains
+    # robust to source objects that encode collection dates differently.
+    across(
+      any_of(c(
+        "Patient", "Timepoint", "Sample_type", "Date_of_sample_collection",
+        "Study", "Sample_ID"
+      )),
+      as.character
+    )
   ) %>%
   
   # 3) pick your key QC columns first, then grab everything else
@@ -893,6 +910,24 @@ temp_qc_bm <- maf_subset@data %>%
     everything()
   ) %>%
   distinct()
+
+# MAF annotation payloads can carry additional date-like fields whose names are
+# caller/version dependent. dplyr cannot bind a Date column to an incompatible
+# scalar class, and these trailing fields are retained only for QC inspection.
+# Convert every detected Date/POSIX field to an ISO-like character value in both
+# tables rather than silently dropping annotation columns.
+qc_date_like_columns <- union(
+  names(temp_qc_bm)[vapply(temp_qc_bm, inherits, logical(1), what = c("Date", "POSIXt"))],
+  names(temp_qc_blood)[vapply(temp_qc_blood, inherits, logical(1), what = c("Date", "POSIXt"))]
+)
+for (column_name in qc_date_like_columns) {
+  if (column_name %in% names(temp_qc_bm)) {
+    temp_qc_bm[[column_name]] <- as.character(temp_qc_bm[[column_name]])
+  }
+  if (column_name %in% names(temp_qc_blood)) {
+    temp_qc_blood[[column_name]] <- as.character(temp_qc_blood[[column_name]])
+  }
+}
 
 mutation_export2 <- bind_rows(temp_qc_bm, temp_qc_blood)
 
