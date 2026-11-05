@@ -246,6 +246,24 @@ fold_operating_summary <- fold_metrics |>
     by = "model"
   ) |>
   mutate(
+    # Names match the manuscript models, which differ between blood and BM.
+    short_label = dplyr::case_when(
+      model == "BM_Sites" ~ "BM Sites Z-score (Sites Model)",
+      model == "BM_cVAF" ~ "BM cVAF Z-score (cVAF Model)",
+      model == "BM_Raw_cVAF" ~ "BM cVAF",
+      model == "BM_Combined_Mutation_Zscores" ~ "BM Sites + cVAF Z-score (Combined Model)",
+      model == "BM_All_Mutation_Features" ~ "All Mut. Features",
+      model == "BM_Mutation_Fragmentomics_Full" ~ "BM Mut. + Fragmentomics",
+      model == "BM_Mutation_Fragmentomics_Min" ~ "BM Mut. + Fragmentomics (min)",
+      model == "Blood_Sites" ~ "Blood Sites Z-score (Sites Model)",
+      model == "Blood_cVAF" ~ "Blood cVAF Z-score",
+      model == "Blood_Raw_cVAF" ~ "Blood cVAF (cVAF Model)",
+      model == "Blood_Combined_Mutation_Zscores" ~ "Blood Sites + cVAF Z-score",
+      model == "Blood_All_Mutation_Features" ~ "All Mut. Features",
+      model == "Blood_Mutation_Fragmentomics_Full" ~ "Blood Mut. + Fragmentomics (Combined Model)",
+      model == "Blood_Mutation_Fragmentomics_Min" ~ "Blood Mut. + Fragmentomics (min)",
+      TRUE ~ short_label
+    ),
     legend_label = sprintf(
       "%s (%d%% sens, %d%% spec)", short_label,
       round(100 * sensitivity_mean), round(100 * specificity_mean)

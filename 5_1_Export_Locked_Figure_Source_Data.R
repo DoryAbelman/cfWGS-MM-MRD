@@ -1291,58 +1291,33 @@ metric_panel <- function(model_map) {
     arrange(match(model, names(model_map)), match(operating_point, c("Youden", "95% sensitivity")))
 }
 
-# Full-cohort ROC source rows for the final Extended Data Figure 7E.
+# Full-training ROC inputs and frozen operating points for ED7E, using the
+# same primary-model call matrix as Figure 4B. No model or threshold is refit.
 build_ed7e <- function() {
-  # ED7E is the frozen full-training/refit ROC. The revision change log
-  # explicitly distinguishes it from expanded-test performance (ED7C).
-  # The original 04db00ce plotting block used `blood_obj$models` and a separate
-  # `valid_df <- train_blood`. Raster comparison against the retained updated3
-  # PNG establishes the preserved equivalents: the refit models come from
-  # nested_blood_validation_updated3.rds, while the exact 34-row evaluable
-  # frame is retained in the run2 model trainingData. Threshold markers were
-  # calculated separately from data_scored_masked in the original script, so
-  # they are exported as their own records rather than incorrectly recomputed
-  # from the refit ROC probabilities.
-  model_path <- file.path(project_root, "nested_blood_validation_updated3.rds")
-  frame_path <- file.path(project_root, "nested_blood_validation_updated3_run2.rds")
-  stop_if_missing(c(model_path, frame_path), "Extended Data Figure 7E")
-  object <- readRDS(model_path)
-  frame_object <- readRDS(frame_path)
-  evaluation_data <- frame_object$models$Blood_plus_fragment_min$trainingData
-  if (is.null(evaluation_data) || nrow(evaluation_data) != 34L ||
-      !".outcome" %in% names(evaluation_data)) {
-    stop("Frozen ED7E evaluation frame is not the expected 34-row caret trainingData.", call. = FALSE)
-  }
-  model_map <- c(
-    Blood_zscore_only_sites = "Sites model",
-    Blood_plus_fragment_min = "Combined model"
-  )
-  curves <- imap_dfr(model_map, function(label, model_name) {
-    fit <- object$models[[model_name]]
-    if (is.null(fit)) {
-      stop("Frozen ED7E refit object lacks model: ", model_name, call. = FALSE)
-    }
-    probabilities <- predict(fit, newdata = evaluation_data, type = "prob")[, "pos"]
-    tibble(
-      plot_role = "ROC input",
-      source_table = paste(basename(model_path), "evaluated_on", basename(frame_path)),
-      model = model_name,
-      combo = label,
-      training_row = seq_along(probabilities),
-      MRD_truth = as.integer(evaluation_data$.outcome == "pos"),
-      probability = as.numeric(probabilities),
-      threshold = NA_real_,
-      fpr = NA_real_,
-      tpr = NA_real_
-    )
+  d <- build_primary_model_call_matrix("Blood") %>% filter(Cohort == "Training")
+  stopifnot(nrow(d) == 44L, n_distinct(d$Patient) == 28L,
+            sum(d$MRD_Truth == 1) == 23L, sum(d$MRD_Truth == 0) == 21L,
+            all(d$Model_1 == "Blood_zscore_only_sites"),
+            all(d$Model_2 == "Blood_plus_fragment"))
+  rows <- lapply(1:2, function(i) {
+    model <- d[[paste0("Model_", i)]]
+    prob <- d[[paste0("Model_", i, "_Probability")]]
+    threshold <- d[[paste0("Model_", i, "_Threshold")]]
+    call <- d[[paste0("Model_", i, "_Call")]]
+    stopifnot(n_distinct(threshold) == 1L, all(is.finite(prob)),
+              all(call == as.integer(prob >= threshold)))
+    label <- c("Sites model", "Combined model")[[i]]
+    inputs <- tibble(plot_role = "ROC input", model = model, combo = label,
+                     training_row = seq_len(nrow(d)), MRD_truth = d$MRD_Truth,
+                     probability = prob, threshold = NA_real_, fpr = NA_real_, tpr = NA_real_)
+    point <- tibble(plot_role = "Threshold marker", model = model[[1]], combo = label,
+                    training_row = NA_integer_, MRD_truth = NA_integer_, probability = NA_real_,
+                    threshold = threshold[[1]],
+                    fpr = sum(call == 1 & d$MRD_Truth == 0) / sum(d$MRD_Truth == 0),
+                    tpr = sum(call == 1 & d$MRD_Truth == 1) / sum(d$MRD_Truth == 1))
+    bind_rows(inputs, point)
   })
-  markers <- tribble(
-    ~plot_role, ~source_table, ~model, ~combo, ~training_row, ~MRD_truth, ~probability, ~threshold, ~fpr, ~tpr,
-    "Threshold marker", "canonical data_scored_masked operating point", "Blood_zscore_only_sites", "Sites model", NA_integer_, NA_integer_, NA_real_, 0.432, 0.500, 0.750,
-    "Threshold marker", "canonical data_scored_masked operating point", "Blood_zscore_only_sites", "Sites model", NA_integer_, NA_integer_, NA_real_, 0.380, 1.000, 0.938,
-    "Threshold marker", "canonical data_scored_masked operating point", "Blood_plus_fragment_min", "Combined model", NA_integer_, NA_integer_, NA_real_, 0.435, 0.167, 0.875
-  )
-  bind_rows(curves, markers)
+  bind_rows(rows)
 }
 
 selected_model_path <- file.path(
@@ -1823,15 +1798,8 @@ for (i in seq_len(nrow(locked_figures))) {
     )
     combine_source_files(source_paths)
   } else if (key == "ED7E") {
-    source_paths <- file.path(
-      project_root,
-      c("nested_blood_validation_updated3.rds", "nested_blood_validation_updated3_run2.rds")
-    )
-    note <- paste(
-      "Frozen full-training/refit ROC: updated3 refit models evaluated on the",
-      "preserved 34-row run2 frame, with separately retained canonical threshold",
-      "coordinates. Expanded-test performance is ED7C."
-    )
+    source_paths <- c(selected_model_path, selected_threshold_path, training_call_path, current_call_path)
+    note <- "Full-training ROC and frozen thresholds from the same primary-model calls as Figure 4B; not independent validation."
     build_ed7e()
   } else if (key == "ED9D") {
     source_paths <- file.path(

@@ -134,13 +134,16 @@ local_input_check_report.tsv
 /6_20_Sync_50Repeat_Figure_Source_Workbooks.R
 /6_21_Sync_ED9D_37Sample_Source_Workbook.R
 
-# Generated index and local documentation used during this review.
+# Index and local documentation used during this review.
 /script_index.tsv
 /docs/SCRIPT_DOCUMENTATION_STANDARD.md
 /docs/FIGURE_SOURCE_WORKBOOK_RECONCILIATION.md
 /MANUSCRIPT_OUTPUT_MAP.md
 /PROSPECTIVE_TIMEWINDOW_QC.md
-/data/
+/data/*
+!/data/curation/
+/data/curation/*
+!/data/curation/igcaller_revision_2026_igv_review.tsv
 
 # Mutation-tracking analyses are not included in the current manuscript.
 /4_2B_FZ07_mutation_tracking_evolution.R
@@ -170,20 +173,8 @@ local_input_check_report.tsv
 /docs/artifact_regeneration_status.tsv
 /docs/stage_ordered_script_artifact_map.md
 /docs/stage_ordered_script_artifact_map.tsv
-
-# ------------------------------------------------------------------------------
-# Archive policy.
-# Most archive content is intentionally excluded. The support-analysis subfolder
-# is retained because it contains study-related sensitivity analyses.
-# ------------------------------------------------------------------------------
-
 /archive/
-
-# ------------------------------------------------------------------------------
-# Agent/runtime instruction files.
-# Keep local agent instructions out of the public source-pipeline repo unless
-# deliberately reviewed for publication.
-# ------------------------------------------------------------------------------
-
 AGENTS.md
-input_overrides/VA15_mrdetect_rerun_2026-07-10.csv
+input_overrides/*
+/codeocean_templates
+/final_manuscript_objects copy

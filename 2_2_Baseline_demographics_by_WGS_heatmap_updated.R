@@ -4050,7 +4050,7 @@ id_lookup <- setNames(id_map$New_ID, id_map$Patient)
 
 # Prepare metadata mapping (Tumor_Sample_Barcode -> Patient, timepoint, cohort)
 metadata_map <- metada_df_mutation_comparison %>%
-  select(Tumor_Sample_Barcode, Patient, timepoint_info) %>%
+  select(Tumor_Sample_Barcode, Patient, timepoint_info, Sample_type) %>%
   distinct() %>%
   left_join(cohort_df %>% select(Patient, Cohort), by = "Patient") %>%
   mutate(
@@ -4066,6 +4066,9 @@ vaf_bm <- maf_subset@data %>%
   select(Tumor_Sample_Barcode, Hugo_Symbol, Chromosome, Start_Position,
          Reference_Allele, Tumor_Seq_Allele2, t_alt_count, t_ref_count) %>%
   inner_join(metadata_map, by = "Tumor_Sample_Barcode") %>%
+  # The MAF objects contain non-BM and non-plasma specimens as well. Do not
+  # assign a compartment from the object name without checking metadata.
+  filter(!is.na(Sample_type), Sample_type == "BM_cells") %>%
   mutate(
     Sample_Type = "Bone Marrow",
     VAF = ifelse(!is.na(t_alt_count) & !is.na(t_ref_count),
@@ -4081,6 +4084,7 @@ vaf_blood <- maf_subset_blood@data %>%
   select(Tumor_Sample_Barcode, Hugo_Symbol, Chromosome, Start_Position,
          Reference_Allele, Tumor_Seq_Allele2, t_alt_count, t_ref_count) %>%
   inner_join(metadata_map, by = "Tumor_Sample_Barcode") %>%
+  filter(!is.na(Sample_type), Sample_type == "Blood_plasma_cfDNA") %>%
   mutate(
     Sample_Type = "cfDNA",
     VAF = ifelse(!is.na(t_alt_count) & !is.na(t_ref_count),
@@ -4095,6 +4099,24 @@ vaf_blood <- maf_subset_blood@data %>%
 vaf_combined <- bind_rows(vaf_bm, vaf_blood) %>%
   rename(Patient_id = Patient_New_ID) %>%
   arrange(Patient_id, timepoint_info, Gene)
+
+# Never distribute unmapped records as though NA were a patient identifier.
+# Keep a local audit so the excluded calls can be reconciled with the ID map.
+unmapped_vaf <- vaf_combined %>%
+  filter(is.na(Patient_id) | !nzchar(trimws(Patient_id)))
+write_csv(unmapped_vaf, "Output_tables_2025_updated/MM_mutations_VAF_unmapped_exclusion_audit.csv", na = "")
+vaf_combined <- vaf_combined %>%
+  filter(!is.na(Patient_id), nzchar(trimws(Patient_id)))
+
+# Without a sample identifier in the public table, duplicate patient/event/
+# compartment keys would be ambiguous even if their read counts differ.
+ambiguous_vaf <- vaf_combined %>%
+  count(Patient_id, timepoint_info, Gene, Chromosome, Start_Position,
+        Reference_Allele, Tumor_Seq_Allele2, Sample_Type, name = "n") %>%
+  filter(n > 1L)
+if (nrow(ambiguous_vaf) > 0L) {
+  stop("Per-variant VAF export has duplicate patient/event/compartment keys; inspect source samples before export.", call. = FALSE)
+}
 
 # Export
 write_csv(vaf_combined, "Output_tables_2025_updated/MM_mutations_VAF_by_sample.csv")

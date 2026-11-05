@@ -225,7 +225,7 @@ panel_e_annotations <- panel_e_stats %>%
   ) %>%
   mutate(
     annotation = sprintf(
-      "XPlus z > 2: %.0f%% vs %.0f%%\nMatched |z| vs 6000: P = %.2g",
+      "XPlus z > 2: %.0f%% vs %.0f%%\nMatched |z| vs 6000: P = %.2f",
       .data$`XPlus\nmismatched`,
       .data$`XPlus\nmatched`,
       .data$paired_wilcoxon_abs_z_p
@@ -319,7 +319,7 @@ panel_e <- ggplot(
   scale_y_continuous(
     trans = pseudo_log_trans(sigma = 1),
     breaks = c(-2, 0, 2, 5, 10, 20),
-    expand = expansion(mult = c(0.08, 0.22))
+    expand = expansion(mult = c(0.08, 0.45))
   ) +
   labs(
     title = "Platform-matched z-score calibration",
@@ -377,7 +377,7 @@ copy_ready_theme <- theme(
   plot.margin = margin(5, 4, 3, 8)
 )
 copy_metric_labels <- c(
-  "Reads detected / reads checked" = "Read detection",
+  "Reads detected / reads checked" = "Reads detected",
   "Proportion of sites detected" = "Sites detected"
 )
 panel_d_copy <- panel_d +
