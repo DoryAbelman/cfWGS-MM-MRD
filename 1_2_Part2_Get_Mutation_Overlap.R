@@ -257,6 +257,25 @@ if (length(missing_patients) == 0) {
           paste(missing_patients, collapse = ", "))
 }
 
+# Use the biological specimen whose catalogue supplied longitudinal MRDetect
+# calls. A specimen without a calling catalogue can enter descriptive overlap
+# only when it is the sole baseline specimen in its compartment.
+calling_catalogues <- readr::read_csv(
+  "Output_tables_2025/clinical_support/baseline_diagnosis_mutation_source_by_patient.csv",
+  show_col_types = FALSE
+) %>%
+  transmute(Patient, Sample_type = mutation_source_type, calling_sample = Sample_ID)
+stopifnot(!anyDuplicated(calling_catalogues[c("Patient", "Sample_type")]))
+combined_maf <- combined_maf %>%
+  filter(Sample_type %in% c("BM_cells", "Blood_plasma_cfDNA")) %>%
+  left_join(calling_catalogues, by = c("Patient", "Sample_type")) %>%
+  filter(is.na(calling_sample) | Sample_ID == calling_sample)
+specimens <- combined_maf %>% distinct(Patient, Sample_type, Sample_ID, Tumor_Sample_Barcode)
+stopifnot(!anyNA(specimens$Sample_ID),
+          !anyDuplicated(specimens[c("Patient", "Sample_type")]),
+          nrow(anti_join(calling_catalogues, specimens,
+            by = c("Patient", "Sample_type", "calling_sample" = "Sample_ID"))) == 0L)
+
 # Pivot the dataframe to wide format
 df_wide <- pivot_wider(
   combined_maf,
@@ -280,13 +299,10 @@ df_wide <- pivot_wider(
 ## removed by the date rule. Patients with no callable mutation set remain in
 ## the downstream audit with Percent_Overlap = NA.
 ##
-## Important scope detail: this block selects eligible patients, not a single
-## barcode pair for the mutation calculation. After eligibility is established,
-## `df_wide` below contains the union of all Diagnosis/Baseline BM calls and all
-## Diagnosis/Baseline cfDNA calls for that patient. The selected nearest dates
-## are retained only in the pairing audit; the selected barcode columns are not
-## carried into the current audit export.
+## Determine pairing eligibility from the selected specimens, so a discarded
+## baseline-labelled specimen cannot qualify the patient for the comparison.
 baseline_pair_metadata <- metada_df_mutation_comparison %>%
+  semi_join(specimens, by = c("Patient", "Sample_type", "Sample_ID", "Tumor_Sample_Barcode")) %>%
   filter(
     timepoint_info %in% c("Baseline", "Diagnosis"),
     Sample_type %in% c("BM_cells", "Blood_plasma_cfDNA")

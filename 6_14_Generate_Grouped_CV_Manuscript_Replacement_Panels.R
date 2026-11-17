@@ -161,9 +161,9 @@ model_metadata <- tribble(
   "Blood_Mutation_Fragmentomics_Full", "Blood", "Mutation + fragmentomics (full)", "Mut. + frag. full", "#D95F02",
   "Blood_Mutation_Fragmentomics_Min", "Blood", "Mutation + fragmentomics (minimal)", "Mut. + frag. min", "#7570B3",
   "Fragmentomics_FullCohort_Full", "FullFrag", "Fragmentomics (full)", "Full", "#000000",
-  "Fragmentomics_FullCohort_Min", "FullFrag", "Fragmentomics (minimal)", "FS + mean coverage", "#E66101",
-  "Fragmentomics_FullCohort_FS", "FullFrag", "Fragment size score", "Fragment size", "#1F78B4",
-  "Fragmentomics_FullCohort_Mean_Coverage", "FullFrag", "Mean coverage", "Mean coverage", "#009E73",
+  "Fragmentomics_FullCohort_Min", "FullFrag", "Fragmentomics (minimal)", "FS + Mean Coverage (Combined Model)", "#E66101",
+  "Fragmentomics_FullCohort_FS", "FullFrag", "Fragment size score", "Fragment size (FS)", "#1F78B4",
+  "Fragmentomics_FullCohort_Mean_Coverage", "FullFrag", "Mean coverage", "Mean coverage (Coverage Model)", "#009E73",
   "Fragmentomics_FullCohort_Proportion_Short", "FullFrag", "Proportion short fragments", "Proportion short", "#E6AB02",
   "Fragmentomics_FullCohort_Tumor_Fraction", "FullFrag", "Tumor fraction", "Tumor fraction", "#D95F02"
 )

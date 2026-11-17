@@ -1406,7 +1406,7 @@ if (USE_PRESERVED_MODELS_ONLY) {
         calc_binary_metrics(
           truth = eval_dat$MRD_truth,
           prob = eval_dat[[prob_col]],
-          threshold = training_95sens_threshold(model_name)
+          threshold = with(locked_training_result$audit, threshold[model == model_name & operating_point == "95Sens"])
         ) %>% dplyr::mutate(operating_point = "Training-derived 95% sensitivity")
       ) %>%
         dplyr::mutate(model = model_name, combo = unname(model_labels[[model_name]]))
@@ -1528,9 +1528,35 @@ if (USE_PRESERVED_MODELS_ONLY) {
     invisible(perf_df)
   }
 
-  # Register training/refit panels that are intentionally not recomputed by
-  # the expanded test-cohort workflow. This preserves the scientific boundary
-  # between frozen training results and newly evaluated test results.
+  # Recompute derived training summaries from the frozen predictions and the
+  # preserved operating-point cutoffs. This does not refit or retune models.
+  # Model-specific confusion counts replace the historical global-prevalence
+  # arithmetic, and ED9C and ED9D use the same FS plus coverage model as ED9E-F.
+  source("Scripts_2025/Final_Scripts/lib/locked_training_summaries.R")
+  locked_training_dir <- file.path(outdir, "locked_training_summaries")
+  locked_training_result <- rebuild_locked_training_summaries(locked_training_dir)
+  write_locked_training_workbooks(locked_training_dir)
+  for (item in list(
+    c("ED5B", "Supp5A_classifier_performance_bar_updated3.png"),
+    c("ED7B", "Supp7A_classifier_performance_bar_updated_blood_muts2.png"),
+    c("ED9C", "Supp9D_classifier_performance_bar_updated_frag2.png"))) {
+    stopifnot(file.copy(file.path(locked_training_dir, "Figures", paste0(item[1], ".png")),
+                        file.path("Final Tables and Figures", item[2]), overwrite = TRUE))
+  }
+  ms_copy_artifact(
+    source_path = file.path(locked_training_dir, "Tables/Supplementary_Table_05.csv"),
+    artifact_id = "STABLE5", role = "table_csv",
+    description = "Locked training summaries calculated from model-specific confusion counts; cutoffs unchanged.",
+    script_name = "3_1_Optimize_cfWGS_thresholds.R"
+  )
+  ms_copy_artifact(
+    source_path = file.path(locked_training_dir, "Tables/Supplementary_Table_05.xlsx"),
+    artifact_id = "STABLE5", role = "workbook_xlsx",
+    description = "Locked training summaries calculated from model-specific confusion counts; cutoffs unchanged.",
+    script_name = "3_1_Optimize_cfWGS_thresholds.R"
+  )
+
+  # Register the rebuilt panels using the existing manuscript artifact paths.
   sync_existing_panel_copy <- function(source_png,
                                        artifact_id,
                                        description,
@@ -1560,7 +1586,7 @@ if (USE_PRESERVED_MODELS_ONLY) {
   sync_existing_panel_copy(
     source_png = "Final Tables and Figures/Supp5A_classifier_performance_bar_updated3.png",
     artifact_id = "EDFIG5B",
-    description = "BM training-cohort performance panel copied from the retained manuscript output; not recomputed for test-cohort expansion.",
+    description = "BM training performance from frozen models and preserved cutoffs, with count-based derived metrics.",
     legacy_component_png = file.path(
       "Scripts_2025/Final_Scripts/final_manuscript_objects/generated/figure_components/Extended_Data_Figure_5/panel_B",
       "Supp5A_classifier_performance_bar_updated3.png"
@@ -1570,7 +1596,7 @@ if (USE_PRESERVED_MODELS_ONLY) {
   sync_existing_panel_copy(
     source_png = "Final Tables and Figures/Supp7A_classifier_performance_bar_updated_blood_muts2.png",
     artifact_id = "EDFIG7B",
-    description = "Blood/cfDNA training-cohort performance panel copied from the retained manuscript output; not recomputed for test-cohort expansion.",
+    description = "Blood/cfDNA training performance from frozen models and preserved cutoffs, with count-based derived metrics.",
     legacy_component_png = file.path(
       "Scripts_2025/Final_Scripts/final_manuscript_objects/generated/figure_components/Extended_Data_Figure_7/panel_B",
       "Supp7A_classifier_performance_bar_updated_blood_muts2.png"
@@ -1580,7 +1606,7 @@ if (USE_PRESERVED_MODELS_ONLY) {
   sync_existing_panel_copy(
     source_png = "Final Tables and Figures/Supp9D_classifier_performance_bar_updated_frag2.png",
     artifact_id = "EDFIG9C",
-    description = "Fragmentomics training-cohort performance panel copied from the retained manuscript output; not recomputed for test-cohort expansion.",
+    description = "Full fragmentomics training performance at the locked cutoffs used downstream, with count-based derived metrics.",
     legacy_component_png = file.path(
       "Scripts_2025/Final_Scripts/final_manuscript_objects/generated/figure_components/Extended_Data_Figure_9/panel_C",
       "Supp9D_classifier_performance_bar_updated_frag2.png"
@@ -1677,12 +1703,12 @@ if (USE_PRESERVED_MODELS_ONLY) {
   write_current_test_performance_panel(
     eval_dat = preserved_test_eval,
     model_names = c(
-      "Fragmentomics_full_Full",
+      "Fragmentomics_min_Full",
       "Fragmentomics_mean_coverage_only_Full",
       "Fragmentomics_prop_short_only_Full"
     ),
     model_labels = c(
-      Fragmentomics_full_Full = "Combined model",
+      Fragmentomics_min_Full = "Combined model",
       Fragmentomics_mean_coverage_only_Full = "Coverage model",
       Fragmentomics_prop_short_only_Full = "Prop. short model"
     ),
@@ -4647,6 +4673,8 @@ prob_cols <- grep("_prob$", colnames(data_scored), value = TRUE)
 ### 3A) First get metrics for entire cohort 
 # 3) Loop over models, build ROC & compute metrics at every threshold
 all_metrics_rescored_primary <- map_dfr(prob_cols, function(prob_col) {
+  # Use the same complete truth/prediction pairs as this model's ROC.
+  prev <- mean(frontline$MRD_truth[!is.na(frontline[[prob_col]])] == 1, na.rm = TRUE)
   # ---- Build ROC curve for this model ----
   # ROC curve shows: X-axis = 1 - specificity (false positive rate)
   #                  Y-axis = sensitivity (true positive rate)
@@ -4706,6 +4734,7 @@ print(metrics_youden)
 ### 3B) Now for each model, find the threshold with ≥95% specificity that maximizes sensitivity,
 #    then compute sensitivity, specificity and accuracy at that threshold
 metrics_at_95spec <- map_dfr(prob_cols, function(prob_col) {
+  prev <- mean(frontline$MRD_truth[!is.na(frontline[[prob_col]])] == 1, na.rm = TRUE)
   # build ROC
   roc_obj <- roc(
     response  = frontline$MRD_truth,
@@ -4763,6 +4792,7 @@ print(metrics_at_95spec)
 prev <- mean(frontline$MRD_truth == 1, na.rm = TRUE)
 
 metrics_at_95sens <- map_dfr(prob_cols, function(prob_col) {
+  prev <- mean(frontline$MRD_truth[!is.na(frontline[[prob_col]])] == 1, na.rm = TRUE)
   # 1) Build ROC
   roc_obj <- roc(
     response  = frontline$MRD_truth,
@@ -6921,12 +6951,12 @@ ms_copy_artifact(
 cv_tbl <- metrics_youden %>%
   filter(model %in% c("Fragmentomics_mean_coverage_only_Full_prob", 
                       "Fragmentomics_prop_short_only_Full_prob", 
-                      "Fragmentomics_full_Full_prob")) %>%
+                      "Fragmentomics_min_Full_prob")) %>%
   mutate(
     combo = recode(model,
                    Fragmentomics_mean_coverage_only_Full_prob          = "Coverage model",
                    Fragmentomics_prop_short_only_Full_prob = "Prop. short model",
-                   Fragmentomics_full_Full_prob = "Combined model")
+                   Fragmentomics_min_Full_prob = "Combined model")
   ) %>%
   # rename so we have *_mean and *_sd
   rename(
@@ -6943,12 +6973,12 @@ cv_tbl <- metrics_youden %>%
 fix95_tbl <- metrics_at_95sens %>%
   filter(model %in% c("Fragmentomics_mean_coverage_only_Full_prob", 
                       "Fragmentomics_prop_short_only_Full_prob", 
-                      "Fragmentomics_full_Full_prob")) %>%
+                      "Fragmentomics_min_Full_prob")) %>%
   mutate(
     combo = recode(model,
                    Fragmentomics_mean_coverage_only_Full_prob          = "Coverage model",
                    Fragmentomics_prop_short_only_Full_prob = "Prop. short model",
-                   Fragmentomics_full_Full_prob = "Combined model")
+                   Fragmentomics_min_Full_prob = "Combined model")
   ) %>%
   select(combo, sensitivity, specificity, accuracy, bal_accuracy, f1) %>%
   rename(
@@ -7079,12 +7109,12 @@ ms_copy_artifact(
 cv_tbl <- metrics_youden_testing %>%
   filter(model %in% c("Fragmentomics_mean_coverage_only_Full_prob", 
                       "Fragmentomics_prop_short_only_Full_prob", 
-                      "Fragmentomics_full_Full_prob")) %>%
+                      "Fragmentomics_min_Full_prob")) %>%
   mutate(
     combo = recode(model,
                    Fragmentomics_mean_coverage_only_Full_prob          = "Coverage model",
                    Fragmentomics_prop_short_only_Full_prob = "Prop. short model",
-                   Fragmentomics_full_Full_prob = "Combined model")
+                   Fragmentomics_min_Full_prob = "Combined model")
     ) %>%
   # rename so we have *_mean and *_sd
   rename(
@@ -7101,12 +7131,12 @@ cv_tbl <- metrics_youden_testing %>%
 fix95_tbl <- metrics_at_95sens_test %>%
   filter(model %in% c("Fragmentomics_mean_coverage_only_Full_prob", 
                       "Fragmentomics_prop_short_only_Full_prob", 
-                      "Fragmentomics_full_Full_prob")) %>%
+                      "Fragmentomics_min_Full_prob")) %>%
   mutate(
     combo = recode(model,
                    Fragmentomics_mean_coverage_only_Full_prob          = "Coverage model",
                    Fragmentomics_prop_short_only_Full_prob = "Prop. short model",
-                   Fragmentomics_full_Full_prob = "Combined model")
+                   Fragmentomics_min_Full_prob = "Combined model")
     ) %>%
   select(combo, sensitivity, specificity, accuracy, bal_accuracy, f1) %>%
   rename(

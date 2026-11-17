@@ -122,6 +122,8 @@ below. Run commands from the repository root.
 | `1_8D_Build_ED3DE_MRDetect_Platform_Calibration.R` | Plot the MRDetect platform comparison and matched-reference calibration analysis prepared by `1_8C`. | The paired-control and calibration tables written by `1_8C`. | Extended Data Figure 3D-E panels and plotted source-data files. |
 | `1_8E_Build_ED3FG_Fragmentomics_Platform_Calibration.R` | Validate fragmentomics platform calibration by leaving out each of the 19 matched controls in turn, estimating the mapping from the other 18, and evaluating the held-out control. | Paired fragmentomics control table from `1_7D`. | Extended Data Figure 3F-G panels, paired-test summaries, and plotted source data. |
 
+For ED2G, run `1_8_Process_Cumulative_VAFs_MRDetect.R` before `1_2_Part2_Get_Mutation_Overlap.R` so the selected baseline catalogue inventory is available. After ED2G, run `2_2_Baseline_demographics_by_WGS_heatmap_updated.R` and `2_3_Feature_Concordance_And_Mutation_Counts.R` to propagate specimen-specific counts into ED1, ED2E/F and the mutation-count correlations.
+
 For the platform-calibration panels, run `1_7D` before `1_8E` and run `1_8C`
 before `1_8D`.
 

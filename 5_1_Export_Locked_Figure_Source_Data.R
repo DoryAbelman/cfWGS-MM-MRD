@@ -619,48 +619,9 @@ build_figure_2e <- function() {
 }
 
 build_ed9c <- function() {
-  youden_path <- file.path(
-    project_root, "Output_tables_2025",
-    "cfWGS_model_metrics_youden_threshold2.csv"
-  )
-  fixed_path <- file.path(
-    project_root, "Output_tables_2025",
-    "cfWGS_model_metrics_fixed_95sens3_Feb2026.csv"
-  )
-  stop_if_missing(c(youden_path, fixed_path), "Extended Data Figure 9C metrics")
-  model_labels <- c(
-    Fragmentomics_full_prob = "Combined model",
-    Fragmentomics_mean_coverage_only_prob = "Coverage model",
-    Fragmentomics_prop_short_only_prob = "Prop. short model"
-  )
-  fixed_model_labels <- c(
-    Fragmentomics_full_Full_prob = "Combined model",
-    Fragmentomics_mean_coverage_only_Full_prob = "Coverage model",
-    Fragmentomics_prop_short_only_Full_prob = "Prop. short model"
-  )
-  youden <- read_csv(youden_path, show_col_types = FALSE) %>%
-    filter(.data$model %in% names(model_labels)) %>%
-    transmute(
-      combo = unname(model_labels[.data$model]),
-      Acc = .data$bal_accuracy, F1 = .data$f1,
-      Sens = .data$sensitivity, Spec = .data$specificity
-    ) %>%
-    pivot_longer(cols = -"combo", names_to = "Metric", values_to = "mean")
-  fixed <- read_csv(fixed_path, show_col_types = FALSE) %>%
-    filter(.data$model %in% names(fixed_model_labels)) %>%
-    transmute(
-      combo = unname(fixed_model_labels[.data$model]),
-      Acc = .data$bal_accuracy, F1 = .data$f1,
-      Sens = .data$sensitivity, Spec = .data$specificity
-    ) %>%
-    pivot_longer(cols = -"combo", names_to = "Metric", values_to = "fixed")
-  left_join(youden, fixed, by = c("combo", "Metric")) %>%
-    mutate(
-      combo = factor(.data$combo, levels = c("Combined model", "Coverage model", "Prop. short model")),
-      Metric = factor(.data$Metric, levels = c("Acc", "F1", "Sens", "Spec"))
-    ) %>%
-    arrange(.data$Metric, .data$combo) %>%
-    mutate(across(where(is.factor), as.character))
+  # The shared reconstruction uses frozen predictions and preserved cutoffs.
+  read_csv(file.path(project_root, "Output_tables_2025",
+    "locked_training_summaries/Source_Data/ED9C.csv"), show_col_types = FALSE)
 }
 
 default_component_files <- function(component_dir) {
@@ -883,7 +844,8 @@ panel_overrides <- list(
   #   ED6D   17, 5 ev, p=0.452         17, 6 ev, p=0.838         --
   #   ED6E   15, 8 ev, p=0.0346        22, 12 ev, p=0.1409       p = 0.14
   #   ED6F   35, 11 ev, p=0.296        38, 18 ev, p=0.611        --
-  #   ED8C   23, 11 ev, p=0.157        24, 13 ev, p=0.0509       --
+  #   ED8C   the 24-row export combines cohorts; the locked primary panel
+  #          uses the 23 frontline rows (15 negative, 8 positive).
   #
   # The current exports reproduce the final components; the stale ones do not.
   # ED6E is the clearest case: the stale freeze would publish a nominally
@@ -1707,6 +1669,12 @@ rebuild_easym_scatter_rows <- function(data, panel) {
   bind_rows(point_rows, correlation_rows)
 }
 
+# Rebuild these three source panels with the same function used by script 3_1.
+# This is metric reconstruction, not model fitting or cutoff selection.
+source(file.path(project_root, "Scripts_2025/Final_Scripts/lib/locked_training_summaries.R"))
+locked_training_summary_root <- file.path(project_root, "Output_tables_2025/locked_training_summaries")
+rebuild_locked_training_summaries(locked_training_summary_root, project_root)
+
 for (i in seq_len(nrow(locked_figures))) {
   item <- locked_figures[i, ]
   key <- item$sheet_name
@@ -1735,20 +1703,10 @@ for (i in seq_len(nrow(locked_figures))) {
       "tests, and BH-adjusted q values."
     )
     build_figure_2e()
-  } else if (key == "ED9C") {
-    source_paths <- file.path(
-      project_root, "Output_tables_2025",
-      c(
-        "cfWGS_model_metrics_youden_threshold2.csv",
-        "cfWGS_model_metrics_fixed_95sens3_Feb2026.csv"
-      )
-    )
-    note <- paste(
-      "Locked fragmentomics training performance: Youden bars use the",
-      "threshold2 snapshot plotted in the retained panel; 95%-sensitivity",
-      "triangles use the fixed-threshold February 2026 table."
-    )
-    build_ed9c()
+  } else if (key %in% c("ED5B", "ED5C", "ED7B", "ED7C", "ED9C", "ED9D")) {
+    source_paths <- file.path(locked_training_summary_root, "Source_Data", paste0(key, ".csv"))
+    note <- "Reconstructed from frozen predictions and preserved cutoffs using model-specific confusion counts."
+    read_csv(source_paths, show_col_types = FALSE)
   } else if (key == "ED1all") {
     source_paths <- c(
       file.path(project_root, "heatmap_matrix_BM_Sep2025.rds"),
@@ -1844,6 +1802,22 @@ for (i in seq_len(nrow(locked_figures))) {
       km_expected_source_basename[[key]], " but observed ",
       paste(basename(source_paths), collapse = ", "), call. = FALSE
     )
+  }
+
+  # The primary ED8C curve is generated from frontline patients in 4_1.
+  # Its dated input also contains the separate non-frontline cohort; filter
+  # before publication relabeling and fail if the locked panel changes.
+  if (key == "ED8C") {
+    if (!"Cohort" %in% names(data) || anyNA(data$Cohort)) {
+      stop("ED8C requires a known cohort for every input row.", call. = FALSE)
+    }
+    data <- data %>% dplyr::filter(.data$Cohort == "Frontline")
+    if (nrow(data) != 23L || sum(data$Group == "Negative") != 15L ||
+        sum(data$Group == "Positive") != 8L || anyDuplicated(data$Patient)) {
+      stop("ED8C frontline rows do not match the locked panel; reconcile first.", call. = FALSE)
+    }
+    status <- "CORRECTED_TO_LOCKED"
+    note <- "Primary frontline post-ASCT curve; non-frontline rows excluded."
   }
 
   # Older Figure 2D exports stored mean coverage with its sign inverted for a

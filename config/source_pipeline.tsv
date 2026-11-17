@@ -3,17 +3,17 @@ order	script_id	stage	script	run_policy	notes
 2	1_1A	clinical_processing	1_1A_Process_post_ACST_and_clinical_OS_PFS_and_clinical_FISH_metadata.R	run	Processes transplant, OS/PFS, progression, and FISH metadata.
 3	1_1B	clinical_processing	1_1B_Process_clinical_labs.R	run	Processes cross-cohort clinical laboratory, staging, demographic, and FISH fields.
 4	1_2	mutation_processing	1_2_Process_Mutation_Data.R	run	Processes bone-marrow and cfDNA MAF files.
-5	1_2_part2	mutation_processing	1_2_Part2_Get_Mutation_Overlap.R	run	Computes patient-level bone-marrow/cfDNA mutation-set Jaccard overlap and Extended Data Figure 2G.
-6	1_3	translocation_processing	1_3_Process_Ig_Translocation_Info.R	run	Processes Ig-caller structural-variant calls into the reviewed translocation feature matrix.
-7	1_4	ichor_cna_processing	1_4_Process_CNA_Data.R	run	Processes ichorCNA segments into arm-level and FISH-locus CNA features.
-8	1_4A	sequenza_cna_processing	1_4A_Process_sequenza_CNA_Data.R	run	Processes Sequenza segments and purity/ploidy outputs.
-9	1_5	feature_integration	1_5_Integrate_WGS_Feature_Data.R	run	Integrates mutation, CNA, translocation, tumour-fraction, and clinical sample features.
-10	1_6	sample_qc	1_6_Identify_High_Quality_Patient_Pairs.R	run	Defines baseline WGS evidence eligibility, cohort assignment, and the Figure 1B source table.
-11	1_7A	fragmentomics_processing	1_7A_Process_fragmentomics_data_nucleosome_accessibility.R	run	Processes nucleosome-accessibility features.
-12	1_7B	fragmentomics_processing	1_7B_Process_fragment_score_and_inetegrate_fragmentomics_data.R	run	Processes fragment-size scores and integrates fragmentomics.
-13	1_7C	dilution_series_processing	1_7C_Process_fragmentomics_data_dilution_series_updated.R	run	Processes dilution-series fragmentomics.
-14	1_7D	platform_calibration	1_7D_Compare_CHARM_Xplus_HC_controls.R	run	Builds the paired healthy-control fragmentomics comparison used by Extended Data Figure 3F-G.
-15	1_8	mrdetect_processing	1_8_Process_Cumulative_VAFs_MRDetect.R	run	Processes MRDetect outputs for patient samples.
+5	1_3	translocation_processing	1_3_Process_Ig_Translocation_Info.R	run	Processes Ig-caller structural-variant calls into the reviewed translocation feature matrix.
+6	1_4	ichor_cna_processing	1_4_Process_CNA_Data.R	run	Processes ichorCNA segments into arm-level and FISH-locus CNA features.
+7	1_4A	sequenza_cna_processing	1_4A_Process_sequenza_CNA_Data.R	run	Processes Sequenza segments and purity/ploidy outputs.
+8	1_5	feature_integration	1_5_Integrate_WGS_Feature_Data.R	run	Integrates mutation, CNA, translocation, tumour-fraction, and clinical sample features.
+9	1_6	sample_qc	1_6_Identify_High_Quality_Patient_Pairs.R	run	Defines baseline WGS evidence eligibility, cohort assignment, and the Figure 1B source table.
+10	1_7A	fragmentomics_processing	1_7A_Process_fragmentomics_data_nucleosome_accessibility.R	run	Processes nucleosome-accessibility features.
+11	1_7B	fragmentomics_processing	1_7B_Process_fragment_score_and_inetegrate_fragmentomics_data.R	run	Processes fragment-size scores and integrates fragmentomics.
+12	1_7C	dilution_series_processing	1_7C_Process_fragmentomics_data_dilution_series_updated.R	run	Processes dilution-series fragmentomics.
+13	1_7D	platform_calibration	1_7D_Compare_CHARM_Xplus_HC_controls.R	run	Builds the paired healthy-control fragmentomics comparison used by Extended Data Figure 3F-G.
+14	1_8	mrdetect_processing	1_8_Process_Cumulative_VAFs_MRDetect.R	run	Processes MRDetect outputs for patient samples.
+15	1_2_part2	mutation_processing	1_2_Part2_Get_Mutation_Overlap.R	run	Computes patient-level bone-marrow/cfDNA mutation-set Jaccard overlap and Extended Data Figure 2G.
 16	1_8A	dilution_series_processing	1_8A_Process_Cumulative_VAFs_for_dilution_series.R	run	Processes MRDetect outputs for the dilution series.
 17	1_8C	platform_calibration	1_8C_Analyze_MRDetect_Healthy_Control_Platform_Calibration.R	run	Analyzes the MRDetect healthy-control platform comparison and calibration used by Extended Data Figure 3D-E.
 18	1_8D	platform_calibration	1_8D_Build_ED3DE_MRDetect_Platform_Calibration.R	run	Builds Extended Data Figure 3D-E and its source data.
